@@ -2215,43 +2215,35 @@ ${wireXmls.join('\n')}
     };
   };
 
-  // Connect active wiring to a component pin
+  // Connect active wiring to a component pin (Unrestricted Logisim wiring)
   const connectToPin = (comp: CircuitComponentInstance, pin: CircuitPin) => {
     if (!wiringFrom) return;
     if (wiringFrom.pinId === pin.id) {
       return;
     }
-    if (wiringFrom.pinType === pin.type) {
-      showToast(
-        wiringFrom.pinType === 'output'
-          ? 'Uyarı: Çıkış pini bir giriş pinine bağlanmalıdır!'
-          : 'Uyarı: Giriş pini bir çıkış pinine bağlanmalıdır!'
-      );
-      return;
-    }
-    if (wiringFrom.compId === comp.id) {
-      showToast('Uyarı: Bir kapının çıkışı kendi girişine doğrudan bağlanamaz!');
-      return;
-    }
 
-    const fromCompId = wiringFrom.pinType === 'output' ? wiringFrom.compId : comp.id;
-    const fromPinId = wiringFrom.pinType === 'output' ? wiringFrom.pinId : pin.id;
-    const toCompId = wiringFrom.pinType === 'input' ? wiringFrom.compId : comp.id;
-    const toPinId = wiringFrom.pinType === 'input' ? wiringFrom.pinId : pin.id;
+    // Determine from/to: if one is output and one is input, make output 'from' and input 'to'
+    let fromCompId = wiringFrom.compId;
+    let fromPinId = wiringFrom.pinId;
+    let toCompId = comp.id;
+    let toPinId = pin.id;
+
+    if (wiringFrom.pinType === 'input' && pin.type === 'output') {
+      fromCompId = comp.id;
+      fromPinId = pin.id;
+      toCompId = wiringFrom.compId;
+      toPinId = wiringFrom.pinId;
+    }
 
     recordHistory();
 
-    const targetPin = findPinById(toPinId) || pin;
-    let finalWaypoints = wiringFrom.waypoints;
-    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-      const lastPt = wiringFrom.waypoints[wiringFrom.waypoints.length - 1];
-      if (lastPt.x !== targetPin.x || lastPt.y !== targetPin.y) {
-        const midX = Math.round((lastPt.x + targetPin.x) / 2);
-        finalWaypoints = [
-          ...wiringFrom.waypoints,
-          { x: midX, y: lastPt.y },
-          { x: midX, y: targetPin.y },
-        ];
+    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
+    if (finalWaypoints && finalWaypoints.length > 0) {
+      const lastPt = finalWaypoints[finalWaypoints.length - 1];
+      if (lastPt.x !== pin.x || lastPt.y !== pin.y) {
+        const midX = Math.round((lastPt.x + pin.x) / 2);
+        finalWaypoints.push({ x: midX, y: lastPt.y });
+        finalWaypoints.push({ x: midX, y: pin.y });
       }
     }
 
@@ -2270,8 +2262,13 @@ ${wireXmls.join('\n')}
     };
 
     setWires((prev) => {
-      const filtered = prev.filter((w) => w.toPinId !== toPinId);
-      const updatedWires = [...filtered, newWire];
+      const isDuplicate = prev.some(
+        (w) =>
+          (w.fromPinId === fromPinId && w.toPinId === toPinId) ||
+          (w.fromPinId === toPinId && w.toPinId === fromPinId)
+      );
+      if (isDuplicate) return prev;
+      const updatedWires = [...prev, newWire];
       const sim = simulateCircuit(components, updatedWires);
       setComponents(sim.components);
       return sim.wires;
@@ -2281,33 +2278,52 @@ ${wireXmls.join('\n')}
     setWiringFrom(null);
   };
 
-  // Helper to branch active input wire onto an existing wire
+  // Helper to branch active wire onto an existing wire
   const connectBranchToWire = (targetWire: CircuitWire, tap: { x: number; y: number }) => {
     if (!wiringFrom) return;
-    if (wiringFrom.pinType === 'input' && wiringFrom.compId !== targetWire.fromCompId) {
-      recordHistory();
-      const newBranchWire: CircuitWire = {
-        id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        fromCompId: targetWire.fromCompId,
-        fromPinId: targetWire.fromPinId,
-        toCompId: wiringFrom.compId,
-        toPinId: wiringFrom.pinId,
-        value: targetWire.value,
-        branchPoint: tap,
-        sourceWireId: targetWire.id,
-        isBus: targetWire.isBus || defaultWireIsBus,
-        bitWidth: targetWire.isBus ? 4 : 1,
-      };
-      setWires((prev) => {
-        const filtered = prev.filter((w) => w.toPinId !== wiringFrom.pinId);
-        const updated = [...filtered, newBranchWire];
-        const sim = simulateCircuit(components, updated);
-        setComponents(sim.components);
-        return sim.wires;
-      });
-      lastWireConnectedTimeRef.current = Date.now();
-      setWiringFrom(null);
+    recordHistory();
+
+    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
+    if (finalWaypoints && finalWaypoints.length > 0) {
+      const lastPt = finalWaypoints[finalWaypoints.length - 1];
+      if (lastPt.x !== tap.x || lastPt.y !== tap.y) {
+        const midX = Math.round((lastPt.x + tap.x) / 2);
+        finalWaypoints.push({ x: midX, y: lastPt.y });
+        finalWaypoints.push({ x: midX, y: tap.y });
+      }
     }
+
+    const newBranchWire: CircuitWire = {
+      id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      fromCompId: targetWire.fromCompId,
+      fromPinId: targetWire.fromPinId,
+      toCompId: wiringFrom.compId,
+      toPinId: wiringFrom.pinId,
+      value: targetWire.value,
+      branchPoint: tap,
+      sourceWireId: targetWire.id,
+      waypoints: finalWaypoints,
+      isBus: targetWire.isBus || defaultWireIsBus,
+      bitWidth: targetWire.isBus ? 4 : 1,
+    };
+
+    setWires((prev) => {
+      const isDuplicate = prev.some(
+        (w) =>
+          w.sourceWireId === targetWire.id &&
+          w.toPinId === wiringFrom.pinId &&
+          w.branchPoint?.x === tap.x &&
+          w.branchPoint?.y === tap.y
+      );
+      if (isDuplicate) return prev;
+      const updated = [...prev, newBranchWire];
+      const sim = simulateCircuit(components, updated);
+      setComponents(sim.components);
+      return sim.wires;
+    });
+
+    lastWireConnectedTimeRef.current = Date.now();
+    setWiringFrom(null);
   };
 
   // Click on pin: start or finish connection
@@ -2356,7 +2372,7 @@ ${wireXmls.join('\n')}
     if (Date.now() - lastWireConnectedTimeRef.current < 400) {
       return;
     }
-    if (wiringFrom && wiringFrom.pinId !== pin.id && wiringFrom.compId !== comp.id) {
+    if (wiringFrom && wiringFrom.pinId !== pin.id) {
       connectToPin(comp, pin);
     }
   };
@@ -6654,13 +6670,11 @@ ${wireXmls.join('\n')}
 
                     // Mid-Wire T-Junction Branching:
                     // If currently dragging from an input pin, tapping on this wire creates a branch connection!
-                    if (wiringFrom && wiringFrom.pinType === 'input') {
-                      if (wiringFrom.compId !== wire.fromCompId) {
+                    if (wiringFrom) {
                         const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
                         connectBranchToWire(wire, tap);
                         return;
                       }
-                    }
 
                     if (e.shiftKey) {
                       setSelectedWireIds((prev) =>
@@ -6714,7 +6728,7 @@ ${wireXmls.join('\n')}
                       setSelectedWireIds([wire.id]);
                     }}
                     onMouseUp={(e) => {
-                      if (wiringFrom && wiringFrom.pinType === 'input' && wiringFrom.compId !== wire.fromCompId) {
+                      if (wiringFrom) {
                         e.stopPropagation();
                         const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
                         connectBranchToWire(wire, tap);
@@ -6821,7 +6835,7 @@ ${wireXmls.join('\n')}
                         cx={startPt.x}
                         cy={startPt.y}
                         r={wire.isBus ? 6.5 : 5}
-                        fill={isHigh ? '#16a34a' : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')}
+                        fill={wire.hasConflict ? '#ef4444' : isHigh ? '#16a34a' : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')}
                         stroke={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
                         strokeWidth={1.8}
                       />
@@ -6829,7 +6843,7 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Live Hover Tap Preview Indicator when wiring from an input */}
-                  {wiringFrom?.pinType === 'input' && hoveredWireId === wire.id && (() => {
+                  {wiringFrom && hoveredWireId === wire.id && (() => {
                     const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX);
                     return (
                       <g className="pointer-events-none">
@@ -7408,7 +7422,7 @@ ${wireXmls.join('\n')}
                   {/* Input Pins */}
                   {comp.inputs.map((pin) => {
                     const isPinHigh = pin.value === 1;
-                    const isValidTarget = wiringFrom && wiringFrom.pinType !== pin.type && wiringFrom.compId !== comp.id;
+                    const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     return (
                       <g
@@ -7475,7 +7489,7 @@ ${wireXmls.join('\n')}
                   {/* Output Pins */}
                   {comp.outputs.map((pin) => {
                     const isPinHigh = pin.value === 1;
-                    const isValidTarget = wiringFrom && wiringFrom.pinType !== pin.type && wiringFrom.compId !== comp.id;
+                    const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     return (
                       <g
