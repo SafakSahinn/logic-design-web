@@ -1,0 +1,211 @@
+import type { LogicValue } from './logic';
+
+export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'sequential' | 'custom';
+
+export type ComponentType =
+  // Inputs
+  | 'switch'
+  | 'pushbutton'
+  | 'clock'
+  | 'vcc'
+  | 'gnd'
+  | 'tunnel'
+  | 'dipSwitch4'
+  | 'asciiKeyboard'
+  // Basic Gates
+  | 'not'
+  | 'and'
+  | 'or'
+  | 'nand'
+  | 'nor'
+  | 'xor'
+  | 'xnor'
+  | 'triState'
+  // Outputs
+  | 'led'
+  | 'probe'
+  | 'buzzer'
+  | 'textLabel'
+  | 'sevenSegment'
+  | 'hexDisplay'
+  | 'ledBar4'
+  | 'dotMatrix8x8'
+  | 'rgbMatrix16x16'
+  // Combinational Blocks
+  | 'halfAdder'
+  | 'fullAdder'
+  | 'halfSubtractor'
+  | 'fullSubtractor'
+  | 'mux2'
+  | 'mux4'
+  | 'mux8'
+  | 'demux2'
+  | 'demux4'
+  | 'decoder2to4'
+  | 'decoder3to8'
+  | 'bcdTo7Seg'
+  | 'priorityEncoder4to2'
+  | 'comparator4'
+  | 'alu4'
+  | 'splitter4'
+  // Sequential & Memory Elements (Ardışıl Mantık & Bellek)
+  | 'dFlipFlop'
+  | 'tFlipFlop'
+  | 'jkFlipFlop'
+  | 'srLatch'
+  | 'counter4'
+  | 'register4'
+  | 'shiftRegister4'
+  | 'ram16x4'
+  | 'rom16x4'
+  // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
+  | 'subcircuit';
+
+export interface PinDefinition {
+  id: string;
+  name: string;
+  type: 'input' | 'output';
+  relX: number; // px relative to component origin
+  relY: number;
+}
+
+export interface ComponentMetadata {
+  type: ComponentType;
+  name: string;
+  category: ComponentCategory;
+  width: number;
+  height: number;
+  inputs: PinDefinition[];
+  outputs: PinDefinition[];
+  description: string;
+}
+
+export interface CircuitPin {
+  id: string; // e.g. "comp1_in_0"
+  name: string;
+  type: 'input' | 'output';
+  value: LogicValue;
+  x: number; // absolute canvas coordinates
+  y: number;
+}
+
+export interface CircuitComponentInstance {
+  id: string;
+  type: ComponentType;
+  label?: string;
+  x: number;
+  y: number;
+  rotation?: 0 | 90 | 180 | 270;
+  inputs: CircuitPin[];
+  outputs: CircuitPin[];
+  state: {
+    on?: boolean;
+    frequencyHz?: number;
+    lastClockTick?: number;
+    ledColor?: 'green' | 'red' | 'blue' | 'yellow';
+    q?: LogicValue;
+    qBar?: LogicValue;
+    lastClk?: LogicValue;
+    hexVal?: number;
+    count?: number;
+    regVal?: number;
+    regBits?: number[];
+    ramData?: number[];
+    romData?: number[];
+    aluResult?: number;
+    hiZ?: boolean;
+    gateInputsCount?: number;
+    dipSwitches?: boolean[];
+    subcircuitId?: string;
+    subcircuitName?: string;
+    subcircuitCode?: string;
+    matrixGrid?: boolean[][];
+    rgbPixels?: string[][];
+    asciiChar?: string;
+    asciiCode?: number;
+    strobe?: boolean;
+    buzzerNote?: number;
+    labelPos?: 'top' | 'bottom' | 'center' | 'hidden';
+  };
+}
+
+export interface SubcircuitPortDefinition {
+  id: string; // pin id on the IC, e.g. "port_in_0"
+  name: string; // pin label, e.g. "A", "B", "CLK", "OUT", "C"
+  type: 'input' | 'output';
+  targetCompId: string; // internal component id (e.g. "sw_A" or "led_out")
+  targetPinId: string; // internal pin id
+}
+
+export interface CustomSubcircuit {
+  id: string; // unique id, e.g. "sub_half_adder_172000"
+  name: string; // display name, e.g. "Yarım Toplayıcı (HA)"
+  chipCode?: string; // e.g. "IC-HA01"
+  description: string;
+  category: 'custom';
+  color?: string;
+  width: number;
+  height: number;
+  ports: SubcircuitPortDefinition[];
+  components: CircuitComponentInstance[];
+  wires: CircuitWire[];
+  createdAt: number;
+}
+
+export interface CircuitAnnotation {
+  id: string;
+  type: 'frame' | 'note';
+  title: string;
+  text?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: 'blue' | 'emerald' | 'amber' | 'purple' | 'rose' | 'slate';
+}
+
+export interface CircuitWire {
+  id: string;
+  fromCompId: string;
+  fromPinId: string;
+  toCompId: string;
+  toPinId: string;
+  value: LogicValue;
+  hasConflict?: boolean;
+  branchPoint?: { x: number; y: number };
+  isBus?: boolean;
+  bitWidth?: number;
+  busValue?: number;
+  jointOffset?: number; // Manhattan orta segment ofseti (px)
+  elbowX?: number; // Manhattan dirsek X koordinatı
+  sourceWireId?: string;
+  waypoints?: { x: number; y: number }[];
+  elbowY?: number; // Manhattan dirsek Y koordinatı
+}
+
+export interface CircuitPreset {
+  id: string;
+  name: string;
+  category?: 'basic' | 'arithmetic' | 'sequential' | 'bus' | 'music_graphics';
+  description: string;
+  components: CircuitComponentInstance[];
+  wires: CircuitWire[];
+}
+
+export interface TruthTableData {
+  inputs: { id: string; name: string }[];
+  outputs: { id: string; name: string }[];
+  booleanExpressions?: { [outputName: string]: string };
+  minimalExpressions?: {
+    [outputName: string]: {
+      expression: string;
+      primeImplicants: string[];
+      essentialImplicants: string[];
+    };
+  };
+  rows: {
+    inputValues: LogicValue[];
+    outputValues: LogicValue[];
+    isCurrentState?: boolean;
+  }[];
+}
