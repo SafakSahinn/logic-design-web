@@ -1229,8 +1229,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 const fromDelta = movedCompDeltas.get(w.fromCompId);
                 const toDelta = movedCompDeltas.get(w.toCompId);
 
-                // If this wire is a self-feedback loop (fromCompId === toCompId) OR both endpoints moved together:
-                if (fromDelta && (toDelta || w.fromCompId === w.toCompId) && (!toDelta || (fromDelta.dx === toDelta.dx && fromDelta.dy === toDelta.dy))) {
+                const isFromPinned = !!findPinById(w.fromPinId);
+                const isToPinned = !!findPinById(w.toPinId);
+
+                // Both endpoints moved together (or self-loop):
+                if (fromDelta && toDelta && fromDelta.dx === toDelta.dx && fromDelta.dy === toDelta.dy) {
                   const delta = fromDelta;
                   if (initialWire.branchPoint) {
                     updatedWire.branchPoint = {
@@ -1238,12 +1241,68 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       y: initialWire.branchPoint.y + delta.dy,
                     };
                   }
-                  if (initialWire.elbowX !== undefined) {
-                    updatedWire.elbowX = initialWire.elbowX + delta.dx;
+                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
+                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
+                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
+                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
+                      x: pt.x + delta.dx,
+                      y: pt.y + delta.dy,
+                    }));
                   }
-                  if (initialWire.elbowY !== undefined) {
-                    updatedWire.elbowY = initialWire.elbowY + delta.dy;
+                  if (initialWire.endPoint) {
+                    updatedWire.endPoint = {
+                      x: initialWire.endPoint.x + delta.dx,
+                      y: initialWire.endPoint.y + delta.dy,
+                    };
                   }
+                  if (initialWire.startPoint) {
+                    updatedWire.startPoint = {
+                      x: initialWire.startPoint.x + delta.dx,
+                      y: initialWire.startPoint.y + delta.dy,
+                    };
+                  }
+                }
+                // Open wire or wire branch attached only to moved fromComp (moves 100% synchronously with gate)
+                else if (fromDelta && !isToPinned) {
+                  const delta = fromDelta;
+                  if (initialWire.branchPoint) {
+                    updatedWire.branchPoint = {
+                      x: initialWire.branchPoint.x + delta.dx,
+                      y: initialWire.branchPoint.y + delta.dy,
+                    };
+                  }
+                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
+                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
+                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
+                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
+                      x: pt.x + delta.dx,
+                      y: pt.y + delta.dy,
+                    }));
+                  }
+                  if (initialWire.endPoint) {
+                    updatedWire.endPoint = {
+                      x: initialWire.endPoint.x + delta.dx,
+                      y: initialWire.endPoint.y + delta.dy,
+                    };
+                  }
+                  if (initialWire.startPoint) {
+                    updatedWire.startPoint = {
+                      x: initialWire.startPoint.x + delta.dx,
+                      y: initialWire.startPoint.y + delta.dy,
+                    };
+                  }
+                }
+                // Open wire attached only to moved toComp
+                else if (toDelta && !isFromPinned) {
+                  const delta = toDelta;
+                  if (initialWire.branchPoint) {
+                    updatedWire.branchPoint = {
+                      x: initialWire.branchPoint.x + delta.dx,
+                      y: initialWire.branchPoint.y + delta.dy,
+                    };
+                  }
+                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
+                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
                   if (initialWire.waypoints && initialWire.waypoints.length > 0) {
                     updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
                       x: pt.x + delta.dx,
@@ -1263,7 +1322,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     };
                   }
                 } else if (fromDelta && initialWire.branchPoint) {
-                  // Only source component moved for a branch wire
                   updatedWire.branchPoint = {
                     x: initialWire.branchPoint.x + fromDelta.dx,
                     y: initialWire.branchPoint.y + fromDelta.dy,
@@ -2103,9 +2161,9 @@ ${wireXmls.join('\n')}
   };
 
 
-    // Resolves wire start point snapped to 10px grid (clamps branches directly onto parent wire)
+    // Resolves wire start point snapped to 10px grid
   const getWireStartPt = (wire: CircuitWire): WirePoint => {
-    if (wire.startPoint) return snapPt10(wire.startPoint);
+    // 1. If this wire is a branch from another wire, branchPoint is its ground truth visual start:
     if (wire.branchPoint) {
       if (wire.sourceWireId) {
         const parentWire = wires.find((w) => w.id === wire.sourceWireId);
@@ -2118,8 +2176,17 @@ ${wireXmls.join('\n')}
       }
       return snapPt10(wire.branchPoint);
     }
-    const fromPin = findPinById(wire.fromPinId);
-    return fromPin ? snapPt10({ x: fromPin.x, y: fromPin.y }) : { x: 0, y: 0 };
+
+    // 2. If connected to a component pin, live pin coordinates are ground truth (moves dynamically with gate!):
+    if (wire.fromPinId) {
+      const fromPin = findPinById(wire.fromPinId);
+      if (fromPin) return snapPt10({ x: fromPin.x, y: fromPin.y });
+    }
+
+    // 3. If floating free wire startPoint:
+    if (wire.startPoint) return snapPt10(wire.startPoint);
+
+    return { x: 0, y: 0 };
   };
 
   const getWireEndPt = (wire: CircuitWire, startPt: WirePoint): WirePoint => {
@@ -2164,11 +2231,14 @@ ${wireXmls.join('\n')}
 
     recordHistory();
 
-    const dx = Math.abs(endPt.x - startPt.x);
-    const dy = Math.abs(endPt.y - startPt.y);
+    const lastPt = wiringFrom.waypoints && wiringFrom.waypoints.length > 0 
+      ? wiringFrom.waypoints[wiringFrom.waypoints.length - 1] 
+      : startPt;
+    const dx = Math.abs(endPt.x - lastPt.x);
+    const dy = Math.abs(endPt.y - lastPt.y);
     let corner: WirePoint | null = null;
-    if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
-      corner = dy > dx ? { x: startPt.x, y: endPt.y } : { x: endPt.x, y: startPt.y };
+    if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
+      corner = dy > dx ? { x: lastPt.x, y: endPt.y } : { x: endPt.x, y: lastPt.y };
     }
 
     if (wiringFrom.extendingWireId) {
@@ -2264,11 +2334,14 @@ ${wireXmls.join('\n')}
     const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
     const endPt = snapPt10({ x: pin.x, y: pin.y });
 
-    const dx = Math.abs(endPt.x - startPt.x);
-    const dy = Math.abs(endPt.y - startPt.y);
+    const lastPt = wiringFrom.waypoints && wiringFrom.waypoints.length > 0 
+      ? wiringFrom.waypoints[wiringFrom.waypoints.length - 1] 
+      : startPt;
+    const dx = Math.abs(endPt.x - lastPt.x);
+    const dy = Math.abs(endPt.y - lastPt.y);
     let corner: WirePoint | null = null;
-    if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
-      corner = dy > dx ? { x: startPt.x, y: endPt.y } : { x: endPt.x, y: startPt.y };
+    if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
+      corner = dy > dx ? { x: lastPt.x, y: endPt.y } : { x: endPt.x, y: lastPt.y };
     }
 
     if (wiringFrom.extendingWireId) {
@@ -6739,13 +6812,7 @@ ${wireXmls.join('\n')}
                       );
                       setSelectedWireIds([wire.id]);
                     }}
-                    onMouseUp={(e) => {
-                      if (wiringFrom) {
-                        e.stopPropagation();
-                        const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
-                        connectBranchToWire(wire, tap);
-                      }
-                    }}
+
                   />
                   {/* Outer wire / glow if HIGH or SELECTED or CONFLICT */}
                   {wire.hasConflict ? (

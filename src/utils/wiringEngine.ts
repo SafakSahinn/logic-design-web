@@ -106,8 +106,10 @@ export const getWireOrthogonalSegments = (
     // Pure straight horizontal or vertical
     addSeg(p0, p1);
   } else if (wire.branchPoint) {
-    // Branch leaving parent wire
-    const corner = { x: p0.x, y: p1.y };
+    // Branch leaving parent wire: smart orthogonal L-direction matching user drag delta
+    const dx = Math.abs(p1.x - p0.x);
+    const dy = Math.abs(p1.y - p0.y);
+    const corner = dy > dx ? { x: p0.x, y: p1.y } : { x: p1.x, y: p0.y };
     addSeg(p0, corner);
     addSeg(corner, p1);
   } else {
