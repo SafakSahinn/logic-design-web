@@ -240,6 +240,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     y: number;
     branchPoint?: { x: number; y: number };
     sourceWireId?: string;
+    extendingWireId?: string;
     waypoints?: { x: number; y: number }[];
   } | null>(null);
 
@@ -2273,10 +2274,18 @@ ${wireXmls.join('\n')}
   const finishWireAtPoint = (point: { x: number; y: number }) => {
     if (!wiringFrom) return;
     recordHistory();
-    const snappedPt = {
+    let snappedPt = {
       x: snapToGrid ? Math.round(point.x / 10) * 10 : Math.round(point.x),
       y: snapToGrid ? Math.round(point.y / 10) * 10 : Math.round(point.y),
     };
+
+    // Snap to straight collinear axis if within 10px tolerance (prevents micro zig-zags)
+    if (Math.abs(snappedPt.x - wiringFrom.x) <= 10) {
+      snappedPt.x = wiringFrom.x;
+    }
+    if (Math.abs(snappedPt.y - wiringFrom.y) <= 10) {
+      snappedPt.y = wiringFrom.y;
+    }
 
     const dist = Math.hypot(snappedPt.x - wiringFrom.x, snappedPt.y - wiringFrom.y);
     if (dist < 8 && (!wiringFrom.waypoints || wiringFrom.waypoints.length === 0)) {
@@ -2287,11 +2296,33 @@ ${wireXmls.join('\n')}
     let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
     if (finalWaypoints && finalWaypoints.length > 0) {
       const lastPt = finalWaypoints[finalWaypoints.length - 1];
-      if (lastPt.x !== snappedPt.x || lastPt.y !== snappedPt.y) {
+      if (lastPt.x !== snappedPt.x && lastPt.y !== snappedPt.y) {
         const midX = Math.round((lastPt.x + snappedPt.x) / 2);
         finalWaypoints.push({ x: midX, y: lastPt.y });
         finalWaypoints.push({ x: midX, y: snappedPt.y });
       }
+    }
+
+    // If extending an existing open wire, update it in-place instead of creating a duplicate wire
+    if (wiringFrom.extendingWireId) {
+      setWires((prev) => {
+        const updatedWires = prev.map((w) => {
+          if (w.id === wiringFrom.extendingWireId) {
+            return {
+              ...w,
+              endPoint: snappedPt,
+              waypoints: finalWaypoints,
+            };
+          }
+          return w;
+        });
+        const sim = simulateCircuit(components, updatedWires);
+        setComponents(sim.components);
+        return sim.wires;
+      });
+      lastWireConnectedTimeRef.current = Date.now();
+      setWiringFrom(null);
+      return;
     }
 
     const freeWire: CircuitWire = {
@@ -2351,6 +2382,30 @@ ${wireXmls.join('\n')}
         finalWaypoints.push({ x: midX, y: lastPt.y });
         finalWaypoints.push({ x: midX, y: pin.y });
       }
+    }
+
+    // If extending an existing open wire, complete it by attaching to target pin
+    if (wiringFrom.extendingWireId) {
+      setWires((prev) => {
+        const updatedWires = prev.map((w) => {
+          if (w.id === wiringFrom.extendingWireId) {
+            return {
+              ...w,
+              toCompId,
+              toPinId,
+              endPoint: undefined,
+              waypoints: finalWaypoints,
+            };
+          }
+          return w;
+        });
+        const sim = simulateCircuit(components, updatedWires);
+        setComponents(sim.components);
+        return sim.wires;
+      });
+      lastWireConnectedTimeRef.current = Date.now();
+      setWiringFrom(null);
+      return;
     }
 
     const newWire: CircuitWire = {
@@ -6744,6 +6799,25 @@ ${wireXmls.join('\n')}
                 pathD = `M ${startPt.x},${startPt.y} L ${endPt.x},${startPt.y}`;
               } else if (isStraightV) {
                 pathD = `M ${startPt.x},${startPt.y} L ${startPt.x},${endPt.y}`;
+              } else if (wire.branchPoint) {
+                // Solder T-Junction: determine orientation of parent wire at branch point
+                const parentW = wires.find((w) => w.id === wire.sourceWireId || (w.id !== wire.id && w.fromPinId === wire.fromPinId));
+                let isParentH = true;
+                if (parentW) {
+                  const pFrom = getWireStartPt(parentW);
+                  const pToPin = findPinById(parentW.toPinId);
+                  const pEnd = pToPin ? { x: pToPin.x, y: pToPin.y } : (parentW.endPoint || pFrom);
+                  if (Math.abs(pFrom.x - pEnd.x) < Math.abs(pFrom.y - pEnd.y)) {
+                    isParentH = false;
+                  }
+                }
+                if (isParentH) {
+                  // Leaving horizontal parent line: drop vertically straight from solder dot!
+                  pathD = `M ${startPt.x},${startPt.y} V ${endPt.y} H ${endPt.x}`;
+                } else {
+                  // Leaving vertical parent line: leave horizontally straight from solder dot!
+                  pathD = `M ${startPt.x},${startPt.y} H ${endPt.x} V ${endPt.y}`;
+                }
               } else {
                 const midX = Math.round((startPt.x + endPt.x) / 2);
                 pathD = `M ${startPt.x},${startPt.y} H ${midX} V ${endPt.y} H ${endPt.x}`;
@@ -6960,11 +7034,12 @@ ${wireXmls.join('\n')}
                         e.stopPropagation();
                         setWiringFrom({
                           compId: wire.fromCompId,
-                          pinId: wire.toPinId,
+                          pinId: wire.toPinId || wire.fromPinId,
                           pinType: 'output',
                           x: endPt.x,
                           y: endPt.y,
-                          sourceWireId: wire.id,
+                          extendingWireId: wire.id,
+                          waypoints: wire.waypoints ? [...wire.waypoints] : [],
                         });
                       }}
                     >
