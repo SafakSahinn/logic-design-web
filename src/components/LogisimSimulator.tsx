@@ -1,3 +1,12 @@
+import {
+  snapTo10,
+  snapPt10,
+  getWireOrthogonalSegments,
+  segmentsToSvgPath,
+  getClosestPointOnWire,
+  computeCircuitJunctions,
+  type WirePoint,
+} from '../utils/wiringEngine';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type {
   ComponentType,
@@ -1132,26 +1141,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const coords = getCanvasCoords(e);
     if (!draggingCompId) setMousePos(coords);
 
-    // Instant Logisim-style pull branch wire from anywhere on wire
-    if (wireDragStartRef.current && !wiringFrom && !draggingCompId && !draggingWireJointRef.current) {
-      const dx = Math.abs(e.clientX - wireDragStartRef.current.startClientX);
-      const dy = Math.abs(e.clientY - wireDragStartRef.current.startClientY);
-      if (dx > 16 || dy > 16) {
-        wireDragStartRef.current.didDrag = true;
-        const wInfo = wireDragStartRef.current;
-        setWiringFrom({
-          compId: wInfo.fromCompId,
-          pinId: wInfo.fromPinId,
-          pinType: 'output',
-          x: wInfo.tap.x,
-          y: wInfo.tap.y,
-          branchPoint: wInfo.tap,
-          sourceWireId: wInfo.wireId,
-        });
-        wireDragStartRef.current = null;
-        return;
-      }
-    }
+    // Wire clicking solely selects wire; explicit branching uses + handle on hover
 
     const activeDragJoint = draggingWireJointRef.current || draggingWireJoint;
     if (activeDragJoint) {
@@ -2112,205 +2102,84 @@ ${wireXmls.join('\n')}
   };
 
 
-  // Helper: Get strictly welded start point for any wire (unbreakable clamped branch resolver)
-  const getWireStartPt = (wire: CircuitWire): { x: number; y: number } => {
+    // Resolves wire start point snapped to 10px grid (clamps branches directly onto parent wire)
+  const getWireStartPt = (wire: CircuitWire): WirePoint => {
+    if (wire.startPoint) return snapPt10(wire.startPoint);
     if (wire.branchPoint) {
-      // Find parent wire in the same electrical net (same fromPinId)
-      const parentWire = wires.find(
-        (w) => w.id !== wire.id && w.fromPinId === wire.fromPinId && (!w.branchPoint || w.id === wire.sourceWireId)
-      );
-      if (parentWire) {
-        const fromPin = findPinById(parentWire.fromPinId);
-        const toPin = findPinById(parentWire.toPinId);
-        if (fromPin && toPin) {
-          const p1 = parentWire.branchPoint || { x: fromPin.x, y: fromPin.y };
-          const p2 = { x: toPin.x, y: toPin.y };
-          const bp = wire.branchPoint;
-
-          // Case 1: Pure horizontal wire (within 5px tolerance)
-          if (Math.abs(p1.y - p2.y) <= 5) {
-            const minX = Math.min(p1.x, p2.x);
-            const maxX = Math.max(p1.x, p2.x);
-            return {
-              x: Math.max(minX, Math.min(maxX, bp.x)),
-              y: p1.y,
-            };
-          }
-
-          // Case 2: Pure vertical wire (within 5px tolerance)
-          if (Math.abs(p1.x - p2.x) <= 5) {
-            const minY = Math.min(p1.y, p2.y);
-            const maxY = Math.max(p1.y, p2.y);
-            return {
-              x: p1.x,
-              y: Math.max(minY, Math.min(maxY, bp.y)),
-            };
-          }
-
-          // Case 3: 90° Manhattan wire with vertical elbow
-          const defaultMidX = Math.round((p1.x + p2.x) / 2);
-          const parentElbowX = parentWire.elbowX !== undefined ? parentWire.elbowX : defaultMidX;
-          const minY = Math.min(p1.y, p2.y);
-          const maxY = Math.max(p1.y, p2.y);
-
-          // If the branch point is on horizontal segment 1 (from p1 to elbow):
-          const seg1MinX = Math.min(p1.x, parentElbowX);
-          const seg1MaxX = Math.max(p1.x, parentElbowX);
-          if (Math.abs(bp.y - p1.y) <= 5 && bp.x >= seg1MinX - 5 && bp.x <= seg1MaxX + 5) {
-            return {
-              x: Math.max(seg1MinX, Math.min(seg1MaxX, bp.x)),
-              y: p1.y,
-            };
-          }
-
-          // If the branch point is on horizontal segment 2 (from elbow to p2):
-          const seg2MinX = Math.min(parentElbowX, p2.x);
-          const seg2MaxX = Math.max(parentElbowX, p2.x);
-          if (Math.abs(bp.y - p2.y) <= 5 && bp.x >= seg2MinX - 5 && bp.x <= seg2MaxX + 5) {
-            return {
-              x: Math.max(seg2MinX, Math.min(seg2MaxX, bp.x)),
-              y: p2.y,
-            };
-          }
-
-          // Clamped along the vertical elbow segment:
-          const clampedY = Math.max(minY, Math.min(maxY, bp.y));
-          return {
-            x: parentElbowX,
-            y: clampedY,
-          };
+      if (wire.sourceWireId) {
+        const parentWire = wires.find((w) => w.id === wire.sourceWireId);
+        if (parentWire) {
+          const pFrom = getWireStartPt(parentWire);
+          const pToPin = findPinById(parentWire.toPinId);
+          const pEnd = pToPin ? { x: pToPin.x, y: pToPin.y } : (parentWire.endPoint || pFrom);
+          return getClosestPointOnWire(parentWire, pFrom, pEnd, wire.branchPoint);
         }
       }
-      return wire.branchPoint;
+      return snapPt10(wire.branchPoint);
     }
     const fromPin = findPinById(wire.fromPinId);
-    return fromPin ? { x: fromPin.x, y: fromPin.y } : { x: 0, y: 0 };
+    return fromPin ? snapPt10({ x: fromPin.x, y: fromPin.y }) : { x: 0, y: 0 };
   };
 
-  // Helper: Find closest orthogonal projection point on a Manhattan wire path
+  const getWireEndPt = (wire: CircuitWire, startPt: WirePoint): WirePoint => {
+    const toPin = findPinById(wire.toPinId);
+    if (toPin) return snapPt10({ x: toPin.x, y: toPin.y });
+    if (wire.endPoint) return snapPt10(wire.endPoint);
+    return startPt;
+  };
+
   const getClosestPointOnOrthogonalWire = (
     p1: { x: number; y: number },
     p2: { x: number; y: number },
     click: { x: number; y: number },
     elbowX?: number,
     waypoints?: { x: number; y: number }[]
-  ) => {
-    interface Seg {
-      type: 'H' | 'V';
-      x1?: number;
-      x2?: number;
-      y1?: number;
-      y2?: number;
-      x?: number;
-      y?: number;
-    }
-    const segs: Seg[] = [];
-    if (waypoints && waypoints.length > 0) {
-      let prev = p1;
-      for (const wp of waypoints) {
-        if (Math.abs(prev.x - wp.x) > 1 && Math.abs(prev.y - wp.y) > 1) {
-          segs.push({ type: 'H', x1: prev.x, x2: wp.x, y: prev.y });
-          segs.push({ type: 'V', x: wp.x, y1: prev.y, y2: wp.y });
-        } else if (Math.abs(prev.y - wp.y) <= 1) {
-          segs.push({ type: 'H', x1: prev.x, x2: wp.x, y: prev.y });
-        } else {
-          segs.push({ type: 'V', x: prev.x, y1: prev.y, y2: wp.y });
-        }
-        prev = wp;
-      }
-      if (Math.abs(prev.x - p2.x) > 1 && Math.abs(prev.y - p2.y) > 1) {
-        const midX = Math.round((prev.x + p2.x) / 2);
-        segs.push({ type: 'H', x1: prev.x, x2: midX, y: prev.y });
-        segs.push({ type: 'V', x: midX, y1: prev.y, y2: p2.y });
-        segs.push({ type: 'H', x1: midX, x2: p2.x, y: p2.y });
-      } else if (Math.abs(prev.y - p2.y) <= 1) {
-        segs.push({ type: 'H', x1: prev.x, x2: p2.x, y: prev.y });
-      } else {
-        segs.push({ type: 'V', x: prev.x, y1: prev.y, y2: p2.y });
-      }
-    } else if (Math.abs(p1.y - p2.y) <= 4) {
-      segs.push({ type: 'H', x1: p1.x, x2: p2.x, y: p1.y });
-    } else if (Math.abs(p1.x - p2.x) <= 4) {
-      segs.push({ type: 'V', x: p1.x, y1: p1.y, y2: p2.y });
-    } else {
-      const midX = elbowX !== undefined ? elbowX : Math.round((p1.x + p2.x) / 2);
-      segs.push({ type: 'H', x1: p1.x, x2: midX, y: p1.y });
-      segs.push({ type: 'V', x: midX, y1: p1.y, y2: p2.y });
-      segs.push({ type: 'H', x1: midX, x2: p2.x, y: p2.y });
-    }
-
-    let bestPt = { x: p1.x, y: p1.y };
-    let bestDistSq = Infinity;
-    let bestSegType: 'H' | 'V' = 'H';
-    for (const s of segs) {
-      let px: number;
-      let py: number;
-      if (s.type === 'H') {
-        const minX = Math.min(s.x1!, s.x2!);
-        const maxX = Math.max(s.x1!, s.x2!);
-        px = Math.max(minX, Math.min(maxX, click.x));
-        py = s.y!;
-      } else {
-        const minY = Math.min(s.y1!, s.y2!);
-        const maxY = Math.max(s.y1!, s.y2!);
-        px = s.x!;
-        py = Math.max(minY, Math.min(maxY, click.y));
-      }
-      const dSq = (px - click.x) ** 2 + (py - click.y) ** 2;
-      if (dSq < bestDistSq) {
-        bestDistSq = dSq;
-        bestPt = { x: px, y: py };
-        bestSegType = s.type;
-      }
-    }
-    // Snap only along the free axis; keep the wire axis strictly fixed so tap never jogs off the wire!
-    return {
-      x: bestSegType === 'H' ? (snapToGrid ? Math.round(bestPt.x / 10) * 10 : Math.round(bestPt.x)) : bestPt.x,
-      y: bestSegType === 'V' ? (snapToGrid ? Math.round(bestPt.y / 10) * 10 : Math.round(bestPt.y)) : bestPt.y,
+  ): WirePoint => {
+    const dummyWire: CircuitWire = {
+      id: 'dummy',
+      fromCompId: '',
+      fromPinId: '',
+      toCompId: '',
+      toPinId: '',
+      value: 0,
+      elbowX,
+      waypoints,
     };
+    return getClosestPointOnWire(dummyWire, p1, p2, click);
   };
 
-  // Finish a wire ending at a free canvas point (Logisim-style open wire stubs)
+    // Finish a wire ending at a free canvas point (Logisim-style open wire stubs)
   const finishWireAtPoint = (point: { x: number; y: number }) => {
     if (!wiringFrom) return;
-    recordHistory();
-    let snappedPt = {
-      x: snapToGrid ? Math.round(point.x / 10) * 10 : Math.round(point.x),
-      y: snapToGrid ? Math.round(point.y / 10) * 10 : Math.round(point.y),
-    };
 
-    // Snap to straight collinear axis if within 10px tolerance (prevents micro zig-zags)
-    if (Math.abs(snappedPt.x - wiringFrom.x) <= 10) {
-      snappedPt.x = wiringFrom.x;
-    }
-    if (Math.abs(snappedPt.y - wiringFrom.y) <= 10) {
-      snappedPt.y = wiringFrom.y;
-    }
+    const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+    const endPt = snapPt10(point);
 
-    const dist = Math.hypot(snappedPt.x - wiringFrom.x, snappedPt.y - wiringFrom.y);
-    if (dist < 8 && (!wiringFrom.waypoints || wiringFrom.waypoints.length === 0)) {
+    const dist = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
+    if (dist < 15 && (!wiringFrom.waypoints || wiringFrom.waypoints.length === 0)) {
       setWiringFrom(null);
       return;
     }
 
-    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
+    recordHistory();
+
+    let finalWaypoints = wiringFrom.waypoints ? wiringFrom.waypoints.map(snapPt10) : undefined;
     if (finalWaypoints && finalWaypoints.length > 0) {
       const lastPt = finalWaypoints[finalWaypoints.length - 1];
-      if (lastPt.x !== snappedPt.x && lastPt.y !== snappedPt.y) {
-        const midX = Math.round((lastPt.x + snappedPt.x) / 2);
-        finalWaypoints.push({ x: midX, y: lastPt.y });
-        finalWaypoints.push({ x: midX, y: snappedPt.y });
+      if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
+        finalWaypoints.push({ x: endPt.x, y: lastPt.y });
       }
+    } else if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
+      finalWaypoints = [{ x: endPt.x, y: startPt.y }];
     }
 
-    // If extending an existing open wire, update it in-place instead of creating a duplicate wire
     if (wiringFrom.extendingWireId) {
       setWires((prev) => {
         const updatedWires = prev.map((w) => {
           if (w.id === wiringFrom.extendingWireId) {
             return {
               ...w,
-              endPoint: snappedPt,
+              endPoint: endPt,
               waypoints: finalWaypoints,
             };
           }
@@ -2332,11 +2201,11 @@ ${wireXmls.join('\n')}
       toCompId: '',
       toPinId: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       value: 0,
-      startPoint: { x: wiringFrom.x, y: wiringFrom.y },
-      branchPoint: wiringFrom.branchPoint,
+      startPoint: startPt,
+      branchPoint: wiringFrom.branchPoint ? snapPt10(wiringFrom.branchPoint) : undefined,
       sourceWireId: wiringFrom.sourceWireId,
       waypoints: finalWaypoints,
-      endPoint: snappedPt,
+      endPoint: endPt,
       isBus: defaultWireIsBus,
       bitWidth: defaultWireIsBus ? 4 : 1,
     };
@@ -5294,6 +5163,10 @@ ${wireXmls.join('\n')}
   };
 
   // Count outgoing wires per output pin to detect branching junctions
+    const circuitJunctions = useMemo(() => {
+    return computeCircuitJunctions(wires, getWireStartPt, getWireEndPt, findPinById);
+  }, [wires, components]);
+
   const pinWireCounts = useMemo(() => {
     const counts = new Map<string, number>();
     wires.forEach((w) => {
@@ -6759,71 +6632,16 @@ ${wireXmls.join('\n')}
               const isHigh = wire.value === 1;
               const isSelected = selectedWireIds.includes(wire.id);
 
-              // Support mid-wire branching start point
               const startPt = getWireStartPt(wire);
-              const endPt = toPin ? { x: toPin.x, y: toPin.y } : (wire.endPoint || startPt);
+              const endPt = getWireEndPt(wire, startPt);
 
-              // Wire Path: Strictly Manhattan 90°
-              const defaultMidX = Math.round((startPt.x + endPt.x) / 2);
-              const effectiveMidX = wire.elbowX !== undefined ? wire.elbowX : (wire.jointOffset !== undefined ? defaultMidX + wire.jointOffset : defaultMidX);
+              const segs = getWireOrthogonalSegments(wire, startPt, endPt);
+              const pathD = segmentsToSvgPath(segs);
 
-              // Anti-kink tolerance: If pins are horizontally or vertically aligned (within 4px), draw pure straight Manhattan line!
-              const isStraightH = Math.abs(startPt.y - endPt.y) <= 4;
-              const isStraightV = Math.abs(startPt.x - endPt.x) <= 4;
-
-              let pathD: string;
-              if (wire.waypoints && wire.waypoints.length > 0) {
-                let d = `M ${startPt.x},${startPt.y}`;
-                let prev = startPt;
-                for (const pt of wire.waypoints) {
-                  if (Math.abs(prev.x - pt.x) <= 3) {
-                    d += ` V ${pt.y}`;
-                  } else if (Math.abs(prev.y - pt.y) <= 3) {
-                    d += ` H ${pt.x}`;
-                  } else {
-                    d += ` H ${pt.x} V ${pt.y}`;
-                  }
-                  prev = pt;
-                }
-                // Connect from last waypoint to endPt with 90° Manhattan step (NEVER diagonal!)
-                if (Math.abs(prev.x - endPt.x) <= 3) {
-                  d += ` V ${endPt.y}`;
-                } else if (Math.abs(prev.y - endPt.y) <= 3) {
-                  d += ` H ${endPt.x}`;
-                } else {
-                  const midX = Math.round((prev.x + endPt.x) / 2);
-                  d += ` H ${midX} V ${endPt.y} H ${endPt.x}`;
-                }
-                pathD = d;
-              } else if (isStraightH) {
-                pathD = `M ${startPt.x},${startPt.y} L ${endPt.x},${startPt.y}`;
-              } else if (isStraightV) {
-                pathD = `M ${startPt.x},${startPt.y} L ${startPt.x},${endPt.y}`;
-              } else if (wire.branchPoint) {
-                // Solder T-Junction: determine orientation of parent wire at branch point
-                const parentW = wires.find((w) => w.id === wire.sourceWireId || (w.id !== wire.id && w.fromPinId === wire.fromPinId));
-                let isParentH = true;
-                if (parentW) {
-                  const pFrom = getWireStartPt(parentW);
-                  const pToPin = findPinById(parentW.toPinId);
-                  const pEnd = pToPin ? { x: pToPin.x, y: pToPin.y } : (parentW.endPoint || pFrom);
-                  if (Math.abs(pFrom.x - pEnd.x) < Math.abs(pFrom.y - pEnd.y)) {
-                    isParentH = false;
-                  }
-                }
-                if (isParentH) {
-                  // Leaving horizontal parent line: drop vertically straight from solder dot!
-                  pathD = `M ${startPt.x},${startPt.y} V ${endPt.y} H ${endPt.x}`;
-                } else {
-                  // Leaving vertical parent line: leave horizontally straight from solder dot!
-                  pathD = `M ${startPt.x},${startPt.y} H ${endPt.x} V ${endPt.y}`;
-                }
-              } else {
-                const midX = Math.round((startPt.x + endPt.x) / 2);
-                pathD = `M ${startPt.x},${startPt.y} H ${midX} V ${endPt.y} H ${endPt.x}`;
-              }
-              const midX = isStraightH ? Math.round((startPt.x + endPt.x) / 2) : effectiveMidX;
-              const midY = isStraightH ? startPt.y : Math.round((startPt.y + endPt.y) / 2);
+              const defaultMidX = snapTo10((startPt.x + endPt.x) / 2);
+              const effectiveMidX = wire.elbowX !== undefined ? snapTo10(wire.elbowX) : defaultMidX;
+              const midX = effectiveMidX;
+              const midY = snapTo10((startPt.y + endPt.y) / 2);
 
               return (
                 <g
@@ -6861,21 +6679,10 @@ ${wireXmls.join('\n')}
                     onMouseDown={(e) => {
                       if (e.button === 0 && !wiringFrom) {
                         e.stopPropagation();
-                        // Select wire immediately on mousedown so drag handles appear reliably
                         if (!e.shiftKey) {
                           setSelectedWireIds([wire.id]);
                           setSelectedCompIds([]);
                         }
-                        const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
-                        wireDragStartRef.current = {
-                          wireId: wire.id,
-                          fromCompId: wire.fromCompId,
-                          fromPinId: wire.fromPinId,
-                          tap,
-                          startClientX: e.clientX,
-                          startClientY: e.clientY,
-                          didDrag: false,
-                        };
                       }
                     }}
                     onDoubleClick={(e) => {
@@ -6993,19 +6800,7 @@ ${wireXmls.join('\n')}
                     </g>
                   )}
 
-                  {/* Solder Junction Dot for Mid-Wire T-Junction - Strictly welded to startPt */}
-                  {wire.branchPoint && (
-                    <g className="pointer-events-none">
-                      <circle
-                        cx={startPt.x}
-                        cy={startPt.y}
-                        r={wire.isBus ? 6.5 : 5}
-                        fill={wire.hasConflict ? '#ef4444' : isHigh ? '#16a34a' : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')}
-                        stroke={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
-                        strokeWidth={1.8}
-                      />
-                    </g>
-                  )}
+                  {/* Solder junctions are dynamically calculated & rendered at true orthogonal intersections */}
 
                   {/* Live Hover Tap Preview Indicator when wiring */}
                   {wiringFrom && hoveredWireId === wire.id && wire.id !== wiringFrom.sourceWireId && (() => {
@@ -7435,93 +7230,113 @@ ${wireXmls.join('\n')}
               );
             })}
 
-            {/* Dynamic Active Wire being drawn (supports Logisim interactive waypoints) */}
-            {wiringFrom && (
-              <g className="pointer-events-none">
-                {/* Glow Underlay for Maximum Visibility */}
-                <path
-                  d={(() => {
-                    const start = { x: wiringFrom.x, y: wiringFrom.y };
-                    const current = mousePos;
-                    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-                      let d = `M ${start.x},${start.y}`;
-                      for (const pt of wiringFrom.waypoints) {
-                        d += ` L ${pt.x},${pt.y}`;
-                      }
-                      const lastPt = wiringFrom.waypoints[wiringFrom.waypoints.length - 1];
-                      const midX = Math.round((lastPt.x + current.x) / 2);
-                      d += ` H ${midX} V ${current.y} H ${current.x}`;
-                      return d;
-                    }
-                    const midX = Math.round((start.x + current.x) / 2);
-                    return `M ${start.x},${start.y} H ${midX} V ${current.y} H ${current.x}`;
-                  })()}
-                  fill="none"
-                  stroke={cadTheme === 'dark' ? '#0284c7' : '#93c5fd'}
-                  strokeWidth={6}
-                  strokeOpacity={0.4}
-                />
-                {/* Main Active Wire Cable */}
-                <path
-                  d={(() => {
-                    const start = { x: wiringFrom.x, y: wiringFrom.y };
-                    const current = mousePos;
-                    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-                      let d = `M ${start.x},${start.y}`;
-                      for (const pt of wiringFrom.waypoints) {
-                        d += ` L ${pt.x},${pt.y}`;
-                      }
-                      const lastPt = wiringFrom.waypoints[wiringFrom.waypoints.length - 1];
-                      const midX = Math.round((lastPt.x + current.x) / 2);
-                      d += ` H ${midX} V ${current.y} H ${current.x}`;
-                      return d;
-                    }
-                    const midX = Math.round((start.x + current.x) / 2);
-                    return `M ${start.x},${start.y} H ${midX} V ${current.y} H ${current.x}`;
-                  })()}
-                  fill="none"
-                  stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
-                  strokeWidth={3}
-                  strokeDasharray="6,4"
-                />
-                {/* Prominent Start Solder Dot */}
+            {/* Dynamic Logisim Solder Dots (strictly rendered at true orthogonal T-junctions & crosses) */}
+            {circuitJunctions.map((j, idx) => (
+              <g key={`dynamic_junc_${j.x}_${j.y}_${idx}`} className="pointer-events-none">
                 <circle
-                  cx={wiringFrom.x}
-                  cy={wiringFrom.y}
-                  r={6}
-                  fill="#2563eb"
-                  stroke="#ffffff"
-                  strokeWidth={2}
+                  cx={j.x}
+                  cy={j.y}
+                  r={j.isBus ? 6.5 : 4.5}
+                  fill={
+                    j.hasConflict
+                      ? '#ef4444'
+                      : j.value === 1
+                      ? (cadTheme === 'dark' ? '#22c55e' : '#16a34a')
+                      : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')
+                  }
+                  stroke={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
+                  strokeWidth={1.8}
                 />
-                {/* Targeting Crosshair Cursor at Mouse Position */}
-                <circle
-                  cx={mousePos.x}
-                  cy={mousePos.y}
-                  r={8}
-                  fill="none"
-                  stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
-                  strokeWidth={2}
-                />
-                <circle
-                  cx={mousePos.x}
-                  cy={mousePos.y}
-                  r={2.5}
-                  fill={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
-                />
-                {/* Placed Interactive Waypoints */}
-                {wiringFrom.waypoints?.map((pt, idx) => (
+              </g>
+            ))}
+
+            {/* Dynamic Active Wire being drawn (strictly 10px grid locked Logisim Manhattan) */}
+            {wiringFrom && (() => {
+              const p0 = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+              const p1 = snapPt10(mousePos);
+
+              let previewPath = '';
+              if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
+                const pts = [p0, ...wiringFrom.waypoints.map(snapPt10), p1];
+                let d = `M ${pts[0].x},${pts[0].y}`;
+                for (let i = 1; i < pts.length; i++) {
+                  const prev = pts[i - 1];
+                  const curr = pts[i];
+                  if (prev.x === curr.x || prev.y === curr.y) {
+                    d += ` L ${curr.x},${curr.y}`;
+                  } else {
+                    d += ` H ${curr.x} V ${curr.y}`;
+                  }
+                }
+                previewPath = d;
+              } else if (p0.x === p1.x || p0.y === p1.y) {
+                previewPath = `M ${p0.x},${p0.y} L ${p1.x},${p1.y}`;
+              } else {
+                // Logisim Manhattan standard: Horizontal then Vertical
+                previewPath = `M ${p0.x},${p0.y} H ${p1.x} V ${p1.y}`;
+              }
+
+              return (
+                <g className="pointer-events-none">
+                  {/* Glow Underlay for Maximum Visibility */}
+                  <path
+                    d={previewPath}
+                    fill="none"
+                    stroke={cadTheme === 'dark' ? '#0284c7' : '#93c5fd'}
+                    strokeWidth={6}
+                    strokeOpacity={0.4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {/* Main Active Wire Cable */}
+                  <path
+                    d={previewPath}
+                    fill="none"
+                    stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
+                    strokeWidth={3}
+                    strokeDasharray="6,4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {/* Prominent Start Solder Dot */}
                   <circle
-                    key={idx}
-                    cx={pt.x}
-                    cy={pt.y}
-                    r={4.5}
+                    cx={p0.x}
+                    cy={p0.y}
+                    r={5.5}
                     fill="#2563eb"
                     stroke="#ffffff"
-                    strokeWidth={1.5}
+                    strokeWidth={2}
                   />
-                ))}
-              </g>
-            )}
+                  {/* Grid-locked Target Dot at mouse grid point */}
+                  <circle
+                    cx={p1.x}
+                    cy={p1.y}
+                    r={6.5}
+                    fill="none"
+                    stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
+                    strokeWidth={2}
+                  />
+                  <circle
+                    cx={p1.x}
+                    cy={p1.y}
+                    r={2.5}
+                    fill={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
+                  />
+                  {/* Placed Interactive Waypoints */}
+                  {wiringFrom.waypoints?.map((pt, idx) => (
+                    <circle
+                      key={idx}
+                      cx={snapTo10(pt.x)}
+                      cy={snapTo10(pt.y)}
+                      r={4.5}
+                      fill="#2563eb"
+                      stroke="#ffffff"
+                      strokeWidth={1.5}
+                    />
+                  ))}
+                </g>
+              );
+            })()}
 
             {/* Solder Junction Dots for Branching Output Pins */}
             {Array.from(pinWireCounts.entries()).map(([pinId, count]) => {
