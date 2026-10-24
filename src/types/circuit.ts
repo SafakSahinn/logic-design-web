@@ -181,6 +181,8 @@ export interface CircuitWire {
   sourceWireId?: string;
   waypoints?: { x: number; y: number }[];
   elbowY?: number; // Manhattan dirsek Y koordinatı
+  endPoint?: { x: number; y: number }; // Serbest tuval bitiş noktası
+  startPoint?: { x: number; y: number }; // Serbest tuval başlangıç noktası
 }
 
 export interface CircuitPreset {

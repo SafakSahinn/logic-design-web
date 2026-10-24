@@ -260,6 +260,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Group drag initial offsets
   const dragGroupOffsetsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const dragRafRef = useRef<number | null>(null);
+  const pendingDragCoordsRef = useRef<{ x: number; y: number } | null>(null);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
   // Backward compatibility setter wrappers
   const setSelectedCompId = (id: string | null) => {
@@ -1126,7 +1129,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }
 
     const coords = getCanvasCoords(e);
-    setMousePos(coords);
+    if (!draggingCompId) setMousePos(coords);
 
     // Instant Logisim-style pull branch wire from anywhere on wire
     if (wireDragStartRef.current && !wiringFrom && !draggingCompId && !draggingWireJointRef.current) {
@@ -1187,71 +1190,77 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       if (dragStartSnapshotRef.current) {
         dragStartSnapshotRef.current.didMove = true;
       }
-      const offsets = dragGroupOffsetsRef.current;
-      const initialComps = dragStartSnapshotRef.current ? dragStartSnapshotRef.current.components : [];
-      const initialWires = dragStartSnapshotRef.current ? dragStartSnapshotRef.current.wires : [];
-      const initialCompMap = new Map(initialComps.map((c) => [c.id, c]));
+      pendingDragCoordsRef.current = coords;
 
-      // 1. Calculate component position deltas synchronously before state updates
-      const movedCompDeltas = new Map<string, { dx: number; dy: number }>();
-      for (const [cId, off] of offsets.entries()) {
-        const rawX = coords.x - off.x;
-        const rawY = coords.y - off.y;
-        const snappedX = snapToGrid ? Math.max(10, Math.round(rawX / 10) * 10) : Math.max(10, Math.round(rawX));
-        const snappedY = snapToGrid ? Math.max(10, Math.round(rawY / 10) * 10) : Math.max(10, Math.round(rawY));
-        const c0 = initialCompMap.get(cId);
-        if (c0) {
-          movedCompDeltas.set(cId, { dx: snappedX - c0.x, dy: snappedY - c0.y });
-        }
-      }
+      if (!dragRafRef.current) {
+        dragRafRef.current = requestAnimationFrame(() => {
+          dragRafRef.current = null;
+          const currentCoords = pendingDragCoordsRef.current;
+          if (!currentCoords || !dragGroupOffsetsRef.current || dragGroupOffsetsRef.current.size === 0) return;
 
-      setComponents((prev) =>
-        prev.map((c) => {
-          const delta = movedCompDeltas.get(c.id);
-          const c0 = initialCompMap.get(c.id);
-          if (delta && c0) {
-            return updatePinPositions({ ...c, x: c0.x + delta.dx, y: c0.y + delta.dy });
+          const offsets = dragGroupOffsetsRef.current;
+          const initialComps = dragStartSnapshotRef.current ? dragStartSnapshotRef.current.components : [];
+          const initialWires = dragStartSnapshotRef.current ? dragStartSnapshotRef.current.wires : [];
+          const initialCompMap = new Map(initialComps.map((c) => [c.id, c]));
+
+          const movedCompDeltas = new Map<string, { dx: number; dy: number }>();
+          for (const [cId, off] of offsets.entries()) {
+            const rawX = currentCoords.x - off.x;
+            const rawY = currentCoords.y - off.y;
+            const snappedX = snapToGrid ? Math.max(10, Math.round(rawX / 10) * 10) : Math.max(10, Math.round(rawX));
+            const snappedY = snapToGrid ? Math.max(10, Math.round(rawY / 10) * 10) : Math.max(10, Math.round(rawY));
+            const c0 = initialCompMap.get(cId);
+            if (c0) {
+              movedCompDeltas.set(cId, { dx: snappedX - c0.x, dy: snappedY - c0.y });
+            }
           }
-          return c;
-        })
-      );
 
-      // 2. Synchronize all connected wires, solder branch points, and Manhattan elbows!
-      if (initialWires.length > 0 && movedCompDeltas.size > 0) {
-        setWires((prev) =>
-          prev.map((w) => {
-            const initialWire = initialWires.find((iw) => iw.id === w.id);
-            if (!initialWire) return w;
-
-            let updatedWire = { ...w };
-
-            // A. If wire has a branchPoint (T-Junction) and its source net component moved:
-            if (initialWire.branchPoint && movedCompDeltas.has(w.fromCompId)) {
-              const delta = movedCompDeltas.get(w.fromCompId)!;
-              updatedWire.branchPoint = {
-                x: initialWire.branchPoint.x + delta.dx,
-                y: initialWire.branchPoint.y + delta.dy,
-              };
-            }
-
-            // B. If both fromCompId and toCompId moved together (group drag):
-            const fromDelta = movedCompDeltas.get(w.fromCompId);
-            const toDelta = movedCompDeltas.get(w.toCompId);
-            if (fromDelta && toDelta && fromDelta.dx === toDelta.dx) {
-              if (initialWire.elbowX !== undefined) {
-                updatedWire.elbowX = initialWire.elbowX + fromDelta.dx;
+          setComponents((prev) =>
+            prev.map((c) => {
+              const delta = movedCompDeltas.get(c.id);
+              const c0 = initialCompMap.get(c.id);
+              if (delta && c0) {
+                return updatePinPositions({ ...c, x: c0.x + delta.dx, y: c0.y + delta.dy });
               }
-              if (initialWire.waypoints && initialWire.waypoints.length > 0) {
-                updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
-                  x: pt.x + fromDelta.dx,
-                  y: pt.y + fromDelta.dy,
-                }));
-              }
-            }
+              return c;
+            })
+          );
 
-            return updatedWire;
-          })
-        );
+          if (initialWires.length > 0 && movedCompDeltas.size > 0) {
+            setWires((prev) =>
+              prev.map((w) => {
+                const initialWire = initialWires.find((iw) => iw.id === w.id);
+                if (!initialWire) return w;
+
+                let updatedWire = { ...w };
+
+                if (initialWire.branchPoint && movedCompDeltas.has(w.fromCompId)) {
+                  const delta = movedCompDeltas.get(w.fromCompId)!;
+                  updatedWire.branchPoint = {
+                    x: initialWire.branchPoint.x + delta.dx,
+                    y: initialWire.branchPoint.y + delta.dy,
+                  };
+                }
+
+                const fromDelta = movedCompDeltas.get(w.fromCompId);
+                const toDelta = movedCompDeltas.get(w.toCompId);
+                if (fromDelta && toDelta && fromDelta.dx === toDelta.dx) {
+                  if (initialWire.elbowX !== undefined) {
+                    updatedWire.elbowX = initialWire.elbowX + fromDelta.dx;
+                  }
+                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
+                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
+                      x: pt.x + fromDelta.dx,
+                      y: pt.y + fromDelta.dy,
+                    }));
+                  }
+                }
+
+                return updatedWire;
+              })
+            );
+          }
+        });
       }
       return;
     }
@@ -1266,6 +1275,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Canvas mouse up: stop dragging, stop panning, or finalize box selection
   const handleCanvasMouseUp = (e: React.MouseEvent) => {
+    if (dragRafRef.current) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    if (wiringFrom) {
+      const coords = getCanvasCoords(e);
+      const didDragWire = Math.hypot(coords.x - wiringFrom.x, coords.y - wiringFrom.y) > 20 || (wiringFrom.waypoints && wiringFrom.waypoints.length > 0);
+      if (didDragWire) {
+        finishWireAtPoint(coords);
+        return;
+      }
+    }
     wireDragStartRef.current = null;
     if (draggingWireJointRef.current || draggingWireJoint) {
       draggingWireJointRef.current = null;
@@ -2213,6 +2234,57 @@ ${wireXmls.join('\n')}
       x: bestSegType === 'H' ? (snapToGrid ? Math.round(bestPt.x / 10) * 10 : Math.round(bestPt.x)) : bestPt.x,
       y: bestSegType === 'V' ? (snapToGrid ? Math.round(bestPt.y / 10) * 10 : Math.round(bestPt.y)) : bestPt.y,
     };
+  };
+
+  // Finish a wire ending at a free canvas point (Logisim-style open wire stubs)
+  const finishWireAtPoint = (point: { x: number; y: number }) => {
+    if (!wiringFrom) return;
+    recordHistory();
+    const snappedPt = {
+      x: snapToGrid ? Math.round(point.x / 10) * 10 : Math.round(point.x),
+      y: snapToGrid ? Math.round(point.y / 10) * 10 : Math.round(point.y),
+    };
+
+    const dist = Math.hypot(snappedPt.x - wiringFrom.x, snappedPt.y - wiringFrom.y);
+    if (dist < 8 && (!wiringFrom.waypoints || wiringFrom.waypoints.length === 0)) {
+      setWiringFrom(null);
+      return;
+    }
+
+    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
+    if (finalWaypoints && finalWaypoints.length > 0) {
+      const lastPt = finalWaypoints[finalWaypoints.length - 1];
+      if (lastPt.x !== snappedPt.x || lastPt.y !== snappedPt.y) {
+        const midX = Math.round((lastPt.x + snappedPt.x) / 2);
+        finalWaypoints.push({ x: midX, y: lastPt.y });
+        finalWaypoints.push({ x: midX, y: snappedPt.y });
+      }
+    }
+
+    const freeWire: CircuitWire = {
+      id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      fromCompId: wiringFrom.compId,
+      fromPinId: wiringFrom.pinId,
+      toCompId: '',
+      toPinId: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      value: 0,
+      branchPoint: wiringFrom.branchPoint,
+      sourceWireId: wiringFrom.sourceWireId,
+      waypoints: finalWaypoints,
+      endPoint: snappedPt,
+      isBus: defaultWireIsBus,
+      bitWidth: defaultWireIsBus ? 4 : 1,
+    };
+
+    setWires((prev) => {
+      const updated = [...prev, freeWire];
+      const sim = simulateCircuit(components, updated);
+      setComponents(sim.components);
+      return sim.wires;
+    });
+
+    lastWireConnectedTimeRef.current = Date.now();
+    setWiringFrom(null);
   };
 
   // Connect active wiring to a component pin (Unrestricted Logisim wiring)
@@ -6592,14 +6664,15 @@ ${wireXmls.join('\n')}
             {wires.map((wire) => {
               const fromPin = findPinById(wire.fromPinId);
               const toPin = findPinById(wire.toPinId);
-              if (!fromPin || !toPin) return null;
+              if (!fromPin && !wire.branchPoint && !wire.startPoint) return null;
+              if (!toPin && !wire.endPoint) return null;
 
               const isHigh = wire.value === 1;
               const isSelected = selectedWireIds.includes(wire.id);
 
               // Support mid-wire branching start point
               const startPt = getWireStartPt(wire);
-              const endPt = { x: toPin.x, y: toPin.y };
+              const endPt = toPin ? { x: toPin.x, y: toPin.y } : (wire.endPoint || startPt);
 
               // Wire Path: Strictly Manhattan 90°
               const defaultMidX = Math.round((startPt.x + endPt.x) / 2);
@@ -6852,6 +6925,32 @@ ${wireXmls.join('\n')}
                       </g>
                     );
                   })()}
+
+                                    {/* Free wire end terminal dot (Logisim open wire end) */}
+                  {!toPin && wire.endPoint && (
+                    <circle
+                      cx={endPt.x}
+                      cy={endPt.y}
+                      r={5}
+                      fill={isHigh ? '#16a34a' : '#2563eb'}
+                      stroke="#ffffff"
+                      strokeWidth={1.8}
+                      className="cursor-pointer hover:scale-125 transition-transform"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setWiringFrom({
+                          compId: wire.fromCompId,
+                          pinId: wire.toPinId,
+                          pinType: 'output',
+                          x: endPt.x,
+                          y: endPt.y,
+                          sourceWireId: wire.id,
+                        });
+                      }}
+                    >
+                      <title>Kabloyu Buradan Uzat</title>
+                    </circle>
+                  )}
 
                   {/* Contention Warning Badge */}
                   {wire.hasConflict && (
@@ -7259,9 +7358,6 @@ ${wireXmls.join('\n')}
                       d += ` H ${midX} V ${current.y} H ${current.x}`;
                       return d;
                     }
-                    if (wiringFrom.branchPoint) {
-                      return `M ${start.x},${start.y} V ${current.y} H ${current.x}`;
-                    }
                     const midX = Math.round((start.x + current.x) / 2);
                     return `M ${start.x},${start.y} H ${midX} V ${current.y} H ${current.x}`;
                   })()}
@@ -7284,9 +7380,6 @@ ${wireXmls.join('\n')}
                       const midX = Math.round((lastPt.x + current.x) / 2);
                       d += ` H ${midX} V ${current.y} H ${current.x}`;
                       return d;
-                    }
-                    if (wiringFrom.branchPoint) {
-                      return `M ${start.x},${start.y} V ${current.y} H ${current.x}`;
                     }
                     const midX = Math.round((start.x + current.x) / 2);
                     return `M ${start.x},${start.y} H ${midX} V ${current.y} H ${current.x}`;
@@ -7813,6 +7906,20 @@ ${wireXmls.join('\n')}
               </button>
             </div>
           )}
+
+                    {/* Floating Clear Canvas Button (Directly above Kare / Bottom-Right Controls) */}
+          <button
+            onClick={() => setShowClearConfirmModal(true)}
+            className={`absolute bottom-16 right-4 z-20 backdrop-blur-md px-3.5 py-1.5 rounded-2xl border text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all hover:scale-105 active:scale-95 font-bold ${
+              cadTheme === 'dark'
+                ? 'bg-rose-950/80 hover:bg-rose-900 border-rose-800 text-rose-300 hover:text-white'
+                : 'bg-white/95 hover:bg-rose-50 border-rose-200 text-rose-600 hover:text-rose-700'
+            }`}
+            title="Tuvaldeki tüm bileşenleri ve kabloları temizle"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+            <span>Temizle</span>
+          </button>
 
           {/* Floating Zoom & Pan Navigation Controls */}
           <div className={`absolute bottom-4 right-4 backdrop-blur-md px-2 py-1.5 rounded-2xl border text-xs shadow-md flex items-center gap-1.5 select-none transition-colors ${
@@ -10520,6 +10627,48 @@ ${wireXmls.join('\n')}
                 className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
               >
                 Kapat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+            {/* Secondary Confirmation Modal for Clear Canvas */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl space-y-5 animate-in zoom-in-95 duration-150 ${
+            cadTheme === 'dark' ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold">Tüm Devreyi Temizle</h3>
+                <p className="text-xs text-slate-500 mt-0.5">İkincil Onay</p>
+              </div>
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              Tuvaldeki tüm mantık kapıları, bağlantı kabloları ve açıklama blokları tamamen silinecektir. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Vazgeç
+              </button>
+              <button
+                onClick={() => {
+                  setShowClearConfirmModal(false);
+                  handleClearCanvas();
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-md transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Evet, Hepsini Temizle</span>
               </button>
             </div>
           </div>

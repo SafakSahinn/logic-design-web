@@ -1981,20 +1981,12 @@ export function simulateCircuit(
 ): { components: CircuitComponentInstance[]; wires: CircuitWire[] } {
   let curComps = components;
   let curWires = wires;
-  let stillChanging = false;
 
   for (let i = 0; i < maxIterations; i++) {
     const step = simulateCircuitStep(curComps, curWires);
     curComps = step.components;
     curWires = step.wires;
-    stillChanging = step.hasChanged;
     if (!step.hasChanged) break;
-  }
-
-  // If unstable oscillation occurs (e.g. Inverter feeding back to its own input without latching),
-  // in Logisim this triggers an oscillation error displayed as a red wire.
-  if (stillChanging) {
-    curWires = curWires.map((w) => ({ ...w, hasConflict: true }));
   }
 
   return { components: curComps, wires: curWires };
