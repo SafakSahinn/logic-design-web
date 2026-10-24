@@ -1135,7 +1135,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (wireDragStartRef.current && !wiringFrom && !draggingCompId && !draggingWireJointRef.current) {
       const dx = Math.abs(e.clientX - wireDragStartRef.current.startClientX);
       const dy = Math.abs(e.clientY - wireDragStartRef.current.startClientY);
-      if (dx > 4 || dy > 4) {
+      if (dx > 16 || dy > 16) {
         wireDragStartRef.current.didDrag = true;
         const wInfo = wireDragStartRef.current;
         setWiringFrom({
@@ -1234,26 +1234,48 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
                 let updatedWire = { ...w };
 
-                if (initialWire.branchPoint && movedCompDeltas.has(w.fromCompId)) {
-                  const delta = movedCompDeltas.get(w.fromCompId)!;
-                  updatedWire.branchPoint = {
-                    x: initialWire.branchPoint.x + delta.dx,
-                    y: initialWire.branchPoint.y + delta.dy,
-                  };
-                }
-
                 const fromDelta = movedCompDeltas.get(w.fromCompId);
                 const toDelta = movedCompDeltas.get(w.toCompId);
-                if (fromDelta && toDelta && fromDelta.dx === toDelta.dx) {
+
+                // If this wire is a self-feedback loop (fromCompId === toCompId) OR both endpoints moved together:
+                if (fromDelta && (toDelta || w.fromCompId === w.toCompId) && (!toDelta || (fromDelta.dx === toDelta.dx && fromDelta.dy === toDelta.dy))) {
+                  const delta = fromDelta;
+                  if (initialWire.branchPoint) {
+                    updatedWire.branchPoint = {
+                      x: initialWire.branchPoint.x + delta.dx,
+                      y: initialWire.branchPoint.y + delta.dy,
+                    };
+                  }
                   if (initialWire.elbowX !== undefined) {
-                    updatedWire.elbowX = initialWire.elbowX + fromDelta.dx;
+                    updatedWire.elbowX = initialWire.elbowX + delta.dx;
+                  }
+                  if (initialWire.elbowY !== undefined) {
+                    updatedWire.elbowY = initialWire.elbowY + delta.dy;
                   }
                   if (initialWire.waypoints && initialWire.waypoints.length > 0) {
                     updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
-                      x: pt.x + fromDelta.dx,
-                      y: pt.y + fromDelta.dy,
+                      x: pt.x + delta.dx,
+                      y: pt.y + delta.dy,
                     }));
                   }
+                  if (initialWire.endPoint) {
+                    updatedWire.endPoint = {
+                      x: initialWire.endPoint.x + delta.dx,
+                      y: initialWire.endPoint.y + delta.dy,
+                    };
+                  }
+                  if (initialWire.startPoint) {
+                    updatedWire.startPoint = {
+                      x: initialWire.startPoint.x + delta.dx,
+                      y: initialWire.startPoint.y + delta.dy,
+                    };
+                  }
+                } else if (fromDelta && initialWire.branchPoint) {
+                  // Only source component moved for a branch wire
+                  updatedWire.branchPoint = {
+                    x: initialWire.branchPoint.x + fromDelta.dx,
+                    y: initialWire.branchPoint.y + fromDelta.dy,
+                  };
                 }
 
                 return updatedWire;
@@ -1329,17 +1351,28 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           })
           .map((c) => c.id);
 
-        // Enclosed wires
+        // Enclosed wires (supports open stubs, branches, and box crossing)
         const enclosedWires = wires
           .filter((w) => {
-            const fromPin = findPinById(w.fromPinId);
-            const toPin = findPinById(w.toPinId);
-            if (!fromPin || !toPin) return false;
-            const pinInside =
-              (fromPin.x >= minX && fromPin.x <= maxX && fromPin.y >= minY && fromPin.y <= maxY) ||
-              (toPin.x >= minX && toPin.x <= maxX && toPin.y >= minY && toPin.y <= maxY);
-            const compsSelected = enclosedComps.includes(w.fromCompId) && enclosedComps.includes(w.toCompId);
-            return pinInside || compsSelected;
+            const startPt = getWireStartPt(w);
+            const toP = findPinById(w.toPinId);
+            const endPt = toP ? { x: toP.x, y: toP.y } : (w.endPoint || startPt);
+
+            // Check if start, end, or any waypoint is inside selection box
+            if (startPt.x >= minX && startPt.x <= maxX && startPt.y >= minY && startPt.y <= maxY) return true;
+            if (endPt.x >= minX && endPt.x <= maxX && endPt.y >= minY && endPt.y <= maxY) return true;
+            if (w.waypoints && w.waypoints.some((pt) => pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY)) return true;
+
+            // Check if wire's bounding envelope overlaps selection box
+            const allPts = [startPt, ...(w.waypoints || []), endPt];
+            const wMinX = Math.min(...allPts.map((p) => p.x));
+            const wMaxX = Math.max(...allPts.map((p) => p.x));
+            const wMinY = Math.min(...allPts.map((p) => p.y));
+            const wMaxY = Math.max(...allPts.map((p) => p.y));
+
+            const overlaps = wMinX <= maxX && wMaxX >= minX && wMinY <= maxY && wMaxY >= minY;
+            const compsSelected = (w.fromCompId && enclosedComps.includes(w.fromCompId)) || (w.toCompId && enclosedComps.includes(w.toCompId));
+            return overlaps || compsSelected;
           })
           .map((w) => w.id);
 
@@ -2268,6 +2301,7 @@ ${wireXmls.join('\n')}
       toCompId: '',
       toPinId: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       value: 0,
+      startPoint: { x: wiringFrom.x, y: wiringFrom.y },
       branchPoint: wiringFrom.branchPoint,
       sourceWireId: wiringFrom.sourceWireId,
       waypoints: finalWaypoints,
@@ -6710,25 +6744,9 @@ ${wireXmls.join('\n')}
                 pathD = `M ${startPt.x},${startPt.y} L ${endPt.x},${startPt.y}`;
               } else if (isStraightV) {
                 pathD = `M ${startPt.x},${startPt.y} L ${startPt.x},${endPt.y}`;
-              } else if (wire.branchPoint) {
-                // T-Branch wire: leave vertically from horizontal tap, or horizontally from vertical tap
-                // Strictly anchors the bend right at the solder dot (zero overshoot or drift!)
-                const parentW = wires.find((w) => w.id === wire.sourceWireId || (w.id !== wire.id && w.fromPinId === wire.fromPinId));
-                const fromP = parentW ? findPinById(parentW.fromPinId) : null;
-                const toP = parentW ? findPinById(parentW.toPinId) : null;
-                const parentP1 = (parentW && parentW.branchPoint) || (fromP ? { x: fromP.x, y: fromP.y } : null);
-                const parentP2 = toP ? { x: toP.x, y: toP.y } : null;
-                const parentIsH = parentP1 && parentP2 && Math.abs(parentP1.y - parentP2.y) <= 5;
-
-                if (parentIsH || (parentP2 && Math.abs(startPt.y - parentP2.y) <= 5)) {
-                  // Leaving a horizontal parent line: drop/rise vertically first directly from solder dot!
-                  pathD = `M ${startPt.x},${startPt.y} V ${endPt.y} H ${endPt.x}`;
-                } else {
-                  // Leaving a vertical parent line: leave horizontally first directly from solder dot!
-                  pathD = `M ${startPt.x},${startPt.y} H ${effectiveMidX} V ${endPt.y} H ${endPt.x}`;
-                }
               } else {
-                pathD = `M ${startPt.x},${startPt.y} H ${effectiveMidX} V ${endPt.y} H ${endPt.x}`;
+                const midX = Math.round((startPt.x + endPt.x) / 2);
+                pathD = `M ${startPt.x},${startPt.y} H ${midX} V ${endPt.y} H ${endPt.x}`;
               }
               const midX = isStraightH ? Math.round((startPt.x + endPt.x) / 2) : effectiveMidX;
               const midY = isStraightH ? startPt.y : Math.round((startPt.y + endPt.y) / 2);
@@ -6915,13 +6933,15 @@ ${wireXmls.join('\n')}
                     </g>
                   )}
 
-                  {/* Live Hover Tap Preview Indicator when wiring from an input */}
-                  {wiringFrom && hoveredWireId === wire.id && (() => {
-                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX);
+                  {/* Live Hover Tap Preview Indicator when wiring */}
+                  {wiringFrom && hoveredWireId === wire.id && wire.id !== wiringFrom.sourceWireId && (() => {
+                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
+                    const dist = Math.hypot(mousePos.x - tap.x, mousePos.y - tap.y);
+                    if (dist > 30) return null;
                     return (
                       <g className="pointer-events-none">
-                        <circle cx={tap.x} cy={tap.y} r={7} fill="#3b82f6" opacity={0.4} className="animate-ping" />
-                        <circle cx={tap.x} cy={tap.y} r={4.5} fill="#2563eb" stroke="#ffffff" strokeWidth={1.5} />
+                        <circle cx={tap.x} cy={tap.y} r={6} fill="#3b82f6" opacity={0.3} />
+                        <circle cx={tap.x} cy={tap.y} r={4} fill="#2563eb" stroke="#ffffff" strokeWidth={1.5} />
                       </g>
                     );
                   })()}
@@ -7907,15 +7927,17 @@ ${wireXmls.join('\n')}
             </div>
           )}
 
-                    {/* Floating Clear Canvas Button (Directly above Kare / Bottom-Right Controls) */}
+                    
+
+                    {/* Floating Clear Canvas Button (Canvas Top-Right) */}
           <button
             onClick={() => setShowClearConfirmModal(true)}
-            className={`absolute bottom-16 right-4 z-20 backdrop-blur-md px-3.5 py-1.5 rounded-2xl border text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all hover:scale-105 active:scale-95 font-bold ${
+            className={`absolute top-4 right-4 z-20 backdrop-blur-md px-3.5 py-1.5 rounded-2xl border text-xs shadow-md flex items-center gap-1.5 cursor-pointer transition-all hover:scale-105 active:scale-95 font-bold ${
               cadTheme === 'dark'
                 ? 'bg-rose-950/80 hover:bg-rose-900 border-rose-800 text-rose-300 hover:text-white'
-                : 'bg-white/95 hover:bg-rose-50 border-rose-200 text-rose-600 hover:text-rose-700'
+                : 'bg-white/95 hover:bg-rose-50 border-rose-200 text-rose-600 hover:text-rose-700 shadow-sm'
             }`}
-            title="Tuvaldeki tüm bileşenleri ve kabloları temizle"
+            title="Tüm devreyi temizle"
           >
             <Trash2 className="w-3.5 h-3.5 text-rose-500" />
             <span>Temizle</span>
