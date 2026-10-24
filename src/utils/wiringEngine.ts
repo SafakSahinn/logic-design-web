@@ -39,6 +39,27 @@ export interface CircuitJunction {
 }
 
 /**
+ * Simplifies a sequence of orthogonal points by removing redundant collinear intermediate points.
+ * e.g. [(100, 20), (80, 20), (40, 20)] -> [(100, 20), (40, 20)]
+ */
+export const simplifyCollinearPoints = (pts: WirePoint[]): WirePoint[] => {
+  if (pts.length <= 2) return pts;
+  const result: WirePoint[] = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = result[result.length - 1];
+    const curr = pts[i];
+    const next = pts[i + 1];
+    const isCollinearH = prev.y === curr.y && curr.y === next.y;
+    const isCollinearV = prev.x === curr.x && curr.x === next.x;
+    if (!isCollinearH && !isCollinearV) {
+      result.push(curr);
+    }
+  }
+  result.push(pts[pts.length - 1]);
+  return result;
+};
+
+/**
  * Decomposes any CircuitWire into strictly orthogonal (Horizontal or Vertical)
  * 10px grid-locked segments. Zero fractional coordinates, zero diagonal kinks.
  */
@@ -64,15 +85,18 @@ export const getWireOrthogonalSegments = (
   };
 
   if (wire.waypoints && wire.waypoints.length > 0) {
-    const pts = [p0, ...wire.waypoints.map(snapPt10), p1];
+    const rawPts = [p0, ...wire.waypoints.map(snapPt10), p1];
+    const pts = simplifyCollinearPoints(rawPts);
     let prev = pts[0];
     for (let i = 1; i < pts.length; i++) {
       const curr = pts[i];
       if (prev.x === curr.x || prev.y === curr.y) {
         addSeg(prev, curr);
       } else {
-        // Orthogonal 90° corner
-        const corner = { x: curr.x, y: prev.y };
+        // Orthogonal 90° corner: choose direction based on delta
+        const dx = Math.abs(curr.x - prev.x);
+        const dy = Math.abs(curr.y - prev.y);
+        const corner = dy > dx ? { x: prev.x, y: curr.y } : { x: curr.x, y: prev.y };
         addSeg(prev, corner);
         addSeg(corner, curr);
       }
@@ -82,7 +106,7 @@ export const getWireOrthogonalSegments = (
     // Pure straight horizontal or vertical
     addSeg(p0, p1);
   } else if (wire.branchPoint) {
-    // Branch leaving parent wire: drop vertically first, then route horizontally into target
+    // Branch leaving parent wire
     const corner = { x: p0.x, y: p1.y };
     addSeg(p0, corner);
     addSeg(corner, p1);
@@ -93,7 +117,9 @@ export const getWireOrthogonalSegments = (
 
     if (midX <= p0.x || midX >= p1.x) {
       // Degenerates cleanly to an L-shape
-      const corner = { x: p1.x, y: p0.y };
+      const dx = Math.abs(p1.x - p0.x);
+      const dy = Math.abs(p1.y - p0.y);
+      const corner = dy > dx ? { x: p0.x, y: p1.y } : { x: p1.x, y: p0.y };
       addSeg(p0, corner);
       addSeg(corner, p1);
     } else {

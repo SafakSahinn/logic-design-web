@@ -3,6 +3,7 @@ import {
   snapPt10,
   getWireOrthogonalSegments,
   segmentsToSvgPath,
+  simplifyCollinearPoints,
   getClosestPointOnWire,
   computeCircuitJunctions,
   type WirePoint,
@@ -2148,7 +2149,7 @@ ${wireXmls.join('\n')}
     return getClosestPointOnWire(dummyWire, p1, p2, click);
   };
 
-    // Finish a wire ending at a free canvas point (Logisim-style open wire stubs)
+      // Finish a wire ending at a free canvas point (Logisim-style unified single wire)
   const finishWireAtPoint = (point: { x: number; y: number }) => {
     if (!wiringFrom) return;
 
@@ -2163,24 +2164,34 @@ ${wireXmls.join('\n')}
 
     recordHistory();
 
-    let finalWaypoints = wiringFrom.waypoints ? wiringFrom.waypoints.map(snapPt10) : undefined;
-    if (finalWaypoints && finalWaypoints.length > 0) {
-      const lastPt = finalWaypoints[finalWaypoints.length - 1];
-      if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
-        finalWaypoints.push({ x: endPt.x, y: lastPt.y });
-      }
-    } else if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
-      finalWaypoints = [{ x: endPt.x, y: startPt.y }];
+    const dx = Math.abs(endPt.x - startPt.x);
+    const dy = Math.abs(endPt.y - startPt.y);
+    let corner: WirePoint | null = null;
+    if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
+      corner = dy > dx ? { x: startPt.x, y: endPt.y } : { x: endPt.x, y: startPt.y };
     }
 
     if (wiringFrom.extendingWireId) {
       setWires((prev) => {
+        const targetWire = prev.find((w) => w.id === wiringFrom.extendingWireId);
+        if (!targetWire) return prev;
+
+        const wStart = getWireStartPt(targetWire);
+        const existingWps = targetWire.waypoints ? targetWire.waypoints.map(snapPt10) : [];
+
+        const rawPts: WirePoint[] = [wStart, ...existingWps, startPt];
+        if (corner) rawPts.push(corner);
+        rawPts.push(endPt);
+
+        const simplified = simplifyCollinearPoints(rawPts);
+        const finalWaypoints = simplified.slice(1, -1);
+
         const updatedWires = prev.map((w) => {
           if (w.id === wiringFrom.extendingWireId) {
             return {
               ...w,
               endPoint: endPt,
-              waypoints: finalWaypoints,
+              waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
             };
           }
           return w;
@@ -2194,6 +2205,16 @@ ${wireXmls.join('\n')}
       return;
     }
 
+    const rawPts: WirePoint[] = [startPt];
+    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
+      rawPts.push(...wiringFrom.waypoints.map(snapPt10));
+    }
+    if (corner) rawPts.push(corner);
+    rawPts.push(endPt);
+
+    const simplified = simplifyCollinearPoints(rawPts);
+    const finalWaypoints = simplified.slice(1, -1);
+
     const freeWire: CircuitWire = {
       id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       fromCompId: wiringFrom.compId,
@@ -2204,7 +2225,7 @@ ${wireXmls.join('\n')}
       startPoint: startPt,
       branchPoint: wiringFrom.branchPoint ? snapPt10(wiringFrom.branchPoint) : undefined,
       sourceWireId: wiringFrom.sourceWireId,
-      waypoints: finalWaypoints,
+      waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
       endPoint: endPt,
       isBus: defaultWireIsBus,
       bitWidth: defaultWireIsBus ? 4 : 1,
@@ -2221,14 +2242,11 @@ ${wireXmls.join('\n')}
     setWiringFrom(null);
   };
 
-  // Connect active wiring to a component pin (Unrestricted Logisim wiring)
+    // Connect active wiring to a component pin (Unrestricted Logisim wiring)
   const connectToPin = (comp: CircuitComponentInstance, pin: CircuitPin) => {
     if (!wiringFrom) return;
-    if (wiringFrom.pinId === pin.id) {
-      return;
-    }
+    if (wiringFrom.pinId === pin.id) return;
 
-    // Determine from/to: if one is output and one is input, make output 'from' and input 'to'
     let fromCompId = wiringFrom.compId;
     let fromPinId = wiringFrom.pinId;
     let toCompId = comp.id;
@@ -2243,19 +2261,31 @@ ${wireXmls.join('\n')}
 
     recordHistory();
 
-    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
-    if (finalWaypoints && finalWaypoints.length > 0) {
-      const lastPt = finalWaypoints[finalWaypoints.length - 1];
-      if (lastPt.x !== pin.x || lastPt.y !== pin.y) {
-        const midX = Math.round((lastPt.x + pin.x) / 2);
-        finalWaypoints.push({ x: midX, y: lastPt.y });
-        finalWaypoints.push({ x: midX, y: pin.y });
-      }
+    const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+    const endPt = snapPt10({ x: pin.x, y: pin.y });
+
+    const dx = Math.abs(endPt.x - startPt.x);
+    const dy = Math.abs(endPt.y - startPt.y);
+    let corner: WirePoint | null = null;
+    if (startPt.x !== endPt.x && startPt.y !== endPt.y) {
+      corner = dy > dx ? { x: startPt.x, y: endPt.y } : { x: endPt.x, y: startPt.y };
     }
 
-    // If extending an existing open wire, complete it by attaching to target pin
     if (wiringFrom.extendingWireId) {
       setWires((prev) => {
+        const targetWire = prev.find((w) => w.id === wiringFrom.extendingWireId);
+        if (!targetWire) return prev;
+
+        const wStart = getWireStartPt(targetWire);
+        const existingWps = targetWire.waypoints ? targetWire.waypoints.map(snapPt10) : [];
+
+        const rawPts: WirePoint[] = [wStart, ...existingWps, startPt];
+        if (corner) rawPts.push(corner);
+        rawPts.push(endPt);
+
+        const simplified = simplifyCollinearPoints(rawPts);
+        const finalWaypoints = simplified.slice(1, -1);
+
         const updatedWires = prev.map((w) => {
           if (w.id === wiringFrom.extendingWireId) {
             return {
@@ -2263,7 +2293,7 @@ ${wireXmls.join('\n')}
               toCompId,
               toPinId,
               endPoint: undefined,
-              waypoints: finalWaypoints,
+              waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
             };
           }
           return w;
@@ -2277,6 +2307,16 @@ ${wireXmls.join('\n')}
       return;
     }
 
+    const rawPts: WirePoint[] = [startPt];
+    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
+      rawPts.push(...wiringFrom.waypoints.map(snapPt10));
+    }
+    if (corner) rawPts.push(corner);
+    rawPts.push(endPt);
+
+    const simplified = simplifyCollinearPoints(rawPts);
+    const finalWaypoints = simplified.slice(1, -1);
+
     const newWire: CircuitWire = {
       id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       fromCompId,
@@ -2284,9 +2324,9 @@ ${wireXmls.join('\n')}
       toCompId,
       toPinId,
       value: 0,
-      branchPoint: wiringFrom.branchPoint,
+      branchPoint: wiringFrom.branchPoint ? snapPt10(wiringFrom.branchPoint) : undefined,
       sourceWireId: wiringFrom.sourceWireId,
-      waypoints: finalWaypoints,
+      waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
       isBus: defaultWireIsBus,
       bitWidth: defaultWireIsBus ? 4 : 1,
     };
@@ -6815,16 +6855,10 @@ ${wireXmls.join('\n')}
                     );
                   })()}
 
-                                    {/* Free wire end terminal dot (Logisim open wire end) */}
+                                    {/* Free wire end extension hit area (Logisim clean wire: NO circle, just extension handle on hover) */}
                   {!toPin && wire.endPoint && (
-                    <circle
-                      cx={endPt.x}
-                      cy={endPt.y}
-                      r={5}
-                      fill={isHigh ? '#16a34a' : '#2563eb'}
-                      stroke="#ffffff"
-                      strokeWidth={1.8}
-                      className="cursor-pointer hover:scale-125 transition-transform"
+                    <g
+                      className="cursor-crosshair"
                       onMouseDown={(e) => {
                         e.stopPropagation();
                         setWiringFrom({
@@ -6838,8 +6872,9 @@ ${wireXmls.join('\n')}
                         });
                       }}
                     >
+                      <circle cx={endPt.x} cy={endPt.y} r={14} fill="transparent" />
                       <title>Kabloyu Buradan Uzat</title>
-                    </circle>
+                    </g>
                   )}
 
                   {/* Contention Warning Badge */}
@@ -7257,7 +7292,8 @@ ${wireXmls.join('\n')}
 
               let previewPath = '';
               if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-                const pts = [p0, ...wiringFrom.waypoints.map(snapPt10), p1];
+                const rawPts = [p0, ...wiringFrom.waypoints.map(snapPt10), p1];
+                const pts = simplifyCollinearPoints(rawPts);
                 let d = `M ${pts[0].x},${pts[0].y}`;
                 for (let i = 1; i < pts.length; i++) {
                   const prev = pts[i - 1];
@@ -7265,20 +7301,34 @@ ${wireXmls.join('\n')}
                   if (prev.x === curr.x || prev.y === curr.y) {
                     d += ` L ${curr.x},${curr.y}`;
                   } else {
-                    d += ` H ${curr.x} V ${curr.y}`;
+                    const dx = Math.abs(curr.x - prev.x);
+                    const dy = Math.abs(curr.y - prev.y);
+                    if (dy > dx) {
+                      d += ` V ${curr.y} H ${curr.x}`;
+                    } else {
+                      d += ` H ${curr.x} V ${curr.y}`;
+                    }
                   }
                 }
                 previewPath = d;
               } else if (p0.x === p1.x || p0.y === p1.y) {
                 previewPath = `M ${p0.x},${p0.y} L ${p1.x},${p1.y}`;
               } else {
-                // Logisim Manhattan standard: Horizontal then Vertical
-                previewPath = `M ${p0.x},${p0.y} H ${p1.x} V ${p1.y}`;
+                // Logisim Manhattan smart direction:
+                // If dragging more vertically: V then H (e.g. pulling down from pin)
+                // If dragging more horizontally: H then V (e.g. pulling right from pin)
+                const dx = Math.abs(p1.x - p0.x);
+                const dy = Math.abs(p1.y - p0.y);
+                if (dy > dx) {
+                  previewPath = `M ${p0.x},${p0.y} V ${p1.y} H ${p1.x}`;
+                } else {
+                  previewPath = `M ${p0.x},${p0.y} H ${p1.x} V ${p1.y}`;
+                }
               }
 
               return (
                 <g className="pointer-events-none">
-                  {/* Glow Underlay for Maximum Visibility */}
+                  {/* Glow Underlay */}
                   <path
                     d={previewPath}
                     fill="none"
@@ -7288,7 +7338,7 @@ ${wireXmls.join('\n')}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                  {/* Main Active Wire Cable */}
+                  {/* Main Active Cable */}
                   <path
                     d={previewPath}
                     fill="none"
@@ -7298,42 +7348,15 @@ ${wireXmls.join('\n')}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                  {/* Prominent Start Solder Dot */}
-                  <circle
-                    cx={p0.x}
-                    cy={p0.y}
-                    r={5.5}
-                    fill="#2563eb"
-                    stroke="#ffffff"
-                    strokeWidth={2}
-                  />
-                  {/* Grid-locked Target Dot at mouse grid point */}
+                  {/* Cursor Crosshair Snap Dot */}
                   <circle
                     cx={p1.x}
                     cy={p1.y}
-                    r={6.5}
+                    r={5}
                     fill="none"
                     stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
                     strokeWidth={2}
                   />
-                  <circle
-                    cx={p1.x}
-                    cy={p1.y}
-                    r={2.5}
-                    fill={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
-                  />
-                  {/* Placed Interactive Waypoints */}
-                  {wiringFrom.waypoints?.map((pt, idx) => (
-                    <circle
-                      key={idx}
-                      cx={snapTo10(pt.x)}
-                      cy={snapTo10(pt.y)}
-                      r={4.5}
-                      fill="#2563eb"
-                      stroke="#ffffff"
-                      strokeWidth={1.5}
-                    />
-                  ))}
                 </g>
               );
             })()}
