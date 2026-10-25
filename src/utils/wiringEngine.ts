@@ -167,35 +167,48 @@ export const getLogisimWiringToolSegments = (
   }
 
   // Default L-bend hits an intermediate pin (e.g. dropping vertically through pin A to reach pin B).
-  // Step the turn back by 20px (or 10..40px) before the target pin so the wire enters the pin cleanly!
-  if (direction === DIR_HORIZONTAL) {
+  // Try stepping the turn back by 20px (or 10..40px) before the target/start pin or flipping L-direction.
+  const tryHvh = (): Array<{ e0: WirePoint; e1: WirePoint }> | null => {
     const stepSign = c.x > s.x ? -1 : 1;
     for (const d of [20, 10, 30, 40, -10, -20]) {
-      const ex = c.x + stepSign * d;
-      if (ex === s.x || ex === c.x) continue;
-      const cand = [s, { x: ex, y: s.y }, { x: ex, y: c.y }, c];
-      if (!pathHitsObstacle(cand)) {
-        return ptsToSegs(cand);
+      for (const baseX of [c.x + stepSign * d, s.x - stepSign * d]) {
+        if (baseX === s.x || baseX === c.x) continue;
+        const cand = [s, { x: baseX, y: s.y }, { x: baseX, y: c.y }, c];
+        if (!pathHitsObstacle(cand)) return ptsToSegs(cand);
       }
     }
-  } else {
+    return null;
+  };
+
+  const tryVhv = (): Array<{ e0: WirePoint; e1: WirePoint }> | null => {
     const stepSign = c.y > s.y ? -1 : 1;
     for (const d of [20, 10, 30, 40, -10, -20]) {
-      const ey = c.y + stepSign * d;
-      if (ey === s.y || ey === c.y) continue;
-      const cand = [s, { x: s.x, y: ey }, { x: c.x, y: ey }, c];
-      if (!pathHitsObstacle(cand)) {
-        return ptsToSegs(cand);
+      for (const baseY of [c.y + stepSign * d, s.y - stepSign * d]) {
+        if (baseY === s.y || baseY === c.y) continue;
+        const cand = [s, { x: s.x, y: baseY }, { x: c.x, y: baseY }, c];
+        if (!pathHitsObstacle(cand)) return ptsToSegs(cand);
       }
     }
-  }
+    return null;
+  };
 
   const mAlt: WirePoint =
     direction === DIR_HORIZONTAL
       ? { x: s.x, y: c.y }
       : { x: c.x, y: s.y };
-  if (!pathHitsObstacle([s, mAlt, c])) {
-    return ptsToSegs([s, mAlt, c]);
+
+  if (direction === DIR_HORIZONTAL) {
+    const hvh = tryHvh();
+    if (hvh) return hvh;
+    if (!pathHitsObstacle([s, mAlt, c])) return ptsToSegs([s, mAlt, c]);
+    const vhv = tryVhv();
+    if (vhv) return vhv;
+  } else {
+    const vhv = tryVhv();
+    if (vhv) return vhv;
+    if (!pathHitsObstacle([s, mAlt, c])) return ptsToSegs([s, mAlt, c]);
+    const hvh = tryHvh();
+    if (hvh) return hvh;
   }
 
   return ptsToSegs([s, m, c]);

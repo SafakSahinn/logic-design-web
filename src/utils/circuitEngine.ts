@@ -859,13 +859,33 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
 
 let componentCounter = 1;
 
+const COMPONENT_TYPE_ALIASES: Record<string, ComponentType> = {
+  busSplitter: 'splitter4',
+  constantHigh: 'vcc',
+  constantLow: 'gnd',
+  mux2to1: 'mux2',
+  mux4to1: 'mux4',
+  mux8to1: 'mux8',
+  demux1to2: 'demux2',
+  demux1to4: 'demux4',
+  comparator4bit: 'comparator4',
+  alu4bit: 'alu4',
+  register4bit: 'register4',
+  counter4bit: 'counter4',
+  shiftRegister4bit: 'shiftRegister4',
+  sevenSeg: 'sevenSegment',
+};
+
 export function createComponentInstance(
-  type: ComponentType,
+  rawType: ComponentType,
   x: number,
   y: number,
   customLabel?: string,
   customId?: string
 ): CircuitComponentInstance {
+  const type: ComponentType = COMPONENT_CATALOG[rawType]
+    ? rawType
+    : COMPONENT_TYPE_ALIASES[rawType as string] || 'and';
   const meta = COMPONENT_CATALOG[type];
   const compId = customId || `comp_${type}_${Date.now()}_${componentCounter++}`;
 
