@@ -637,7 +637,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       if (saved) {
         const data = JSON.parse(saved);
         if (data && Array.isArray(data.components) && data.components.length > 0) {
-          const sim = simulateCircuit(data.components, data.wires || []);
+          const refreshedComps = data.components.map((c: CircuitComponentInstance) =>
+            updatePinPositions({ ...c, x: snapTo10(c.x), y: snapTo10(c.y) })
+          );
+          const repaired = repairWires(data.wires || [], refreshedComps);
+          const sim = simulateCircuit(refreshedComps, repaired);
           setComponents(sim.components);
           setWires(sim.wires);
           if (Array.isArray(data.sheets) && data.sheets.length > 0) {
@@ -3022,8 +3026,11 @@ ${wireXmls.join('\n')}
     setSelectedCompIds([]);
     setSelectedWireIds([]);
 
-    const refreshedComps = preset.components.map(updatePinPositions);
-    const sim = simulateCircuit(refreshedComps, preset.wires);
+    const refreshedComps = preset.components.map((c) =>
+      updatePinPositions({ ...c, x: snapTo10(c.x), y: snapTo10(c.y) })
+    );
+    const repaired = repairWires(preset.wires, refreshedComps);
+    const sim = simulateCircuit(refreshedComps, repaired);
     setComponents(sim.components);
     setWires(sim.wires);
 

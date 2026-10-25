@@ -417,8 +417,42 @@ export const repairWires = (
     return null;
   };
 
-  // Step 0: Decompose all wires into canonical straight segments
-  let rawSegs: CanonicalSeg[] = [];
+  // Step 0: Decompose all wires into canonical straight segments.
+  // For legacy/preset wires (wires without explicit startPoint & endPoint), use net-aware
+  // orthogonal channel routing so parallel wires of different nets never overlap or short-circuit.
+  const ufParent = new Map<string, string>();
+  const ufFind = (k: string): string => {
+    let curr = k;
+    while (ufParent.has(curr) && ufParent.get(curr) !== curr) {
+      curr = ufParent.get(curr)!;
+    }
+    let trace = k;
+    while (ufParent.has(trace) && ufParent.get(trace) !== curr) {
+      const nxt = ufParent.get(trace)!;
+      ufParent.set(trace, curr);
+      trace = nxt;
+    }
+    if (!ufParent.has(curr)) ufParent.set(curr, curr);
+    return curr;
+  };
+  const ufUnion = (a: string, b: string) => {
+    const ra = ufFind(a);
+    const rb = ufFind(b);
+    if (ra !== rb) ufParent.set(ra, rb);
+  };
+
+  for (const [locKey, pinInfo] of pinAtLoc) {
+    ufUnion(`loc:${locKey}`, `pin:${pinInfo.pinId}`);
+  }
+
+  const resolvedEndpoints: Array<{
+    wire: CircuitWire;
+    sPt: WirePoint;
+    ePt: WirePoint;
+    isCanonical: boolean;
+    netKey: string;
+  }> = [];
+
   for (const w of wires) {
     let sPt: WirePoint | null = null;
     let ePt: WirePoint | null = null;
@@ -441,21 +475,281 @@ export const repairWires = (
 
     if (!sPt || !ePt) continue;
 
-    const ortho = getWireOrthogonalSegments(w, sPt, ePt);
+    const sk = w.fromPinId && !w.fromPinId.startsWith('loc_') ? `pin:${w.fromPinId}` : `loc:${sPt.x},${sPt.y}`;
+    const ek = w.toPinId && !w.toPinId.startsWith('loc_') ? `pin:${w.toPinId}` : `loc:${ePt.x},${ePt.y}`;
+    ufUnion(sk, `loc:${sPt.x},${sPt.y}`);
+    ufUnion(ek, `loc:${ePt.x},${ePt.y}`);
+    ufUnion(sk, ek);
+
+    const isCanonical = Boolean(w.startPoint && w.endPoint && (!w.waypoints || w.waypoints.length === 0));
+    resolvedEndpoints.push({ wire: w, sPt, ePt, isCanonical, netKey: sk });
+  }
+
+  const pinNetAtLoc = new Map<string, string>();
+  for (const [locKey, pinInfo] of pinAtLoc) {
+    pinNetAtLoc.set(locKey, ufFind(`pin:${pinInfo.pinId}`));
+  }
+
+  interface RoutedNetSeg {
+    isVertical: boolean;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    netId: string;
+  }
+  const placedNetSegs: RoutedNetSeg[] = [];
+  const netCorners = new Map<string, string>(); // "x,y" -> netId
+
+  const recordCorner = (pt: WirePoint, netId: string) => {
+    netCorners.set(`${pt.x},${pt.y}`, netId);
+  };
+
+  const recordSeg = (cSeg: CanonicalSeg, netId: string) => {
+    placedNetSegs.push({
+      isVertical: cSeg.isVertical,
+      x0: cSeg.x0,
+      y0: cSeg.y0,
+      x1: cSeg.x1,
+      y1: cSeg.y1,
+      netId,
+    });
+    recordCorner({ x: cSeg.x0, y: cSeg.y0 }, netId);
+    recordCorner({ x: cSeg.x1, y: cSeg.y1 }, netId);
+  };
+
+  const isPointOnRoutedSeg = (px: number, py: number, s: RoutedNetSeg): boolean => {
+    if (s.isVertical) return px === s.x0 && py >= s.y0 && py <= s.y1;
+    return py === s.y0 && px >= s.x0 && px <= s.x1;
+  };
+
+  const isCandidatePathValid = (pts: WirePoint[], netId: string): boolean => {
+    const cleanPts: WirePoint[] = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const prev = cleanPts[cleanPts.length - 1];
+      if (pts[i].x !== prev.x || pts[i].y !== prev.y) {
+        cleanPts.push(pts[i]);
+      }
+    }
+    if (cleanPts.length < 2) return true;
+
+    // Check corners against existing segments/pins of other nets
+    for (const pt of cleanPts) {
+      const k = `${pt.x},${pt.y}`;
+      const pinNet = pinNetAtLoc.get(k);
+      if (pinNet && pinNet !== netId) return false;
+      const cornerNet = netCorners.get(k);
+      if (cornerNet && cornerNet !== netId) return false;
+      for (const s of placedNetSegs) {
+        if (s.netId !== netId && isPointOnRoutedSeg(pt.x, pt.y, s)) {
+          return false;
+        }
+      }
+    }
+
+    // Check each segment against pins, corners, and collinear overlaps of other nets
+    for (let i = 0; i < cleanPts.length - 1; i++) {
+      const pA = cleanPts[i];
+      const pB = cleanPts[i + 1];
+      const isVert = pA.x === pB.x;
+      const x0 = Math.min(pA.x, pB.x);
+      const x1 = Math.max(pA.x, pB.x);
+      const y0 = Math.min(pA.y, pB.y);
+      const y1 = Math.max(pA.y, pB.y);
+
+      if (isVert) {
+        for (let y = y0; y <= y1; y += GRID_SIZE) {
+          const k = `${x0},${y}`;
+          const pNet = pinNetAtLoc.get(k);
+          if (pNet && pNet !== netId) return false;
+          const cNet = netCorners.get(k);
+          if (cNet && cNet !== netId) return false;
+        }
+        for (const s of placedNetSegs) {
+          if (s.netId === netId) continue;
+          if (s.isVertical && s.x0 === x0) {
+            if (Math.max(y0, s.y0) <= Math.min(y1, s.y1)) return false;
+          }
+        }
+      } else {
+        for (let x = x0; x <= x1; x += GRID_SIZE) {
+          const k = `${x},${y0}`;
+          const pNet = pinNetAtLoc.get(k);
+          if (pNet && pNet !== netId) return false;
+          const cNet = netCorners.get(k);
+          if (cNet && cNet !== netId) return false;
+        }
+        for (const s of placedNetSegs) {
+          if (s.netId === netId) continue;
+          if (!s.isVertical && s.y0 === y0) {
+            if (Math.max(x0, s.x0) <= Math.min(x1, s.x1)) return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  };
+
+  let rawSegs: CanonicalSeg[] = [];
+
+  // Pass 1: Process already-canonical wires first
+  for (const item of resolvedEndpoints) {
+    if (!item.isCanonical) continue;
+    const netId = ufFind(item.netKey);
+    const ortho = getWireOrthogonalSegments(item.wire, item.sPt, item.ePt);
     ortho.forEach((os, idx) => {
       const cSeg = createCanonicalSeg(
         { x: os.x1, y: os.y1 },
         { x: os.x2, y: os.y2 },
         {
+          isBus: item.wire.isBus,
+          bitWidth: item.wire.bitWidth,
+          value: item.wire.value,
+          hasConflict: item.wire.hasConflict,
+          id: ortho.length === 1 && idx === 0 ? item.wire.id : undefined,
+        }
+      );
+      if (cSeg) {
+        rawSegs.push(cSeg);
+        recordSeg(cSeg, netId);
+      }
+    });
+  }
+
+  // Pass 2: Route legacy/preset wires with collision avoidance
+  for (const item of resolvedEndpoints) {
+    if (item.isCanonical) continue;
+    const { wire: w, sPt, ePt } = item;
+    const netId = ufFind(item.netKey);
+
+    let chosenPts: WirePoint[] | null = null;
+
+    if (w.waypoints && w.waypoints.length > 0) {
+      chosenPts = [sPt, ...w.waypoints.map(snapPt10), ePt];
+    } else {
+      const candidates: WirePoint[][] = [];
+
+      // 1. Straight line if aligned
+      if (sPt.x === ePt.x || sPt.y === ePt.y) {
+        candidates.push([sPt, ePt]);
+      }
+
+      // 2. Reuse existing vertical trunk X of the same net (for clean Logisim fan-outs)
+      for (const s of placedNetSegs) {
+        if (s.netId === netId && s.isVertical && s.x0 > Math.min(sPt.x, ePt.x) && s.x0 < Math.max(sPt.x, ePt.x)) {
+          candidates.push([sPt, { x: s.x0, y: sPt.y }, { x: s.x0, y: ePt.y }, ePt]);
+        }
+      }
+
+      // 3. Explicit elbowX if present
+      if (w.elbowX !== undefined) {
+        const ex = snapTo10(w.elbowX);
+        candidates.push([sPt, { x: ex, y: sPt.y }, { x: ex, y: ePt.y }, ePt]);
+      }
+
+      // 4. L-shaped 2-segment paths (great for bottom/top pins like CLK, WE, B0..B3, C0..C7)
+      const toPinKey = `${ePt.x},${ePt.y}`;
+      const toPinObj = pinAtLoc.get(toPinKey);
+      let isTopBottomTarget = false;
+      if (toPinObj) {
+        const comp = components.find((c) => c.id === toPinObj.compId);
+        const pin = comp ? comp.inputs.find((p) => p.id === toPinObj.pinId) : undefined;
+        if (pin && comp && Math.abs(pin.x - comp.x) > 4) {
+          isTopBottomTarget = true;
+        }
+      }
+      if (isTopBottomTarget) {
+        candidates.push([sPt, { x: ePt.x, y: sPt.y }, ePt]);
+      }
+
+      // 5. Z-shaped 3-segment paths (H-V-H) spiraling outward from midpoint X
+      const baseMidX = snapTo10((sPt.x + ePt.x) / 2);
+      candidates.push([sPt, { x: baseMidX, y: sPt.y }, { x: baseMidX, y: ePt.y }, ePt]);
+      for (let d = GRID_SIZE; d <= 260; d += GRID_SIZE) {
+        const xRight = baseMidX + d;
+        const xLeft = baseMidX - d;
+        if (sPt.x < ePt.x) {
+          if (xRight < ePt.x) candidates.push([sPt, { x: xRight, y: sPt.y }, { x: xRight, y: ePt.y }, ePt]);
+          if (xLeft > sPt.x) candidates.push([sPt, { x: xLeft, y: sPt.y }, { x: xLeft, y: ePt.y }, ePt]);
+        } else {
+          candidates.push([sPt, { x: xRight, y: sPt.y }, { x: xRight, y: ePt.y }, ePt]);
+          candidates.push([sPt, { x: xLeft, y: sPt.y }, { x: xLeft, y: ePt.y }, ePt]);
+        }
+      }
+
+      // 6. L-shaped 2-segment paths (fallback)
+      candidates.push([sPt, { x: ePt.x, y: sPt.y }, ePt]);
+      candidates.push([sPt, { x: sPt.x, y: ePt.y }, ePt]);
+
+      // 7. N-shaped 3-segment paths (V-H-V) and 5-segment detours if horizontal exit is blocked
+      const baseMidY = snapTo10((sPt.y + ePt.y) / 2);
+      for (let dy = 0; dy <= 240; dy += GRID_SIZE) {
+        for (const sign of [1, -1]) {
+          const my = baseMidY + sign * dy;
+          candidates.push([sPt, { x: sPt.x, y: my }, { x: ePt.x, y: my }, ePt]);
+          for (const dx1 of [10, 20, 30, -10, -20]) {
+            for (const dx2 of [-10, -20, -30, 10, 20]) {
+              candidates.push([
+                sPt,
+                { x: sPt.x + dx1, y: sPt.y },
+                { x: sPt.x + dx1, y: my },
+                { x: ePt.x + dx2, y: my },
+                { x: ePt.x + dx2, y: ePt.y },
+                ePt,
+              ]);
+            }
+          }
+        }
+      }
+
+      for (const cand of candidates) {
+        if (isCandidatePathValid(cand, netId)) {
+          chosenPts = cand;
+          break;
+        }
+      }
+    }
+
+    if (!chosenPts) {
+      // Fallback to default orthogonal segments
+      const ortho = getWireOrthogonalSegments(w, sPt, ePt);
+      ortho.forEach((os, idx) => {
+        const cSeg = createCanonicalSeg(
+          { x: os.x1, y: os.y1 },
+          { x: os.x2, y: os.y2 },
+          {
+            isBus: w.isBus,
+            bitWidth: w.bitWidth,
+            value: w.value,
+            hasConflict: w.hasConflict,
+            id: ortho.length === 1 && idx === 0 ? w.id : undefined,
+          }
+        );
+        if (cSeg) {
+          rawSegs.push(cSeg);
+          recordSeg(cSeg, netId);
+        }
+      });
+    } else {
+      const segsForWire: CanonicalSeg[] = [];
+      for (let i = 0; i < chosenPts.length - 1; i++) {
+        const cSeg = createCanonicalSeg(chosenPts[i], chosenPts[i + 1], {
           isBus: w.isBus,
           bitWidth: w.bitWidth,
           value: w.value,
           hasConflict: w.hasConflict,
-          id: ortho.length === 1 && idx === 0 ? w.id : undefined,
-        }
-      );
-      if (cSeg) rawSegs.push(cSeg);
-    });
+        });
+        if (cSeg) segsForWire.push(cSeg);
+      }
+      if (segsForWire.length === 1) {
+        segsForWire[0].preferredId = w.id;
+      }
+      for (const cSeg of segsForWire) {
+        rawSegs.push(cSeg);
+        recordSeg(cSeg, netId);
+      }
+    }
   }
 
   if (rawSegs.length === 0) return [];

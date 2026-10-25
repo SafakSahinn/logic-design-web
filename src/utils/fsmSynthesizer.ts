@@ -2,6 +2,7 @@ import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import type { LogicValue } from '../types/logic';
 import { createComponentInstance, simulateCircuit, updatePinPositions } from './circuitEngine';
 import { solveKMap } from './kmapSolver';
+import { repairWires } from './wiringEngine';
 
 export interface FSMState {
   id: string;
@@ -141,36 +142,38 @@ export function synthesizeFSM(
   const zSol = solveKMap(zMintermValues, 3);
 
   // Construct circuit layout on canvas
+  const sx = Math.round(startX / 10) * 10;
+  const sy = Math.round(startY / 10) * 10;
   const components: CircuitComponentInstance[] = [];
   const wires: CircuitWire[] = [];
 
   // Input Components (Clock, Reset, Input X)
-  const compClk = { ...createComponentInstance('clock', startX, startY + 60, 'Sistem Saati (CLK)'), id: 'fsm_clk' };
-  const compRst = { ...createComponentInstance('switch', startX, startY + 160, 'Sıfırla (RST)'), id: 'fsm_rst' };
-  const compX = { ...createComponentInstance('switch', startX, startY + 260, 'Giriş (X)'), id: 'fsm_x' };
+  const compClk = { ...createComponentInstance('clock', sx, sy + 60, 'Sistem Saati (CLK)'), id: 'fsm_clk' };
+  const compRst = { ...createComponentInstance('switch', sx, sy + 160, 'Durum Girişi (S)'), id: 'fsm_rst', state: { on: true } };
+  const compX = { ...createComponentInstance('switch', sx, sy + 260, 'Giriş (X)'), id: 'fsm_x' };
 
   // D Flip-Flops for State Storage
-  const compFF1 = { ...createComponentInstance('dFlipFlop', startX + 380, startY + 80, 'Durum FF1 (Q1)'), id: 'fsm_ff1' };
-  const compFF0 = { ...createComponentInstance('dFlipFlop', startX + 380, startY + 240, 'Durum FF0 (Q0)'), id: 'fsm_ff0' };
+  const compFF1 = { ...createComponentInstance('dFlipFlop', sx + 380, sy + 80, 'Durum FF1 (Q1)'), id: 'fsm_ff1' };
+  const compFF0 = { ...createComponentInstance('dFlipFlop', sx + 380, sy + 240, 'Durum FF0 (Q0)'), id: 'fsm_ff0' };
 
   // Logic Gates for Next State (AND, OR, NOT)
-  const compAnd1 = { ...createComponentInstance('and', startX + 200, startY + 60, 'D1 Mantık Kapısı'), id: 'fsm_and1' };
-  const compAnd0 = { ...createComponentInstance('and', startX + 200, startY + 220, 'D0 Mantık Kapısı'), id: 'fsm_and0' };
+  const compAnd1 = { ...createComponentInstance('and', sx + 200, sy + 70, 'D1 Mantık Kapısı'), id: 'fsm_and1' };
+  const compAnd0 = { ...createComponentInstance('and', sx + 200, sy + 230, 'D0 Mantık Kapısı'), id: 'fsm_and0' };
 
   // Output Z LED
-  const compLedZ = { ...createComponentInstance('led', startX + 540, startY + 180, 'Çıkış (Z)'), id: 'fsm_led_z' };
+  const compLedZ = { ...createComponentInstance('led', sx + 540, sy + 70, 'Çıkış (Z)'), id: 'fsm_led_z' };
 
   const compsToAdd = [compClk, compRst, compX, compFF1, compFF0, compAnd1, compAnd0, compLedZ].map(updatePinPositions);
   components.push(...compsToAdd);
 
   // Wire connections
-  // Clock to both Flip-Flops
   wires.push(
+    // Clock to both Flip-Flops
     { id: 'fsm_w1', fromCompId: 'fsm_clk', fromPinId: 'fsm_clk_out', toCompId: 'fsm_ff1', toPinId: 'fsm_ff1_inClk', value: 0 },
     { id: 'fsm_w2', fromCompId: 'fsm_clk', fromPinId: 'fsm_clk_out', toCompId: 'fsm_ff0', toPinId: 'fsm_ff0_inClk', value: 0 },
-    // Reset to both Flip-Flops
-    { id: 'fsm_w3', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_ff1', toPinId: 'fsm_ff1_inRst', value: 0 },
-    { id: 'fsm_w4', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_ff0', toPinId: 'fsm_ff0_inRst', value: 0 },
+    // Enable/State input to Next State logic
+    { id: 'fsm_w3', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_and1', toPinId: 'fsm_and1_in1', value: 1 },
+    { id: 'fsm_w4', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_and0', toPinId: 'fsm_and0_in1', value: 1 },
     // Input X to Next State logic
     { id: 'fsm_w5', fromCompId: 'fsm_x', fromPinId: 'fsm_x_out', toCompId: 'fsm_and1', toPinId: 'fsm_and1_in0', value: 0 },
     { id: 'fsm_w6', fromCompId: 'fsm_x', fromPinId: 'fsm_x_out', toCompId: 'fsm_and0', toPinId: 'fsm_and0_in0', value: 0 },
@@ -181,7 +184,8 @@ export function synthesizeFSM(
     { id: 'fsm_w9', fromCompId: 'fsm_ff1', fromPinId: 'fsm_ff1_outQ', toCompId: 'fsm_led_z', toPinId: 'fsm_led_z_in', value: 0 }
   );
 
-  const sim = simulateCircuit(components, wires);
+  const normalizedWires = repairWires(wires, components);
+  const sim = simulateCircuit(components, normalizedWires);
 
   return {
     transitionTable,
