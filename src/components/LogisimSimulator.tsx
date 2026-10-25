@@ -6924,6 +6924,16 @@ ${wireXmls.join('\n')}
                     <g
                       transform={`translate(${midX}, ${midY < 55 ? midY + 32 : midY - 32})`}
                       className="select-none"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      onMouseUp={(e) => {
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
                     >
                       <rect
                         x={-32}
@@ -6940,6 +6950,13 @@ ${wireXmls.join('\n')}
                       {/* Action 1: Delete Wire Segment Button */}
                       <g
                         transform="translate(-14, 0)"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                        }}
+                        onMouseUp={(e) => {
+                          e.stopPropagation();
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteSelected();
@@ -6965,6 +6982,13 @@ ${wireXmls.join('\n')}
                       {/* Action 2: Toggle Bus Width Mode Button */}
                       <g
                         transform="translate(14, 0)"
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                        }}
+                        onMouseUp={(e) => {
+                          e.stopPropagation();
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleToggleWireBus(wire.id);
