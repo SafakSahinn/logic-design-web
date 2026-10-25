@@ -1093,10 +1093,42 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
 
-    // Normal left-click on canvas background starts box selection
+    // Normal left-click on canvas background: first check if within 10px of any wire, otherwise start box selection
     if (e.button === 0 && !wiringFrom) {
-      didDragSelectionBoxRef.current = false;
       const coords = getCanvasCoords(e);
+      let bestWire: CircuitWire | null = null;
+      let bestTap: WirePoint | null = null;
+      let bestDist = 10;
+      for (const w of wires) {
+        const sPt = getWireStartPt(w);
+        const ePt = getWireEndPt(w, sPt);
+        const effMidX = w.elbowX !== undefined ? snapTo10(w.elbowX) : snapTo10((sPt.x + ePt.x) / 2);
+        const candidateTap = getClosestPointOnOrthogonalWire(sPt, ePt, coords, effMidX, w.waypoints);
+        const d = Math.hypot(coords.x - candidateTap.x, coords.y - candidateTap.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          bestWire = w;
+          bestTap = candidateTap;
+        }
+      }
+      if (bestWire && bestTap) {
+        wiringStartTimeRef.current = Date.now();
+        setWiringFrom({
+          compId: bestWire.fromCompId,
+          pinId: bestWire.fromPinId,
+          pinType: 'output',
+          x: bestTap.x,
+          y: bestTap.y,
+          direction: DIR_NONE,
+          hasDragged: false,
+          clickedWireId: bestWire.id,
+          branchPoint: bestTap,
+          sourceWireId: bestWire.id,
+        });
+        return;
+      }
+
+      didDragSelectionBoxRef.current = false;
       if (!e.shiftKey) {
         setSelectedCompIds([]);
         setSelectedWireIds([]);
@@ -6542,76 +6574,68 @@ ${wireXmls.join('\n')}
                   onClick={(e) => {
                     e.stopPropagation();
                   }}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    e.stopPropagation();
+                    const coords = getCanvasCoords(e);
+                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
+
+                    if (wiringFrom) {
+                      connectBranchToWire(wire, tap);
+                      return;
+                    }
+
+                    // Logisim EditTool + WiringTool:
+                    // Pressing on any point of a wire starts `wiringFrom` at `tap` on the 10px grid:
+                    // - Releasing without dragging selects `wire.id`!
+                    // - Dragging pulls a new wire from `tap` (or shortens `wire` if dragging from its endpoint back along itself)!
+                    wiringStartTimeRef.current = Date.now();
+                    setWiringFrom({
+                      compId: wire.fromCompId,
+                      pinId: wire.fromPinId,
+                      pinType: 'output',
+                      x: tap.x,
+                      y: tap.y,
+                      direction: DIR_NONE,
+                      hasDragged: false,
+                      clickedWireId: wire.id,
+                      branchPoint: tap,
+                      sourceWireId: wire.id,
+                    });
+                  }}
+                  onMouseUp={(e) => {
+                    if (e.button !== 0 || !wiringFrom) return;
+                    e.stopPropagation();
+                    const coords = getCanvasCoords(e);
+                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
+                    const startW = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+                    const didDrag = wiringFrom.hasDragged || tap.x !== startW.x || tap.y !== startW.y;
+
+                    if (didDrag) {
+                      finishWireAtPoint(tap);
+                    } else if (wiringFrom.clickedWireId) {
+                      const wId = wiringFrom.clickedWireId;
+                      if (e.shiftKey) {
+                        setSelectedWireIds((prev) =>
+                          prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
+                        );
+                      } else {
+                        setSelectedWireIds([wId]);
+                        setSelectedCompIds([]);
+                      }
+                      setWiringFrom(null);
+                    }
+                  }}
                   className="cursor-pointer group"
                 >
-                  {/* Thick transparent hover hitbox (Logisim EditTool: click selects segment, drag draws/branches/shortens wire) */}
+                  {/* Thick hover/click hitbox with explicit pointerEvents="stroke" */}
                   <path
                     d={pathD}
                     fill="none"
-                    stroke="transparent"
-                    strokeWidth={16}
-                    onMouseDown={(e) => {
-                      if (e.button !== 0) return;
-                      e.stopPropagation();
-                      const coords = getCanvasCoords(e);
-                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
-
-                      if (wiringFrom) {
-                        connectBranchToWire(wire, tap);
-                        return;
-                      }
-
-                      const isAtStart = tap.x === startPt.x && tap.y === startPt.y;
-                      const isAtEnd = tap.x === endPt.x && tap.y === endPt.y;
-
-                      // If wire is already selected and user grabs its interior (not endpoints), move the wire segment
-                      if (isSelected && !isAtStart && !isAtEnd && !e.shiftKey) {
-                        draggingWireJointRef.current = { wireId: wire.id, type: 'segment' };
-                        setDraggingWireJoint({ wireId: wire.id, type: 'segment' });
-                        return;
-                      }
-
-                      // Logisim EditTool + WiringTool:
-                      // Start wiring potential at `tap` on the 10px grid.
-                      // - If user releases without dragging to another grid point -> selects `wire.id`!
-                      // - If user drags -> draws a new wire from `tap` (or shortens `wire` if dragging from its endpoint back along itself)!
-                      wiringStartTimeRef.current = Date.now();
-                      setWiringFrom({
-                        compId: wire.fromCompId,
-                        pinId: wire.fromPinId,
-                        pinType: 'output',
-                        x: tap.x,
-                        y: tap.y,
-                        direction: DIR_NONE,
-                        hasDragged: false,
-                        clickedWireId: wire.id,
-                        branchPoint: tap,
-                        sourceWireId: wire.id,
-                      });
-                    }}
-                    onMouseUp={(e) => {
-                      if (e.button !== 0 || !wiringFrom) return;
-                      e.stopPropagation();
-                      const coords = getCanvasCoords(e);
-                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
-                      const startW = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
-                      const didDrag = wiringFrom.hasDragged || tap.x !== startW.x || tap.y !== startW.y;
-
-                      if (didDrag) {
-                        finishWireAtPoint(tap);
-                      } else if (wiringFrom.clickedWireId) {
-                        const wId = wiringFrom.clickedWireId;
-                        if (e.shiftKey) {
-                          setSelectedWireIds((prev) =>
-                            prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
-                          );
-                        } else {
-                          setSelectedWireIds([wId]);
-                          setSelectedCompIds([]);
-                        }
-                        setWiringFrom(null);
-                      }
-                    }}
+                    stroke="rgba(0,0,0,0.001)"
+                    strokeWidth={18}
+                    strokeLinecap="round"
+                    pointerEvents="stroke"
                   />
                   {/* Outer wire / glow if HIGH or SELECTED or CONFLICT */}
                   {wire.hasConflict ? (
@@ -6622,6 +6646,7 @@ ${wireXmls.join('\n')}
                       strokeWidth={wire.isBus ? 10 : 8}
                       opacity={cadTheme === 'dark' ? 0.85 : 0.8}
                       strokeLinecap="round"
+                      pointerEvents="none"
                     />
                   ) : isSelected ? (
                     <path
@@ -6631,6 +6656,7 @@ ${wireXmls.join('\n')}
                       strokeWidth={wire.isBus ? 10 : 8}
                       opacity={cadTheme === 'dark' ? 0.85 : 0.8}
                       strokeLinecap="round"
+                      pointerEvents="none"
                     />
                   ) : isHigh ? (
                     <path
@@ -6640,12 +6666,14 @@ ${wireXmls.join('\n')}
                       strokeWidth={wire.isBus ? 9 : 7}
                       opacity={cadTheme === 'dark' ? 0.75 : 0.6}
                       strokeLinecap="round"
+                      pointerEvents="none"
                     />
                   ) : null}
                   {/* Visible wire path */}
                   <path
                     d={pathD}
                     fill="none"
+                    pointerEvents="none"
                     stroke={
                       wire.hasConflict
                         ? '#ef4444'
