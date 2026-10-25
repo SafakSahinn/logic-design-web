@@ -78,20 +78,82 @@ export const computeLogisimWireDirection = (
 };
 
 /**
- * Computes the 1 or 2 orthogonal segments produced by Logisim's WiringTool
+ * Computes the orthogonal segments produced by Logisim's WiringTool
  * between `start` and `cur` given locked `direction`.
+ * When `components` is provided, automatically steps around any intermediate component pins
+ * (such as sibling input pins on the same gate) so connecting to pin B never shorts pin A.
  */
 export const getLogisimWiringToolSegments = (
   start: WirePoint,
   cur: WirePoint,
-  direction: LogisimWireDirection
+  direction: LogisimWireDirection,
+  components?: CircuitComponentInstance[]
 ): Array<{ e0: WirePoint; e1: WirePoint }> => {
   const s = snapPt10(start);
   const c = snapPt10(cur);
 
   if (s.x === c.x && s.y === c.y) return [];
 
+  const obstaclePins = new Set<string>();
+  if (components) {
+    for (const comp of components) {
+      for (const pin of [...comp.inputs, ...comp.outputs]) {
+        const sp = snapPt10(pin);
+        if ((sp.x === s.x && sp.y === s.y) || (sp.x === c.x && sp.y === c.y)) continue;
+        obstaclePins.add(`${sp.x},${sp.y}`);
+      }
+    }
+  }
+
+  const segHitsObstacle = (a: WirePoint, b: WirePoint): boolean => {
+    if (obstaclePins.size === 0) return false;
+    if (a.x === b.x) {
+      const minY = Math.min(a.y, b.y);
+      const maxY = Math.max(a.y, b.y);
+      for (let y = minY; y <= maxY; y += GRID_SIZE) {
+        if (obstaclePins.has(`${a.x},${y}`)) return true;
+      }
+    } else if (a.y === b.y) {
+      const minX = Math.min(a.x, b.x);
+      const maxX = Math.max(a.x, b.x);
+      for (let x = minX; x <= maxX; x += GRID_SIZE) {
+        if (obstaclePins.has(`${x},${a.y}`)) return true;
+      }
+    }
+    return false;
+  };
+
+  const pathHitsObstacle = (pts: WirePoint[]): boolean => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      if (segHitsObstacle(pts[i], pts[i + 1])) return true;
+    }
+    return false;
+  };
+
+  const ptsToSegs = (pts: WirePoint[]): Array<{ e0: WirePoint; e1: WirePoint }> => {
+    const clean = simplifyCollinearPoints(pts);
+    const out: Array<{ e0: WirePoint; e1: WirePoint }> = [];
+    for (let i = 0; i < clean.length - 1; i++) {
+      if (clean[i].x !== clean[i + 1].x || clean[i].y !== clean[i + 1].y) {
+        out.push({ e0: clean[i], e1: clean[i + 1] });
+      }
+    }
+    return out;
+  };
+
   if (s.x === c.x || s.y === c.y) {
+    if (!segHitsObstacle(s, c)) {
+      return [{ e0: s, e1: c }];
+    }
+    for (const offset of [-20, 20, -10, 10, -30, 30]) {
+      const cand =
+        s.x === c.x
+          ? [s, { x: s.x + offset, y: s.y }, { x: s.x + offset, y: c.y }, c]
+          : [s, { x: s.x, y: s.y + offset }, { x: c.x, y: s.y + offset }, c];
+      if (!pathHitsObstacle(cand)) {
+        return ptsToSegs(cand);
+      }
+    }
     return [{ e0: s, e1: c }];
   }
 
@@ -100,10 +162,43 @@ export const getLogisimWiringToolSegments = (
       ? { x: c.x, y: s.y }
       : { x: s.x, y: c.y };
 
-  const out: Array<{ e0: WirePoint; e1: WirePoint }> = [];
-  if (s.x !== m.x || s.y !== m.y) out.push({ e0: s, e1: m });
-  if (m.x !== c.x || m.y !== c.y) out.push({ e0: m, e1: c });
-  return out;
+  if (!pathHitsObstacle([s, m, c])) {
+    return ptsToSegs([s, m, c]);
+  }
+
+  // Default L-bend hits an intermediate pin (e.g. dropping vertically through pin A to reach pin B).
+  // Step the turn back by 20px (or 10..40px) before the target pin so the wire enters the pin cleanly!
+  if (direction === DIR_HORIZONTAL) {
+    const stepSign = c.x > s.x ? -1 : 1;
+    for (const d of [20, 10, 30, 40, -10, -20]) {
+      const ex = c.x + stepSign * d;
+      if (ex === s.x || ex === c.x) continue;
+      const cand = [s, { x: ex, y: s.y }, { x: ex, y: c.y }, c];
+      if (!pathHitsObstacle(cand)) {
+        return ptsToSegs(cand);
+      }
+    }
+  } else {
+    const stepSign = c.y > s.y ? -1 : 1;
+    for (const d of [20, 10, 30, 40, -10, -20]) {
+      const ey = c.y + stepSign * d;
+      if (ey === s.y || ey === c.y) continue;
+      const cand = [s, { x: s.x, y: ey }, { x: c.x, y: ey }, c];
+      if (!pathHitsObstacle(cand)) {
+        return ptsToSegs(cand);
+      }
+    }
+  }
+
+  const mAlt: WirePoint =
+    direction === DIR_HORIZONTAL
+      ? { x: s.x, y: c.y }
+      : { x: c.x, y: s.y };
+  if (!pathHitsObstacle([s, mAlt, c])) {
+    return ptsToSegs([s, mAlt, c]);
+  }
+
+  return ptsToSegs([s, m, c]);
 };
 
 /**
@@ -754,16 +849,18 @@ export const repairWires = (
 
   if (rawSegs.length === 0) return [];
 
-  // Step 1: Collect all split points (all segment endpoints + all component pin locations)
-  // Note: Before merging collinear segments, we record where perpendicular wires or pins exist.
+  // Step 1: Collect all split points from actual wire segment endpoints in rawSegs.
+  // A component pin only splits a passing wire if at least one wire segment actually
+  // terminated at that pin (preventing a wire passing over pin A on its way to pin B from shorting pin A).
+  const rawWireEndpoints = new Set<string>();
   const allSplitPoints = new Map<string, WirePoint>();
-  for (const [k] of pinAtLoc) {
-    const [px, py] = k.split(',').map(Number);
-    allSplitPoints.set(k, { x: px, y: py });
-  }
   for (const s of rawSegs) {
-    allSplitPoints.set(`${s.x0},${s.y0}`, { x: s.x0, y: s.y0 });
-    allSplitPoints.set(`${s.x1},${s.y1}`, { x: s.x1, y: s.y1 });
+    const k0 = `${s.x0},${s.y0}`;
+    const k1 = `${s.x1},${s.y1}`;
+    rawWireEndpoints.add(k0);
+    rawWireEndpoints.add(k1);
+    allSplitPoints.set(k0, { x: s.x0, y: s.y0 });
+    allSplitPoints.set(k1, { x: s.x1, y: s.y1 });
   }
 
   // Step 2: Merge overlapping collinear segments along each line (`doOverlaps` + `doMerges`)
@@ -845,7 +942,7 @@ export const repairWires = (
     const splitYs = new Set<number>([v.y0, v.y1]);
     for (let y = v.y0 + GRID_SIZE; y < v.y1; y += GRID_SIZE) {
       const key = `${v.x0},${y}`;
-      if (pinAtLoc.has(key)) {
+      if (pinAtLoc.has(key) && rawWireEndpoints.has(key)) {
         splitYs.add(y);
       } else if (allSplitPoints.has(key) && horzTouchAt(v.x0, y)) {
         splitYs.add(y);
@@ -866,7 +963,7 @@ export const repairWires = (
     const splitXs = new Set<number>([h.x0, h.x1]);
     for (let x = h.x0 + GRID_SIZE; x < h.x1; x += GRID_SIZE) {
       const key = `${x},${h.y0}`;
-      if (pinAtLoc.has(key)) {
+      if (pinAtLoc.has(key) && rawWireEndpoints.has(key)) {
         splitXs.add(x);
       } else if (allSplitPoints.has(key) && vertTouchAt(x, h.y0)) {
         splitXs.add(x);
@@ -1143,6 +1240,21 @@ export const translateWiresForMovedComponents = (
         const deltaE = movingPinDeltaAtLoc.get(ke);
 
         if (!deltaS && !deltaE) continue;
+
+        if (deltaS && deltaE) {
+          const newS = { x: s.x + deltaS.dx, y: s.y + deltaS.dy };
+          const newE = { x: e.x + deltaE.dx, y: e.y + deltaE.dy };
+          resultWires[wIdx] = {
+            ...w0,
+            fromCompId: '',
+            fromPinId: `loc_${newS.x}_${newS.y}`,
+            toCompId: '',
+            toPinId: `loc_${newE.x}_${newE.y}`,
+            startPoint: newS,
+            endPoint: newE,
+          };
+          continue;
+        }
 
         const isStartMoving = !!deltaS;
         const movingPt = isStartMoving ? s : e;

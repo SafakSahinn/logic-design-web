@@ -2277,7 +2277,7 @@ ${wireXmls.join('\n')}
         }
       } else {
         // 2. Normal Logisim WiringTool: produce 1 or 2 straight horizontal/vertical segments
-        const toolSegs = getLogisimWiringToolSegments(startPt, endPt, effectiveDir);
+        const toolSegs = getLogisimWiringToolSegments(startPt, endPt, effectiveDir, components);
         const newSegWires: CircuitWire[] = toolSegs.map((seg, idx) => ({
           id: `wire_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
           fromCompId: '',
@@ -7087,7 +7087,7 @@ ${wireXmls.join('\n')}
                 p1,
                 wiringFrom.direction ?? DIR_NONE
               );
-              const previewSegs = getLogisimWiringToolSegments(p0, p1, previewDir);
+              const previewSegs = getLogisimWiringToolSegments(p0, p1, previewDir, components);
               if (previewSegs.length === 0) return null;
 
               let previewPath = `M ${previewSegs[0].e0.x},${previewSegs[0].e0.y}`;
