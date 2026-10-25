@@ -862,10 +862,12 @@ export const translateWiresForMovedComponents = (
         if (otherNeighbors.length === 1 && !stationaryPinLocs.has(otherKey) && !movingPinDeltaAtLoc.has(otherKey)) {
           const perpIdx = otherNeighbors[0];
           const perpEnds = wireEndpoints[perpIdx];
+          const perpHasMovingPin =
+            movingPinDeltaAtLoc.has(keyOf(perpEnds.s)) || movingPinDeltaAtLoc.has(keyOf(perpEnds.e));
           const isWVertical = s.x === e.x;
           const isPerpVertical = perpEnds.s.x === perpEnds.e.x;
 
-          if (isWVertical !== isPerpVertical) {
+          if (!perpHasMovingPin && isWVertical !== isPerpVertical) {
             // Slide the orthogonal corner `otherPt`!
             const newCorner = isWVertical
               ? { x: newPinPt.x, y: otherPt.y }
@@ -873,41 +875,147 @@ export const translateWiresForMovedComponents = (
 
             resultWires[wIdx] = {
               ...w0,
+              fromCompId: '',
+              fromPinId: `loc_${(isStartMoving ? newPinPt : newCorner).x}_${(isStartMoving ? newPinPt : newCorner).y}`,
+              toCompId: '',
+              toPinId: `loc_${(isStartMoving ? newCorner : newPinPt).x}_${(isStartMoving ? newCorner : newPinPt).y}`,
               startPoint: isStartMoving ? newPinPt : newCorner,
               endPoint: isStartMoving ? newCorner : newPinPt,
             };
 
             const isPerpStartAtCorner = keyOf(perpEnds.s) === otherKey;
+            const pNewS = isPerpStartAtCorner ? newCorner : perpEnds.s;
+            const pNewE = isPerpStartAtCorner ? perpEnds.e : newCorner;
             resultWires[perpIdx] = {
               ...initialWires[perpIdx],
-              startPoint: isPerpStartAtCorner ? newCorner : perpEnds.s,
-              endPoint: isPerpStartAtCorner ? perpEnds.e : newCorner,
+              fromCompId: '',
+              fromPinId: `loc_${pNewS.x}_${pNewS.y}`,
+              toCompId: '',
+              toPinId: `loc_${pNewE.x}_${pNewE.y}`,
+              startPoint: pNewS,
+              endPoint: pNewE,
             };
             continue;
           }
         }
 
-        // Otherwise, connect `newPinPt` to `otherPt` orthogonally (1 segment if collinear, 2 if L-bend)
+        // Otherwise, connect `newPinPt` to `otherPt` orthogonally
         if (newPinPt.x === otherPt.x || newPinPt.y === otherPt.y) {
+          const newS = isStartMoving ? newPinPt : otherPt;
+          const newE = isStartMoving ? otherPt : newPinPt;
           resultWires[wIdx] = {
             ...w0,
-            startPoint: isStartMoving ? newPinPt : otherPt,
-            endPoint: isStartMoving ? otherPt : newPinPt,
+            fromCompId: '',
+            fromPinId: `loc_${newS.x}_${newS.y}`,
+            toCompId: '',
+            toPinId: `loc_${newE.x}_${newE.y}`,
+            startPoint: newS,
+            endPoint: newE,
           };
         } else {
           const wasHorizontal = s.y === e.y;
+          // If `otherPt` is a stationary pin, route via the midpoint so the perpendicular segment
+          // never runs along the face of the gate across adjacent pins!
+          if (stationaryPinLocs.has(otherKey)) {
+            if (wasHorizontal) {
+              const midX = snapTo10((newPinPt.x + otherPt.x) / 2);
+              if (midX !== newPinPt.x && midX !== otherPt.x) {
+                const c1 = { x: midX, y: newPinPt.y };
+                const c2 = { x: midX, y: otherPt.y };
+                resultWires[wIdx] = {
+                  ...w0,
+                  fromCompId: '',
+                  fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
+                  toCompId: '',
+                  toPinId: `loc_${c1.x}_${c1.y}`,
+                  startPoint: newPinPt,
+                  endPoint: c1,
+                };
+                extraWires.push(
+                  {
+                    ...w0,
+                    id: `${w0.id}_bridge1`,
+                    fromCompId: '',
+                    fromPinId: `loc_${c1.x}_${c1.y}`,
+                    toCompId: '',
+                    toPinId: `loc_${c2.x}_${c2.y}`,
+                    startPoint: c1,
+                    endPoint: c2,
+                  },
+                  {
+                    ...w0,
+                    id: `${w0.id}_bridge2`,
+                    fromCompId: '',
+                    fromPinId: `loc_${c2.x}_${c2.y}`,
+                    toCompId: '',
+                    toPinId: `loc_${otherPt.x}_${otherPt.y}`,
+                    startPoint: c2,
+                    endPoint: otherPt,
+                  }
+                );
+                continue;
+              }
+            } else {
+              const midY = snapTo10((newPinPt.y + otherPt.y) / 2);
+              if (midY !== newPinPt.y && midY !== otherPt.y) {
+                const c1 = { x: newPinPt.x, y: midY };
+                const c2 = { x: otherPt.x, y: midY };
+                resultWires[wIdx] = {
+                  ...w0,
+                  fromCompId: '',
+                  fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
+                  toCompId: '',
+                  toPinId: `loc_${c1.x}_${c1.y}`,
+                  startPoint: newPinPt,
+                  endPoint: c1,
+                };
+                extraWires.push(
+                  {
+                    ...w0,
+                    id: `${w0.id}_bridge1`,
+                    fromCompId: '',
+                    fromPinId: `loc_${c1.x}_${c1.y}`,
+                    toCompId: '',
+                    toPinId: `loc_${c2.x}_${c2.y}`,
+                    startPoint: c1,
+                    endPoint: c2,
+                  },
+                  {
+                    ...w0,
+                    id: `${w0.id}_bridge2`,
+                    fromCompId: '',
+                    fromPinId: `loc_${c2.x}_${c2.y}`,
+                    toCompId: '',
+                    toPinId: `loc_${otherPt.x}_${otherPt.y}`,
+                    startPoint: c2,
+                    endPoint: otherPt,
+                  }
+                );
+                continue;
+              }
+            }
+          }
+
           const corner = wasHorizontal
             ? { x: otherPt.x, y: newPinPt.y }
             : { x: newPinPt.x, y: otherPt.y };
 
           resultWires[wIdx] = {
             ...w0,
+            fromCompId: '',
+            fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
+            toCompId: '',
+            toPinId: `loc_${corner.x}_${corner.y}`,
             startPoint: newPinPt,
             endPoint: corner,
           };
           extraWires.push({
             ...w0,
             id: `${w0.id}_bridge`,
+            fromCompId: '',
+            fromPinId: `loc_${corner.x}_${corner.y}`,
+            toCompId: '',
+            toPinId: `loc_${otherPt.x}_${otherPt.y}`,
             startPoint: corner,
             endPoint: otherPt,
           });

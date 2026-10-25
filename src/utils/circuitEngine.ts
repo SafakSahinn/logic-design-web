@@ -1113,9 +1113,6 @@ export function simulateCircuitStep(
 
   // Connect pins and grid locations via wires
   newWires.forEach((w) => {
-    if (w.fromPinId && w.toPinId) {
-      unionPins(w.fromPinId, w.toPinId);
-    }
     if (w.startPoint && w.endPoint) {
       const sx = Math.round(w.startPoint.x / 10) * 10;
       const sy = Math.round(w.startPoint.y / 10) * 10;
@@ -1124,8 +1121,15 @@ export function simulateCircuitStep(
       const ks = `loc_${sx}_${sy}`;
       const ke = `loc_${ex}_${ey}`;
       unionPins(ks, ke);
-      if (w.fromPinId) unionPins(w.fromPinId, ks);
-      if (w.toPinId) unionPins(w.toPinId, ke);
+    } else {
+      if (w.fromPinId && w.toPinId) {
+        unionPins(w.fromPinId, w.toPinId);
+      }
+      if (w.branchPoint && w.toPinId) {
+        const bx = Math.round(w.branchPoint.x / 10) * 10;
+        const by = Math.round(w.branchPoint.y / 10) * 10;
+        unionPins(`loc_${bx}_${by}`, w.toPinId);
+      }
     }
   });
 
@@ -1157,11 +1161,9 @@ export function simulateCircuitStep(
 
   const netWires = new Map<string, CircuitWire[]>();
   newWires.forEach((w) => {
-    const key =
-      w.fromPinId ||
-      (w.startPoint
-        ? `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`
-        : w.id);
+    const key = w.startPoint
+      ? `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`
+      : w.fromPinId || w.id;
     const root = findRoot(key);
     if (!netWires.has(root)) netWires.set(root, []);
     netWires.get(root)!.push(w);

@@ -1360,25 +1360,51 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (draggingCompId) {
       const didMove = !!(dragStartSnapshotRef.current && dragStartSnapshotRef.current.didMove);
       if (didMove && dragStartSnapshotRef.current) {
-        recordHistory(dragStartSnapshotRef.current.components, dragStartSnapshotRef.current.wires);
-      }
-      dragStartSnapshotRef.current = null;
-      setDraggingCompId(null);
-      dragGroupOffsetsRef.current.clear();
-      if (didMove) {
-        setComponents((prevComps) => {
-          setWires((prevWires) => {
-            const repaired = repairWires(prevWires, prevComps);
-            const sim = simulateCircuit(prevComps, repaired);
-            return sim.wires;
-          });
-          const repaired = repairWires(wires, prevComps);
-          const sim = simulateCircuit(prevComps, repaired);
-          return sim.components;
+        const initialComps = dragStartSnapshotRef.current.components;
+        const initialWires = dragStartSnapshotRef.current.wires;
+        recordHistory(initialComps, initialWires);
+
+        const finalCoords = pendingDragCoordsRef.current || getCanvasCoords(e);
+        const offsets = dragGroupOffsetsRef.current;
+        const initialCompMap = new Map(initialComps.map((c) => [c.id, c]));
+        const movedCompDeltas = new Map<string, { dx: number; dy: number }>();
+
+        for (const [cId, off] of offsets.entries()) {
+          const rawX = finalCoords.x - off.x;
+          const rawY = finalCoords.y - off.y;
+          const snappedX = snapToGrid ? Math.max(10, Math.round(rawX / 10) * 10) : Math.max(10, Math.round(rawX));
+          const snappedY = snapToGrid ? Math.max(10, Math.round(rawY / 10) * 10) : Math.max(10, Math.round(rawY));
+          const c0 = initialCompMap.get(cId);
+          if (c0) {
+            movedCompDeltas.set(cId, { dx: snappedX - c0.x, dy: snappedY - c0.y });
+          }
+        }
+
+        const finalComps = initialComps.map((c) => {
+          const delta = movedCompDeltas.get(c.id);
+          const c0 = initialCompMap.get(c.id);
+          if (delta && c0) {
+            return updatePinPositions({ ...c, x: c0.x + delta.dx, y: c0.y + delta.dy });
+          }
+          return c;
         });
+
+        const translatedWires =
+          initialWires.length > 0 && movedCompDeltas.size > 0
+            ? translateWiresForMovedComponents(initialWires, initialComps, movedCompDeltas)
+            : initialWires;
+
+        const repaired = repairWires(translatedWires, finalComps);
+        const sim = simulateCircuit(finalComps, repaired);
+        setComponents(sim.components);
+        setWires(sim.wires);
       } else {
         runSimulation();
       }
+      pendingDragCoordsRef.current = null;
+      dragStartSnapshotRef.current = null;
+      setDraggingCompId(null);
+      dragGroupOffsetsRef.current.clear();
     }
     if (selectionBox) {
       const minX = Math.min(selectionBox.startX, selectionBox.currentX);
@@ -6559,7 +6585,23 @@ ${wireXmls.join('\n')}
               const endPt = getWireEndPt(wire, startPt);
 
               const segs = getWireOrthogonalSegments(wire, startPt, endPt);
-              const pathD = segmentsToSvgPath(segs);
+              let pathD = segmentsToSvgPath(segs);
+              if (
+                fromPin &&
+                snapTo10(fromPin.x) === startPt.x &&
+                snapTo10(fromPin.y) === startPt.y &&
+                (fromPin.x !== startPt.x || fromPin.y !== startPt.y)
+              ) {
+                pathD = `M ${fromPin.x},${fromPin.y} L ${startPt.x},${startPt.y} ${pathD}`;
+              }
+              if (
+                toPin &&
+                snapTo10(toPin.x) === endPt.x &&
+                snapTo10(toPin.y) === endPt.y &&
+                (toPin.x !== endPt.x || toPin.y !== endPt.y)
+              ) {
+                pathD = `${pathD} L ${toPin.x},${toPin.y}`;
+              }
 
               const defaultMidX = snapTo10((startPt.x + endPt.x) / 2);
               const effectiveMidX = wire.elbowX !== undefined ? snapTo10(wire.elbowX) : defaultMidX;
