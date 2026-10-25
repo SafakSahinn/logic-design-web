@@ -1104,9 +1104,29 @@ export function simulateCircuitStep(
     }
   }
 
-  // Connect pins via wires
+  // Connect pins to their 10px snapped grid locations (Logisim CircuitWires coordinate connectivity)
+  pinMap.forEach((pin, pinId) => {
+    const gx = Math.round(pin.x / 10) * 10;
+    const gy = Math.round(pin.y / 10) * 10;
+    unionPins(pinId, `loc_${gx}_${gy}`);
+  });
+
+  // Connect pins and grid locations via wires
   newWires.forEach((w) => {
-    unionPins(w.fromPinId, w.toPinId);
+    if (w.fromPinId && w.toPinId) {
+      unionPins(w.fromPinId, w.toPinId);
+    }
+    if (w.startPoint && w.endPoint) {
+      const sx = Math.round(w.startPoint.x / 10) * 10;
+      const sy = Math.round(w.startPoint.y / 10) * 10;
+      const ex = Math.round(w.endPoint.x / 10) * 10;
+      const ey = Math.round(w.endPoint.y / 10) * 10;
+      const ks = `loc_${sx}_${sy}`;
+      const ke = `loc_${ex}_${ey}`;
+      unionPins(ks, ke);
+      if (w.fromPinId) unionPins(w.fromPinId, ks);
+      if (w.toPinId) unionPins(w.toPinId, ke);
+    }
   });
 
   // Connect matching Tunnels wirelessly into the same electrical net (Global Net Wireless Bus)
@@ -1137,9 +1157,15 @@ export function simulateCircuitStep(
 
   const netWires = new Map<string, CircuitWire[]>();
   newWires.forEach((w) => {
-    const root = findRoot(w.fromPinId);
+    const key =
+      w.fromPinId ||
+      (w.startPoint
+        ? `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`
+        : w.id);
+    const root = findRoot(key);
     if (!netWires.has(root)) netWires.set(root, []);
     netWires.get(root)!.push(w);
+    if (!netPins.has(root)) netPins.set(root, []);
   });
 
   // Evaluate each electrical net
@@ -2768,18 +2794,59 @@ export function generateBooleanExpression(
   if (comp.type === 'gnd') return '0';
   if (comp.type === 'clock') return 'CLK';
 
+  const findDriverForPin = (targetPinId: string): { comp: CircuitComponentInstance; outIdx: number } | null => {
+    const parent = new Map<string, string>();
+    const findR = (k: string): string => {
+      if (!parent.has(k)) parent.set(k, k);
+      let c = k;
+      while (c !== parent.get(c)) {
+        const p = parent.get(c)!;
+        parent.set(c, parent.get(p)!);
+        c = p;
+      }
+      return c;
+    };
+    const unite = (a: string, b: string) => {
+      const ra = findR(a);
+      const rb = findR(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    components.forEach((c) => {
+      [...c.inputs, ...c.outputs].forEach((p) => {
+        unite(p.id, `loc_${Math.round(p.x / 10) * 10}_${Math.round(p.y / 10) * 10}`);
+      });
+    });
+    wires.forEach((w) => {
+      if (w.fromPinId && w.toPinId) unite(w.fromPinId, w.toPinId);
+      if (w.startPoint && w.endPoint) {
+        const ks = `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`;
+        const ke = `loc_${Math.round(w.endPoint.x / 10) * 10}_${Math.round(w.endPoint.y / 10) * 10}`;
+        unite(ks, ke);
+        if (w.fromPinId) unite(w.fromPinId, ks);
+        if (w.toPinId) unite(w.toPinId, ke);
+      }
+    });
+    const targetRoot = findR(targetPinId);
+    for (const c of components) {
+      if (c.type === 'tunnel') continue;
+      for (let idx = 0; idx < c.outputs.length; idx++) {
+        if (findR(c.outputs[idx].id) === targetRoot) {
+          return { comp: c, outIdx: idx };
+        }
+      }
+    }
+    return null;
+  };
+
   if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
     const inPin = comp.inputs[0];
     if (!inPin) return '?';
-    const wire = wires.find((w) => w.toPinId === inPin.id);
-    if (!wire) return '0';
+    const driver = findDriverForPin(inPin.id);
+    if (!driver) return '0';
     if (visited.has(comp.id)) return '...';
     const nextVisited = new Set(visited);
     nextVisited.add(comp.id);
-    const sourceComp = components.find((c) => c.id === wire.fromCompId);
-    if (!sourceComp) return '?';
-    const outIdx = sourceComp.outputs.findIndex((p) => p.id === wire.fromPinId);
-    return generateBooleanExpression(wire.fromCompId, outIdx >= 0 ? outIdx : 0, components, wires, nextVisited);
+    return generateBooleanExpression(driver.comp.id, driver.outIdx, components, wires, nextVisited);
   }
 
   if (visited.has(comp.id)) return '...';
@@ -2787,12 +2854,9 @@ export function generateBooleanExpression(
   newVisited.add(comp.id);
 
   const traceInput = (inputPinId: string): string => {
-    const wire = wires.find((w) => w.toPinId === inputPinId);
-    if (!wire) return '0';
-    const sourceComp = components.find((c) => c.id === wire.fromCompId);
-    if (!sourceComp) return '?';
-    const outIdx = sourceComp.outputs.findIndex((p) => p.id === wire.fromPinId);
-    return generateBooleanExpression(wire.fromCompId, outIdx >= 0 ? outIdx : 0, components, wires, newVisited);
+    const driver = findDriverForPin(inputPinId);
+    if (!driver) return '0';
+    return generateBooleanExpression(driver.comp.id, driver.outIdx, components, wires, newVisited);
   };
 
   const inputExprs = comp.inputs.map((p) => traceInput(p.id));

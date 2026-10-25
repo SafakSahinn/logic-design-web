@@ -1,12 +1,18 @@
 import {
   snapTo10,
   snapPt10,
+  DIR_NONE,
+  computeLogisimWireDirection,
+  getLogisimWiringToolSegments,
+  computeWireShortening,
+  repairWires,
+  translateWiresForMovedComponents,
   getWireOrthogonalSegments,
   segmentsToSvgPath,
-  simplifyCollinearPoints,
   getClosestPointOnWire,
   computeCircuitJunctions,
   type WirePoint,
+  type LogisimWireDirection,
 } from '../utils/wiringEngine';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type {
@@ -241,13 +247,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Selected preset (null by default for clean start)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
 
-  // Active wiring state (supports mid-wire branching tap point)
+  // Active wiring state (Logisim WiringTool + EditTool unified state)
   const [wiringFrom, setWiringFrom] = useState<{
     compId: string;
     pinId: string;
     pinType: 'input' | 'output';
     x: number;
     y: number;
+    direction?: LogisimWireDirection;
+    hasDragged?: boolean;
+    clickedWireId?: string;
     branchPoint?: { x: number; y: number };
     sourceWireId?: string;
     extendingWireId?: string;
@@ -1077,37 +1086,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
 
-    // Logisim-style interactive wiring: Clicking canvas while wiring places 90° orthogonal corner or freeform waypoint!
+    // Logisim-style interactive wiring: If already wiring (e.g. from click-mode), clicking canvas finishes the wire segment(s)
     if (e.button === 0 && wiringFrom) {
       const coords = getCanvasCoords(e);
-      const snapped = {
-        x: snapToGrid ? Math.round(coords.x / 10) * 10 : Math.round(coords.x),
-        y: snapToGrid ? Math.round(coords.y / 10) * 10 : Math.round(coords.y),
-      };
-
-      setWiringFrom((prev) => {
-        if (!prev) return null;
-        const lastPt = prev.waypoints && prev.waypoints.length > 0 ? prev.waypoints[prev.waypoints.length - 1] : { x: prev.x, y: prev.y };
-        
-        // If Shift is pressed: Freeform direct point
-        // If normal (default): Strictly 90-degree orthogonal Logisim corner (Horizontal then Vertical)
-        if (e.shiftKey) {
-          return {
-            ...prev,
-            waypoints: [...(prev.waypoints || []), snapped],
-          };
-        } else {
-          // Logisim 90° corner
-          const cornerPt = { x: snapped.x, y: lastPt.y };
-          const newWps = (lastPt.x !== snapped.x && lastPt.y !== snapped.y)
-            ? [...(prev.waypoints || []), cornerPt, snapped]
-            : [...(prev.waypoints || []), snapped];
-          return {
-            ...prev,
-            waypoints: newWps,
-          };
-        }
-      });
+      finishWireAtPoint(coords);
       return;
     }
 
@@ -1142,35 +1124,91 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const coords = getCanvasCoords(e);
     if (!draggingCompId) setMousePos(coords);
 
-    // Wire clicking solely selects wire; explicit branching uses + handle on hover
+    // Logisim WiringTool.computeMove: lock initial drag direction on 10px grid
+    if (wiringFrom) {
+      const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+      const curPt = snapPt10(coords);
+      const nextDir = computeLogisimWireDirection(startPt, curPt, wiringFrom.direction ?? DIR_NONE);
+      const movedOnGrid = curPt.x !== startPt.x || curPt.y !== startPt.y;
+      if (nextDir !== (wiringFrom.direction ?? DIR_NONE) || (movedOnGrid && !wiringFrom.hasDragged)) {
+        setWiringFrom((prev) =>
+          prev
+            ? {
+                ...prev,
+                direction: nextDir,
+                hasDragged: prev.hasDragged || movedOnGrid,
+              }
+            : null
+        );
+      }
+      return;
+    }
 
     const activeDragJoint = draggingWireJointRef.current || draggingWireJoint;
     if (activeDragJoint) {
-      const snappedX = snapToGrid ? Math.round(coords.x / 10) * 10 : Math.round(coords.x);
-      const snappedY = snapToGrid ? Math.round(coords.y / 10) * 10 : Math.round(coords.y);
+      const snappedX = snapTo10(coords.x);
+      const snappedY = snapTo10(coords.y);
       setWires((prev) => {
         const targetWire = prev.find((w) => w.id === activeDragJoint.wireId);
         if (!targetWire) return prev;
 
+        const ws = getWireStartPt(targetWire);
+        const we = getWireEndPt(targetWire, ws);
+        const isPureVertical = ws.x === we.x && (!targetWire.waypoints || targetWire.waypoints.length === 0);
+        const isPureHorizontal = ws.y === we.y && (!targetWire.waypoints || targetWire.waypoints.length === 0);
+
+        if (activeDragJoint.type === 'segment' && (isPureVertical || isPureHorizontal)) {
+          return prev.map((w) => {
+            if (w.id === targetWire.id) {
+              if (isPureVertical) {
+                return {
+                  ...w,
+                  startPoint: { x: snappedX, y: ws.y },
+                  endPoint: { x: snappedX, y: we.y },
+                };
+              } else {
+                return {
+                  ...w,
+                  startPoint: { x: ws.x, y: snappedY },
+                  endPoint: { x: we.x, y: snappedY },
+                };
+              }
+            }
+            // Stretch connected perpendicular wire endpoints that shared an endpoint with targetWire
+            const os = getWireStartPt(w);
+            const oe = getWireEndPt(w, os);
+            const sharesWsWithOs = os.x === ws.x && os.y === ws.y;
+            const sharesWeWithOs = os.x === we.x && os.y === we.y;
+            const sharesWsWithOe = oe.x === ws.x && oe.y === ws.y;
+            const sharesWeWithOe = oe.x === we.x && oe.y === we.y;
+
+            if (isPureVertical && os.y === oe.y) {
+              if (sharesWsWithOs || sharesWeWithOs) {
+                return { ...w, startPoint: { x: snappedX, y: os.y }, endPoint: oe };
+              }
+              if (sharesWsWithOe || sharesWeWithOe) {
+                return { ...w, startPoint: os, endPoint: { x: snappedX, y: oe.y } };
+              }
+            } else if (isPureHorizontal && os.x === oe.x) {
+              if (sharesWsWithOs || sharesWeWithOs) {
+                return { ...w, startPoint: { x: os.x, y: snappedY }, endPoint: oe };
+              }
+              if (sharesWsWithOe || sharesWeWithOe) {
+                return { ...w, startPoint: os, endPoint: { x: oe.x, y: snappedY } };
+              }
+            }
+            return w;
+          });
+        }
+
         return prev.map((w) => {
           if (w.id === activeDragJoint.wireId) {
-            // Dragging an interactive waypoint corner:
             if (activeDragJoint.type === 'waypoint' && activeDragJoint.index !== undefined && w.waypoints) {
               const updatedWps = [...w.waypoints];
               updatedWps[activeDragJoint.index] = { x: snappedX, y: snappedY };
               return { ...w, waypoints: updatedWps };
             }
             return { ...w, elbowX: snappedX };
-          }
-          // ANY branch wire in the same electrical net follows elbowX
-          if (w.branchPoint && (w.fromPinId === targetWire.fromPinId || w.sourceWireId === targetWire.id)) {
-            return {
-              ...w,
-              branchPoint: {
-                ...w.branchPoint,
-                x: snappedX,
-              },
-            };
           }
           return w;
         });
@@ -1219,118 +1257,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           );
 
           if (initialWires.length > 0 && movedCompDeltas.size > 0) {
-            setWires((prev) =>
-              prev.map((w) => {
-                const initialWire = initialWires.find((iw) => iw.id === w.id);
-                if (!initialWire) return w;
-
-                let updatedWire = { ...w };
-
-                const fromDelta = movedCompDeltas.get(w.fromCompId);
-                const toDelta = movedCompDeltas.get(w.toCompId);
-
-                const isFromPinned = !!findPinById(w.fromPinId);
-                const isToPinned = !!findPinById(w.toPinId);
-
-                // Both endpoints moved together (or self-loop):
-                if (fromDelta && toDelta && fromDelta.dx === toDelta.dx && fromDelta.dy === toDelta.dy) {
-                  const delta = fromDelta;
-                  if (initialWire.branchPoint) {
-                    updatedWire.branchPoint = {
-                      x: initialWire.branchPoint.x + delta.dx,
-                      y: initialWire.branchPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
-                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
-                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
-                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
-                      x: pt.x + delta.dx,
-                      y: pt.y + delta.dy,
-                    }));
-                  }
-                  if (initialWire.endPoint) {
-                    updatedWire.endPoint = {
-                      x: initialWire.endPoint.x + delta.dx,
-                      y: initialWire.endPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.startPoint) {
-                    updatedWire.startPoint = {
-                      x: initialWire.startPoint.x + delta.dx,
-                      y: initialWire.startPoint.y + delta.dy,
-                    };
-                  }
-                }
-                // Open wire or wire branch attached only to moved fromComp (moves 100% synchronously with gate)
-                else if (fromDelta && !isToPinned) {
-                  const delta = fromDelta;
-                  if (initialWire.branchPoint) {
-                    updatedWire.branchPoint = {
-                      x: initialWire.branchPoint.x + delta.dx,
-                      y: initialWire.branchPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
-                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
-                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
-                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
-                      x: pt.x + delta.dx,
-                      y: pt.y + delta.dy,
-                    }));
-                  }
-                  if (initialWire.endPoint) {
-                    updatedWire.endPoint = {
-                      x: initialWire.endPoint.x + delta.dx,
-                      y: initialWire.endPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.startPoint) {
-                    updatedWire.startPoint = {
-                      x: initialWire.startPoint.x + delta.dx,
-                      y: initialWire.startPoint.y + delta.dy,
-                    };
-                  }
-                }
-                // Open wire attached only to moved toComp
-                else if (toDelta && !isFromPinned) {
-                  const delta = toDelta;
-                  if (initialWire.branchPoint) {
-                    updatedWire.branchPoint = {
-                      x: initialWire.branchPoint.x + delta.dx,
-                      y: initialWire.branchPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.elbowX !== undefined) updatedWire.elbowX = initialWire.elbowX + delta.dx;
-                  if (initialWire.elbowY !== undefined) updatedWire.elbowY = initialWire.elbowY + delta.dy;
-                  if (initialWire.waypoints && initialWire.waypoints.length > 0) {
-                    updatedWire.waypoints = initialWire.waypoints.map((pt) => ({
-                      x: pt.x + delta.dx,
-                      y: pt.y + delta.dy,
-                    }));
-                  }
-                  if (initialWire.endPoint) {
-                    updatedWire.endPoint = {
-                      x: initialWire.endPoint.x + delta.dx,
-                      y: initialWire.endPoint.y + delta.dy,
-                    };
-                  }
-                  if (initialWire.startPoint) {
-                    updatedWire.startPoint = {
-                      x: initialWire.startPoint.x + delta.dx,
-                      y: initialWire.startPoint.y + delta.dy,
-                    };
-                  }
-                } else if (fromDelta && initialWire.branchPoint) {
-                  updatedWire.branchPoint = {
-                    x: initialWire.branchPoint.x + fromDelta.dx,
-                    y: initialWire.branchPoint.y + fromDelta.dy,
-                  };
-                }
-
-                return updatedWire;
-              })
+            const translatedWires = translateWiresForMovedComponents(
+              initialWires,
+              initialComps,
+              movedCompDeltas
             );
+            setWires(translatedWires);
           }
         });
       }
@@ -1353,9 +1285,28 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }
     if (wiringFrom) {
       const coords = getCanvasCoords(e);
-      const didDragWire = Math.hypot(coords.x - wiringFrom.x, coords.y - wiringFrom.y) > 20 || (wiringFrom.waypoints && wiringFrom.waypoints.length > 0);
+      const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+      const endPt = snapPt10(coords);
+      const didDragWire =
+        wiringFrom.hasDragged ||
+        startPt.x !== endPt.x ||
+        startPt.y !== endPt.y;
+
       if (didDragWire) {
-        finishWireAtPoint(coords);
+        finishWireAtPoint(endPt);
+        return;
+      } else if (wiringFrom.clickedWireId) {
+        // Logisim EditTool: clicking a wire without dragging selects that wire segment!
+        if (e.shiftKey) {
+          const wId = wiringFrom.clickedWireId;
+          setSelectedWireIds((prev) =>
+            prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
+          );
+        } else {
+          setSelectedWireIds([wiringFrom.clickedWireId]);
+          setSelectedCompIds([]);
+        }
+        setWiringFrom(null);
         return;
       }
     }
@@ -1364,19 +1315,38 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       draggingWireJointRef.current = null;
       setDraggingWireJoint(null);
       recordHistory();
-      runSimulation();
+      setWires((prevWires) => {
+        const repaired = repairWires(prevWires, components);
+        const sim = simulateCircuit(components, repaired);
+        setComponents(sim.components);
+        return sim.wires;
+      });
     }
     if (isPanning) {
       setIsPanning(false);
     }
     if (draggingCompId) {
-      if (dragStartSnapshotRef.current && dragStartSnapshotRef.current.didMove) {
+      const didMove = !!(dragStartSnapshotRef.current && dragStartSnapshotRef.current.didMove);
+      if (didMove && dragStartSnapshotRef.current) {
         recordHistory(dragStartSnapshotRef.current.components, dragStartSnapshotRef.current.wires);
       }
       dragStartSnapshotRef.current = null;
       setDraggingCompId(null);
       dragGroupOffsetsRef.current.clear();
-      runSimulation();
+      if (didMove) {
+        setComponents((prevComps) => {
+          setWires((prevWires) => {
+            const repaired = repairWires(prevWires, prevComps);
+            const sim = simulateCircuit(prevComps, repaired);
+            return sim.wires;
+          });
+          const repaired = repairWires(wires, prevComps);
+          const sim = simulateCircuit(prevComps, repaired);
+          return sim.components;
+        });
+      } else {
+        runSimulation();
+      }
     }
     if (selectionBox) {
       const minX = Math.min(selectionBox.startX, selectionBox.currentX);
@@ -2161,38 +2131,24 @@ ${wireXmls.join('\n')}
   };
 
 
-    // Resolves wire start point snapped to 10px grid
+  // Resolves wire start point snapped to 10px grid (Logisim Wire.e0)
   const getWireStartPt = (wire: CircuitWire): WirePoint => {
-    // 1. If this wire is a branch from another wire, branchPoint is its ground truth visual start:
-    if (wire.branchPoint) {
-      if (wire.sourceWireId) {
-        const parentWire = wires.find((w) => w.id === wire.sourceWireId);
-        if (parentWire) {
-          const pFrom = getWireStartPt(parentWire);
-          const pToPin = findPinById(parentWire.toPinId);
-          const pEnd = pToPin ? { x: pToPin.x, y: pToPin.y } : (parentWire.endPoint || pFrom);
-          return getClosestPointOnWire(parentWire, pFrom, pEnd, wire.branchPoint);
-        }
-      }
-      return snapPt10(wire.branchPoint);
-    }
-
-    // 2. If connected to a component pin, live pin coordinates are ground truth (moves dynamically with gate!):
+    if (wire.startPoint) return snapPt10(wire.startPoint);
+    if (wire.branchPoint) return snapPt10(wire.branchPoint);
     if (wire.fromPinId) {
       const fromPin = findPinById(wire.fromPinId);
       if (fromPin) return snapPt10({ x: fromPin.x, y: fromPin.y });
     }
-
-    // 3. If floating free wire startPoint:
-    if (wire.startPoint) return snapPt10(wire.startPoint);
-
     return { x: 0, y: 0 };
   };
 
+  // Resolves wire end point snapped to 10px grid (Logisim Wire.e1)
   const getWireEndPt = (wire: CircuitWire, startPt: WirePoint): WirePoint => {
-    const toPin = findPinById(wire.toPinId);
-    if (toPin) return snapPt10({ x: toPin.x, y: toPin.y });
     if (wire.endPoint) return snapPt10(wire.endPoint);
+    if (wire.toPinId) {
+      const toPin = findPinById(wire.toPinId);
+      if (toPin) return snapPt10({ x: toPin.x, y: toPin.y });
+    }
     return startPt;
   };
 
@@ -2216,257 +2172,86 @@ ${wireXmls.join('\n')}
     return getClosestPointOnWire(dummyWire, p1, p2, click);
   };
 
-      // Finish a wire ending at a free canvas point (Logisim-style unified single wire)
+  // Unified Logisim WiringTool commit: handles drawing 1 or 2 straight orthogonal segments,
+  // shortening an existing wire when dragged back along itself, and running WireRepair + Simulation.
   const finishWireAtPoint = (point: { x: number; y: number }) => {
     if (!wiringFrom) return;
 
     const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
     const endPt = snapPt10(point);
 
-    const dist = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
-    if (dist < 15 && (!wiringFrom.waypoints || wiringFrom.waypoints.length === 0)) {
+    if (startPt.x === endPt.x && startPt.y === endPt.y) {
       setWiringFrom(null);
       return;
     }
 
     recordHistory();
 
-    const lastPt = wiringFrom.waypoints && wiringFrom.waypoints.length > 0 
-      ? wiringFrom.waypoints[wiringFrom.waypoints.length - 1] 
-      : startPt;
-    const dx = Math.abs(endPt.x - lastPt.x);
-    const dy = Math.abs(endPt.y - lastPt.y);
-    let corner: WirePoint | null = null;
-    if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
-      corner = dy > dx ? { x: lastPt.x, y: endPt.y } : { x: endPt.x, y: lastPt.y };
-    }
-
-    if (wiringFrom.extendingWireId) {
-      setWires((prev) => {
-        const targetWire = prev.find((w) => w.id === wiringFrom.extendingWireId);
-        if (!targetWire) return prev;
-
-        const wStart = getWireStartPt(targetWire);
-        const existingWps = targetWire.waypoints ? targetWire.waypoints.map(snapPt10) : [];
-
-        const rawPts: WirePoint[] = [wStart, ...existingWps, startPt];
-        if (corner) rawPts.push(corner);
-        rawPts.push(endPt);
-
-        const simplified = simplifyCollinearPoints(rawPts);
-        const finalWaypoints = simplified.slice(1, -1);
-
-        const updatedWires = prev.map((w) => {
-          if (w.id === wiringFrom.extendingWireId) {
-            return {
-              ...w,
-              endPoint: endPt,
-              waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
-            };
-          }
-          return w;
-        });
-        const sim = simulateCircuit(components, updatedWires);
-        setComponents(sim.components);
-        return sim.wires;
-      });
-      lastWireConnectedTimeRef.current = Date.now();
-      setWiringFrom(null);
-      return;
-    }
-
-    const rawPts: WirePoint[] = [startPt];
-    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-      rawPts.push(...wiringFrom.waypoints.map(snapPt10));
-    }
-    if (corner) rawPts.push(corner);
-    rawPts.push(endPt);
-
-    const simplified = simplifyCollinearPoints(rawPts);
-    const finalWaypoints = simplified.slice(1, -1);
-
-    const freeWire: CircuitWire = {
-      id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      fromCompId: wiringFrom.compId,
-      fromPinId: wiringFrom.pinId,
-      toCompId: '',
-      toPinId: `node_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      value: 0,
-      startPoint: startPt,
-      branchPoint: wiringFrom.branchPoint ? snapPt10(wiringFrom.branchPoint) : undefined,
-      sourceWireId: wiringFrom.sourceWireId,
-      waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
-      endPoint: endPt,
-      isBus: defaultWireIsBus,
-      bitWidth: defaultWireIsBus ? 4 : 1,
-    };
+    const effectiveDir = computeLogisimWireDirection(
+      startPt,
+      endPt,
+      wiringFrom.direction ?? DIR_NONE
+    );
 
     setWires((prev) => {
-      const updated = [...prev, freeWire];
-      const sim = simulateCircuit(components, updated);
-      setComponents(sim.components);
-      return sim.wires;
-    });
+      // 1. Check Logisim wire shortening (dragging endpoint back along existing wire)
+      const shorten = computeWireShortening(prev, startPt, endPt, getWireStartPt, getWireEndPt);
+      let candidateWires: CircuitWire[];
 
-    lastWireConnectedTimeRef.current = Date.now();
-    setWiringFrom(null);
-  };
-
-    // Connect active wiring to a component pin (Unrestricted Logisim wiring)
-  const connectToPin = (comp: CircuitComponentInstance, pin: CircuitPin) => {
-    if (!wiringFrom) return;
-    if (wiringFrom.pinId === pin.id) return;
-
-    let fromCompId = wiringFrom.compId;
-    let fromPinId = wiringFrom.pinId;
-    let toCompId = comp.id;
-    let toPinId = pin.id;
-
-    if (wiringFrom.pinType === 'input' && pin.type === 'output') {
-      fromCompId = comp.id;
-      fromPinId = pin.id;
-      toCompId = wiringFrom.compId;
-      toPinId = wiringFrom.pinId;
-    }
-
-    recordHistory();
-
-    const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
-    const endPt = snapPt10({ x: pin.x, y: pin.y });
-
-    const lastPt = wiringFrom.waypoints && wiringFrom.waypoints.length > 0 
-      ? wiringFrom.waypoints[wiringFrom.waypoints.length - 1] 
-      : startPt;
-    const dx = Math.abs(endPt.x - lastPt.x);
-    const dy = Math.abs(endPt.y - lastPt.y);
-    let corner: WirePoint | null = null;
-    if (lastPt.x !== endPt.x && lastPt.y !== endPt.y) {
-      corner = dy > dx ? { x: lastPt.x, y: endPt.y } : { x: endPt.x, y: lastPt.y };
-    }
-
-    if (wiringFrom.extendingWireId) {
-      setWires((prev) => {
-        const targetWire = prev.find((w) => w.id === wiringFrom.extendingWireId);
-        if (!targetWire) return prev;
-
-        const wStart = getWireStartPt(targetWire);
-        const existingWps = targetWire.waypoints ? targetWire.waypoints.map(snapPt10) : [];
-
-        const rawPts: WirePoint[] = [wStart, ...existingWps, startPt];
-        if (corner) rawPts.push(corner);
-        rawPts.push(endPt);
-
-        const simplified = simplifyCollinearPoints(rawPts);
-        const finalWaypoints = simplified.slice(1, -1);
-
-        const updatedWires = prev.map((w) => {
-          if (w.id === wiringFrom.extendingWireId) {
-            return {
-              ...w,
-              toCompId,
-              toPinId,
-              endPoint: undefined,
-              waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
-            };
-          }
-          return w;
-        });
-        const sim = simulateCircuit(components, updatedWires);
-        setComponents(sim.components);
-        return sim.wires;
-      });
-      lastWireConnectedTimeRef.current = Date.now();
-      setWiringFrom(null);
-      return;
-    }
-
-    const rawPts: WirePoint[] = [startPt];
-    if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-      rawPts.push(...wiringFrom.waypoints.map(snapPt10));
-    }
-    if (corner) rawPts.push(corner);
-    rawPts.push(endPt);
-
-    const simplified = simplifyCollinearPoints(rawPts);
-    const finalWaypoints = simplified.slice(1, -1);
-
-    const newWire: CircuitWire = {
-      id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      fromCompId,
-      fromPinId,
-      toCompId,
-      toPinId,
-      value: 0,
-      branchPoint: wiringFrom.branchPoint ? snapPt10(wiringFrom.branchPoint) : undefined,
-      sourceWireId: wiringFrom.sourceWireId,
-      waypoints: finalWaypoints.length > 0 ? finalWaypoints : undefined,
-      isBus: defaultWireIsBus,
-      bitWidth: defaultWireIsBus ? 4 : 1,
-    };
-
-    setWires((prev) => {
-      const isDuplicate = prev.some(
-        (w) =>
-          (w.fromPinId === fromPinId && w.toPinId === toPinId) ||
-          (w.fromPinId === toPinId && w.toPinId === fromPinId)
-      );
-      if (isDuplicate) return prev;
-      const updatedWires = [...prev, newWire];
-      const sim = simulateCircuit(components, updatedWires);
-      setComponents(sim.components);
-      return sim.wires;
-    });
-
-    lastWireConnectedTimeRef.current = Date.now();
-    setWiringFrom(null);
-  };
-
-  // Helper to branch active wire onto an existing wire
-  const connectBranchToWire = (targetWire: CircuitWire, tap: { x: number; y: number }) => {
-    if (!wiringFrom) return;
-    recordHistory();
-
-    let finalWaypoints = wiringFrom.waypoints ? [...wiringFrom.waypoints] : undefined;
-    if (finalWaypoints && finalWaypoints.length > 0) {
-      const lastPt = finalWaypoints[finalWaypoints.length - 1];
-      if (lastPt.x !== tap.x || lastPt.y !== tap.y) {
-        const midX = Math.round((lastPt.x + tap.x) / 2);
-        finalWaypoints.push({ x: midX, y: lastPt.y });
-        finalWaypoints.push({ x: midX, y: tap.y });
+      if (shorten) {
+        if (shorten.remove) {
+          candidateWires = prev.filter((w) => w.id !== shorten.targetWire.id);
+        } else {
+          candidateWires = prev.map((w) =>
+            w.id === shorten.targetWire.id
+              ? {
+                  ...w,
+                  startPoint: shorten.newStart,
+                  endPoint: shorten.newEnd,
+                  waypoints: undefined,
+                }
+              : w
+          );
+        }
+      } else {
+        // 2. Normal Logisim WiringTool: produce 1 or 2 straight horizontal/vertical segments
+        const toolSegs = getLogisimWiringToolSegments(startPt, endPt, effectiveDir);
+        const newSegWires: CircuitWire[] = toolSegs.map((seg, idx) => ({
+          id: `wire_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+          fromCompId: '',
+          fromPinId: `loc_${seg.e0.x}_${seg.e0.y}`,
+          toCompId: '',
+          toPinId: `loc_${seg.e1.x}_${seg.e1.y}`,
+          startPoint: seg.e0,
+          endPoint: seg.e1,
+          value: 0,
+          isBus: defaultWireIsBus,
+          bitWidth: defaultWireIsBus ? 4 : 1,
+        }));
+        candidateWires = [...prev, ...newSegWires];
       }
-    }
 
-    const newBranchWire: CircuitWire = {
-      id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      fromCompId: targetWire.fromCompId,
-      fromPinId: targetWire.fromPinId,
-      toCompId: wiringFrom.compId,
-      toPinId: wiringFrom.pinId,
-      value: targetWire.value,
-      branchPoint: tap,
-      sourceWireId: targetWire.id,
-      waypoints: finalWaypoints,
-      isBus: targetWire.isBus || defaultWireIsBus,
-      bitWidth: targetWire.isBus ? 4 : 1,
-    };
-
-    setWires((prev) => {
-      const isDuplicate = prev.some(
-        (w) =>
-          w.sourceWireId === targetWire.id &&
-          w.toPinId === wiringFrom.pinId &&
-          w.branchPoint?.x === tap.x &&
-          w.branchPoint?.y === tap.y
-      );
-      if (isDuplicate) return prev;
-      const updated = [...prev, newBranchWire];
-      const sim = simulateCircuit(components, updated);
+      const repaired = repairWires(candidateWires, components);
+      const sim = simulateCircuit(components, repaired);
       setComponents(sim.components);
       return sim.wires;
     });
 
     lastWireConnectedTimeRef.current = Date.now();
     setWiringFrom(null);
+  };
+
+  // Connect active wiring to a component pin (delegates to unified Logisim finishWireAtPoint)
+  const connectToPin = (_comp: CircuitComponentInstance, pin: CircuitPin) => {
+    if (!wiringFrom) return;
+    const endPt = snapPt10({ x: pin.x, y: pin.y });
+    finishWireAtPoint(endPt);
+  };
+
+  // Connect active wire onto an existing wire tap point (delegates to unified Logisim finishWireAtPoint)
+  const connectBranchToWire = (_targetWire: CircuitWire, tap: { x: number; y: number }) => {
+    if (!wiringFrom) return;
+    finishWireAtPoint(snapPt10(tap));
   };
 
   // Click on pin: start or finish connection
@@ -2477,28 +2262,29 @@ ${wireXmls.join('\n')}
   ) => {
     e.stopPropagation();
 
-    // Prevent immediate re-trigger right after a wire connection finishes
-    if (Date.now() - lastWireConnectedTimeRef.current < 400) {
+    if (Date.now() - lastWireConnectedTimeRef.current < 300) {
       return;
     }
 
-    // If not currently wiring, start from this pin
+    const snappedPin = snapPt10({ x: pin.x, y: pin.y });
+
     if (!wiringFrom) {
       wiringStartTimeRef.current = Date.now();
       setWiringFrom({
         compId: comp.id,
         pinId: pin.id,
         pinType: pin.type,
-        x: pin.x,
-        y: pin.y,
+        x: snappedPin.x,
+        y: snappedPin.y,
+        direction: DIR_NONE,
+        hasDragged: false,
       });
       setSelectedCompIds([]);
       setSelectedWireIds([]);
       return;
     }
 
-    // If clicking on the exact same pin where wiring started, do nothing
-    if (wiringFrom.pinId === pin.id) {
+    if (wiringFrom.x === snappedPin.x && wiringFrom.y === snappedPin.y) {
       return;
     }
 
@@ -2512,26 +2298,27 @@ ${wireXmls.join('\n')}
     pin: CircuitPin
   ) => {
     e.stopPropagation();
-    if (Date.now() - lastWireConnectedTimeRef.current < 400) {
+    if (Date.now() - lastWireConnectedTimeRef.current < 300) {
       return;
     }
-    if (wiringFrom && wiringFrom.pinId !== pin.id) {
+    const snappedPin = snapPt10({ x: pin.x, y: pin.y });
+    if (wiringFrom && (wiringFrom.x !== snappedPin.x || wiringFrom.y !== snappedPin.y)) {
       connectToPin(comp, pin);
     }
   };
 
   // Add component from catalog to canvas
   const handleAddComponent = (type: ComponentType) => {
-    // Determine free spot near center or right
-    const posX = 160 + (components.length % 5) * 40;
-    const posY = 120 + (components.length % 4) * 50;
+    const posX = snapTo10(160 + (components.length % 5) * 40);
+    const posY = snapTo10(120 + (components.length % 4) * 50);
 
     recordHistory();
 
     const newComp = updatePinPositions(createComponentInstance(type, posX, posY));
     setComponents((prev) => {
       const updated = [...prev, newComp];
-      const sim = simulateCircuit(updated, wires);
+      const repaired = repairWires(wires, updated);
+      const sim = simulateCircuit(updated, repaired);
       setWires(sim.wires);
       return sim.components;
     });
@@ -2539,22 +2326,18 @@ ${wireXmls.join('\n')}
     setSelectedWireId(null);
   };
 
-  // Delete selected components or wires
+  // Delete selected components or wires (with automatic Logisim WireRepair healing!)
   const handleDeleteSelected = useCallback(() => {
     if (selectedCompIds.length > 0 || selectedWireIds.length > 0) {
       recordHistory();
       const compIdsToDelete = new Set(selectedCompIds);
       const wireIdsToDelete = new Set(selectedWireIds);
 
-      // Remaining components
       const remainingComps = components.filter((c) => !compIdsToDelete.has(c.id));
+      const remainingWires = wires.filter((w) => !wireIdsToDelete.has(w.id));
 
-      // Remaining wires (remove wires connected to deleted components OR explicitly selected wires)
-      const remainingWires = wires.filter(
-        (w) => !wireIdsToDelete.has(w.id) && !compIdsToDelete.has(w.fromCompId) && !compIdsToDelete.has(w.toCompId)
-      );
-
-      const sim = simulateCircuit(remainingComps, remainingWires);
+      const repairedWires = repairWires(remainingWires, remainingComps);
+      const sim = simulateCircuit(remainingComps, repairedWires);
       setComponents(sim.components);
       setWires(sim.wires);
       setSelectedCompIds([]);
@@ -2566,16 +2349,20 @@ ${wireXmls.join('\n')}
   const handleRotateSelected = useCallback(() => {
     if (selectedCompIds.length === 0) return;
     recordHistory();
-    setComponents((prev) =>
-      prev.map((c) => {
+    setComponents((prev) => {
+      const rotated = prev.map((c) => {
         if (selectedCompIds.includes(c.id)) {
           const nextRot = (((c.rotation || 0) + 90) % 360) as 0 | 90 | 180 | 270;
           return updatePinPositions({ ...c, rotation: nextRot });
         }
         return c;
-      })
-    );
-  }, [selectedCompIds, recordHistory]);
+      });
+      const repaired = repairWires(wires, rotated);
+      const sim = simulateCircuit(rotated, repaired);
+      setWires(sim.wires);
+      return sim.components;
+    });
+  }, [selectedCompIds, recordHistory, wires]);
 
   // Duplicate selected components and any interconnecting wires
   const handleDuplicateSelected = useCallback(() => {
@@ -5276,18 +5063,9 @@ ${wireXmls.join('\n')}
   };
 
   // Count outgoing wires per output pin to detect branching junctions
-    const circuitJunctions = useMemo(() => {
+  const circuitJunctions = useMemo(() => {
     return computeCircuitJunctions(wires, getWireStartPt, getWireEndPt, findPinById);
   }, [wires, components]);
-
-  const pinWireCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    wires.forEach((w) => {
-      counts.set(w.fromPinId, (counts.get(w.fromPinId) || 0) + 1);
-      counts.set(w.toPinId, (counts.get(w.toPinId) || 0) + 1);
-    });
-    return counts;
-  }, [wires]);
 
   // Wire jumper bridges removed - Logisim standard flat crossings with solder junction dots
 
@@ -6763,56 +6541,77 @@ ${wireXmls.join('\n')}
                   onMouseLeave={() => setHoveredWireId(null)}
                   onClick={(e) => {
                     e.stopPropagation();
-
-                    // Mid-Wire T-Junction Branching:
-                    // If currently dragging from an input pin, tapping on this wire creates a branch connection!
-                    if (wiringFrom) {
-                        const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
-                        connectBranchToWire(wire, tap);
-                        return;
-                      }
-
-                    if (e.shiftKey) {
-                      setSelectedWireIds((prev) =>
-                        prev.includes(wire.id) ? prev.filter((id) => id !== wire.id) : [...prev, wire.id]
-                      );
-                    } else {
-                      setSelectedWireIds([wire.id]);
-                      setSelectedCompIds([]);
-                    }
                   }}
                   className="cursor-pointer group"
                 >
-                  {/* Thick transparent hover hitbox (supports clicking or dragging from anywhere to branch) */}
+                  {/* Thick transparent hover hitbox (Logisim EditTool: click selects segment, drag draws/branches/shortens wire) */}
                   <path
                     d={pathD}
                     fill="none"
                     stroke="transparent"
-                    strokeWidth={20}
+                    strokeWidth={16}
                     onMouseDown={(e) => {
-                      if (e.button === 0 && !wiringFrom) {
-                        e.stopPropagation();
-                        if (!e.shiftKey) {
-                          setSelectedWireIds([wire.id]);
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      const coords = getCanvasCoords(e);
+                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
+
+                      if (wiringFrom) {
+                        connectBranchToWire(wire, tap);
+                        return;
+                      }
+
+                      const isAtStart = tap.x === startPt.x && tap.y === startPt.y;
+                      const isAtEnd = tap.x === endPt.x && tap.y === endPt.y;
+
+                      // If wire is already selected and user grabs its interior (not endpoints), move the wire segment
+                      if (isSelected && !isAtStart && !isAtEnd && !e.shiftKey) {
+                        draggingWireJointRef.current = { wireId: wire.id, type: 'segment' };
+                        setDraggingWireJoint({ wireId: wire.id, type: 'segment' });
+                        return;
+                      }
+
+                      // Logisim EditTool + WiringTool:
+                      // Start wiring potential at `tap` on the 10px grid.
+                      // - If user releases without dragging to another grid point -> selects `wire.id`!
+                      // - If user drags -> draws a new wire from `tap` (or shortens `wire` if dragging from its endpoint back along itself)!
+                      wiringStartTimeRef.current = Date.now();
+                      setWiringFrom({
+                        compId: wire.fromCompId,
+                        pinId: wire.fromPinId,
+                        pinType: 'output',
+                        x: tap.x,
+                        y: tap.y,
+                        direction: DIR_NONE,
+                        hasDragged: false,
+                        clickedWireId: wire.id,
+                        branchPoint: tap,
+                        sourceWireId: wire.id,
+                      });
+                    }}
+                    onMouseUp={(e) => {
+                      if (e.button !== 0 || !wiringFrom) return;
+                      e.stopPropagation();
+                      const coords = getCanvasCoords(e);
+                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
+                      const startW = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+                      const didDrag = wiringFrom.hasDragged || tap.x !== startW.x || tap.y !== startW.y;
+
+                      if (didDrag) {
+                        finishWireAtPoint(tap);
+                      } else if (wiringFrom.clickedWireId) {
+                        const wId = wiringFrom.clickedWireId;
+                        if (e.shiftKey) {
+                          setSelectedWireIds((prev) =>
+                            prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
+                          );
+                        } else {
+                          setSelectedWireIds([wId]);
                           setSelectedCompIds([]);
                         }
+                        setWiringFrom(null);
                       }
                     }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
-                      setWires((prev) =>
-                        prev.map((w) => {
-                          if (w.id === wire.id) {
-                            const existing = w.waypoints || [];
-                            return { ...w, waypoints: [...existing, tap] };
-                          }
-                          return w;
-                        })
-                      );
-                      setSelectedWireIds([wire.id]);
-                    }}
-
                   />
                   {/* Outer wire / glow if HIGH or SELECTED or CONFLICT */}
                   {wire.hasConflict ? (
@@ -6907,46 +6706,9 @@ ${wireXmls.join('\n')}
                     </g>
                   )}
 
-                  {/* Solder junctions are dynamically calculated & rendered at true orthogonal intersections */}
-
-                  {/* Live Hover Tap Preview Indicator when wiring */}
-                  {wiringFrom && hoveredWireId === wire.id && wire.id !== wiringFrom.sourceWireId && (() => {
-                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
-                    const dist = Math.hypot(mousePos.x - tap.x, mousePos.y - tap.y);
-                    if (dist > 30) return null;
-                    return (
-                      <g className="pointer-events-none">
-                        <circle cx={tap.x} cy={tap.y} r={6} fill="#3b82f6" opacity={0.3} />
-                        <circle cx={tap.x} cy={tap.y} r={4} fill="#2563eb" stroke="#ffffff" strokeWidth={1.5} />
-                      </g>
-                    );
-                  })()}
-
-                                    {/* Free wire end extension hit area (Logisim clean wire: NO circle, just extension handle on hover) */}
-                  {!toPin && wire.endPoint && (
-                    <g
-                      className="cursor-crosshair"
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        setWiringFrom({
-                          compId: wire.fromCompId,
-                          pinId: wire.toPinId || wire.fromPinId,
-                          pinType: 'output',
-                          x: endPt.x,
-                          y: endPt.y,
-                          extendingWireId: wire.id,
-                          waypoints: wire.waypoints ? [...wire.waypoints] : [],
-                        });
-                      }}
-                    >
-                      <circle cx={endPt.x} cy={endPt.y} r={14} fill="transparent" />
-                      <title>Kabloyu Buradan Uzat</title>
-                    </g>
-                  )}
-
                   {/* Contention Warning Badge */}
                   {wire.hasConflict && (
-                    <g transform={`translate(${midX}, ${midY})`}>
+                    <g transform={`translate(${midX}, ${midY})`} className="pointer-events-none">
                       <rect
                         x={-46}
                         y={-12}
@@ -6972,206 +6734,131 @@ ${wireXmls.join('\n')}
                     </g>
                   )}
 
-                  {/* Logisim-Style Dynamic Anywhere-Branching Indicator: Follows mouse cursor along wire */}
-                  {hoveredWireId === wire.id && !wiringFrom && !draggingWireJoint && (() => {
+                  {/* Logisim EditTool Subtle 10px Grid Hover Ring (pointer-events-none so it never blocks clicking or dragging) */}
+                  {hoveredWireId === wire.id && !draggingWireJoint && (() => {
                     const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
                     return (
+                      <g transform={`translate(${tap.x}, ${tap.y})`} className="pointer-events-none">
+                        <circle
+                          cx={0}
+                          cy={0}
+                          r={4.5}
+                          fill="none"
+                          stroke="#22c55e"
+                          strokeWidth={2}
+                        />
+                      </g>
+                    );
+                  })()}
+
+                  {/* Selected Wire Handles (Logisim Wire.drawHandles at endpoints + midpoint segment move handle) */}
+                  {isSelected && !wiringFrom && (
+                    <g>
+                      {/* Endpoint 0 Handle (Drag to extend or shorten wire) */}
                       <g
-                        transform={`translate(${tap.x}, ${tap.y})`}
+                        transform={`translate(${startPt.x}, ${startPt.y})`}
+                        className="cursor-crosshair"
                         onMouseDown={(e) => {
+                          if (e.button !== 0) return;
                           e.stopPropagation();
                           e.preventDefault();
                           setWiringFrom({
                             compId: wire.fromCompId,
                             pinId: wire.fromPinId,
                             pinType: 'output',
-                            x: tap.x,
-                            y: tap.y,
-                            branchPoint: tap,
-                            sourceWireId: wire.id,
+                            x: startPt.x,
+                            y: startPt.y,
+                            direction: DIR_NONE,
+                            hasDragged: false,
+                            clickedWireId: wire.id,
                           });
-                          setSelectedWireIds([]);
                         }}
-                        className="cursor-pointer group/tapGlide"
                       >
+                        <circle cx={0} cy={0} r={10} fill="transparent" />
+                        <rect
+                          x={-4}
+                          y={-4}
+                          width={8}
+                          height={8}
+                          fill="#ffffff"
+                          stroke="#2563eb"
+                          strokeWidth={2}
+                          pointerEvents="none"
+                        />
+                        <title>Kablo Ucu (Uzatmak veya kısaltmak için sürükleyin)</title>
+                      </g>
+
+                      {/* Endpoint 1 Handle (Drag to extend or shorten wire) */}
+                      <g
+                        transform={`translate(${endPt.x}, ${endPt.y})`}
+                        className="cursor-crosshair"
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.stopPropagation();
+                          e.preventDefault();
+                          setWiringFrom({
+                            compId: wire.fromCompId,
+                            pinId: wire.toPinId || wire.fromPinId,
+                            pinType: 'output',
+                            x: endPt.x,
+                            y: endPt.y,
+                            direction: DIR_NONE,
+                            hasDragged: false,
+                            clickedWireId: wire.id,
+                          });
+                        }}
+                      >
+                        <circle cx={0} cy={0} r={10} fill="transparent" />
+                        <rect
+                          x={-4}
+                          y={-4}
+                          width={8}
+                          height={8}
+                          fill="#ffffff"
+                          stroke="#2563eb"
+                          strokeWidth={2}
+                          pointerEvents="none"
+                        />
+                        <title>Kablo Ucu (Uzatmak veya kısaltmak için sürükleyin)</title>
+                      </g>
+
+                      {/* Midpoint Segment Move Handle */}
+                      <g
+                        transform={`translate(${midX}, ${midY})`}
+                        className={startPt.x === endPt.x ? 'cursor-ew-resize' : 'cursor-ns-resize'}
+                        onMouseDown={(e) => {
+                          if (e.button !== 0) return;
+                          e.stopPropagation();
+                          e.preventDefault();
+                          draggingWireJointRef.current = { wireId: wire.id, type: 'segment' };
+                          setDraggingWireJoint({ wireId: wire.id, type: 'segment' });
+                        }}
+                      >
+                        <circle cx={0} cy={0} r={12} fill="transparent" />
                         <circle
                           cx={0}
                           cy={0}
-                          r={10.5}
+                          r={5}
                           fill="#2563eb"
                           stroke="#ffffff"
-                          strokeWidth={1.5}
-                          filter="drop-shadow(0 2px 5px rgba(0,0,0,0.3))"
+                          strokeWidth={1.8}
+                          pointerEvents="none"
                         />
-                        <path
-                          d="M -3.5,0 L 3.5,0 M 0,-3.5 L 0,3.5"
-                          stroke="#ffffff"
-                          strokeWidth={2}
-                          strokeLinecap="round"
-                        />
-                        <title>Bu Noktadan Kablo Çek (T-Kavşak / Sürükle veya Tıkla)</title>
+                        <title>Kablo Segmentini Taşı</title>
                       </g>
-                    );
-                  })()}
-
-                  {/* Interactive Wire Drag Handles (Supports both 90° Manhattan and Waypoint Freeform) */}
-                  {isSelected && !wiringFrom && (
-                    <g>
-                      {/* Case A: Wire with interactive waypoints */}
-                      {wire.waypoints && wire.waypoints.length > 0 ? (
-                        <g>
-                          {wire.waypoints.map((pt, i) => (
-                            <g
-                              key={i}
-                              transform={`translate(${pt.x}, ${pt.y})`}
-                              className="cursor-move group/wp"
-                              onMouseDown={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                draggingWireJointRef.current = { wireId: wire.id, type: 'waypoint', index: i };
-                                setDraggingWireJoint({ wireId: wire.id, type: 'waypoint', index: i });
-                              }}
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                setWires((prev) =>
-                                  prev.map((w) => {
-                                    if (w.id === wire.id && w.waypoints) {
-                                      const nextWps = w.waypoints.filter((_, idx) => idx !== i);
-                                      return { ...w, waypoints: nextWps.length > 0 ? nextWps : undefined };
-                                    }
-                                    return w;
-                                  })
-                                );
-                              }}
-                            >
-                              <circle cx={0} cy={0} r={16} fill="#000000" fillOpacity={0} pointerEvents="all" />
-                              <circle
-                                cx={0}
-                                cy={0}
-                                r={6.5}
-                                fill="#2563eb"
-                                stroke="#ffffff"
-                                strokeWidth={2}
-                                filter="drop-shadow(0 2px 5px rgba(0,0,0,0.35))"
-                                pointerEvents="none"
-                              />
-                              <circle cx={0} cy={0} r={2} fill="#ffffff" pointerEvents="none" />
-                              <title>{`Köşe Noktası ${i + 1} (Sürükle, Çift tıkla kaldır)`}</title>
-                            </g>
-                          ))}
-                        </g>
-                      ) : (
-                        /* Case B: Standard 90° Manhattan Wire Handles */
-                        
-                        <g>
-                          {/* Midpoint Handle on vertical segment */}
-                          <g
-                            transform={`translate(${effectiveMidX}, ${midY})`}
-                            className="cursor-ew-resize group/joint"
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              draggingWireJointRef.current = { wireId: wire.id, type: 'segment' };
-                              setDraggingWireJoint({ wireId: wire.id, type: 'segment' });
-                            }}
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              setWires((prev) =>
-                                prev.map((w) => (w.id === wire.id ? { ...w, elbowX: undefined, jointOffset: undefined } : w))
-                              );
-                            }}
-                          >
-                            <circle
-                              cx={0}
-                              cy={0}
-                              r={18}
-                              fill="#000000"
-                              fillOpacity={0}
-                              pointerEvents="all"
-                            />
-                            <circle
-                              cx={0}
-                              cy={0}
-                              r={7}
-                              fill="#2563eb"
-                              stroke="#ffffff"
-                              strokeWidth={2}
-                              filter="drop-shadow(0 2px 5px rgba(0,0,0,0.35))"
-                              pointerEvents="none"
-                            />
-                            <circle
-                              cx={0}
-                              cy={0}
-                              r={2.5}
-                              fill="#ffffff"
-                              pointerEvents="none"
-                            />
-                            <title>Segmenti Yatay Taşı / Sürükle (Çift tıkla sıfırla)</title>
-                          </g>
-
-                          {/* Elbow Corner 1 (Top / Start corner) */}
-                          <g
-                            transform={`translate(${effectiveMidX}, ${startPt.y})`}
-                            className="cursor-ew-resize group/corner1"
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              draggingWireJointRef.current = { wireId: wire.id, type: 'corner1' };
-                              setDraggingWireJoint({ wireId: wire.id, type: 'corner1' });
-                            }}
-                          >
-                            <circle cx={0} cy={0} r={16} fill="#000000" fillOpacity={0} pointerEvents="all" />
-                            <circle
-                              cx={0}
-                              cy={0}
-                              r={5.5}
-                              fill="#60a5fa"
-                              stroke="#ffffff"
-                              strokeWidth={1.5}
-                              pointerEvents="none"
-                            />
-                            <title>Dirsek Köşesi 1 (Sürükle)</title>
-                          </g>
-
-                          {/* Elbow Corner 2 (Bottom / End corner) */}
-                          <g
-                            transform={`translate(${effectiveMidX}, ${endPt.y})`}
-                            className="cursor-ew-resize group/corner2"
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              draggingWireJointRef.current = { wireId: wire.id, type: 'corner2' };
-                              setDraggingWireJoint({ wireId: wire.id, type: 'corner2' });
-                            }}
-                          >
-                            <circle cx={0} cy={0} r={16} fill="#000000" fillOpacity={0} pointerEvents="all" />
-                            <circle
-                              cx={0}
-                              cy={0}
-                              r={5.5}
-                              fill="#60a5fa"
-                              stroke="#ffffff"
-                              strokeWidth={1.5}
-                              pointerEvents="none"
-                            />
-                            <title>Dirsek Köşesi 2 (Sürükle)</title>
-                          </g>
-                        </g>
-                      )}
                     </g>
                   )}
 
-                  {/* Selected Wire: Floating Action Toolbar Pill (Positioned cleanly 34px ABOVE midpoint with 18px clear air gap) */}
+                  {/* Selected Wire: Floating Action Toolbar Pill (Delete & Bus Toggle) */}
                   {isSelected && !wiringFrom && !draggingWireJoint && !draggingWireJointRef.current && (
                     <g
-                      transform={`translate(${effectiveMidX}, ${midY < 55 ? midY + 34 : midY - 34})`}
+                      transform={`translate(${midX}, ${midY < 55 ? midY + 32 : midY - 32})`}
                       className="select-none"
                     >
-                      {/* Pill container shadow and background */}
                       <rect
-                        x={-50}
+                        x={-32}
                         y={-14}
-                        width={100}
+                        width={64}
                         height={28}
                         rx={14}
                         fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
@@ -7180,9 +6867,9 @@ ${wireXmls.join('\n')}
                         filter="drop-shadow(0 4px 8px rgba(0,0,0,0.25))"
                       />
 
-                      {/* Action 1: Delete Wire Button */}
+                      {/* Action 1: Delete Wire Segment Button */}
                       <g
-                        transform="translate(-32, 0)"
+                        transform="translate(-14, 0)"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteSelected();
@@ -7202,77 +6889,12 @@ ${wireXmls.join('\n')}
                           strokeWidth={1.8}
                           strokeLinecap="round"
                         />
-                        <title>Kabloyu Sil (Del / Backspace)</title>
+                        <title>Seçili Kablo Parçasını Sil (Del / Backspace)</title>
                       </g>
 
-                      {/* Action 2: T-Junction Branch Wire Button */}
+                      {/* Action 2: Toggle Bus Width Mode Button */}
                       <g
-                        transform="translate(-10, 0)"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const tap = getClosestPointOnOrthogonalWire(startPt, endPt, { x: effectiveMidX, y: midY }, effectiveMidX);
-                          wiringStartTimeRef.current = Date.now();
-                          setWiringFrom({
-                            compId: wire.fromCompId,
-                            pinId: wire.fromPinId,
-                            pinType: 'output',
-                            x: tap.x,
-                            y: tap.y,
-                            branchPoint: tap,
-                            sourceWireId: wire.id,
-                          });
-                          setSelectedWireIds([]);
-                        }}
-                        className="cursor-pointer group/add"
-                      >
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={9.5}
-                          fill="#2563eb"
-                          className="group-hover/add:opacity-80 transition-opacity"
-                        />
-                        <path
-                          d="M -3.5,0 L 3.5,0 M 0,-3.5 L 0,3.5"
-                          stroke="#ffffff"
-                          strokeWidth={1.8}
-                          strokeLinecap="round"
-                        />
-                        <title>Kablo Ortasından T-Kavşak Çıkar (Branch Wire)</title>
-                      </g>
-
-                      {/* Action 3: Add Corner Waypoint Button */}
-                      <g
-                        transform="translate(12, 0)"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const tap = getClosestPointOnOrthogonalWire(startPt, endPt, { x: effectiveMidX, y: midY }, effectiveMidX);
-                          setWires((prev) =>
-                            prev.map((w) => {
-                              if (w.id === wire.id) {
-                                const existing = w.waypoints || [];
-                                return { ...w, waypoints: [...existing, tap] };
-                              }
-                              return w;
-                            })
-                          );
-                        }}
-                        className="cursor-pointer group/addwp"
-                      >
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={9.5}
-                          fill="#8b5cf6"
-                          className="group-hover/addwp:opacity-80 transition-opacity"
-                        />
-                        <circle cx={0} cy={0} r={2.5} fill="#ffffff" />
-                        <title>Köşe / Dirsek Noktası Ekle (Çift Tıklama ile de eklenebilir)</title>
-                      </g>
-
-                      {/* Action 4: Toggle Bus Width Mode Button */}
-                      <g
-                        transform="translate(34, 0)"
+                        transform="translate(14, 0)"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleToggleWireBus(wire.id);
@@ -7303,7 +6925,7 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Floating Live Signal Tooltip on Hover */}
-                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && (
+                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && !wiringFrom && (
                     <g transform={`translate(${midX}, ${midY - 16})`} className="pointer-events-none select-none">
                       <rect
                         x={-52}
@@ -7332,7 +6954,7 @@ ${wireXmls.join('\n')}
               );
             })}
 
-            {/* Dynamic Logisim Solder Dots (strictly rendered at true orthogonal T-junctions & crosses) */}
+            {/* Dynamic Logisim Solder Dots (strictly rendered where >= 3 wire segments meet) */}
             {circuitJunctions.map((j, idx) => (
               <g key={`dynamic_junc_${j.x}_${j.y}_${idx}`} className="pointer-events-none">
                 <circle
@@ -7352,45 +6974,24 @@ ${wireXmls.join('\n')}
               </g>
             ))}
 
-            {/* Dynamic Active Wire being drawn (strictly 10px grid locked Logisim Manhattan) */}
+            {/* Dynamic Active Wire being drawn (Logisim WiringTool direction-locked preview) */}
             {wiringFrom && (() => {
               const p0 = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
               const p1 = snapPt10(mousePos);
 
-              let previewPath = '';
-              if (wiringFrom.waypoints && wiringFrom.waypoints.length > 0) {
-                const rawPts = [p0, ...wiringFrom.waypoints.map(snapPt10), p1];
-                const pts = simplifyCollinearPoints(rawPts);
-                let d = `M ${pts[0].x},${pts[0].y}`;
-                for (let i = 1; i < pts.length; i++) {
-                  const prev = pts[i - 1];
-                  const curr = pts[i];
-                  if (prev.x === curr.x || prev.y === curr.y) {
-                    d += ` L ${curr.x},${curr.y}`;
-                  } else {
-                    const dx = Math.abs(curr.x - prev.x);
-                    const dy = Math.abs(curr.y - prev.y);
-                    if (dy > dx) {
-                      d += ` V ${curr.y} H ${curr.x}`;
-                    } else {
-                      d += ` H ${curr.x} V ${curr.y}`;
-                    }
-                  }
-                }
-                previewPath = d;
-              } else if (p0.x === p1.x || p0.y === p1.y) {
-                previewPath = `M ${p0.x},${p0.y} L ${p1.x},${p1.y}`;
-              } else {
-                // Logisim Manhattan smart direction:
-                // If dragging more vertically: V then H (e.g. pulling down from pin)
-                // If dragging more horizontally: H then V (e.g. pulling right from pin)
-                const dx = Math.abs(p1.x - p0.x);
-                const dy = Math.abs(p1.y - p0.y);
-                if (dy > dx) {
-                  previewPath = `M ${p0.x},${p0.y} V ${p1.y} H ${p1.x}`;
-                } else {
-                  previewPath = `M ${p0.x},${p0.y} H ${p1.x} V ${p1.y}`;
-                }
+              if (p0.x === p1.x && p0.y === p1.y) return null;
+
+              const previewDir = computeLogisimWireDirection(
+                p0,
+                p1,
+                wiringFrom.direction ?? DIR_NONE
+              );
+              const previewSegs = getLogisimWiringToolSegments(p0, p1, previewDir);
+              if (previewSegs.length === 0) return null;
+
+              let previewPath = `M ${previewSegs[0].e0.x},${previewSegs[0].e0.y}`;
+              for (const seg of previewSegs) {
+                previewPath += ` L ${seg.e1.x},${seg.e1.y}`;
               }
 
               return (
@@ -7419,7 +7020,7 @@ ${wireXmls.join('\n')}
                   <circle
                     cx={p1.x}
                     cy={p1.y}
-                    r={5}
+                    r={4.5}
                     fill="none"
                     stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
                     strokeWidth={2}
@@ -7427,25 +7028,6 @@ ${wireXmls.join('\n')}
                 </g>
               );
             })()}
-
-            {/* Solder Junction Dots for Branching Output Pins */}
-            {Array.from(pinWireCounts.entries()).map(([pinId, count]) => {
-              if (count < 2) return null;
-              const pin = findPinById(pinId);
-              if (!pin) return null;
-              return (
-                <circle
-                  key={`junc_${pinId}`}
-                  cx={pin.x}
-                  cy={pin.y}
-                  r={5}
-                  fill={pin.value === 1 ? '#16a34a' : '#475569'}
-                  stroke="#ffffff"
-                  strokeWidth={1.5}
-                  className="pointer-events-none"
-                />
-              );
-            })}
 
             {/* Render Components */}
             {components.map((comp) => {
@@ -7523,17 +7105,20 @@ ${wireXmls.join('\n')}
                         transform={`translate(${pin.x - comp.x}, ${pin.y - comp.y})`}
                         onMouseDown={(e) => {
                           e.stopPropagation();
-                          if (Date.now() - lastWireConnectedTimeRef.current < 400) {
+                          if (Date.now() - lastWireConnectedTimeRef.current < 300) {
                             return;
                           }
                           if (!wiringFrom && e.button === 0) {
+                            const sp = snapPt10({ x: pin.x, y: pin.y });
                             wiringStartTimeRef.current = Date.now();
                             setWiringFrom({
                               compId: comp.id,
                               pinId: pin.id,
                               pinType: pin.type,
-                              x: pin.x,
-                              y: pin.y,
+                              x: sp.x,
+                              y: sp.y,
+                              direction: DIR_NONE,
+                              hasDragged: false,
                             });
                             setSelectedCompIds([]);
                             setSelectedWireIds([]);
@@ -7590,17 +7175,20 @@ ${wireXmls.join('\n')}
                         transform={`translate(${pin.x - comp.x}, ${pin.y - comp.y})`}
                         onMouseDown={(e) => {
                           e.stopPropagation();
-                          if (Date.now() - lastWireConnectedTimeRef.current < 400) {
+                          if (Date.now() - lastWireConnectedTimeRef.current < 300) {
                             return;
                           }
                           if (!wiringFrom && e.button === 0) {
+                            const sp = snapPt10({ x: pin.x, y: pin.y });
                             wiringStartTimeRef.current = Date.now();
                             setWiringFrom({
                               compId: comp.id,
                               pinId: pin.id,
                               pinType: pin.type,
-                              x: pin.x,
-                              y: pin.y,
+                              x: sp.x,
+                              y: sp.y,
+                              direction: DIR_NONE,
+                              hasDragged: false,
                             });
                             setSelectedCompIds([]);
                             setSelectedWireIds([]);
