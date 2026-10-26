@@ -2653,7 +2653,7 @@ ${wireXmls.join('\n')}
     showToast(`"${newSub.name}" (${newSub.chipCode}) kütüphaneye eklendi!`);
   };
 
-  // Change input count for multi-input gates (2 to 5 inputs)
+  // Change input count for multi-input gates (2 to 5 inputs) preserving attached wires like Logisim
   const handleChangeGateInputs = useCallback(
     (compId: string, targetCountOrDelta: number, isAbsolute = false) => {
       const comp = components.find((c) => c.id === compId);
@@ -2665,31 +2665,23 @@ ${wireXmls.join('\n')}
       if (newCount === currentCount) return;
 
       recordHistory();
-      const meta = COMPONENT_CATALOG[comp.type];
 
-      // Build new inputs array
+      // 1. Snapshot previous input pins and their locations
+      const oldInputs = comp.inputs;
+      const oldPinLocations = oldInputs.map((p) => snapPt10({ x: p.x, y: p.y }));
+
+      // 2. Build new inputs array with canonical pin IDs (comp.id_in0, comp.id_in1, ...)
       const newInputs: CircuitPin[] = Array.from({ length: newCount }).map((_, idx) => {
-        const pinId = `${comp.id}_in_${idx}`;
-        const existing = comp.inputs.find((p) => p.id === pinId);
-        const spacing = meta.height / (newCount + 1);
-        const relY = Math.round(spacing * (idx + 1));
+        const canonicalId = `${comp.id}_in${idx}`;
+        const existing = oldInputs[idx];
         return {
-          id: pinId,
+          id: canonicalId,
           name: String.fromCharCode(65 + idx),
           type: 'input' as const,
           value: existing ? existing.value : 0,
           x: comp.x,
-          y: comp.y + relY,
+          y: comp.y, // precisely positioned by updatePinPositions below
         };
-      });
-
-      // Remove wires connected to pins that are now gone
-      const validPinIds = new Set(newInputs.map((p) => p.id));
-      const validWires = wires.filter((w) => {
-        if (w.toCompId === compId && !validPinIds.has(w.toPinId)) {
-          return false;
-        }
-        return true;
       });
 
       const updatedComp = updatePinPositions({
@@ -2701,12 +2693,91 @@ ${wireXmls.join('\n')}
         },
       });
 
-      setComponents((prev) => {
-        const nextComps = prev.map((c) => (c.id === compId ? updatedComp : c));
-        const sim = simulateCircuit(nextComps, validWires);
-        setWires(sim.wires);
-        return sim.components;
-      });
+      // Helper to detect which input pin index an existing wire endpoint or pin ID was connected to
+      const getOldInputIndex = (pinId?: string, pt?: WirePoint): number => {
+        if (pinId) {
+          for (let i = 0; i < oldInputs.length; i++) {
+            if (
+              oldInputs[i].id === pinId ||
+              pinId === `${compId}_in${i}` ||
+              pinId === `${compId}_in_${i}`
+            ) {
+              return i;
+            }
+          }
+        }
+        if (pt) {
+          const sp = snapPt10(pt);
+          for (let i = 0; i < oldPinLocations.length; i++) {
+            if (oldPinLocations[i].x === sp.x && oldPinLocations[i].y === sp.y) {
+              return i;
+            }
+          }
+        }
+        return -1;
+      };
+
+      // 3. Update wires connected to this component's input pins
+      const updatedWires: CircuitWire[] = [];
+
+      for (const w of wires) {
+        let modified = false;
+        let newStart = w.startPoint ? { ...w.startPoint } : undefined;
+        let newEnd = w.endPoint ? { ...w.endPoint } : undefined;
+        let newFromPinId = w.fromPinId;
+        let newToPinId = w.toPinId;
+        let newFromCompId = w.fromCompId;
+        let newToCompId = w.toCompId;
+
+        // Check if wire terminates at an input pin of this component
+        const toIdx = (w.toCompId === compId || w.endPoint) ? getOldInputIndex(w.toPinId, w.endPoint) : -1;
+        if (toIdx !== -1) {
+          if (toIdx < newCount) {
+            // Pin still exists: follow pin to its new position!
+            const targetPin = updatedComp.inputs[toIdx];
+            newToCompId = compId;
+            newToPinId = targetPin.id;
+            newEnd = { x: targetPin.x, y: targetPin.y };
+            modified = true;
+          } else {
+            // Pin was removed because input count was decreased: disconnect wire
+            continue;
+          }
+        }
+
+        // Check if wire originates at an input pin of this component (if drawn in reverse)
+        const fromIdx = (w.fromCompId === compId || w.startPoint) ? getOldInputIndex(w.fromPinId, w.startPoint) : -1;
+        if (fromIdx !== -1) {
+          if (fromIdx < newCount) {
+            const targetPin = updatedComp.inputs[fromIdx];
+            newFromCompId = compId;
+            newFromPinId = targetPin.id;
+            newStart = { x: targetPin.x, y: targetPin.y };
+            modified = true;
+          } else {
+            continue;
+          }
+        }
+
+        updatedWires.push({
+          ...w,
+          fromCompId: newFromCompId,
+          fromPinId: newFromPinId,
+          toCompId: newToCompId,
+          toPinId: newToPinId,
+          startPoint: newStart,
+          endPoint: newEnd,
+          waypoints: modified ? undefined : w.waypoints,
+        });
+      }
+
+      // 4. Update component list and repair wires to re-route orthogonally to new pin coordinates
+      const nextComps = components.map((c) => (c.id === compId ? updatedComp : c));
+      const repaired = repairWires(updatedWires, nextComps);
+      const sim = simulateCircuit(nextComps, repaired);
+
+      setWires(sim.wires);
+      setComponents(sim.components);
     },
     [components, wires, recordHistory]
   );
@@ -7184,9 +7255,19 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Input Pins */}
-                  {comp.inputs.map((pin) => {
+                  {comp.inputs.map((pin, pinIdx) => {
                     const isPinHigh = pin.value === 1;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
+
+                    // Clamped hit radius ensures neighboring pins (e.g. 10px apart on 5-input gates) never overlap
+                    let minNeighborDist = 40;
+                    for (let i = 0; i < comp.inputs.length; i++) {
+                      if (i !== pinIdx) {
+                        const dist = Math.hypot(comp.inputs[i].x - pin.x, comp.inputs[i].y - pin.y);
+                        if (dist < minNeighborDist) minNeighborDist = dist;
+                      }
+                    }
+                    const hitRadius = Math.max(5, Math.min(10, Math.floor((minNeighborDist - 1) / 2)));
 
                     return (
                       <g
@@ -7223,18 +7304,19 @@ ${wireXmls.join('\n')}
                         }}
                         className="cursor-pointer group"
                       >
-                        {/* Generous hover/hit target (prevents accidental misclicks on component body) */}
-                        <circle cx={0} cy={0} r={14} fill="transparent" />
+                        {/* Clamped hit target preventing overlap with adjacent pins */}
+                        <circle cx={0} cy={0} r={hitRadius} fill="transparent" pointerEvents="all" />
                         {/* Valid target indicator ring while wiring */}
                         {isValidTarget && (
                           <circle
                             cx={0}
                             cy={0}
-                            r={9}
+                            r={Math.min(9, hitRadius + 3)}
                             fill="rgba(34, 197, 94, 0.2)"
                             stroke="#22c55e"
                             strokeWidth={2}
-                            className="animate-pulse"
+                            className="animate-pulse pointer-events-none"
+                            pointerEvents="none"
                           />
                         )}
                         {/* Pin dot */}
@@ -7245,7 +7327,8 @@ ${wireXmls.join('\n')}
                           fill={isPinHigh ? '#16a34a' : '#64748b'}
                           stroke="#ffffff"
                           strokeWidth={1.5}
-                          className="group-hover:scale-125 transition-transform"
+                          className="group-hover:scale-125 transition-transform pointer-events-none"
+                          pointerEvents="none"
                         />
                         {/* Pin label tooltip on hover */}
                         <title>{`${pin.name} (Giriş: ${pin.value})`}</title>
@@ -7254,9 +7337,18 @@ ${wireXmls.join('\n')}
                   })}
 
                   {/* Output Pins */}
-                  {comp.outputs.map((pin) => {
+                  {comp.outputs.map((pin, pinIdx) => {
                     const isPinHigh = pin.value === 1;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
+
+                    let minNeighborDist = 40;
+                    for (let i = 0; i < comp.outputs.length; i++) {
+                      if (i !== pinIdx) {
+                        const dist = Math.hypot(comp.outputs[i].x - pin.x, comp.outputs[i].y - pin.y);
+                        if (dist < minNeighborDist) minNeighborDist = dist;
+                      }
+                    }
+                    const hitRadius = Math.max(5, Math.min(10, Math.floor((minNeighborDist - 1) / 2)));
 
                     return (
                       <g
@@ -7293,16 +7385,17 @@ ${wireXmls.join('\n')}
                         }}
                         className="cursor-pointer group"
                       >
-                        <circle cx={0} cy={0} r={14} fill="transparent" />
+                        <circle cx={0} cy={0} r={hitRadius} fill="transparent" pointerEvents="all" />
                         {isValidTarget && (
                           <circle
                             cx={0}
                             cy={0}
-                            r={9}
+                            r={Math.min(9, hitRadius + 3)}
                             fill="rgba(34, 197, 94, 0.2)"
                             stroke="#22c55e"
                             strokeWidth={2}
-                            className="animate-pulse"
+                            className="animate-pulse pointer-events-none"
+                            pointerEvents="none"
                           />
                         )}
                         <circle
@@ -7312,7 +7405,8 @@ ${wireXmls.join('\n')}
                           fill={isPinHigh ? '#16a34a' : '#64748b'}
                           stroke="#ffffff"
                           strokeWidth={1.5}
-                          className="group-hover:scale-125 transition-transform"
+                          className="group-hover:scale-125 transition-transform pointer-events-none"
+                          pointerEvents="none"
                         />
                         <title>{`${pin.name} (Çıkış: ${pin.value})`}</title>
                       </g>

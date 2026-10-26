@@ -998,7 +998,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
       pinSuffix = pinDef.id || `in${idx}`;
     }
     const p = rotatePoint(relX, relY);
-    const pinId = pin.id.startsWith(`${comp.id}_`) ? pin.id : `${comp.id}_${pinSuffix}`;
+    const canonicalId = `${comp.id}_${pinSuffix}`;
+    const pinId = isMultiInputGate ? canonicalId : (pin.id.startsWith(`${comp.id}_`) ? pin.id : canonicalId);
     return { ...pin, id: pinId, x: comp.x + p.x, y: comp.y + p.y };
   });
 
@@ -1008,7 +1009,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     const rawRelY = pinDef.relY !== undefined ? pinDef.relY : defaultRelY;
     const p = rotatePoint(pinDef.relX, rawRelY);
     const pinSuffix = pinDef.id || (idx === 0 ? 'out' : `out${idx}`);
-    const pinId = pin.id.startsWith(`${comp.id}_`) ? pin.id : `${comp.id}_${pinSuffix}`;
+    const canonicalId = `${comp.id}_${pinSuffix}`;
+    const pinId = isMultiInputGate ? canonicalId : (pin.id.startsWith(`${comp.id}_`) ? pin.id : canonicalId);
     return { ...pin, id: pinId, x: comp.x + p.x, y: comp.y + p.y };
   });
 
@@ -3530,7 +3532,7 @@ export function synthesizeCircuitFromBooleanExpression(
       const numInputs = Math.min(5, children.length);
       const meta = COMPONENT_CATALOG[actualGateType];
       gateComp.inputs = Array.from({ length: numInputs }).map((_, idx) => {
-        const pinId = `${gateComp.id}_in_${idx}`;
+        const pinId = `${gateComp.id}_in${idx}`;
         const spacing = meta.height / (numInputs + 1);
         const relY = Math.round((spacing * (idx + 1)) / 10) * 10;
         return {
