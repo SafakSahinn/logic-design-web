@@ -1128,6 +1128,46 @@ export const computeCircuitJunctions = (
 };
 
 /**
+ * Computes ONE rigid (dx, dy) shared by every component in a multi-selection drag
+ * (Logisim MoveTool semantics). Previously every component was snapped/clamped on its own,
+ * so a group pushed against the canvas edge (or with off-grid members) got different deltas,
+ * which distorted the selection and broke the wires between co-moving components.
+ */
+export const computeGroupDragDeltas = (
+  offsets: Map<string, { x: number; y: number }>,
+  initialComps: CircuitComponentInstance[],
+  coords: WirePoint,
+  primaryId: string | null | undefined,
+  snap: boolean
+): Map<string, { dx: number; dy: number }> => {
+  const result = new Map<string, { dx: number; dy: number }>();
+  const compMap = new Map(initialComps.map((c) => [c.id, c]));
+  const ids = Array.from(offsets.keys()).filter((id) => compMap.has(id));
+  if (ids.length === 0) return result;
+
+  const leadId = primaryId && offsets.has(primaryId) && compMap.has(primaryId) ? primaryId : ids[0];
+  const off = offsets.get(leadId)!;
+  const lead = compMap.get(leadId)!;
+  const q = (v: number) => (snap ? Math.round(v / GRID_SIZE) * GRID_SIZE : Math.round(v));
+
+  let dx = q(coords.x - off.x) - lead.x;
+  let dy = q(coords.y - off.y) - lead.y;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  for (const id of ids) {
+    const c = compMap.get(id)!;
+    minX = Math.min(minX, c.x);
+    minY = Math.min(minY, c.y);
+  }
+  if (minX + dx < 10) dx = 10 - minX;
+  if (minY + dy < 10) dy = 10 - minY;
+
+  for (const id of ids) result.set(id, { dx, dy });
+  return result;
+};
+
+/**
  * Translates and routes wires when one or more components are dragged on the canvas.
  * - Any connected wire cluster attached ONLY to the moving component(s) (such as open wire stubs
  *   or wires between two co-moving components) translates rigidly 1:1 by (dx, dy).
@@ -1302,11 +1342,16 @@ export const translateWiresForMovedComponents = (
               endPoint: isStartMoving ? newCorner : newPinPt,
             };
 
+            // Use the perpendicular wire's CURRENT endpoints so an earlier corner-slide on its
+            // opposite end (e.g. a U-shaped path between two moved pins) is not reverted.
+            const curPerp = resultWires[perpIdx];
+            const curPerpS = curPerp.startPoint ? snapPt10(curPerp.startPoint) : perpEnds.s;
+            const curPerpE = curPerp.endPoint ? snapPt10(curPerp.endPoint) : perpEnds.e;
             const isPerpStartAtCorner = keyOf(perpEnds.s) === otherKey;
-            const pNewS = isPerpStartAtCorner ? newCorner : perpEnds.s;
-            const pNewE = isPerpStartAtCorner ? perpEnds.e : newCorner;
+            const pNewS = isPerpStartAtCorner ? newCorner : curPerpS;
+            const pNewE = isPerpStartAtCorner ? curPerpE : newCorner;
             resultWires[perpIdx] = {
-              ...initialWires[perpIdx],
+              ...curPerp,
               fromCompId: '',
               fromPinId: `loc_${pNewS.x}_${pNewS.y}`,
               toCompId: '',
