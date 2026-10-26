@@ -699,6 +699,136 @@ export const repairWires = (
     return true;
   };
 
+  const gridRoute = (sPt: WirePoint, ePt: WirePoint, netId: string): WirePoint[] | null => {
+    const MARGIN = 300;
+    const minX = Math.min(sPt.x, ePt.x) - MARGIN;
+    const minY = Math.min(sPt.y, ePt.y) - MARGIN;
+    const W = (Math.max(sPt.x, ePt.x) + MARGIN - minX) / GRID_SIZE + 1;
+    const H = (Math.max(sPt.y, ePt.y) + MARGIN - minY) / GRID_SIZE + 1;
+    if (W * H > 250000) return null;
+
+    const blocked = new Uint8Array(W * H); // foreign pin / corner / endpoint
+    const hCover = new Uint8Array(W * H); // covered by a foreign horizontal segment
+    const vCover = new Uint8Array(W * H); // covered by a foreign vertical segment
+    const idx = (x: number, y: number) => {
+      const ix = (x - minX) / GRID_SIZE;
+      const iy = (y - minY) / GRID_SIZE;
+      return ix < 0 || iy < 0 || ix >= W || iy >= H ? -1 : iy * W + ix;
+    };
+    const parseKey = (k: string) => k.split(',').map(Number);
+    for (const [k, net] of pinNetAtLoc) {
+      if (net === netId) continue;
+      const [x, y] = parseKey(k);
+      const i = idx(x, y);
+      if (i >= 0) blocked[i] = 1;
+    }
+    for (const [k, net] of netCorners) {
+      if (net === netId) continue;
+      const [x, y] = parseKey(k);
+      const i = idx(x, y);
+      if (i >= 0) blocked[i] = 1;
+    }
+    for (const sg of placedNetSegs) {
+      if (sg.netId === netId) continue;
+      if (sg.isVertical) {
+        for (let y = sg.y0; y <= sg.y1; y += GRID_SIZE) {
+          const i = idx(sg.x0, y);
+          if (i >= 0) vCover[i] = 1;
+        }
+      } else {
+        for (let x = sg.x0; x <= sg.x1; x += GRID_SIZE) {
+          const i = idx(x, sg.y0);
+          if (i >= 0) hCover[i] = 1;
+        }
+      }
+    }
+    const sI = idx(sPt.x, sPt.y);
+    const eI = idx(ePt.x, ePt.y);
+    blocked[sI] = 0;
+    blocked[eI] = 0;
+
+    const BEND = 4;
+    const N = W * H * 2;
+    const dist = new Float64Array(N).fill(Infinity);
+    const prev = new Int32Array(N).fill(-1);
+    const heap: Array<[number, number]> = [];
+    const push = (c: number, st: number) => {
+      heap.push([c, st]);
+      let i = heap.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (heap[p][0] <= heap[i][0]) break;
+        [heap[p], heap[i]] = [heap[i], heap[p]];
+        i = p;
+      }
+    };
+    const pop = (): [number, number] => {
+      const top = heap[0];
+      const last = heap.pop()!;
+      if (heap.length > 0) {
+        heap[0] = last;
+        let i = 0;
+        for (;;) {
+          const l = 2 * i + 1;
+          const r = l + 1;
+          let m = i;
+          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (m === i) break;
+          [heap[m], heap[i]] = [heap[i], heap[m]];
+          i = m;
+        }
+      }
+      return top;
+    };
+    for (const d of [0, 1]) {
+      dist[sI * 2 + d] = 0;
+      push(0, sI * 2 + d);
+    }
+    let goal = -1;
+    while (heap.length > 0) {
+      const [c, st] = pop();
+      if (c > dist[st]) continue;
+      const cell = st >> 1;
+      const d = st & 1; // 0 = horizontal, 1 = vertical
+      if (cell === eI) {
+        goal = st;
+        break;
+      }
+      const relax = (nst: number, nc: number) => {
+        if (nc < dist[nst]) {
+          dist[nst] = nc;
+          prev[nst] = st;
+          push(nc, nst);
+        }
+      };
+      // Turn in place (not allowed on foreign wires: a corner there would connect to them)
+      if (!hCover[cell] && !vCover[cell] && !blocked[cell]) relax(cell * 2 + (1 - d), c + BEND);
+      const cx = cell % W;
+      const cy = (cell - cx) / W;
+      for (const step of [-1, 1]) {
+        const nx = d === 0 ? cx + step : cx;
+        const ny = d === 1 ? cy + step : cy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ncell = ny * W + nx;
+        if (blocked[ncell]) continue;
+        if (d === 0 && hCover[cell] && hCover[ncell]) continue; // collinear overlap
+        if (d === 1 && vCover[cell] && vCover[ncell]) continue;
+        relax(ncell * 2 + d, c + 1);
+      }
+    }
+    if (goal < 0) return null;
+    const pts: WirePoint[] = [];
+    for (let st = goal; st >= 0; st = prev[st]) {
+      const cell = st >> 1;
+      const cx = cell % W;
+      const cy = (cell - cx) / W;
+      pts.push({ x: minX + cx * GRID_SIZE, y: minY + cy * GRID_SIZE });
+    }
+    pts.reverse();
+    return simplifyCollinearPoints(pts);
+  };
+
   let rawSegs: CanonicalSeg[] = [];
 
   // Pass 1: Process already-canonical wires first
@@ -816,6 +946,14 @@ export const repairWires = (
           chosenPts = cand;
           break;
         }
+      }
+
+      // 8. Guaranteed fallback: bend-penalised grid search (Dijkstra) around every foreign pin,
+      // foreign wire endpoint/corner and collinear foreign segment, so a re-routed connection never
+      // short-circuits another net even in dense circuits.
+      if (!chosenPts) {
+        const routed = gridRoute(sPt, ePt, netId);
+        if (routed && isCandidatePathValid(routed, netId)) chosenPts = routed;
       }
     }
 
@@ -1204,6 +1342,15 @@ export const translateWiresForMovedComponents = (
     }
   }
 
+  const pinIdAtLoc = new Map<string, { compId: string; pinId: string }>();
+  for (const comp of initialComps) {
+    for (const pin of [...comp.inputs, ...comp.outputs]) {
+      pinIdAtLoc.set(keyOf(snapPt10(pin)), { compId: comp.id, pinId: pin.id });
+    }
+  }
+  const removedWire = new Set<number>();
+  const rigidGroups: Array<{ indices: number[]; delta: { dx: number; dy: number } }> = [];
+
   // Build adjacency of wire indices by shared endpoint coordinates
   const locToWireIndices = new Map<string, number[]>();
   const wireEndpoints: Array<{ s: WirePoint; e: WirePoint }> = initialWires.map((w, idx) => {
@@ -1267,226 +1414,193 @@ export const translateWiresForMovedComponents = (
     // Case A: Entire wire cluster is attached ONLY to uniformly moving component(s) (no stationary pins!)
     // Translate the entire wire cluster rigidly 1:1 with the component!
     if (uniformMovingDelta && !touchesStationaryPin && !hasConflictingDeltas) {
-      const { dx, dy } = uniformMovingDelta;
-      for (const wIdx of clusterIndices) {
-        const w0 = initialWires[wIdx];
-        const { s, e } = wireEndpoints[wIdx];
-        resultWires[wIdx] = {
-          ...w0,
-          startPoint: { x: s.x + dx, y: s.y + dy },
-          endPoint: { x: e.x + dx, y: e.y + dy },
-          waypoints: undefined,
-        };
-      }
+      rigidGroups.push({ indices: [...clusterIndices], delta: uniformMovingDelta });
+      clusterIndices.forEach((i) => removedWire.add(i));
       continue;
     }
 
-    // Case B: Wire cluster connects moving pin(s) to stationary pin(s)
-    // Adjust segments attached to each moving pin orthogonally
+    // Case B: Wire cluster connects moving pin(s) to stationary pin(s).
+    // Every wire CHAIN that starts at a moving pin (pin -> corner -> corner ... -> anchor, where the
+    // anchor is a pin, a junction or an open end) is detached and re-routed net-aware by `repairWires`
+    // from the pin's NEW location to the anchor. Untouched parts of the net keep the user's routing.
+    // (The previous corner-slide / bridge approach could lay wires collinearly over other nets,
+    // which Logisim's overlap merging turned into short circuits.)
     if (uniformMovingDelta || hasConflictingDeltas) {
+      const inCluster = new Set(clusterIndices);
+      const otherEnd = (idx: number, k: string): WirePoint => {
+        const { s, e } = wireEndpoints[idx];
+        return keyOf(s) === k ? e : s;
+      };
       for (const wIdx of clusterIndices) {
-        const w0 = initialWires[wIdx];
-        const { s, e } = wireEndpoints[wIdx];
-        const ks = keyOf(s);
-        const ke = keyOf(e);
-        const deltaS = movingPinDeltaAtLoc.get(ks);
-        const deltaE = movingPinDeltaAtLoc.get(ke);
+        for (const startPt of [wireEndpoints[wIdx].s, wireEndpoints[wIdx].e]) {
+          const startKey = keyOf(startPt);
+          const startDelta = movingPinDeltaAtLoc.get(startKey);
+          if (!startDelta || removedWire.has(wIdx)) continue;
 
-        if (!deltaS && !deltaE) continue;
+          // Walk the chain through plain 2-way corners
+          const chain: number[] = [wIdx];
+          let prevIdx = wIdx;
+          let cur = otherEnd(wIdx, startKey);
+          for (;;) {
+            const kc = keyOf(cur);
+            if (pinIdAtLoc.has(kc)) break;
+            const neigh = (locToWireIndices.get(kc) || []).filter((i) => i !== prevIdx);
+            if (neigh.length !== 1) break;
+            const nxt = neigh[0];
+            if (!inCluster.has(nxt) || removedWire.has(nxt) || chain.includes(nxt)) break;
+            chain.push(nxt);
+            prevIdx = nxt;
+            cur = otherEnd(nxt, kc);
+          }
+          const endKey = keyOf(cur);
+          chain.forEach((i) => removedWire.add(i));
 
-        if (deltaS && deltaE) {
-          const newS = { x: s.x + deltaS.dx, y: s.y + deltaS.dy };
-          const newE = { x: e.x + deltaE.dx, y: e.y + deltaE.dy };
-          resultWires[wIdx] = {
-            ...w0,
-            fromCompId: '',
-            fromPinId: `loc_${newS.x}_${newS.y}`,
-            toCompId: '',
-            toPinId: `loc_${newE.x}_${newE.y}`,
-            startPoint: newS,
-            endPoint: newE,
-          };
-          continue;
-        }
+          const endDelta = movingPinDeltaAtLoc.get(endKey);
+          const endIsPin = pinIdAtLoc.has(endKey);
+          const endIsOpen =
+            !endIsPin && (locToWireIndices.get(endKey) || []).filter((i) => !chain.includes(i)).length === 0;
 
-        const isStartMoving = !!deltaS;
-        const movingPt = isStartMoving ? s : e;
-        const otherPt = isStartMoving ? e : s;
-        const delta = (deltaS || deltaE)!;
-        const newPinPt = { x: movingPt.x + delta.dx, y: movingPt.y + delta.dy };
-        const otherKey = keyOf(otherPt);
-        const otherNeighbors = (locToWireIndices.get(otherKey) || []).filter((idx) => idx !== wIdx);
-
-        // If `otherPt` is a simple 2-wire corner (connected to exactly 1 perpendicular wire and not a pin):
-        if (otherNeighbors.length === 1 && !stationaryPinLocs.has(otherKey) && !movingPinDeltaAtLoc.has(otherKey)) {
-          const perpIdx = otherNeighbors[0];
-          const perpEnds = wireEndpoints[perpIdx];
-          const perpHasMovingPin =
-            movingPinDeltaAtLoc.has(keyOf(perpEnds.s)) || movingPinDeltaAtLoc.has(keyOf(perpEnds.e));
-          const isWVertical = s.x === e.x;
-          const isPerpVertical = perpEnds.s.x === perpEnds.e.x;
-
-          if (!perpHasMovingPin && isWVertical !== isPerpVertical) {
-            // Slide the orthogonal corner `otherPt`!
-            const newCorner = isWVertical
-              ? { x: newPinPt.x, y: otherPt.y }
-              : { x: otherPt.x, y: newPinPt.y };
-
-            resultWires[wIdx] = {
-              ...w0,
-              fromCompId: '',
-              fromPinId: `loc_${(isStartMoving ? newPinPt : newCorner).x}_${(isStartMoving ? newPinPt : newCorner).y}`,
-              toCompId: '',
-              toPinId: `loc_${(isStartMoving ? newCorner : newPinPt).x}_${(isStartMoving ? newCorner : newPinPt).y}`,
-              startPoint: isStartMoving ? newPinPt : newCorner,
-              endPoint: isStartMoving ? newCorner : newPinPt,
-            };
-
-            // Use the perpendicular wire's CURRENT endpoints so an earlier corner-slide on its
-            // opposite end (e.g. a U-shaped path between two moved pins) is not reverted.
-            const curPerp = resultWires[perpIdx];
-            const curPerpS = curPerp.startPoint ? snapPt10(curPerp.startPoint) : perpEnds.s;
-            const curPerpE = curPerp.endPoint ? snapPt10(curPerp.endPoint) : perpEnds.e;
-            const isPerpStartAtCorner = keyOf(perpEnds.s) === otherKey;
-            const pNewS = isPerpStartAtCorner ? newCorner : curPerpS;
-            const pNewE = isPerpStartAtCorner ? curPerpE : newCorner;
-            resultWires[perpIdx] = {
-              ...curPerp,
-              fromCompId: '',
-              fromPinId: `loc_${pNewS.x}_${pNewS.y}`,
-              toCompId: '',
-              toPinId: `loc_${pNewE.x}_${pNewE.y}`,
-              startPoint: pNewS,
-              endPoint: pNewE,
-            };
+          if (endIsOpen || (endDelta && endDelta.dx === startDelta.dx && endDelta.dy === startDelta.dy)) {
+            // Dangling stub or chain between two co-moving pins -> rigid translation (validated below)
+            rigidGroups.push({ indices: chain, delta: startDelta });
             continue;
           }
-        }
 
-        // Otherwise, connect `newPinPt` to `otherPt` orthogonally
-        if (newPinPt.x === otherPt.x || newPinPt.y === otherPt.y) {
-          const newS = isStartMoving ? newPinPt : otherPt;
-          const newE = isStartMoving ? otherPt : newPinPt;
-          resultWires[wIdx] = {
-            ...w0,
-            fromCompId: '',
-            fromPinId: `loc_${newS.x}_${newS.y}`,
-            toCompId: '',
-            toPinId: `loc_${newE.x}_${newE.y}`,
-            startPoint: newS,
-            endPoint: newE,
-          };
-        } else {
-          const wasHorizontal = s.y === e.y;
-          // If `otherPt` is a stationary pin, route via the midpoint so the perpendicular segment
-          // never runs along the face of the gate across adjacent pins!
-          if (stationaryPinLocs.has(otherKey)) {
-            if (wasHorizontal) {
-              const midX = snapTo10((newPinPt.x + otherPt.x) / 2);
-              if (midX !== newPinPt.x && midX !== otherPt.x) {
-                const c1 = { x: midX, y: newPinPt.y };
-                const c2 = { x: midX, y: otherPt.y };
-                resultWires[wIdx] = {
-                  ...w0,
-                  fromCompId: '',
-                  fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
-                  toCompId: '',
-                  toPinId: `loc_${c1.x}_${c1.y}`,
-                  startPoint: newPinPt,
-                  endPoint: c1,
-                };
-                extraWires.push(
-                  {
-                    ...w0,
-                    id: `${w0.id}_bridge1`,
-                    fromCompId: '',
-                    fromPinId: `loc_${c1.x}_${c1.y}`,
-                    toCompId: '',
-                    toPinId: `loc_${c2.x}_${c2.y}`,
-                    startPoint: c1,
-                    endPoint: c2,
-                  },
-                  {
-                    ...w0,
-                    id: `${w0.id}_bridge2`,
-                    fromCompId: '',
-                    fromPinId: `loc_${c2.x}_${c2.y}`,
-                    toCompId: '',
-                    toPinId: `loc_${otherPt.x}_${otherPt.y}`,
-                    startPoint: c2,
-                    endPoint: otherPt,
-                  }
-                );
-                continue;
-              }
-            } else {
-              const midY = snapTo10((newPinPt.y + otherPt.y) / 2);
-              if (midY !== newPinPt.y && midY !== otherPt.y) {
-                const c1 = { x: newPinPt.x, y: midY };
-                const c2 = { x: otherPt.x, y: midY };
-                resultWires[wIdx] = {
-                  ...w0,
-                  fromCompId: '',
-                  fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
-                  toCompId: '',
-                  toPinId: `loc_${c1.x}_${c1.y}`,
-                  startPoint: newPinPt,
-                  endPoint: c1,
-                };
-                extraWires.push(
-                  {
-                    ...w0,
-                    id: `${w0.id}_bridge1`,
-                    fromCompId: '',
-                    fromPinId: `loc_${c1.x}_${c1.y}`,
-                    toCompId: '',
-                    toPinId: `loc_${c2.x}_${c2.y}`,
-                    startPoint: c1,
-                    endPoint: c2,
-                  },
-                  {
-                    ...w0,
-                    id: `${w0.id}_bridge2`,
-                    fromCompId: '',
-                    fromPinId: `loc_${c2.x}_${c2.y}`,
-                    toCompId: '',
-                    toPinId: `loc_${otherPt.x}_${otherPt.y}`,
-                    startPoint: c2,
-                    endPoint: otherPt,
-                  }
-                );
-                continue;
-              }
-            }
-          }
-
-          const corner = wasHorizontal
-            ? { x: otherPt.x, y: newPinPt.y }
-            : { x: newPinPt.x, y: otherPt.y };
-
-          resultWires[wIdx] = {
-            ...w0,
-            fromCompId: '',
-            fromPinId: `loc_${newPinPt.x}_${newPinPt.y}`,
-            toCompId: '',
-            toPinId: `loc_${corner.x}_${corner.y}`,
-            startPoint: newPinPt,
-            endPoint: corner,
-          };
+          const w0 = initialWires[wIdx];
+          const startPin = pinIdAtLoc.get(startKey)!;
+          const endPt = endDelta ? { x: cur.x + endDelta.dx, y: cur.y + endDelta.dy } : cur;
+          const endPin = endIsPin ? pinIdAtLoc.get(endKey)! : null;
           extraWires.push({
             ...w0,
-            id: `${w0.id}_bridge`,
-            fromCompId: '',
-            fromPinId: `loc_${corner.x}_${corner.y}`,
-            toCompId: '',
-            toPinId: `loc_${otherPt.x}_${otherPt.y}`,
-            startPoint: corner,
-            endPoint: otherPt,
+            id: `${w0.id}_rt`,
+            fromCompId: startPin.compId,
+            fromPinId: startPin.pinId,
+            toCompId: endPin ? endPin.compId : '',
+            toPinId: endPin ? endPin.pinId : `loc_${endPt.x}_${endPt.y}`,
+            startPoint: undefined,
+            endPoint: endPin ? undefined : endPt,
+            waypoints: undefined,
+            branchPoint: undefined,
+            elbowX: undefined,
           });
         }
       }
     }
   }
 
-  return [...resultWires, ...extraWires];
+  const keptWires = resultWires.filter((_, i) => !removedWire.has(i));
+
+  // Rigidly translated wire groups keep their shape ONLY if they land on free space.
+  // If a translated segment would overlap / touch a stationary wire or a foreign pin
+  // (which Logisim would treat as a connection), the group is re-routed pin-to-pin instead.
+  if (rigidGroups.length > 0) {
+    const staticSegs = keptWires
+      .filter((w) => w.startPoint && w.endPoint)
+      .map((w) => ({ a: snapPt10(w.startPoint!), b: snapPt10(w.endPoint!) }));
+    const newPinAt = new Map<string, string>(); // moved/stationary pin location -> pinId
+    for (const comp of initialComps) {
+      const d = movedCompDeltas.get(comp.id) || { dx: 0, dy: 0 };
+      for (const pin of [...comp.inputs, ...comp.outputs]) {
+        const sp = snapPt10(pin);
+        newPinAt.set(keyOf({ x: sp.x + d.dx, y: sp.y + d.dy }), pin.id);
+      }
+    }
+    const onSeg = (p: WirePoint, a: WirePoint, b: WirePoint) =>
+      (a.x === b.x && p.x === a.x && p.y >= Math.min(a.y, b.y) && p.y <= Math.max(a.y, b.y)) ||
+      (a.y === b.y && p.y === a.y && p.x >= Math.min(a.x, b.x) && p.x <= Math.max(a.x, b.x));
+    const collinearOverlap = (a: WirePoint, b: WirePoint, c: WirePoint, d: WirePoint) => {
+      if (a.x === b.x && c.x === d.x && a.x === c.x) {
+        return Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y)) < Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y));
+      }
+      if (a.y === b.y && c.y === d.y && a.y === c.y) {
+        return Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x)) < Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x));
+      }
+      return false;
+    };
+
+    for (const g of rigidGroups) {
+      const { dx, dy } = g.delta;
+      const ownPinKeys = new Set<string>();
+      const ownPins: Array<{ compId: string; pinId: string }> = [];
+      const moved = g.indices.map((i) => {
+        const { s, e } = wireEndpoints[i];
+        for (const p of [s, e]) {
+          const info = pinIdAtLoc.get(keyOf(p));
+          const newKey = keyOf({ x: p.x + dx, y: p.y + dy });
+          if (info && !ownPinKeys.has(newKey)) {
+            ownPinKeys.add(newKey);
+            ownPins.push(info);
+          }
+        }
+        return { i, a: { x: s.x + dx, y: s.y + dy }, b: { x: e.x + dx, y: e.y + dy } };
+      });
+
+      let clash = false;
+      for (const m of moved) {
+        for (const st of staticSegs) {
+          if (
+            collinearOverlap(m.a, m.b, st.a, st.b) ||
+            onSeg(m.a, st.a, st.b) || onSeg(m.b, st.a, st.b) ||
+            onSeg(st.a, m.a, m.b) || onSeg(st.b, m.a, m.b)
+          ) {
+            clash = true;
+            break;
+          }
+        }
+        if (clash) break;
+        for (const [k] of newPinAt) {
+          if (ownPinKeys.has(k)) continue;
+          const [px, py] = k.split(',').map(Number);
+          if (onSeg({ x: px, y: py }, m.a, m.b)) {
+            clash = true;
+            break;
+          }
+        }
+        if (clash) break;
+      }
+
+      if (!clash || ownPins.length < 2) {
+        for (const m of moved) {
+          extraWires.push({
+            ...initialWires[m.i],
+            fromCompId: '',
+            fromPinId: `loc_${m.a.x}_${m.a.y}`,
+            toCompId: '',
+            toPinId: `loc_${m.b.x}_${m.b.y}`,
+            startPoint: m.a,
+            endPoint: m.b,
+            waypoints: undefined,
+          });
+        }
+      } else {
+        // Star re-route from the first pin to every other pin of this group's net
+        const root = ownPins[0];
+        for (let k = 1; k < ownPins.length; k++) {
+          extraWires.push({
+            ...initialWires[g.indices[0]],
+            id: `${initialWires[g.indices[0]].id}_rr${k}`,
+            fromCompId: root.compId,
+            fromPinId: root.pinId,
+            toCompId: ownPins[k].compId,
+            toPinId: ownPins[k].pinId,
+            startPoint: undefined,
+            endPoint: undefined,
+            waypoints: undefined,
+            branchPoint: undefined,
+            elbowX: undefined,
+          });
+        }
+      }
+    }
+  }
+  if (extraWires.length === 0) return keptWires;
+
+  // Route the detached chains against the moved component pins (net-aware, collision free)
+  const movedComps = initialComps.map((c) => {
+    const d = movedCompDeltas.get(c.id);
+    if (!d) return c;
+    const shift = (p: CircuitPin) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy });
+    return { ...c, x: c.x + d.dx, y: c.y + d.dy, inputs: c.inputs.map(shift), outputs: c.outputs.map(shift) };
+  });
+  return repairWires([...keptWires, ...extraWires], movedComps);
 };
