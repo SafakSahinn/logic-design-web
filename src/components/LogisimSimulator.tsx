@@ -869,7 +869,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         if (c.id === compId) {
           const pixels = (c.state.rgbPixels || Array.from({ length: 16 }, () => Array(16).fill('#050505'))).map((row) => [...row]);
           const current = pixels[y][x];
-          const colorCycle = ['#050505', '#ef4444', '#22c55e', '#3b82f6', '#eab308', '#ec4899', '#06b6d4', '#ffffff'];
+          const colorCycle = ['#050505', '#ef4444', '#10b981', '#1d4ed8', '#facc15', '#d946ef', '#06b6d4', '#ffffff'];
           const nextIdx = (colorCycle.indexOf(current) + 1) % colorCycle.length;
           pixels[y][x] = colorCycle[nextIdx === -1 ? 1 : nextIdx];
           return {

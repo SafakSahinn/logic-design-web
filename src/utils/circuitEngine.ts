@@ -1802,13 +1802,13 @@ export function simulateCircuitStep(
           hasChanged = true;
         } else if (weVal && (isRising || !isClkConnected)) {
           let hexCol = '#050505';
-          if (rVal && gVal && bVal) hexCol = '#ffffff';
-          else if (rVal && gVal && !bVal) hexCol = '#eab308';
-          else if (rVal && !gVal && bVal) hexCol = '#ec4899';
-          else if (rVal && !gVal && !bVal) hexCol = '#ef4444';
-          else if (!rVal && gVal && bVal) hexCol = '#06b6d4';
-          else if (!rVal && gVal && !bVal) hexCol = '#22c55e';
-          else if (!rVal && !gVal && bVal) hexCol = '#3b82f6';
+          if (rVal && gVal && bVal) hexCol = '#ffffff'; // Beyaz (R+G+B)
+          else if (rVal && gVal && !bVal) hexCol = '#facc15'; // Sarı (R+G)
+          else if (rVal && !gVal && bVal) hexCol = '#d946ef'; // Macenta / Fuşya (R+B)
+          else if (rVal && !gVal && !bVal) hexCol = '#ef4444'; // Kırmızı (R)
+          else if (!rVal && gVal && bVal) hexCol = '#06b6d4'; // Camgöbeği / Turkuaz (G+B)
+          else if (!rVal && gVal && !bVal) hexCol = '#10b981'; // Canlı Zümrüt Yeşili (G)
+          else if (!rVal && !gVal && bVal) hexCol = '#1d4ed8'; // Derin Saf Mavi (B)
 
           if (xVal >= 0 && xVal < 16 && yVal >= 0 && yVal < 16) {
             if (comp.state.rgbPixels[yVal][xVal] !== hexCol) {
@@ -2723,8 +2723,20 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
     components: [
       { ...createComponentInstance('clock', 40, 40, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 8 } },
       { ...createComponentInstance('counter4', 160, 40, 'X-Koordinat Sayacı'), id: 'cnt_x' },
-      { ...createComponentInstance('not', 270, 70, 'Satır İlerleme (NOT)'), id: 'not_y' },
-      { ...createComponentInstance('counter4', 160, 150, 'Y-Koordinat Sayacı'), id: 'cnt_y' },
+      (() => {
+        const notC = createComponentInstance('not', 270, 70, 'Satır İlerleme (NOT)');
+        notC.id = 'not_y';
+        if (notC.outputs[0]) notC.outputs[0].value = 1;
+        return notC;
+      })(),
+      (() => {
+        const cntC = createComponentInstance('counter4', 160, 150, 'Y-Koordinat Sayacı');
+        cntC.id = 'cnt_y';
+        if (cntC.inputs[0]) cntC.inputs[0].value = 1;
+        cntC.state.lastClk = 1;
+        cntC.state.count = 0;
+        return cntC;
+      })(),
       { ...createComponentInstance('vcc', 40, 140, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
       { ...createComponentInstance('switch', 40, 200, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
       { ...createComponentInstance('switch', 40, 260, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
@@ -2738,7 +2750,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w4', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX2', value: 0 },
       { id: 'w5', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX3', value: 0 },
       { id: 'w6', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'not_y', toPinId: 'not_y_in', value: 0 },
-      { id: 'w7', fromCompId: 'not_y', fromPinId: 'not_y_out', toCompId: 'cnt_y', toPinId: 'cnt_y_inClk', value: 0 },
+      { id: 'w7', fromCompId: 'not_y', fromPinId: 'not_y_out', toCompId: 'cnt_y', toPinId: 'cnt_y_inClk', value: 1 },
       { id: 'w8', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ0', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY0', value: 0 },
       { id: 'w9', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ1', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY1', value: 0 },
       { id: 'w10', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY2', value: 0 },
