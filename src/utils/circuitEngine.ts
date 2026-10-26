@@ -2721,27 +2721,27 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
     category: 'music_graphics',
     description: 'X ve Y koordinat sayaçları, RGB renk seçici ve Yazma İzni (WE) ile 256 piksellik renkli grafik ekranına çizim yapan GPU gösterim devresi.',
     components: [
-      { ...createComponentInstance('clock', 40, 40, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 8 } },
-      { ...createComponentInstance('counter4', 160, 40, 'X-Koordinat Sayacı'), id: 'cnt_x' },
+      { ...createComponentInstance('clock', 40, 60, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 8 } },
+      { ...createComponentInstance('counter4', 180, 60, 'X-Koordinat Sayacı'), id: 'cnt_x' },
       (() => {
-        const notC = createComponentInstance('not', 270, 70, 'Satır İlerleme (NOT)');
+        const notC = createComponentInstance('not', 310, 140, 'Satır İlerleme (NOT)');
         notC.id = 'not_y';
         if (notC.outputs[0]) notC.outputs[0].value = 1;
         return notC;
       })(),
       (() => {
-        const cntC = createComponentInstance('counter4', 160, 150, 'Y-Koordinat Sayacı');
+        const cntC = createComponentInstance('counter4', 180, 240, 'Y-Koordinat Sayacı');
         cntC.id = 'cnt_y';
         if (cntC.inputs[0]) cntC.inputs[0].value = 1;
         cntC.state.lastClk = 1;
         cntC.state.count = 0;
         return cntC;
       })(),
-      { ...createComponentInstance('vcc', 40, 140, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
-      { ...createComponentInstance('switch', 40, 200, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
-      { ...createComponentInstance('switch', 40, 260, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
-      { ...createComponentInstance('switch', 40, 320, 'Mavi Renk (B)'), id: 'sw_b', state: { on: true } },
-      { ...createComponentInstance('rgbMatrix16x16', 390, 40, '16x16 RGB Video Matrisi'), id: 'gpu_screen' },
+      { ...createComponentInstance('vcc', 40, 340, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
+      { ...createComponentInstance('switch', 40, 410, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
+      { ...createComponentInstance('switch', 40, 480, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
+      { ...createComponentInstance('switch', 40, 550, 'Mavi Renk (B)'), id: 'sw_b', state: { on: true } },
+      { ...createComponentInstance('rgbMatrix16x16', 500, 60, '16x16 RGB Video Matrisi'), id: 'gpu_screen' },
     ].map(updatePinPositions),
     wires: [
       { id: 'w1', fromCompId: 'clk_gpu', fromPinId: 'clk_gpu_out', toCompId: 'cnt_x', toPinId: 'cnt_x_inClk', value: 0 },
