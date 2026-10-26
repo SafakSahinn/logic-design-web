@@ -22,7 +22,7 @@ export function App() {
       const hash = window.location.hash.replace('#', '') as UnitTab;
       if (hash) return hash;
     }
-    return 'circuit-simulator';
+    return 'home';
   };
 
   const [activeTab, setActiveTab] = useState<UnitTab>(getInitialTab);
