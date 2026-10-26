@@ -7,6 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.0-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Live Demo](https://img.shields.io/badge/🌐_Canlı_Demo-GitHub_Pages-2563EB?style=for-the-badge&logo=github)](https://safaksahinn.github.io/logic-design-web/)
 [![Electron](https://img.shields.io/badge/Electron-Desktop_App-47848F?style=for-the-badge&logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Logisim Compatible](https://img.shields.io/badge/Logisim-.circ_XML_Uyumlu-10B981?style=for-the-badge)](#)
 
@@ -16,7 +17,9 @@
 
 ---
 
-[🌐 **Web Platformu (logic-design-web)**](https://github.com/SafakSahinn/logic-design-web) • [🖥️ **Masaüstü Uygulaması (logic-design-studio)**](https://github.com/SafakSahinn/logic-design-studio)
+### 🚀 **Canlı Uygulama (Live Web App):** [https://safaksahinn.github.io/logic-design-web/](https://safaksahinn.github.io/logic-design-web/)
+
+[🌐 **Web Kaynak Kodu (logic-design-web)**](https://github.com/SafakSahinn/logic-design-web) • [🖥️ **Masaüstü Uygulaması (logic-design-studio)**](https://github.com/SafakSahinn/logic-design-studio) • [🚀 **Canlı Demo**](https://safaksahinn.github.io/logic-design-web/)
 
 </div>
 
