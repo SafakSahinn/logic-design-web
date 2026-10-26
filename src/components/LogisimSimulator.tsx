@@ -803,13 +803,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Pushbutton Down/Up handler (anlık bas-bırak buton)
   const handlePushbuttonState = (e: React.MouseEvent, compId: string, isDown: boolean) => {
     e.stopPropagation();
+    const currentComp = components.find((c) => c.id === compId);
+    const currentlyOn = !!currentComp?.state?.on;
+    if (currentlyOn === isDown) return;
+
     setSelectedCompId(compId);
     playSwitchSound(isDown);
     setComponents((prev) => {
       let changed = false;
       const updated = prev.map((c) => {
         if (c.id === compId) {
-          if (c.state.on === isDown) return c;
+          if (!!c.state.on === isDown) return c;
           changed = true;
           return {
             ...c,
