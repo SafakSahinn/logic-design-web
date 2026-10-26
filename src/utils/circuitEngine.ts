@@ -1037,7 +1037,10 @@ export function simulateCircuitStep(
     ...c,
     inputs: c.inputs.map((p) => ({ ...p })),
     outputs: c.outputs.map((p) => ({ ...p })),
-    state: { ...c.state },
+    state: {
+      ...c.state,
+      rgbPixels: c.state.rgbPixels ? c.state.rgbPixels.map((row) => [...row]) : undefined,
+    },
   }));
 
   const newWires: CircuitWire[] = wires.map((w) => ({ ...w }));
@@ -1788,10 +1791,16 @@ export function simulateCircuitStep(
           comp.state.rgbPixels = Array.from({ length: 16 }, () => Array(16).fill('#050505'));
         }
 
+        const clkPin = comp.inputs[12];
+        const isClkConnected = clkPin
+          ? (netWires.get(findRoot(clkPin.id))?.length ?? 0) > 0 ||
+            (netPins.get(findRoot(clkPin.id))?.length ?? 0) > 1
+          : false;
+
         if (rstVal) {
           comp.state.rgbPixels = Array.from({ length: 16 }, () => Array(16).fill('#050505'));
           hasChanged = true;
-        } else if (weVal && (isRising || inVals[12] === undefined)) {
+        } else if (weVal && (isRising || !isClkConnected)) {
           let hexCol = '#050505';
           if (rVal && gVal && bVal) hexCol = '#ffffff';
           else if (rVal && gVal && !bVal) hexCol = '#eab308';
@@ -2712,13 +2721,15 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
     category: 'music_graphics',
     description: 'X ve Y koordinat sayaçları, RGB renk seçici ve Yazma İzni (WE) ile 256 piksellik renkli grafik ekranına çizim yapan GPU gösterim devresi.',
     components: [
-      { ...createComponentInstance('clock', 50, 40, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 4 } },
+      { ...createComponentInstance('clock', 40, 40, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 8 } },
       { ...createComponentInstance('counter4', 160, 40, 'X-Koordinat Sayacı'), id: 'cnt_x' },
-      { ...createComponentInstance('vcc', 50, 160, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
-      { ...createComponentInstance('switch', 50, 230, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
-      { ...createComponentInstance('switch', 50, 290, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
-      { ...createComponentInstance('switch', 50, 350, 'Mavi Renk (B)'), id: 'sw_b', state: { on: true } },
-      { ...createComponentInstance('rgbMatrix16x16', 360, 50, '16x16 RGB Video Matrisi'), id: 'gpu_screen' },
+      { ...createComponentInstance('not', 270, 70, 'Satır İlerleme (NOT)'), id: 'not_y' },
+      { ...createComponentInstance('counter4', 160, 150, 'Y-Koordinat Sayacı'), id: 'cnt_y' },
+      { ...createComponentInstance('vcc', 40, 140, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
+      { ...createComponentInstance('switch', 40, 200, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
+      { ...createComponentInstance('switch', 40, 260, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
+      { ...createComponentInstance('switch', 40, 320, 'Mavi Renk (B)'), id: 'sw_b', state: { on: true } },
+      { ...createComponentInstance('rgbMatrix16x16', 390, 40, '16x16 RGB Video Matrisi'), id: 'gpu_screen' },
     ].map(updatePinPositions),
     wires: [
       { id: 'w1', fromCompId: 'clk_gpu', fromPinId: 'clk_gpu_out', toCompId: 'cnt_x', toPinId: 'cnt_x_inClk', value: 0 },
@@ -2726,10 +2737,16 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w3', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ1', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX1', value: 0 },
       { id: 'w4', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX2', value: 0 },
       { id: 'w5', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX3', value: 0 },
-      { id: 'w6', fromCompId: 'vcc_we', fromPinId: 'vcc_we_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inWE', value: 1 },
-      { id: 'w7', fromCompId: 'sw_r', fromPinId: 'sw_r_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inR', value: 1 },
-      { id: 'w8', fromCompId: 'sw_g', fromPinId: 'sw_g_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inG', value: 0 },
-      { id: 'w9', fromCompId: 'sw_b', fromPinId: 'sw_b_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inB', value: 1 },
+      { id: 'w6', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'not_y', toPinId: 'not_y_in', value: 0 },
+      { id: 'w7', fromCompId: 'not_y', fromPinId: 'not_y_out', toCompId: 'cnt_y', toPinId: 'cnt_y_inClk', value: 0 },
+      { id: 'w8', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ0', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY0', value: 0 },
+      { id: 'w9', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ1', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY1', value: 0 },
+      { id: 'w10', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY2', value: 0 },
+      { id: 'w11', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ3', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY3', value: 0 },
+      { id: 'w12', fromCompId: 'vcc_we', fromPinId: 'vcc_we_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inWE', value: 1 },
+      { id: 'w13', fromCompId: 'sw_r', fromPinId: 'sw_r_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inR', value: 1 },
+      { id: 'w14', fromCompId: 'sw_g', fromPinId: 'sw_g_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inG', value: 0 },
+      { id: 'w15', fromCompId: 'sw_b', fromPinId: 'sw_b_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inB', value: 1 },
     ],
   },
 ];

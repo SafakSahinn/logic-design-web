@@ -3023,7 +3023,8 @@ ${wireXmls.join('\n')}
       const targetHz = clkComp?.state?.frequencyHz || 4;
       setClockHz(targetHz);
       setIsRunning(true);
-      showToast(`Müzik Kiti Yüklendi! Tempo: ${targetHz} Hz (Çalıyor 🎵)`);
+      const isGpu = preset.id === 'rgb_matrix_gpu_painter';
+      showToast(isGpu ? `RGB VRAM Ekranı Yüklendi! Hız: ${targetHz} Hz (GPU Çiziyor 🎨)` : `Müzik Kiti Yüklendi! Tempo: ${targetHz} Hz (Çalıyor 🎵)`);
     }
   };
 
