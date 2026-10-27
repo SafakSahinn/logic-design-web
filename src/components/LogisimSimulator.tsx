@@ -2693,6 +2693,14 @@ ${wireXmls.join('\n')}
         },
       });
 
+      // Proportional mapping: top pin stays at top, bottom pin stays at bottom, new pins in middle
+      const mapOldInputIndexToNew = (oldIdx: number, oldCount: number, targetCount: number): number => {
+        if (oldIdx === 0) return 0;
+        if (oldIdx === oldCount - 1) return targetCount - 1;
+        const fraction = oldIdx / (oldCount - 1);
+        return Math.round(fraction * (targetCount - 1));
+      };
+
       // Helper to detect which input pin index an existing wire endpoint or pin ID was connected to
       const getOldInputIndex = (pinId?: string, pt?: WirePoint): number => {
         if (pinId) {
@@ -2717,63 +2725,128 @@ ${wireXmls.join('\n')}
         return -1;
       };
 
-      // 3. Update wires connected to this component's input pins
-      const updatedWires: CircuitWire[] = [];
+      // Build mapping from old input index to target pin
+      const targetMap = new Map<number, CircuitPin>();
+      const claimedTargets = new Set<number>();
+      for (let i = 0; i < currentCount; i++) {
+        const targetIdx = mapOldInputIndexToNew(i, currentCount, newCount);
+        if (!claimedTargets.has(targetIdx) && targetIdx >= 0 && targetIdx < newCount) {
+          targetMap.set(i, updatedComp.inputs[targetIdx]);
+          claimedTargets.add(targetIdx);
+        }
+      }
 
-      for (const w of wires) {
-        let modified = false;
-        let newStart = w.startPoint ? { ...w.startPoint } : undefined;
-        let newEnd = w.endPoint ? { ...w.endPoint } : undefined;
-        let newFromPinId = w.fromPinId;
-        let newToPinId = w.toPinId;
-        let newFromCompId = w.fromCompId;
-        let newToCompId = w.toCompId;
+      let adjustedWires: CircuitWire[] = wires.map((w) => ({
+        ...w,
+        startPoint: w.startPoint ? { ...w.startPoint } : undefined,
+        endPoint: w.endPoint ? { ...w.endPoint } : undefined,
+      }));
 
-        // Check if wire terminates at an input pin of this component
+      // Disconnect wires connected to removed/unmapped pins
+      adjustedWires = adjustedWires.filter((w) => {
         const toIdx = (w.toCompId === compId || w.endPoint) ? getOldInputIndex(w.toPinId, w.endPoint) : -1;
-        if (toIdx !== -1) {
-          if (toIdx < newCount) {
-            // Pin still exists: follow pin to its new position!
-            const targetPin = updatedComp.inputs[toIdx];
-            newToCompId = compId;
-            newToPinId = targetPin.id;
-            newEnd = { x: targetPin.x, y: targetPin.y };
-            modified = true;
-          } else {
-            // Pin was removed because input count was decreased: disconnect wire
-            continue;
-          }
-        }
-
-        // Check if wire originates at an input pin of this component (if drawn in reverse)
         const fromIdx = (w.fromCompId === compId || w.startPoint) ? getOldInputIndex(w.fromPinId, w.startPoint) : -1;
-        if (fromIdx !== -1) {
-          if (fromIdx < newCount) {
-            const targetPin = updatedComp.inputs[fromIdx];
-            newFromCompId = compId;
-            newFromPinId = targetPin.id;
-            newStart = { x: targetPin.x, y: targetPin.y };
-            modified = true;
-          } else {
-            continue;
+        if (toIdx !== -1 && !targetMap.has(toIdx)) return false;
+        if (fromIdx !== -1 && !targetMap.has(fromIdx)) return false;
+        return true;
+      });
+
+      // Update positions of wires attached to mapped pins with clean orthogonal shifting
+      for (let i = 0; i < currentCount; i++) {
+        const targetPin = targetMap.get(i);
+        if (!targetPin) continue;
+
+        const oldPt = oldPinLocations[i];
+        const newPt = snapPt10({ x: targetPin.x, y: targetPin.y });
+        const dy = newPt.y - oldPt.y;
+
+        for (const w of adjustedWires) {
+          if (!w.startPoint || !w.endPoint) continue;
+          const endPt = snapPt10(w.endPoint);
+          const startPt = snapPt10(w.startPoint);
+
+          const touchesEnd = (w.toCompId === compId && w.toPinId === oldInputs[i].id) ||
+            (endPt.x === oldPt.x && endPt.y === oldPt.y);
+          const touchesStart = (w.fromCompId === compId && w.fromPinId === oldInputs[i].id) ||
+            (startPt.x === oldPt.x && startPt.y === oldPt.y);
+
+          if (touchesEnd) {
+            w.toCompId = compId;
+            w.toPinId = targetPin.id;
+            w.endPoint.y = newPt.y;
+            w.endPoint.x = newPt.x;
+
+            if (dy !== 0 && startPt.y === oldPt.y && startPt.x !== oldPt.x) {
+              const cornerX = startPt.x;
+              const vertWires = adjustedWires.filter(
+                (other) =>
+                  other.id !== w.id &&
+                  other.startPoint &&
+                  other.endPoint &&
+                  snapPt10(other.startPoint).x === cornerX &&
+                  snapPt10(other.endPoint).x === cornerX &&
+                  (snapPt10(other.startPoint).y === oldPt.y || snapPt10(other.endPoint).y === oldPt.y)
+              );
+              const otherHorzWires = adjustedWires.filter(
+                (other) =>
+                  other.id !== w.id &&
+                  other.startPoint &&
+                  other.endPoint &&
+                  snapPt10(other.startPoint).y === oldPt.y &&
+                  snapPt10(other.endPoint).y === oldPt.y &&
+                  (snapPt10(other.startPoint).x === cornerX || snapPt10(other.endPoint).x === cornerX)
+              );
+
+              if (vertWires.length > 0 && otherHorzWires.length === 0) {
+                w.startPoint.y = newPt.y;
+                vertWires.forEach((vw) => {
+                  if (snapPt10(vw.startPoint!).y === oldPt.y) vw.startPoint!.y = newPt.y;
+                  if (snapPt10(vw.endPoint!).y === oldPt.y) vw.endPoint!.y = newPt.y;
+                });
+              }
+            }
+          } else if (touchesStart) {
+            w.fromCompId = compId;
+            w.fromPinId = targetPin.id;
+            w.startPoint.y = newPt.y;
+            w.startPoint.x = newPt.x;
+
+            if (dy !== 0 && endPt.y === oldPt.y && endPt.x !== oldPt.x) {
+              const cornerX = endPt.x;
+              const vertWires = adjustedWires.filter(
+                (other) =>
+                  other.id !== w.id &&
+                  other.startPoint &&
+                  other.endPoint &&
+                  snapPt10(other.startPoint).x === cornerX &&
+                  snapPt10(other.endPoint).x === cornerX &&
+                  (snapPt10(other.startPoint).y === oldPt.y || snapPt10(other.endPoint).y === oldPt.y)
+              );
+              const otherHorzWires = adjustedWires.filter(
+                (other) =>
+                  other.id !== w.id &&
+                  other.startPoint &&
+                  other.endPoint &&
+                  snapPt10(other.startPoint).y === oldPt.y &&
+                  snapPt10(other.endPoint).y === oldPt.y &&
+                  (snapPt10(other.startPoint).x === cornerX || snapPt10(other.endPoint).x === cornerX)
+              );
+
+              if (vertWires.length > 0 && otherHorzWires.length === 0) {
+                w.endPoint.y = newPt.y;
+                vertWires.forEach((vw) => {
+                  if (snapPt10(vw.startPoint!).y === oldPt.y) vw.startPoint!.y = newPt.y;
+                  if (snapPt10(vw.endPoint!).y === oldPt.y) vw.endPoint!.y = newPt.y;
+                });
+              }
+            }
           }
         }
-
-        updatedWires.push({
-          ...w,
-          fromCompId: newFromCompId,
-          fromPinId: newFromPinId,
-          toCompId: newToCompId,
-          toPinId: newToPinId,
-          startPoint: newStart,
-          endPoint: newEnd,
-          waypoints: modified ? undefined : w.waypoints,
-        });
       }
 
       // 4. Update component list and repair wires to re-route orthogonally to new pin coordinates
       const nextComps = components.map((c) => (c.id === compId ? updatedComp : c));
-      const repaired = repairWires(updatedWires, nextComps);
+      const repaired = repairWires(adjustedWires, nextComps);
       const sim = simulateCircuit(nextComps, repaired);
 
       setWires(sim.wires);

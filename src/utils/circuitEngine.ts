@@ -1261,9 +1261,22 @@ export function simulateCircuitStep(
     });
   });
 
+  // Helper to determine if a pin is electrically connected to a wire or other pin
+  const isPinConnected = (pinId: string): boolean => {
+    const root = findRoot(pinId);
+    const wiresCount = netWires.get(root)?.length || 0;
+    if (wiresCount > 0) return true;
+    const pins = netPins.get(root);
+    if (pins && pins.length > 1) return true;
+    return false;
+  };
+
   // Step 3: Compute gate/block outputs based on their current inputs
   newComps.forEach((comp) => {
     const inVals = comp.inputs.map((p) => (p.value === 1 ? 1 : 0));
+    // In Logisim, multi-input logic gates ignore unconnected (floating) input pins
+    const connectedInputs = comp.inputs.filter((p) => isPinConnected(p.id));
+    const hasAnyConnectedInput = connectedInputs.length > 0;
 
     switch (comp.type) {
       case 'not': {
@@ -1275,7 +1288,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'and': {
-        const val: LogicValue = inVals.length > 0 && inVals.every((v) => v === 1) ? 1 : 0;
+        const val: LogicValue = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1) ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1283,7 +1296,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'or': {
-        const val: LogicValue = inVals.some((v) => v === 1) ? 1 : 0;
+        const val: LogicValue = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1) ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1291,8 +1304,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'nand': {
-        const allOnes = inVals.length > 0 && inVals.every((v) => v === 1);
-        const val: LogicValue = allOnes ? 0 : 1;
+        const allOnes = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1);
+        const val: LogicValue = hasAnyConnectedInput ? (allOnes ? 0 : 1) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1300,8 +1313,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'nor': {
-        const anyOnes = inVals.some((v) => v === 1);
-        const val: LogicValue = anyOnes ? 0 : 1;
+        const anyOnes = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1);
+        const val: LogicValue = hasAnyConnectedInput ? (anyOnes ? 0 : 1) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1309,8 +1322,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'xor': {
-        const onesCount = inVals.filter((v) => v === 1).length;
-        const val: LogicValue = onesCount % 2 === 1 ? 1 : 0;
+        const onesCount = connectedInputs.filter((p) => p.value === 1).length;
+        const val: LogicValue = hasAnyConnectedInput && onesCount % 2 === 1 ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1318,8 +1331,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'xnor': {
-        const onesCount = inVals.filter((v) => v === 1).length;
-        const val: LogicValue = onesCount % 2 === 0 ? 1 : 0;
+        const onesCount = connectedInputs.filter((p) => p.value === 1).length;
+        const val: LogicValue = hasAnyConnectedInput ? (onesCount % 2 === 0 ? 1 : 0) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
