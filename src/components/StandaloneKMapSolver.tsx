@@ -149,7 +149,7 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       {/* Title Header */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-8 sm:p-10 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div className="bg-white rounded-3xl border border-slate-200 p-8 sm:p-10 shadow-xs">
         <div className="space-y-2 max-w-2xl">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
             <Calculator className="w-3.5 h-3.5" />
@@ -161,31 +161,6 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
           <p className="text-sm text-slate-600 leading-relaxed">
             İstediğiniz değişken sayısını seçin, minterm / don't care listesi girin, bir Boole ifadesi yazın ya da haritaya doğrudan tıklayarak serbestçe sadeleştirme yapın.
           </p>
-        </div>
-
-        {/* Variable Switcher */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 self-start md:self-auto shrink-0">
-          {[2, 3, 4].map((v) => (
-            <button
-              key={v}
-              onClick={() => {
-                setNumVars(v);
-                const total = Math.pow(2, v);
-                const newVals: Record<number, LogicValue> = {};
-                for (let i = 0; i < total; i++) {
-                  newVals[i] = values[i] ?? 0;
-                }
-                setValues(newVals);
-              }}
-              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
-                numVars === v
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {v} Değişken ({['A, B', 'A, B, C', 'A, B, C, D'][v - 2]})
-            </button>
-          ))}
         </div>
       </div>
 
@@ -331,6 +306,43 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
             )}
           </div>
         )}
+      </div>
+
+      {/* Variable Switcher Panel */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
+            <Layers className="w-4 h-4" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Değişken Sayısı</h3>
+            <p className="text-xs text-slate-500">Karnaugh haritasında kullanılacak değişken sayısını seçin</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shrink-0">
+          {[2, 3, 4].map((v) => (
+            <button
+              key={v}
+              onClick={() => {
+                setNumVars(v);
+                const total = Math.pow(2, v);
+                const newVals: Record<number, LogicValue> = {};
+                for (let i = 0; i < total; i++) {
+                  newVals[i] = values[i] ?? 0;
+                }
+                setValues(newVals);
+              }}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                numVars === v
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {v} Değişken ({['A, B', 'A, B, C', 'A, B, C, D'][v - 2]})
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Interactive Split Workspace: K-Map Grid on Left, Results & Asal Gruplar on Right */}
