@@ -2671,7 +2671,7 @@ ${wireXmls.join('\n')}
 
       // 2. Build new inputs array with canonical pin IDs (comp.id_in0, comp.id_in1, ...)
       const newInputs: CircuitPin[] = Array.from({ length: newCount }).map((_, idx) => {
-        const canonicalId = `${comp.id}_in${idx}`;
+        const canonicalId = comp.id + '_in' + idx;
         const existing = oldInputs[idx];
         return {
           id: canonicalId,
@@ -2692,85 +2692,88 @@ ${wireXmls.join('\n')}
         },
       });
 
-      // Helper to detect which input pin index an existing wire endpoint or pin ID was connected to
-      const getOldInputIndex = (pinId?: string, pt?: WirePoint): number => {
-        if (pinId) {
-          for (let i = 0; i < oldInputs.length; i++) {
-            if (
-              oldInputs[i].id === pinId ||
-              pinId === `${compId}_in${i}` ||
-              pinId === `${compId}_in_${i}`
-            ) {
-              return i;
-            }
-          }
-        }
-        if (pt) {
-          const sp = snapPt10(pt);
-          for (let i = 0; i < oldPinLocations.length; i++) {
-            if (oldPinLocations[i].x === sp.x && oldPinLocations[i].y === sp.y) {
-              return i;
-            }
-          }
-        }
-        return -1;
-      };
+      // 3. Snapshot exact wire attachments to old pins before any mutations
+      interface WireAttachment {
+        wireId: string;
+        end: 'start' | 'end';
+        oldIdx: number;
+      }
+      const attachments: WireAttachment[] = [];
 
-      // Detect which old input pins actually have connected wires
-      const connectedOldIndices: number[] = [];
-      for (let i = 0; i < currentCount; i++) {
-        const hasWire = wires.some((w) => {
-          const toIdx = (w.toCompId === compId || w.endPoint) ? getOldInputIndex(w.toPinId, w.endPoint) : -1;
-          const fromIdx = (w.fromCompId === compId || w.startPoint) ? getOldInputIndex(w.fromPinId, w.startPoint) : -1;
-          return toIdx === i || fromIdx === i;
-        });
-        if (hasWire) connectedOldIndices.push(i);
+      for (const w of wires) {
+        if (w.endPoint) {
+          const ep = snapPt10(w.endPoint);
+          for (let i = 0; i < currentCount; i++) {
+            const pin = oldInputs[i];
+            const oldLoc = oldPinLocations[i];
+            if (
+              (w.toCompId === compId && w.toPinId === pin.id) ||
+              ((!w.toCompId || w.toCompId === compId) && ep.x === oldLoc.x && ep.y === oldLoc.y)
+            ) {
+              attachments.push({ wireId: w.id, end: 'end', oldIdx: i });
+              break;
+            }
+          }
+        }
+        if (w.startPoint) {
+          const sp = snapPt10(w.startPoint);
+          for (let i = 0; i < currentCount; i++) {
+            const pin = oldInputs[i];
+            const oldLoc = oldPinLocations[i];
+            if (
+              (w.fromCompId === compId && w.fromPinId === pin.id) ||
+              ((!w.fromCompId || w.fromCompId === compId) && sp.x === oldLoc.x && sp.y === oldLoc.y)
+            ) {
+              attachments.push({ wireId: w.id, end: 'start', oldIdx: i });
+              break;
+            }
+          }
+        }
       }
 
-      // Build collision-free smart target mapping so NO connected wires are lost during increase or decrease
+      // Distinct old pin indices that actually have attached wires
+      const connectedOldIndices = Array.from(new Set(attachments.map((a) => a.oldIdx))).sort((a, b) => a - b);
+      const K = connectedOldIndices.length;
+
+      // 4. Collision-free target mapping from old pin indices to new pins
       const targetMap = new Map<number, CircuitPin>();
       const claimedNewIndices = new Set<number>();
 
-      if (connectedOldIndices.length <= newCount) {
-        // All connected wires fit into the new gate!
-        if (connectedOldIndices.length === 1) {
-          const oldIdx = connectedOldIndices[0];
-          const newIdx = (oldIdx === currentCount - 1 && newCount > 1) ? newCount - 1 : 0;
+      if (K === 1) {
+        const oldIdx = connectedOldIndices[0];
+        let newIdx = 0;
+        if (oldIdx === currentCount - 1 && newCount > 1) {
+          newIdx = newCount - 1;
+        } else if (oldIdx > 0 && oldIdx < currentCount - 1) {
+          newIdx = Math.round((oldIdx / (currentCount - 1)) * (newCount - 1));
+        }
+        targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
+        claimedNewIndices.add(newIdx);
+      } else if (K === 2 && newCount >= 2) {
+        targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
+        targetMap.set(connectedOldIndices[1], updatedComp.inputs[newCount - 1]);
+        claimedNewIndices.add(0);
+        claimedNewIndices.add(newCount - 1);
+      } else if (K <= newCount) {
+        connectedOldIndices.forEach((oldIdx, i) => {
+          let newIdx: number;
+          if (i === 0) newIdx = 0;
+          else if (i === K - 1) newIdx = newCount - 1;
+          else newIdx = Math.round((i / (K - 1)) * (newCount - 1));
+
+          while (claimedNewIndices.has(newIdx) && newIdx < newCount - 1) newIdx++;
+          while (claimedNewIndices.has(newIdx) && newIdx > 0) newIdx--;
           targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
           claimedNewIndices.add(newIdx);
-        } else if (connectedOldIndices.length === 2 && newCount >= 2) {
-          targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
-          targetMap.set(connectedOldIndices[1], updatedComp.inputs[newCount - 1]);
-          claimedNewIndices.add(0);
-          claimedNewIndices.add(newCount - 1);
-        } else {
-          connectedOldIndices.forEach((oldIdx, i) => {
-            let newIdx: number;
-            if (i === 0) {
-              newIdx = 0;
-            } else if (i === connectedOldIndices.length - 1) {
-              newIdx = newCount - 1;
-            } else {
-              const frac = i / (connectedOldIndices.length - 1);
-              newIdx = Math.round(frac * (newCount - 1));
-            }
-            while (claimedNewIndices.has(newIdx) && newIdx < newCount - 1) newIdx++;
-            while (claimedNewIndices.has(newIdx) && newIdx > 0) newIdx--;
-            targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
-            claimedNewIndices.add(newIdx);
-          });
-        }
+        });
       } else {
-        // More connected wires than available pins (e.g. 3 wires, reduced to 2 pins)
-        const firstOld = connectedOldIndices[0];
-        const lastOld = connectedOldIndices[connectedOldIndices.length - 1];
-        targetMap.set(firstOld, updatedComp.inputs[0]);
+        // More connected wires than available pins (e.g. 3 wires reduced to 2 pins)
+        targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
         claimedNewIndices.add(0);
-        if (newCount > 1) {
-          targetMap.set(lastOld, updatedComp.inputs[newCount - 1]);
-          claimedNewIndices.add(newCount - 1);
-        }
-        for (let i = 1; i < connectedOldIndices.length - 1; i++) {
+        targetMap.set(connectedOldIndices[K - 1], updatedComp.inputs[newCount - 1]);
+        claimedNewIndices.add(newCount - 1);
+
+        for (let i = 1; i < K - 1; i++) {
           const oldIdx = connectedOldIndices[i];
           for (let cand = 1; cand < newCount - 1; cand++) {
             if (!claimedNewIndices.has(cand)) {
@@ -2792,117 +2795,237 @@ ${wireXmls.join('\n')}
         }
       }
 
-      let adjustedWires: CircuitWire[] = wires.map((w) => ({
-        ...w,
-        startPoint: w.startPoint ? { ...w.startPoint } : undefined,
-        endPoint: w.endPoint ? { ...w.endPoint } : undefined,
-      }));
-
-      // Disconnect wires connected to removed/unmapped pins
-      adjustedWires = adjustedWires.filter((w) => {
-        const toIdx = (w.toCompId === compId || w.endPoint) ? getOldInputIndex(w.toPinId, w.endPoint) : -1;
-        const fromIdx = (w.fromCompId === compId || w.startPoint) ? getOldInputIndex(w.fromPinId, w.startPoint) : -1;
-        if (toIdx !== -1 && !targetMap.has(toIdx)) return false;
-        if (fromIdx !== -1 && !targetMap.has(fromIdx)) return false;
-        return true;
+      // 5. Clone wire list and apply orthogonal adjustments
+      const wireMap = new Map<string, CircuitWire>();
+      wires.forEach((w) => {
+        wireMap.set(w.id, {
+          ...w,
+          startPoint: w.startPoint ? { ...w.startPoint } : undefined,
+          endPoint: w.endPoint ? { ...w.endPoint } : undefined,
+        });
       });
 
-      // Update positions of wires attached to mapped pins with clean orthogonal shifting
-      for (let i = 0; i < currentCount; i++) {
-        const targetPin = targetMap.get(i);
-        if (!targetPin) continue;
+      const additionalWires: CircuitWire[] = [];
 
-        const oldPt = oldPinLocations[i];
+      for (const att of attachments) {
+        const w = wireMap.get(att.wireId);
+        if (!w || !w.startPoint || !w.endPoint) continue;
+
+        const targetPin = targetMap.get(att.oldIdx);
+        if (!targetPin) {
+          // Unmapped wire (e.g. 3rd wire when reduced from 3 to 2 inputs):
+          // NEVER DELETE! Preserve wire exactly as-is on canvas as a floating wire like Logisim
+          if (att.end === 'end') {
+            w.toCompId = '';
+            w.toPinId = 'loc_' + w.endPoint.x + '_' + w.endPoint.y;
+          } else {
+            w.fromCompId = '';
+            w.fromPinId = 'loc_' + w.startPoint.x + '_' + w.startPoint.y;
+          }
+          continue;
+        }
+
+        const oldPt = oldPinLocations[att.oldIdx];
         const newPt = snapPt10({ x: targetPin.x, y: targetPin.y });
+        const dx = newPt.x - oldPt.x;
         const dy = newPt.y - oldPt.y;
 
-        for (const w of adjustedWires) {
-          if (!w.startPoint || !w.endPoint) continue;
-          const endPt = snapPt10(w.endPoint);
-          const startPt = snapPt10(w.startPoint);
+        if (att.end === 'end') {
+          w.toCompId = compId;
+          w.toPinId = targetPin.id;
 
-          const touchesEnd = (w.toCompId === compId && w.toPinId === oldInputs[i].id) ||
-            (endPt.x === oldPt.x && endPt.y === oldPt.y);
-          const touchesStart = (w.fromCompId === compId && w.fromPinId === oldInputs[i].id) ||
-            (startPt.x === oldPt.x && startPt.y === oldPt.y);
-
-          if (touchesEnd) {
-            w.toCompId = compId;
-            w.toPinId = targetPin.id;
-            w.endPoint.y = newPt.y;
-            w.endPoint.x = newPt.x;
-
+          if (dy !== 0 || dx !== 0) {
+            const startPt = snapPt10(w.startPoint);
+            // Check if wire was horizontal coming into pin
             if (dy !== 0 && startPt.y === oldPt.y && startPt.x !== oldPt.x) {
-              const cornerX = startPt.x;
-              const vertWires = adjustedWires.filter(
-                (other) =>
-                  other.id !== w.id &&
-                  other.startPoint &&
-                  other.endPoint &&
-                  snapPt10(other.startPoint).x === cornerX &&
-                  snapPt10(other.endPoint).x === cornerX &&
-                  (snapPt10(other.startPoint).y === oldPt.y || snapPt10(other.endPoint).y === oldPt.y)
-              );
-              const otherHorzWires = adjustedWires.filter(
-                (other) =>
-                  other.id !== w.id &&
-                  other.startPoint &&
-                  other.endPoint &&
-                  snapPt10(other.startPoint).y === oldPt.y &&
-                  snapPt10(other.endPoint).y === oldPt.y &&
-                  (snapPt10(other.startPoint).x === cornerX || snapPt10(other.endPoint).x === cornerX)
-              );
+              const minX = Math.min(startPt.x, newPt.x);
+              const maxX = Math.max(startPt.x, newPt.x);
+              const cornerX = startPt.x < newPt.x
+                ? Math.max(minX + 10, maxX - 20)
+                : Math.min(maxX - 10, minX + 20);
 
-              if (vertWires.length > 0 && otherHorzWires.length === 0) {
+              if (cornerX > minX && cornerX < maxX) {
+                // Split into 3 strictly orthogonal segments
+                const seg1: CircuitWire = {
+                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: w.fromCompId,
+                  fromPinId: w.fromPinId,
+                  toCompId: '',
+                  toPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                  startPoint: { ...w.startPoint },
+                  endPoint: { x: cornerX, y: oldPt.y },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                const seg2: CircuitWire = {
+                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                  toCompId: '',
+                  toPinId: 'loc_' + cornerX + '_' + newPt.y,
+                  startPoint: { x: cornerX, y: oldPt.y },
+                  endPoint: { x: cornerX, y: newPt.y },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                w.startPoint = { x: cornerX, y: newPt.y };
+                w.endPoint = { x: newPt.x, y: newPt.y };
+                w.fromCompId = '';
+                w.fromPinId = 'loc_' + cornerX + '_' + newPt.y;
+                additionalWires.push(seg1, seg2);
+              } else {
                 w.startPoint.y = newPt.y;
-                vertWires.forEach((vw) => {
-                  if (snapPt10(vw.startPoint!).y === oldPt.y) vw.startPoint!.y = newPt.y;
-                  if (snapPt10(vw.endPoint!).y === oldPt.y) vw.endPoint!.y = newPt.y;
-                });
+                w.endPoint = { x: newPt.x, y: newPt.y };
               }
+            } else if (dx !== 0 && startPt.x === oldPt.x && startPt.y !== oldPt.y) {
+              // Vertical wire moving horizontally (e.g. rotated gate)
+              const minY = Math.min(startPt.y, newPt.y);
+              const maxY = Math.max(startPt.y, newPt.y);
+              const cornerY = startPt.y < newPt.y
+                ? Math.max(minY + 10, maxY - 20)
+                : Math.min(maxY - 10, minY + 20);
+
+              if (cornerY > minY && cornerY < maxY) {
+                const seg1: CircuitWire = {
+                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: w.fromCompId,
+                  fromPinId: w.fromPinId,
+                  toCompId: '',
+                  toPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                  startPoint: { ...w.startPoint },
+                  endPoint: { x: oldPt.x, y: cornerY },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                const seg2: CircuitWire = {
+                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                  toCompId: '',
+                  toPinId: 'loc_' + newPt.x + '_' + cornerY,
+                  startPoint: { x: oldPt.x, y: cornerY },
+                  endPoint: { x: newPt.x, y: cornerY },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                w.startPoint = { x: newPt.x, y: cornerY };
+                w.endPoint = { x: newPt.x, y: newPt.y };
+                w.fromCompId = '';
+                w.fromPinId = 'loc_' + newPt.x + '_' + cornerY;
+                additionalWires.push(seg1, seg2);
+              } else {
+                w.startPoint.x = newPt.x;
+                w.endPoint = { x: newPt.x, y: newPt.y };
+              }
+            } else {
+              w.endPoint = { x: newPt.x, y: newPt.y };
             }
-          } else if (touchesStart) {
-            w.fromCompId = compId;
-            w.fromPinId = targetPin.id;
-            w.startPoint.y = newPt.y;
-            w.startPoint.x = newPt.x;
+          }
+        } else {
+          // att.end === 'start'
+          w.fromCompId = compId;
+          w.fromPinId = targetPin.id;
 
+          if (dy !== 0 || dx !== 0) {
+            const endPt = snapPt10(w.endPoint);
             if (dy !== 0 && endPt.y === oldPt.y && endPt.x !== oldPt.x) {
-              const cornerX = endPt.x;
-              const vertWires = adjustedWires.filter(
-                (other) =>
-                  other.id !== w.id &&
-                  other.startPoint &&
-                  other.endPoint &&
-                  snapPt10(other.startPoint).x === cornerX &&
-                  snapPt10(other.endPoint).x === cornerX &&
-                  (snapPt10(other.startPoint).y === oldPt.y || snapPt10(other.endPoint).y === oldPt.y)
-              );
-              const otherHorzWires = adjustedWires.filter(
-                (other) =>
-                  other.id !== w.id &&
-                  other.startPoint &&
-                  other.endPoint &&
-                  snapPt10(other.startPoint).y === oldPt.y &&
-                  snapPt10(other.endPoint).y === oldPt.y &&
-                  (snapPt10(other.startPoint).x === cornerX || snapPt10(other.endPoint).x === cornerX)
-              );
+              const minX = Math.min(endPt.x, newPt.x);
+              const maxX = Math.max(endPt.x, newPt.x);
+              const cornerX = endPt.x < newPt.x
+                ? Math.max(minX + 10, maxX - 20)
+                : Math.min(maxX - 10, minX + 20);
 
-              if (vertWires.length > 0 && otherHorzWires.length === 0) {
+              if (cornerX > minX && cornerX < maxX) {
+                const seg1: CircuitWire = {
+                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                  toCompId: w.toCompId,
+                  toPinId: w.toPinId,
+                  startPoint: { x: cornerX, y: oldPt.y },
+                  endPoint: { ...w.endPoint },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                const seg2: CircuitWire = {
+                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + cornerX + '_' + newPt.y,
+                  toCompId: '',
+                  toPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                  startPoint: { x: cornerX, y: newPt.y },
+                  endPoint: { x: cornerX, y: oldPt.y },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                w.startPoint = { x: newPt.x, y: newPt.y };
+                w.endPoint = { x: cornerX, y: newPt.y };
+                w.toCompId = '';
+                w.toPinId = 'loc_' + cornerX + '_' + newPt.y;
+                additionalWires.push(seg1, seg2);
+              } else {
                 w.endPoint.y = newPt.y;
-                vertWires.forEach((vw) => {
-                  if (snapPt10(vw.startPoint!).y === oldPt.y) vw.startPoint!.y = newPt.y;
-                  if (snapPt10(vw.endPoint!).y === oldPt.y) vw.endPoint!.y = newPt.y;
-                });
+                w.startPoint = { x: newPt.x, y: newPt.y };
               }
+            } else if (dx !== 0 && endPt.x === oldPt.x && endPt.y !== oldPt.y) {
+              const minY = Math.min(endPt.y, newPt.y);
+              const maxY = Math.max(endPt.y, newPt.y);
+              const cornerY = endPt.y < newPt.y
+                ? Math.max(minY + 10, maxY - 20)
+                : Math.min(maxY - 10, minY + 20);
+
+              if (cornerY > minY && cornerY < maxY) {
+                const seg1: CircuitWire = {
+                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                  toCompId: w.toCompId,
+                  toPinId: w.toPinId,
+                  startPoint: { x: oldPt.x, y: cornerY },
+                  endPoint: { ...w.endPoint },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                const seg2: CircuitWire = {
+                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                  fromCompId: '',
+                  fromPinId: 'loc_' + newPt.x + '_' + cornerY,
+                  toCompId: '',
+                  toPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                  startPoint: { x: newPt.x, y: cornerY },
+                  endPoint: { x: oldPt.x, y: cornerY },
+                  value: w.value,
+                  isBus: w.isBus,
+                  bitWidth: w.bitWidth,
+                };
+                w.startPoint = { x: newPt.x, y: newPt.y };
+                w.endPoint = { x: newPt.x, y: cornerY };
+                w.toCompId = '';
+                w.toPinId = 'loc_' + newPt.x + '_' + cornerY;
+                additionalWires.push(seg1, seg2);
+              } else {
+                w.endPoint.x = newPt.x;
+                w.startPoint = { x: newPt.x, y: newPt.y };
+              }
+            } else {
+              w.startPoint = { x: newPt.x, y: newPt.y };
             }
           }
         }
       }
 
-      // 4. Update component list and repair wires to re-route orthogonally to new pin coordinates
+      const allWires = [...Array.from(wireMap.values()), ...additionalWires];
+
+      // 6. Update component list and repair wires to normalize segments and junctions
       const nextComps = components.map((c) => (c.id === compId ? updatedComp : c));
-      const repaired = repairWires(adjustedWires, nextComps);
+      const repaired = repairWires(allWires, nextComps);
       const sim = simulateCircuit(nextComps, repaired);
 
       setWires(sim.wires);
@@ -2911,7 +3034,6 @@ ${wireXmls.join('\n')}
     [components, wires, recordHistory]
   );
 
-  // Observable channels for Digital Timing Diagram (Scope)
   const observableChannels = useMemo(() => {
     const list: { key: string; name: string; color: string; type: string }[] = [];
     const colors = [
