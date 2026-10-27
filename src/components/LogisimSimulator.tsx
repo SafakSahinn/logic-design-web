@@ -2836,17 +2836,11 @@ ${wireXmls.join('\n')}
 
           if (dy !== 0 || dx !== 0) {
             const startPt = snapPt10(w.startPoint);
-            // Check if wire was horizontal coming into pin
-            if (dy !== 0 && startPt.y === oldPt.y && startPt.x !== oldPt.x) {
-              const minX = Math.min(startPt.x, newPt.x);
-              const maxX = Math.max(startPt.x, newPt.x);
-              const cornerX = startPt.x < newPt.x
-                ? Math.max(minX + 10, maxX - 20)
-                : Math.min(maxX - 10, minX + 20);
-
-              if (cornerX > minX && cornerX < maxX) {
-                // Split into 3 strictly orthogonal segments
-                const seg1: CircuitWire = {
+            if (dy !== 0 && startPt.y === oldPt.y && startPt.x !== newPt.x) {
+              const dist = Math.abs(newPt.x - startPt.x);
+              const cornerX = dist >= 30 ? (startPt.x < newPt.x ? newPt.x - 20 : newPt.x + 20) : startPt.x;
+              if (cornerX !== startPt.x) {
+                additionalWires.push({
                   id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                   fromCompId: w.fromCompId,
                   fromPinId: w.fromPinId,
@@ -2857,38 +2851,29 @@ ${wireXmls.join('\n')}
                   value: w.value,
                   isBus: w.isBus,
                   bitWidth: w.bitWidth,
-                };
-                const seg2: CircuitWire = {
-                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
-                  toCompId: '',
-                  toPinId: 'loc_' + cornerX + '_' + newPt.y,
-                  startPoint: { x: cornerX, y: oldPt.y },
-                  endPoint: { x: cornerX, y: newPt.y },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                };
-                w.startPoint = { x: cornerX, y: newPt.y };
-                w.endPoint = { x: newPt.x, y: newPt.y };
-                w.fromCompId = '';
-                w.fromPinId = 'loc_' + cornerX + '_' + newPt.y;
-                additionalWires.push(seg1, seg2);
-              } else {
-                w.startPoint.y = newPt.y;
-                w.endPoint = { x: newPt.x, y: newPt.y };
+                });
               }
-            } else if (dx !== 0 && startPt.x === oldPt.x && startPt.y !== oldPt.y) {
-              // Vertical wire moving horizontally (e.g. rotated gate)
-              const minY = Math.min(startPt.y, newPt.y);
-              const maxY = Math.max(startPt.y, newPt.y);
-              const cornerY = startPt.y < newPt.y
-                ? Math.max(minY + 10, maxY - 20)
-                : Math.min(maxY - 10, minY + 20);
-
-              if (cornerY > minY && cornerY < maxY) {
-                const seg1: CircuitWire = {
+              additionalWires.push({
+                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                fromCompId: '',
+                fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                toCompId: '',
+                toPinId: 'loc_' + cornerX + '_' + newPt.y,
+                startPoint: { x: cornerX, y: oldPt.y },
+                endPoint: { x: cornerX, y: newPt.y },
+                value: w.value,
+                isBus: w.isBus,
+                bitWidth: w.bitWidth,
+              });
+              w.startPoint = { x: cornerX, y: newPt.y };
+              w.endPoint = { x: newPt.x, y: newPt.y };
+              w.fromCompId = '';
+              w.fromPinId = 'loc_' + cornerX + '_' + newPt.y;
+            } else if (dx !== 0 && startPt.x === oldPt.x && startPt.y !== newPt.y) {
+              const dist = Math.abs(newPt.y - startPt.y);
+              const cornerY = dist >= 30 ? (startPt.y < newPt.y ? newPt.y - 20 : newPt.y + 20) : startPt.y;
+              if (cornerY !== startPt.y) {
+                additionalWires.push({
                   id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                   fromCompId: w.fromCompId,
                   fromPinId: w.fromPinId,
@@ -2899,28 +2884,24 @@ ${wireXmls.join('\n')}
                   value: w.value,
                   isBus: w.isBus,
                   bitWidth: w.bitWidth,
-                };
-                const seg2: CircuitWire = {
-                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
-                  toCompId: '',
-                  toPinId: 'loc_' + newPt.x + '_' + cornerY,
-                  startPoint: { x: oldPt.x, y: cornerY },
-                  endPoint: { x: newPt.x, y: cornerY },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                };
-                w.startPoint = { x: newPt.x, y: cornerY };
-                w.endPoint = { x: newPt.x, y: newPt.y };
-                w.fromCompId = '';
-                w.fromPinId = 'loc_' + newPt.x + '_' + cornerY;
-                additionalWires.push(seg1, seg2);
-              } else {
-                w.startPoint.x = newPt.x;
-                w.endPoint = { x: newPt.x, y: newPt.y };
+                });
               }
+              additionalWires.push({
+                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                fromCompId: '',
+                fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                toCompId: '',
+                toPinId: 'loc_' + newPt.x + '_' + cornerY,
+                startPoint: { x: oldPt.x, y: cornerY },
+                endPoint: { x: newPt.x, y: cornerY },
+                value: w.value,
+                isBus: w.isBus,
+                bitWidth: w.bitWidth,
+              });
+              w.startPoint = { x: newPt.x, y: cornerY };
+              w.endPoint = { x: newPt.x, y: newPt.y };
+              w.fromCompId = '';
+              w.fromPinId = 'loc_' + newPt.x + '_' + cornerY;
             } else {
               w.endPoint = { x: newPt.x, y: newPt.y };
             }
@@ -2932,15 +2913,23 @@ ${wireXmls.join('\n')}
 
           if (dy !== 0 || dx !== 0) {
             const endPt = snapPt10(w.endPoint);
-            if (dy !== 0 && endPt.y === oldPt.y && endPt.x !== oldPt.x) {
-              const minX = Math.min(endPt.x, newPt.x);
-              const maxX = Math.max(endPt.x, newPt.x);
-              const cornerX = endPt.x < newPt.x
-                ? Math.max(minX + 10, maxX - 20)
-                : Math.min(maxX - 10, minX + 20);
-
-              if (cornerX > minX && cornerX < maxX) {
-                const seg1: CircuitWire = {
+            if (dy !== 0 && endPt.y === oldPt.y && endPt.x !== newPt.x) {
+              const dist = Math.abs(endPt.x - newPt.x);
+              const cornerX = dist >= 30 ? (newPt.x < endPt.x ? newPt.x + 20 : newPt.x - 20) : endPt.x;
+              additionalWires.push({
+                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                fromCompId: '',
+                fromPinId: 'loc_' + cornerX + '_' + newPt.y,
+                toCompId: '',
+                toPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                startPoint: { x: cornerX, y: newPt.y },
+                endPoint: { x: cornerX, y: oldPt.y },
+                value: w.value,
+                isBus: w.isBus,
+                bitWidth: w.bitWidth,
+              });
+              if (cornerX !== endPt.x) {
+                additionalWires.push({
                   id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                   fromCompId: '',
                   fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
@@ -2951,37 +2940,29 @@ ${wireXmls.join('\n')}
                   value: w.value,
                   isBus: w.isBus,
                   bitWidth: w.bitWidth,
-                };
-                const seg2: CircuitWire = {
-                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + cornerX + '_' + newPt.y,
-                  toCompId: '',
-                  toPinId: 'loc_' + cornerX + '_' + oldPt.y,
-                  startPoint: { x: cornerX, y: newPt.y },
-                  endPoint: { x: cornerX, y: oldPt.y },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                };
-                w.startPoint = { x: newPt.x, y: newPt.y };
-                w.endPoint = { x: cornerX, y: newPt.y };
-                w.toCompId = '';
-                w.toPinId = 'loc_' + cornerX + '_' + newPt.y;
-                additionalWires.push(seg1, seg2);
-              } else {
-                w.endPoint.y = newPt.y;
-                w.startPoint = { x: newPt.x, y: newPt.y };
+                });
               }
-            } else if (dx !== 0 && endPt.x === oldPt.x && endPt.y !== oldPt.y) {
-              const minY = Math.min(endPt.y, newPt.y);
-              const maxY = Math.max(endPt.y, newPt.y);
-              const cornerY = endPt.y < newPt.y
-                ? Math.max(minY + 10, maxY - 20)
-                : Math.min(maxY - 10, minY + 20);
-
-              if (cornerY > minY && cornerY < maxY) {
-                const seg1: CircuitWire = {
+              w.startPoint = { x: newPt.x, y: newPt.y };
+              w.endPoint = { x: cornerX, y: newPt.y };
+              w.toCompId = '';
+              w.toPinId = 'loc_' + cornerX + '_' + newPt.y;
+            } else if (dx !== 0 && endPt.x === oldPt.x && endPt.y !== newPt.y) {
+              const dist = Math.abs(endPt.y - newPt.y);
+              const cornerY = dist >= 30 ? (newPt.y < endPt.y ? newPt.y + 20 : newPt.y - 20) : endPt.y;
+              additionalWires.push({
+                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+                fromCompId: '',
+                fromPinId: 'loc_' + newPt.x + '_' + cornerY,
+                toCompId: '',
+                toPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                startPoint: { x: newPt.x, y: cornerY },
+                endPoint: { x: oldPt.x, y: cornerY },
+                value: w.value,
+                isBus: w.isBus,
+                bitWidth: w.bitWidth,
+              });
+              if (cornerY !== endPt.y) {
+                additionalWires.push({
                   id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                   fromCompId: '',
                   fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
@@ -2992,28 +2973,12 @@ ${wireXmls.join('\n')}
                   value: w.value,
                   isBus: w.isBus,
                   bitWidth: w.bitWidth,
-                };
-                const seg2: CircuitWire = {
-                  id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + newPt.x + '_' + cornerY,
-                  toCompId: '',
-                  toPinId: 'loc_' + oldPt.x + '_' + cornerY,
-                  startPoint: { x: newPt.x, y: cornerY },
-                  endPoint: { x: oldPt.x, y: cornerY },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                };
-                w.startPoint = { x: newPt.x, y: newPt.y };
-                w.endPoint = { x: newPt.x, y: cornerY };
-                w.toCompId = '';
-                w.toPinId = 'loc_' + newPt.x + '_' + cornerY;
-                additionalWires.push(seg1, seg2);
-              } else {
-                w.endPoint.x = newPt.x;
-                w.startPoint = { x: newPt.x, y: newPt.y };
+                });
               }
+              w.startPoint = { x: newPt.x, y: newPt.y };
+              w.endPoint = { x: newPt.x, y: cornerY };
+              w.toCompId = '';
+              w.toPinId = 'loc_' + newPt.x + '_' + cornerY;
             } else {
               w.startPoint = { x: newPt.x, y: newPt.y };
             }
