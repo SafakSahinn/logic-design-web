@@ -2366,8 +2366,7 @@ ${wireXmls.join('\n')}
     const newComp = updatePinPositions(createComponentInstance(type, posX, posY));
     setComponents((prev) => {
       const updated = [...prev, newComp];
-      const repaired = repairWires(wires, updated);
-      const sim = simulateCircuit(updated, repaired);
+      const sim = simulateCircuit(updated, wires);
       setWires(sim.wires);
       return sim.components;
     });
