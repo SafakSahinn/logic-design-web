@@ -16,6 +16,43 @@ export const snapPt10 = (pt: { x: number; y: number }): { x: number; y: number }
   y: Math.round(pt.y / GRID_SIZE) * GRID_SIZE,
 });
 
+/**
+ * Component body size lookup. circuitEngine registers COMPONENT_CATALOG sizes here so the auto-router
+ * can keep re-routed wires out of gate/chip bodies without wiringEngine importing circuitEngine.
+ */
+type ComponentBodySizeResolver = (comp: CircuitComponentInstance) => { width: number; height: number } | null;
+let componentBodySizeResolver: ComponentBodySizeResolver | null = null;
+export const setComponentBodySizeResolver = (fn: ComponentBodySizeResolver) => {
+  componentBodySizeResolver = fn;
+};
+
+interface BodyRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+// Body rectangle on the canvas; rotation turns the body around its centre exactly like updatePinPositions
+const getComponentBodyRect = (comp: CircuitComponentInstance): BodyRect | null => {
+  const size = componentBodySizeResolver ? componentBodySizeResolver(comp) : null;
+  if (!size || size.width <= 0 || size.height <= 0) return null;
+  const rot = comp.rotation || 0;
+  const cx = comp.x + size.width / 2;
+  const cy = comp.y + size.height / 2;
+  const quarterTurn = rot === 90 || rot === 270;
+  const hw = (quarterTurn ? size.height : size.width) / 2;
+  const hh = (quarterTurn ? size.width : size.height) / 2;
+  // Pins are snapped onto the 10px grid (a 104px wide chip has its outputs at +100), so shrink the body to
+  // the grid as well; otherwise border pins would count as being inside their own body.
+  return {
+    x0: Math.ceil((cx - hw) / GRID_SIZE) * GRID_SIZE,
+    y0: Math.ceil((cy - hh) / GRID_SIZE) * GRID_SIZE,
+    x1: Math.floor((cx + hw) / GRID_SIZE) * GRID_SIZE,
+    y1: Math.floor((cy + hh) / GRID_SIZE) * GRID_SIZE,
+  };
+};
+
 export interface WirePoint {
   x: number;
   y: number;
@@ -455,6 +492,95 @@ export const isPointOnWireSegment = (
 };
 
 /**
+ * Slides one straight wire segment perpendicular to itself so that it passes through `target`.
+ * Each end of the segment keeps its connections:
+ * - an open end simply moves along,
+ * - a plain corner/T whose other wires all run along the move axis is stretched (those wires follow),
+ * - an end on a component pin or on a collinear neighbour gets a new jog wire from the old to the new end,
+ *   so the segment never tears away from a pin.
+ * Always computed from the wires as they were when the drag started.
+ */
+export const moveWireSegment = (
+  wires: CircuitWire[],
+  components: CircuitComponentInstance[],
+  wireId: string,
+  target: WirePoint
+): CircuitWire[] => {
+  const w = wires.find((x) => x.id === wireId);
+  if (!w || !w.startPoint || !w.endPoint || (w.waypoints && w.waypoints.length > 0)) return wires;
+  const ws = snapPt10(w.startPoint);
+  const we = snapPt10(w.endPoint);
+  if (ws.x !== we.x && ws.y !== we.y) return wires;
+  const isVertical = ws.x === we.x;
+  const t = snapPt10(target);
+  const dx = isVertical ? t.x - ws.x : 0;
+  const dy = isVertical ? 0 : t.y - ws.y;
+  if (dx === 0 && dy === 0) return wires;
+
+  const keyOf = (p: WirePoint) => `${p.x},${p.y}`;
+  const pinLocs = new Set<string>();
+  for (const comp of components) {
+    for (const pin of [...comp.inputs, ...comp.outputs]) pinLocs.add(keyOf(snapPt10(pin)));
+  }
+
+  const result = wires.map((x) => ({ ...x }));
+  const extra: CircuitWire[] = [];
+
+  [ws, we].forEach((p, endIdx) => {
+    const moved = { x: p.x + dx, y: p.y + dy };
+    const others = result.filter((o) => {
+      if (o.id === w.id || !o.startPoint || !o.endPoint) return false;
+      const os = snapPt10(o.startPoint);
+      const oe = snapPt10(o.endPoint);
+      return keyOf(os) === keyOf(p) || keyOf(oe) === keyOf(p);
+    });
+    if (others.length === 0 && !pinLocs.has(keyOf(p))) return; // open end: moves with the segment
+
+    const alongMoveAxis = (o: CircuitWire) => {
+      const os = snapPt10(o.startPoint!);
+      const oe = snapPt10(o.endPoint!);
+      return (!o.waypoints || o.waypoints.length === 0) && (isVertical ? os.y === oe.y : os.x === oe.x);
+    };
+
+    if (!pinLocs.has(keyOf(p)) && others.length > 0 && others.every(alongMoveAxis)) {
+      for (const o of others) {
+        if (keyOf(snapPt10(o.startPoint!)) === keyOf(p)) o.startPoint = moved;
+        else o.endPoint = moved;
+        o.fromCompId = '';
+        o.toCompId = '';
+        o.fromPinId = `loc_${o.startPoint!.x}_${o.startPoint!.y}`;
+        o.toPinId = `loc_${o.endPoint!.x}_${o.endPoint!.y}`;
+      }
+      return;
+    }
+
+    extra.push({
+      ...w,
+      id: `${w.id}_jog${endIdx}`,
+      fromCompId: '',
+      fromPinId: `loc_${p.x}_${p.y}`,
+      toCompId: '',
+      toPinId: `loc_${moved.x}_${moved.y}`,
+      startPoint: p,
+      endPoint: moved,
+      waypoints: undefined,
+      branchPoint: undefined,
+      elbowX: undefined,
+    });
+  });
+
+  const target0 = result.find((x) => x.id === w.id)!;
+  target0.startPoint = { x: ws.x + dx, y: ws.y + dy };
+  target0.endPoint = { x: we.x + dx, y: we.y + dy };
+  target0.fromCompId = '';
+  target0.toCompId = '';
+  target0.fromPinId = `loc_${target0.startPoint.x}_${target0.startPoint.y}`;
+  target0.toPinId = `loc_${target0.endPoint.x}_${target0.endPoint.y}`;
+
+  return [...result, ...extra];
+};
+
+/**
  * Logisim's WiringTool shortening check (willShorten / getShortenResult in WiringTool.java):
  * When the user starts dragging at an endpoint of an existing straight wire `w` and drags
  * back along `w` itself, Logisim shortens (or removes if dragged to the other end) `w`.
@@ -609,6 +735,20 @@ export const repairWires = (
   const placedNetSegs: RoutedNetSeg[] = [];
   const netCorners = new Map<string, string>(); // "x,y" -> netId
 
+  // Auto-routed wires must not run through component bodies (pins sit on the body border, so only the
+  // strict interior is an obstacle). Dense or overlapping layouts fall back to body-blind routing.
+  const bodyRects: BodyRect[] = [];
+  for (const comp of components) {
+    const r = getComponentBodyRect(comp);
+    if (r) bodyRects.push(r);
+  }
+  const isInsideBody = (x: number, y: number): boolean => {
+    for (const r of bodyRects) {
+      if (x > r.x0 && x < r.x1 && y > r.y0 && y < r.y1) return true;
+    }
+    return false;
+  };
+
   const recordCorner = (pt: WirePoint, netId: string) => {
     netCorners.set(`${pt.x},${pt.y}`, netId);
   };
@@ -631,7 +771,7 @@ export const repairWires = (
     return py === s.y0 && px >= s.x0 && px <= s.x1;
   };
 
-  const isCandidatePathValid = (pts: WirePoint[], netId: string): boolean => {
+  const isCandidatePathValid = (pts: WirePoint[], netId: string, avoidBodies = false): boolean => {
     const cleanPts: WirePoint[] = [pts[0]];
     for (let i = 1; i < pts.length; i++) {
       const prev = cleanPts[cleanPts.length - 1];
@@ -667,6 +807,7 @@ export const repairWires = (
 
       if (isVert) {
         for (let y = y0; y <= y1; y += GRID_SIZE) {
+          if (avoidBodies && isInsideBody(x0, y)) return false;
           const k = `${x0},${y}`;
           const pNet = pinNetAtLoc.get(k);
           if (pNet && pNet !== netId) return false;
@@ -681,6 +822,7 @@ export const repairWires = (
         }
       } else {
         for (let x = x0; x <= x1; x += GRID_SIZE) {
+          if (avoidBodies && isInsideBody(x, y0)) return false;
           const k = `${x},${y0}`;
           const pNet = pinNetAtLoc.get(k);
           if (pNet && pNet !== netId) return false;
@@ -699,7 +841,7 @@ export const repairWires = (
     return true;
   };
 
-  const gridRoute = (sPt: WirePoint, ePt: WirePoint, netId: string): WirePoint[] | null => {
+  const gridRoute = (sPt: WirePoint, ePt: WirePoint, netId: string, avoidBodies = false): WirePoint[] | null => {
     const MARGIN = 300;
     const minX = Math.min(sPt.x, ePt.x) - MARGIN;
     const minY = Math.min(sPt.y, ePt.y) - MARGIN;
@@ -739,6 +881,18 @@ export const repairWires = (
         for (let x = sg.x0; x <= sg.x1; x += GRID_SIZE) {
           const i = idx(x, sg.y0);
           if (i >= 0) hCover[i] = 1;
+        }
+      }
+    }
+    if (avoidBodies) {
+      for (const r of bodyRects) {
+        for (let x = Math.ceil(r.x0 / GRID_SIZE) * GRID_SIZE; x < r.x1; x += GRID_SIZE) {
+          if (x <= r.x0) continue;
+          for (let y = Math.ceil(r.y0 / GRID_SIZE) * GRID_SIZE; y < r.y1; y += GRID_SIZE) {
+            if (y <= r.y0) continue;
+            const i = idx(x, y);
+            if (i >= 0) blocked[i] = 1;
+          }
         }
       }
     }
@@ -855,9 +1009,26 @@ export const repairWires = (
     });
   }
 
-  // Pass 2: Route legacy/preset wires with collision avoidance
-  for (const item of resolvedEndpoints) {
-    if (item.isCanonical) continue;
+  // Pass 2: Route legacy/preset wires with collision avoidance.
+  // Routing is greedy (one connection after another), so an early route can wall in the pin of a later one
+  // (e.g. a chip dropped right next to a display). The unrouteable connection would then fall back to a
+  // plain L-path that runs over foreign pins and shorts them. Rip-up & retry: route the failed connections
+  // first and keep the attempt with the fewest unsafe fallbacks.
+  const pendingItems = resolvedEndpoints.filter((item) => !item.isCanonical);
+  const baseSegCount = rawSegs.length;
+  const basePlacedCount = placedNetSegs.length;
+  const baseCorners = new Map(netCorners);
+  const resetPass2 = () => {
+    rawSegs.length = baseSegCount;
+    placedNetSegs.length = basePlacedCount;
+    netCorners.clear();
+    baseCorners.forEach((v, k) => netCorners.set(k, v));
+  };
+
+  // Returns the items that needed the unsafe (collision-blind) fallback
+  const routePending = (order: typeof pendingItems): typeof pendingItems => {
+  const unsafe: typeof pendingItems = [];
+  for (const item of order) {
     const { wire: w, sPt, ePt } = item;
     const netId = ufFind(item.netKey);
 
@@ -941,24 +1112,28 @@ export const repairWires = (
         }
       }
 
-      for (const cand of candidates) {
-        if (isCandidatePathValid(cand, netId)) {
-          chosenPts = cand;
-          break;
-        }
-      }
-
       // 8. Guaranteed fallback: bend-penalised grid search (Dijkstra) around every foreign pin,
       // foreign wire endpoint/corner and collinear foreign segment, so a re-routed connection never
-      // short-circuits another net even in dense circuits.
-      if (!chosenPts) {
-        const routed = gridRoute(sPt, ePt, netId);
-        if (routed && isCandidatePathValid(routed, netId)) chosenPts = routed;
+      // short-circuits another net even in dense circuits. Component bodies are avoided first; only
+      // when that is impossible (overlapping parts) may a wire cross a body.
+      for (const avoidBodies of bodyRects.length > 0 ? [true, false] : [false]) {
+        for (const cand of candidates) {
+          if (isCandidatePathValid(cand, netId, avoidBodies)) {
+            chosenPts = cand;
+            break;
+          }
+        }
+        if (!chosenPts) {
+          const routed = gridRoute(sPt, ePt, netId, avoidBodies);
+          if (routed && isCandidatePathValid(routed, netId, avoidBodies)) chosenPts = routed;
+        }
+        if (chosenPts) break;
       }
     }
 
     if (!chosenPts) {
       // Fallback to default orthogonal segments
+      unsafe.push(item);
       const ortho = getWireOrthogonalSegments(w, sPt, ePt);
       ortho.forEach((os, idx) => {
         const cSeg = createCanonicalSeg(
@@ -995,6 +1170,29 @@ export const repairWires = (
         rawSegs.push(cSeg);
         recordSeg(cSeg, netId);
       }
+    }
+  }
+  return unsafe;
+  };
+
+  let order = pendingItems;
+  let unsafe = routePending(order);
+  if (unsafe.length > 0) {
+    let bestOrder = order;
+    let bestUnsafe = unsafe.length;
+    for (let attempt = 0; attempt < 6 && unsafe.length > 0; attempt++) {
+      const failed = new Set(unsafe);
+      order = [...unsafe, ...order.filter((item) => !failed.has(item))];
+      resetPass2();
+      unsafe = routePending(order);
+      if (unsafe.length < bestUnsafe) {
+        bestUnsafe = unsafe.length;
+        bestOrder = order;
+      }
+    }
+    if (unsafe.length > bestUnsafe) {
+      resetPass2();
+      routePending(bestOrder);
     }
   }
 
@@ -1263,6 +1461,100 @@ export const computeCircuitJunctions = (
   }
 
   return junctions;
+};
+
+/**
+ * Re-attaches wires after pins of components changed location in place (rotation, gate input count change).
+ * `pinRemap` maps an OLD pin location ("x,y") to the id of the pin that now owns that connection
+ * (`null` = the pin is gone; its wires stay as open ends, like Logisim).
+ * Every wire chain that ran from a remapped pin through plain 2-way corners up to its anchor (a pin, a
+ * junction or an open end) is removed and re-routed net-aware from the pin's new location to that anchor,
+ * so no dangling stubs are left at the old corners.
+ */
+export const rerouteWiresToRemappedPins = (
+  rawWires: CircuitWire[],
+  oldComps: CircuitComponentInstance[],
+  newComps: CircuitComponentInstance[],
+  pinRemap: Map<string, string | null>
+): CircuitWire[] => {
+  const keyOf = (pt: WirePoint) => `${pt.x},${pt.y}`;
+  const wires = repairWires(rawWires, oldComps);
+
+  const newPinLoc = new Map<string, { compId: string; loc: WirePoint }>();
+  for (const comp of newComps) {
+    for (const pin of [...comp.inputs, ...comp.outputs]) newPinLoc.set(pin.id, { compId: comp.id, loc: snapPt10(pin) });
+  }
+  const oldPinAt = new Map<string, { compId: string; pinId: string }>();
+  for (const comp of oldComps) {
+    for (const pin of [...comp.inputs, ...comp.outputs]) oldPinAt.set(keyOf(snapPt10(pin)), { compId: comp.id, pinId: pin.id });
+  }
+
+  // Remapped locations whose pin really moved (a pin that keeps its spot keeps its wires untouched)
+  const movedTo = new Map<string, string>();
+  for (const [oldKey, newPinId] of pinRemap) {
+    if (!newPinId) continue;
+    const np = newPinLoc.get(newPinId);
+    if (np && keyOf(np.loc) !== oldKey) movedTo.set(oldKey, newPinId);
+  }
+  if (movedTo.size === 0) return repairWires(wires, newComps);
+
+  const ends = wires.map((w) => ({ s: snapPt10(w.startPoint!), e: snapPt10(w.endPoint!) }));
+  const atLoc = new Map<string, number[]>();
+  ends.forEach(({ s, e }, i) => {
+    for (const k of [keyOf(s), keyOf(e)]) {
+      if (!atLoc.has(k)) atLoc.set(k, []);
+      atLoc.get(k)!.push(i);
+    }
+  });
+
+  const removed = new Set<number>();
+  const extra: CircuitWire[] = [];
+  for (const [startKey, newPinId] of movedTo) {
+    for (const first of atLoc.get(startKey) || []) {
+      if (removed.has(first)) continue;
+      const chain = [first];
+      let prevIdx = first;
+      let curKey = keyOf(ends[first].s) === startKey ? keyOf(ends[first].e) : keyOf(ends[first].s);
+      let cur = keyOf(ends[first].s) === startKey ? ends[first].e : ends[first].s;
+      for (;;) {
+        if (oldPinAt.has(curKey)) break;
+        const neigh = (atLoc.get(curKey) || []).filter((i) => i !== prevIdx);
+        if (neigh.length !== 1 || removed.has(neigh[0]) || chain.includes(neigh[0])) break;
+        const nxt = neigh[0];
+        chain.push(nxt);
+        prevIdx = nxt;
+        const ne = ends[nxt];
+        if (keyOf(ne.s) === curKey) {
+          cur = ne.e;
+        } else {
+          cur = ne.s;
+        }
+        curKey = keyOf(cur);
+      }
+      chain.forEach((i) => removed.add(i));
+
+      const w0 = wires[first];
+      const startPin = newPinLoc.get(newPinId)!;
+      // Anchor on another remapped pin (e.g. both ends on the same rotated part) follows that pin as well
+      const anchorPinId = movedTo.get(curKey) ?? (pinRemap.has(curKey) ? pinRemap.get(curKey) : oldPinAt.get(curKey)?.pinId);
+      const anchorPin = anchorPinId ? newPinLoc.get(anchorPinId) : undefined;
+      extra.push({
+        ...w0,
+        id: `${w0.id}_rr`,
+        fromCompId: startPin.compId,
+        fromPinId: newPinId,
+        toCompId: anchorPin ? anchorPin.compId : '',
+        toPinId: anchorPin ? anchorPinId! : `loc_${cur.x}_${cur.y}`,
+        startPoint: undefined,
+        endPoint: anchorPin ? undefined : cur,
+        waypoints: undefined,
+        branchPoint: undefined,
+        elbowX: undefined,
+      });
+    }
+  }
+
+  return repairWires([...wires.filter((_, i) => !removed.has(i)), ...extra], newComps);
 };
 
 /**

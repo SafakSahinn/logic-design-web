@@ -5,7 +5,9 @@ import {
   computeLogisimWireDirection,
   getLogisimWiringToolSegments,
   computeWireShortening,
+  moveWireSegment,
   repairWires,
+  rerouteWiresToRemappedPins,
   translateWiresForMovedComponents,
   computeGroupDragDeltas,
   getWireOrthogonalSegments,
@@ -36,6 +38,7 @@ import {
   CHIPTUNE_NOTE_NAMES,
   generateTruthTable,
   synthesizeCircuitFromBooleanExpression,
+  getMultiInputGatePinRelY,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -90,6 +93,16 @@ import {
 import { importCircXmlProject } from '../utils/circXmlImporter';
 import { analyzeCircuit, type CircuitAnalysisReport } from '../utils/circuitAnalyzer';
 import { IC_DATASHEETS } from '../utils/icDatasheets';
+import { StandaloneKMapSolver } from './StandaloneKMapSolver';
+import { StandaloneNumberConverter } from './StandaloneNumberConverter';
+import {
+  Calculator,
+  FolderOpen,
+  FilePlus,
+  Save,
+  Info,
+  Zap,
+} from 'lucide-react';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
 import {
   getAllSubcircuits,
@@ -183,7 +196,7 @@ export interface LogicCircuitSimulatorProps {
   desktopMode?: boolean;
 }
 
-export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ desktopMode: _desktopMode = false }) => {
+export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ desktopMode = false }) => {
   // Step 5: CAD Engineering Theme ('light' vs 'dark' / Neon CAD mode)
   const [cadTheme, setCadTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -192,6 +205,59 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return 'light';
     }
   });
+
+  // Desktop EDA CAD Mode State & Modals
+  const [activeDesktopMenu, setActiveDesktopMenu] = useState<string | null>(null);
+  const [showKMapModal, setShowKMapModal] = useState<boolean>(false);
+  const [showNumberConverterModal, setShowNumberConverterModal] = useState<boolean>(false);
+  const [showAboutModal, setShowAboutModal] = useState<boolean>(false);
+  const [showPresetsModal, setShowPresetsModal] = useState<boolean>(false);
+  const [presetModalSearch, setPresetModalSearch] = useState<string>('');
+  const [presetFilterCat, setPresetFilterCat] = useState<string>('all');
+  const [showLeftToolbox, setShowLeftToolbox] = useState<boolean>(true);
+  const [desktopToolboxSearch, setDesktopToolboxSearch] = useState<string>('');
+  const [toolboxCategoryOpen, setToolboxCategoryOpen] = useState<Record<string, boolean>>({
+    presets: false,
+    wiring: false,
+    gates: true,
+    plexers: false,
+    arithmetic: false,
+    memory: false,
+    displays: false,
+    audio: false,
+    subcircuits: false,
+  });
+
+  const toggleToolboxCategory = (catId: string) => {
+    setToolboxCategoryOpen((prev) => ({ ...prev, [catId]: !prev[catId] }));
+  };
+
+  const handleAddComponentAt = (type: ComponentType, posX: number, posY: number) => {
+    recordHistory();
+    const newComp = updatePinPositions(createComponentInstance(type, snapTo10(posX), snapTo10(posY)));
+    setComponents((prev) => {
+      const updated = [...prev, newComp];
+      const repaired = repairWires(wires, updated);
+      const sim = simulateCircuit(updated, repaired);
+      setWires(sim.wires);
+      return sim.components;
+    });
+    setSelectedCompId(newComp.id);
+    setSelectedWireId(null);
+  };
+
+  const handleCanvasDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const compType = e.dataTransfer.getData('application/logic-component') as ComponentType;
+    if (!compType) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    const canvasX = Math.round(((clientX - panOffset.x) / zoom) / 20) * 20;
+    const canvasY = Math.round(((clientY - panOffset.y) / zoom) / 20) * 20;
+    handleAddComponentAt(compType, canvasX, canvasY);
+  };
 
   const toggleCadTheme = () => {
     setCadTheme((prev) => {
@@ -251,7 +317,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Selected preset (null by default for clean start)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
 
-  // Active wiring state (Logisim WiringTool + EditTool unified state)
+  // Active wiring state (Logisim WiringTool: direction-locked orthogonal segment drawing)
   const [wiringFrom, setWiringFrom] = useState<{
     compId: string;
     pinId: string;
@@ -480,7 +546,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   } | null>(null);
 
   const wiringStartTimeRef = useRef<number>(0);
-  const lastWireConnectedTimeRef = useRef<number>(0);
+  // Set when a wire is finished on mouseup, so the click event of that same gesture doesn't start a new wire
+  const suppressPinClickRef = useRef<boolean>(false);
+  // Wires/components as they were when a segment drag started (segment moves are recomputed from it)
+  const segmentDragStartRef = useRef<{
+    components: CircuitComponentInstance[];
+    wires: CircuitWire[];
+    didMove: boolean;
+  } | null>(null);
 
   const draggingWireJointRef = useRef<{
     wireId: string;
@@ -584,18 +657,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return newRedo;
     });
   }, [components, wires]);
-
-  // Execute simulation when components or wires change
-  const runSimulation = useCallback(() => {
-    setComponents((prevComps) => {
-      setWires((prevWires) => {
-        const sim = simulateCircuit(prevComps, prevWires);
-        return sim.wires;
-      });
-      const sim = simulateCircuit(prevComps, wires);
-      return sim.components;
-    });
-  }, [wires]);
 
   // Continuous Clock Generator Loop (Toggle interval = half period T/2 = 500 / clockHz ms)
   useEffect(() => {
@@ -1098,31 +1159,33 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
 
-    // Logisim-style interactive wiring: If already wiring (e.g. from click-mode), clicking canvas finishes the wire segment(s)
+    // Logisim-style wiring: if a wire is currently active and user clicks on canvas, finish it at that point
     if (e.button === 0 && wiringFrom) {
       const coords = getCanvasCoords(e);
       finishWireAtPoint(coords);
       return;
     }
 
-    // Normal left-click on canvas background: first check if within 10px of any wire, otherwise start box selection
+    // Normal left-click on canvas: first check if user clicked on or near an existing wire (Logisim WiringTool starts wire from any wire point)
     if (e.button === 0 && !wiringFrom) {
       const coords = getCanvasCoords(e);
+
+      // Check proximity to any existing wire (<= 10px) so clicking/dragging a wire NEVER triggers selectionBox!
       let bestWire: CircuitWire | null = null;
       let bestTap: WirePoint | null = null;
-      let bestDist = 10;
+      let bestDist = 10.5;
       for (const w of wires) {
-        const sPt = getWireStartPt(w);
-        const ePt = getWireEndPt(w, sPt);
-        const effMidX = w.elbowX !== undefined ? snapTo10(w.elbowX) : snapTo10((sPt.x + ePt.x) / 2);
-        const candidateTap = getClosestPointOnOrthogonalWire(sPt, ePt, coords, effMidX, w.waypoints);
-        const d = Math.hypot(coords.x - candidateTap.x, coords.y - candidateTap.y);
-        if (d <= bestDist) {
+        const wStart = getWireStartPt(w);
+        const wEnd = getWireEndPt(w, wStart);
+        const tap = getClosestPointOnWire(w, wStart, wEnd, coords);
+        const d = Math.hypot(coords.x - tap.x, coords.y - tap.y);
+        if (d < bestDist) {
           bestDist = d;
           bestWire = w;
-          bestTap = candidateTap;
+          bestTap = tap;
         }
       }
+
       if (bestWire && bestTap) {
         wiringStartTimeRef.current = Date.now();
         setWiringFrom({
@@ -1168,83 +1231,33 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const coords = getCanvasCoords(e);
     if (!draggingCompId) setMousePos(coords);
 
-    // Logisim WiringTool.computeMove: lock initial drag direction on 10px grid
+    // Update Logisim WiringTool locked direction when dragging a wire
     if (wiringFrom) {
-      const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
-      const curPt = snapPt10(coords);
-      const nextDir = computeLogisimWireDirection(startPt, curPt, wiringFrom.direction ?? DIR_NONE);
-      const movedOnGrid = curPt.x !== startPt.x || curPt.y !== startPt.y;
-      if (nextDir !== (wiringFrom.direction ?? DIR_NONE) || (movedOnGrid && !wiringFrom.hasDragged)) {
-        setWiringFrom((prev) =>
-          prev
-            ? {
-                ...prev,
-                direction: nextDir,
-                hasDragged: prev.hasDragged || movedOnGrid,
-              }
-            : null
-        );
+      const curSnap = snapPt10(coords);
+      const startSnap = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+      const nextDir = computeLogisimWireDirection(startSnap, curSnap, wiringFrom.direction || DIR_NONE);
+      const dragged = wiringFrom.hasDragged || curSnap.x !== startSnap.x || curSnap.y !== startSnap.y;
+      if (nextDir !== wiringFrom.direction || dragged !== wiringFrom.hasDragged) {
+        setWiringFrom((prev) => (prev ? { ...prev, direction: nextDir, hasDragged: dragged } : null));
       }
-      return;
     }
 
     const activeDragJoint = draggingWireJointRef.current || draggingWireJoint;
     if (activeDragJoint) {
-      const snappedX = snapTo10(coords.x);
-      const snappedY = snapTo10(coords.y);
+      const snappedX = snapToGrid ? Math.round(coords.x / 10) * 10 : Math.round(coords.x);
+      const snappedY = snapToGrid ? Math.round(coords.y / 10) * 10 : Math.round(coords.y);
+      const segStart = segmentDragStartRef.current;
+      if (activeDragJoint.type === 'segment' && segStart) {
+        // Recompute from the drag-start wires so pin connections get jog wires instead of tearing off
+        const moved = moveWireSegment(segStart.wires, segStart.components, activeDragJoint.wireId, {
+          x: snappedX,
+          y: snappedY,
+        });
+        if (moved !== segStart.wires) segStart.didMove = true;
+        setWires(moved);
+        return;
+      }
       setWires((prev) => {
-        const targetWire = prev.find((w) => w.id === activeDragJoint.wireId);
-        if (!targetWire) return prev;
-
-        const ws = getWireStartPt(targetWire);
-        const we = getWireEndPt(targetWire, ws);
-        const isPureVertical = ws.x === we.x && (!targetWire.waypoints || targetWire.waypoints.length === 0);
-        const isPureHorizontal = ws.y === we.y && (!targetWire.waypoints || targetWire.waypoints.length === 0);
-
-        if (activeDragJoint.type === 'segment' && (isPureVertical || isPureHorizontal)) {
-          return prev.map((w) => {
-            if (w.id === targetWire.id) {
-              if (isPureVertical) {
-                return {
-                  ...w,
-                  startPoint: { x: snappedX, y: ws.y },
-                  endPoint: { x: snappedX, y: we.y },
-                };
-              } else {
-                return {
-                  ...w,
-                  startPoint: { x: ws.x, y: snappedY },
-                  endPoint: { x: we.x, y: snappedY },
-                };
-              }
-            }
-            // Stretch connected perpendicular wire endpoints that shared an endpoint with targetWire
-            const os = getWireStartPt(w);
-            const oe = getWireEndPt(w, os);
-            const sharesWsWithOs = os.x === ws.x && os.y === ws.y;
-            const sharesWeWithOs = os.x === we.x && os.y === we.y;
-            const sharesWsWithOe = oe.x === ws.x && oe.y === ws.y;
-            const sharesWeWithOe = oe.x === we.x && oe.y === we.y;
-
-            if (isPureVertical && os.y === oe.y) {
-              if (sharesWsWithOs || sharesWeWithOs) {
-                return { ...w, startPoint: { x: snappedX, y: os.y }, endPoint: oe };
-              }
-              if (sharesWsWithOe || sharesWeWithOe) {
-                return { ...w, startPoint: os, endPoint: { x: snappedX, y: oe.y } };
-              }
-            } else if (isPureHorizontal && os.x === oe.x) {
-              if (sharesWsWithOs || sharesWeWithOs) {
-                return { ...w, startPoint: { x: os.x, y: snappedY }, endPoint: oe };
-              }
-              if (sharesWsWithOe || sharesWeWithOe) {
-                return { ...w, startPoint: os, endPoint: { x: oe.x, y: snappedY } };
-              }
-            }
-            return w;
-          });
-        }
-
         return prev.map((w) => {
           if (w.id === activeDragJoint.wireId) {
             if (activeDragJoint.type === 'waypoint' && activeDragJoint.index !== undefined && w.waypoints) {
@@ -1279,16 +1292,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
           const movedCompDeltas = computeGroupDragDeltas(offsets, initialComps, currentCoords, draggingCompId, snapToGrid);
 
-          setComponents((prev) =>
-            prev.map((c) => {
-              const delta = movedCompDeltas.get(c.id);
-              const c0 = initialCompMap.get(c.id);
-              if (delta && c0) {
-                return updatePinPositions({ ...c, x: c0.x + delta.dx, y: c0.y + delta.dy });
-              }
-              return c;
-            })
-          );
+          const updatedComps = initialComps.map((c) => {
+            const delta = movedCompDeltas.get(c.id);
+            const c0 = initialCompMap.get(c.id);
+            if (delta && c0) {
+              return updatePinPositions({ ...c, x: c0.x + delta.dx, y: c0.y + delta.dy });
+            }
+            return c;
+          });
+
+          setComponents(updatedComps);
 
           if (initialWires.length > 0 && movedCompDeltas.size > 0) {
             const translatedWires = translateWiresForMovedComponents(
@@ -1321,23 +1334,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const coords = getCanvasCoords(e);
       const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
       const endPt = snapPt10(coords);
-      const didDragWire =
-        wiringFrom.hasDragged ||
-        startPt.x !== endPt.x ||
-        startPt.y !== endPt.y;
-
-      if (didDragWire) {
+      const didMove = startPt.x !== endPt.x || startPt.y !== endPt.y || wiringFrom.hasDragged;
+      if (didMove) {
         finishWireAtPoint(endPt);
         return;
       } else if (wiringFrom.clickedWireId) {
-        // Logisim EditTool: clicking a wire without dragging selects that wire segment!
+        // User clicked and released on a wire without dragging -> select that wire!
+        const wId = wiringFrom.clickedWireId;
         if (e.shiftKey) {
-          const wId = wiringFrom.clickedWireId;
-          setSelectedWireIds((prev) =>
-            prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
-          );
+          setSelectedWireIds((prev) => (prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]));
         } else {
-          setSelectedWireIds([wiringFrom.clickedWireId]);
+          setSelectedWireIds([wId]);
           setSelectedCompIds([]);
         }
         setWiringFrom(null);
@@ -1346,15 +1353,27 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }
     wireDragStartRef.current = null;
     if (draggingWireJointRef.current || draggingWireJoint) {
+      const joint = draggingWireJointRef.current || draggingWireJoint;
       draggingWireJointRef.current = null;
       setDraggingWireJoint(null);
-      recordHistory();
-      setWires((prevWires) => {
-        const repaired = repairWires(prevWires, components);
+      const segStart = segmentDragStartRef.current;
+      segmentDragStartRef.current = null;
+      let finalWires = wires;
+      if (segStart && joint?.type === 'segment') {
+        // Use the release position: a quick flick can end before the last mousemove was rendered
+        const upPt = snapPt10(getCanvasCoords(e));
+        finalWires = moveWireSegment(segStart.wires, segStart.components, joint.wireId, upPt);
+        segStart.didMove = finalWires !== segStart.wires;
+      }
+      if (!segStart || segStart.didMove) {
+        // History must hold the state from before the drag (the live state is already moved)
+        if (segStart) recordHistory(segStart.components, segStart.wires);
+        else recordHistory();
+        const repaired = repairWires(finalWires, components);
         const sim = simulateCircuit(components, repaired);
         setComponents(sim.components);
-        return sim.wires;
-      });
+        setWires(sim.wires);
+      }
     }
     if (isPanning) {
       setIsPanning(false);
@@ -1390,7 +1409,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         setComponents(sim.components);
         setWires(sim.wires);
       } else {
-        runSimulation();
+        setWires((prev) => {
+          const repaired = repairWires(prev, components);
+          const sim = simulateCircuit(components, repaired);
+          setComponents(sim.components);
+          return sim.wires;
+        });
       }
       pendingDragCoordsRef.current = null;
       dragStartSnapshotRef.current = null;
@@ -2224,8 +2248,8 @@ ${wireXmls.join('\n')}
     return getClosestPointOnWire(dummyWire, p1, p2, click);
   };
 
-  // Unified Logisim WiringTool commit: handles drawing 1 or 2 straight orthogonal segments,
-  // shortening an existing wire when dragged back along itself, and running WireRepair + Simulation.
+  // Logisim WiringTool.mouseReleased: creates 1 or 2 atomic orthogonal segments (or shortens an existing wire),
+  // then runs Logisim's repairWires() (merge collinear + split at T-junctions) and simulates the circuit.
   const finishWireAtPoint = (point: { x: number; y: number }) => {
     if (!wiringFrom) return;
 
@@ -2239,14 +2263,8 @@ ${wireXmls.join('\n')}
 
     recordHistory();
 
-    const effectiveDir = computeLogisimWireDirection(
-      startPt,
-      endPt,
-      wiringFrom.direction ?? DIR_NONE
-    );
-
     setWires((prev) => {
-      // 1. Check Logisim wire shortening (dragging endpoint back along existing wire)
+      // 1. Check Logisim computeWireShortening first (dragging an existing wire endpoint inward along itself)
       const shorten = computeWireShortening(prev, startPt, endPt, getWireStartPt, getWireEndPt);
       let candidateWires: CircuitWire[];
 
@@ -2266,21 +2284,24 @@ ${wireXmls.join('\n')}
           );
         }
       } else {
-        // 2. Normal Logisim WiringTool: produce 1 or 2 straight horizontal/vertical segments
-        const toolSegs = getLogisimWiringToolSegments(startPt, endPt, effectiveDir, components);
-        const newSegWires: CircuitWire[] = toolSegs.map((seg, idx) => ({
-          id: `wire_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        // 2. Otherwise compute the 1 or 2 orthogonal segments from Logisim's direction-locked L-bend
+        const dir = computeLogisimWireDirection(startPt, endPt, wiringFrom.direction || DIR_NONE);
+        const segs = getLogisimWiringToolSegments(startPt, endPt, dir, components);
+        if (segs.length === 0) return prev;
+
+        const addedWires: CircuitWire[] = segs.map((seg, idx) => ({
+          id: `wire_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`,
           fromCompId: '',
           fromPinId: `loc_${seg.e0.x}_${seg.e0.y}`,
           toCompId: '',
           toPinId: `loc_${seg.e1.x}_${seg.e1.y}`,
+          value: 0,
           startPoint: seg.e0,
           endPoint: seg.e1,
-          value: 0,
           isBus: defaultWireIsBus,
           bitWidth: defaultWireIsBus ? 4 : 1,
         }));
-        candidateWires = [...prev, ...newSegWires];
+        candidateWires = [...prev, ...addedWires];
       }
 
       const repaired = repairWires(candidateWires, components);
@@ -2289,21 +2310,14 @@ ${wireXmls.join('\n')}
       return sim.wires;
     });
 
-    lastWireConnectedTimeRef.current = Date.now();
+    suppressPinClickRef.current = true;
     setWiringFrom(null);
   };
 
-  // Connect active wiring to a component pin (delegates to unified Logisim finishWireAtPoint)
+  // Connect active wiring to a component pin using Logisim's unified segment + repairWires architecture
   const connectToPin = (_comp: CircuitComponentInstance, pin: CircuitPin) => {
     if (!wiringFrom) return;
-    const endPt = snapPt10({ x: pin.x, y: pin.y });
-    finishWireAtPoint(endPt);
-  };
-
-  // Connect active wire onto an existing wire tap point (delegates to unified Logisim finishWireAtPoint)
-  const connectBranchToWire = (_targetWire: CircuitWire, tap: { x: number; y: number }) => {
-    if (!wiringFrom) return;
-    finishWireAtPoint(snapPt10(tap));
+    finishWireAtPoint({ x: pin.x, y: pin.y });
   };
 
   // Click on pin: start or finish connection
@@ -2314,13 +2328,14 @@ ${wireXmls.join('\n')}
   ) => {
     e.stopPropagation();
 
-    if (Date.now() - lastWireConnectedTimeRef.current < 300) {
+    // The mouseup of this same gesture already finished a wire on this pin
+    if (suppressPinClickRef.current) {
+      suppressPinClickRef.current = false;
       return;
     }
 
-    const snappedPin = snapPt10({ x: pin.x, y: pin.y });
-
     if (!wiringFrom) {
+      const snappedPin = snapPt10({ x: pin.x, y: pin.y });
       wiringStartTimeRef.current = Date.now();
       setWiringFrom({
         compId: comp.id,
@@ -2336,7 +2351,7 @@ ${wireXmls.join('\n')}
       return;
     }
 
-    if (wiringFrom.x === snappedPin.x && wiringFrom.y === snappedPin.y) {
+    if (wiringFrom.pinId === pin.id && !wiringFrom.hasDragged) {
       return;
     }
 
@@ -2350,34 +2365,77 @@ ${wireXmls.join('\n')}
     pin: CircuitPin
   ) => {
     e.stopPropagation();
-    if (Date.now() - lastWireConnectedTimeRef.current < 300) {
-      return;
-    }
-    const snappedPin = snapPt10({ x: pin.x, y: pin.y });
-    if (wiringFrom && (wiringFrom.x !== snappedPin.x || wiringFrom.y !== snappedPin.y)) {
-      connectToPin(comp, pin);
+    if (wiringFrom) {
+      const startPt = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+      const endPt = snapPt10({ x: pin.x, y: pin.y });
+      if (startPt.x !== endPt.x || startPt.y !== endPt.y) {
+        connectToPin(comp, pin);
+      }
     }
   };
 
   // Add component from catalog to canvas
   const handleAddComponent = (type: ComponentType) => {
-    const posX = snapTo10(160 + (components.length % 5) * 40);
-    const posY = snapTo10(120 + (components.length % 4) * 50);
-
     recordHistory();
 
+    // Place the new part on free space inside the visible canvas: a part dropped onto another part or
+    // a wire would share pin locations with it and silently short those nets.
+    const compBox = (c: { type: ComponentType; x: number; y: number; inputs: CircuitPin[]; outputs: CircuitPin[]; rotation?: number }) => {
+      const meta = COMPONENT_CATALOG[c.type];
+      const w = meta?.width || 120;
+      const h = meta?.height || Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20);
+      const quarterTurn = c.rotation === 90 || c.rotation === 270;
+      const cx = c.x + w / 2;
+      const cy = c.y + h / 2;
+      const hw = (quarterTurn ? h : w) / 2;
+      const hh = (quarterTurn ? w : h) / 2;
+      return { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh };
+    };
+    const occupied = components.map(compBox);
+    const wireBoxes = wires
+      .filter((w) => w.startPoint && w.endPoint)
+      .map((w) => ({
+        x0: Math.min(w.startPoint!.x, w.endPoint!.x),
+        y0: Math.min(w.startPoint!.y, w.endPoint!.y),
+        x1: Math.max(w.startPoint!.x, w.endPoint!.x),
+        y1: Math.max(w.startPoint!.y, w.endPoint!.y),
+      }));
+    const probe = updatePinPositions(createComponentInstance(type, 0, 0));
+    const size = compBox(probe);
+    const MARGIN = 30;
+    const viewW = (svgRef.current?.clientWidth || 900) / zoom;
+    const viewH = (svgRef.current?.clientHeight || 560) / zoom;
+    const viewX0 = snapTo10(Math.max(10, -panOffset.x / zoom + 40));
+    const viewY0 = snapTo10(Math.max(10, -panOffset.y / zoom + 40));
+    const isFree = (x: number, y: number) => {
+      const b = { x0: x - MARGIN, y0: y - MARGIN, x1: x + size.x1 + MARGIN, y1: y + size.y1 + MARGIN };
+      const hits = (o: { x0: number; y0: number; x1: number; y1: number }) =>
+        o.x0 <= b.x1 && o.x1 >= b.x0 && o.y0 <= b.y1 && o.y1 >= b.y0;
+      return !occupied.some(hits) && !wireBoxes.some(hits);
+    };
+    // Fallback when the view is full: just below everything on the sheet
+    let posX = viewX0;
+    let posY = snapTo10(Math.max(viewY0, ...occupied.map((o) => o.y1 + 40), ...wireBoxes.map((o) => o.y1 + 40)));
+    search: for (let y = viewY0; y < viewY0 + Math.max(200, viewH - size.y1 - 40); y += 20) {
+      for (let x = viewX0; x < viewX0 + Math.max(200, viewW - size.x1 - 40); x += 20) {
+        if (isFree(x, y)) {
+          posX = x;
+          posY = y;
+          break search;
+        }
+      }
+    }
+
     const newComp = updatePinPositions(createComponentInstance(type, posX, posY));
-    setComponents((prev) => {
-      const updated = [...prev, newComp];
-      const sim = simulateCircuit(updated, wires);
-      setWires(sim.wires);
-      return sim.components;
-    });
+    const updated = [...components, newComp];
+    const sim = simulateCircuit(updated, repairWires(wires, updated));
+    setComponents(sim.components);
+    setWires(sim.wires);
     setSelectedCompId(newComp.id);
     setSelectedWireId(null);
   };
 
-  // Delete selected components or wires (with automatic Logisim WireRepair healing!)
+  // Delete selected components or wires
   const handleDeleteSelected = useCallback(() => {
     if (selectedCompIds.length > 0 || selectedWireIds.length > 0) {
       recordHistory();
@@ -2387,8 +2445,8 @@ ${wireXmls.join('\n')}
       const remainingComps = components.filter((c) => !compIdsToDelete.has(c.id));
       const remainingWires = wires.filter((w) => !wireIdsToDelete.has(w.id));
 
-      const repairedWires = repairWires(remainingWires, remainingComps);
-      const sim = simulateCircuit(remainingComps, repairedWires);
+      const repaired = repairWires(remainingWires, remainingComps);
+      const sim = simulateCircuit(remainingComps, repaired);
       setComponents(sim.components);
       setWires(sim.wires);
       setSelectedCompIds([]);
@@ -2401,18 +2459,7 @@ ${wireXmls.join('\n')}
     if (selectedCompIds.length === 0) return;
     recordHistory();
 
-    // Map old pin positions for selected components
-    const oldPinMap = new Map<string, { x: number; y: number; pinId: string; compId: string }>();
-    for (const c of components) {
-      if (selectedCompIds.includes(c.id)) {
-        for (const p of [...c.inputs, ...c.outputs]) {
-          const sp = snapPt10(p);
-          oldPinMap.set(p.id, { x: sp.x, y: sp.y, pinId: p.id, compId: c.id });
-        }
-      }
-    }
-
-    const rotated = components.map((c) => {
+    const rotatedComps = components.map((c) => {
       if (selectedCompIds.includes(c.id)) {
         const nextRot = (((c.rotation || 0) + 90) % 360) as 0 | 90 | 180 | 270;
         return updatePinPositions({ ...c, rotation: nextRot });
@@ -2420,41 +2467,18 @@ ${wireXmls.join('\n')}
       return c;
     });
 
-    // Update wires that were attached to rotated pins so repairWires re-routes them cleanly to the rotated pin locations
-    const updatedWires: CircuitWire[] = wires.map((wire) => {
-      let modified = { ...wire };
-      const sPt = wire.startPoint ? snapPt10(wire.startPoint) : null;
-      const ePt = wire.endPoint ? snapPt10(wire.endPoint) : null;
-
-      for (const [pinId, oldPin] of oldPinMap) {
-        if (
-          (wire.fromCompId === oldPin.compId && wire.fromPinId === pinId) ||
-          (sPt && sPt.x === oldPin.x && sPt.y === oldPin.y)
-        ) {
-          modified.fromCompId = oldPin.compId;
-          modified.fromPinId = pinId;
-          modified.startPoint = undefined;
-          break;
-        }
+    // Every pin keeps its id; wire chains ending on a rotated pin are re-routed to its new location
+    const pinRemap = new Map<string, string | null>();
+    for (const c of components) {
+      if (!selectedCompIds.includes(c.id)) continue;
+      for (const p of [...c.inputs, ...c.outputs]) {
+        const sp = snapPt10(p);
+        pinRemap.set(`${sp.x},${sp.y}`, p.id);
       }
+    }
 
-      for (const [pinId, oldPin] of oldPinMap) {
-        if (
-          (wire.toCompId === oldPin.compId && wire.toPinId === pinId) ||
-          (ePt && ePt.x === oldPin.x && ePt.y === oldPin.y)
-        ) {
-          modified.toCompId = oldPin.compId;
-          modified.toPinId = pinId;
-          modified.endPoint = undefined;
-          break;
-        }
-      }
-
-      return modified;
-    });
-
-    const repaired = repairWires(updatedWires, rotated);
-    const sim = simulateCircuit(rotated, repaired);
+    const rerouted = rerouteWiresToRemappedPins(wires, components, rotatedComps, pinRemap);
+    const sim = simulateCircuit(rotatedComps, rerouted);
     setComponents(sim.components);
     setWires(sim.wires);
   }, [selectedCompIds, recordHistory, components, wires]);
@@ -2855,202 +2879,15 @@ ${wireXmls.join('\n')}
         }
       }
 
-      // 5. Clone wire list and apply orthogonal adjustments
-      const wireMap = new Map<string, CircuitWire>();
-      normalizedWires.forEach((w) => {
-        wireMap.set(w.id, {
-          ...w,
-          startPoint: w.startPoint ? { ...w.startPoint } : undefined,
-          endPoint: w.endPoint ? { ...w.endPoint } : undefined,
-        });
+      // 5. Re-attach the wires: chains on a pin that moved are re-routed to its new location (net-aware and
+      // around component bodies, like a component move; hand-made jogs could overlap neighbouring wires and
+      // short them). Wires of a removed pin stay as open wire ends, like in Logisim.
+      const pinRemap = new Map<string, string | null>();
+      oldPinLocations.forEach((loc, i) => {
+        pinRemap.set(`${loc.x},${loc.y}`, targetMap.get(i)?.id ?? null);
       });
-
-      const additionalWires: CircuitWire[] = [];
-
-      for (const att of attachments) {
-        const w = wireMap.get(att.wireId);
-        if (!w || !w.startPoint || !w.endPoint) continue;
-
-        const targetPin = targetMap.get(att.oldIdx);
-        if (!targetPin) {
-          // Unmapped wire (e.g. 3rd wire when reduced from 3 to 2 inputs):
-          // NEVER DELETE! Preserve wire exactly as-is on canvas as a floating wire like Logisim
-          if (att.end === 'end') {
-            w.toCompId = '';
-            w.toPinId = 'loc_' + w.endPoint.x + '_' + w.endPoint.y;
-          } else {
-            w.fromCompId = '';
-            w.fromPinId = 'loc_' + w.startPoint.x + '_' + w.startPoint.y;
-          }
-          continue;
-        }
-
-        const oldPt = oldPinLocations[att.oldIdx];
-        const newPt = snapPt10({ x: targetPin.x, y: targetPin.y });
-        const dx = newPt.x - oldPt.x;
-        const dy = newPt.y - oldPt.y;
-
-        if (att.end === 'end') {
-          w.toCompId = compId;
-          w.toPinId = targetPin.id;
-
-          if (dy !== 0 || dx !== 0) {
-            const startPt = snapPt10(w.startPoint);
-            if (dy !== 0 && startPt.y === oldPt.y && startPt.x !== newPt.x) {
-              const dist = Math.abs(newPt.x - startPt.x);
-              const cornerX = dist >= 30 ? (startPt.x < newPt.x ? newPt.x - 20 : newPt.x + 20) : startPt.x;
-              if (cornerX !== startPt.x) {
-                additionalWires.push({
-                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: w.fromCompId,
-                  fromPinId: w.fromPinId,
-                  toCompId: '',
-                  toPinId: 'loc_' + cornerX + '_' + oldPt.y,
-                  startPoint: { ...w.startPoint },
-                  endPoint: { x: cornerX, y: oldPt.y },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                });
-              }
-              additionalWires.push({
-                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: cornerX === startPt.x ? w.fromCompId : '',
-                fromPinId: cornerX === startPt.x ? w.fromPinId : 'loc_' + cornerX + '_' + oldPt.y,
-                toCompId: '',
-                toPinId: 'loc_' + cornerX + '_' + newPt.y,
-                startPoint: { x: cornerX, y: oldPt.y },
-                endPoint: { x: cornerX, y: newPt.y },
-                value: w.value,
-                isBus: w.isBus,
-                bitWidth: w.bitWidth,
-              });
-              w.startPoint = { x: cornerX, y: newPt.y };
-              w.endPoint = { x: newPt.x, y: newPt.y };
-              w.fromCompId = '';
-              w.fromPinId = 'loc_' + cornerX + '_' + newPt.y;
-            } else if (dx !== 0 && startPt.x === oldPt.x && startPt.y !== newPt.y) {
-              const dist = Math.abs(newPt.y - startPt.y);
-              const cornerY = dist >= 30 ? (startPt.y < newPt.y ? newPt.y - 20 : newPt.y + 20) : startPt.y;
-              if (cornerY !== startPt.y) {
-                additionalWires.push({
-                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: w.fromCompId,
-                  fromPinId: w.fromPinId,
-                  toCompId: '',
-                  toPinId: 'loc_' + oldPt.x + '_' + cornerY,
-                  startPoint: { ...w.startPoint },
-                  endPoint: { x: oldPt.x, y: cornerY },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                });
-              }
-              additionalWires.push({
-                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: cornerY === startPt.y ? w.fromCompId : '',
-                fromPinId: cornerY === startPt.y ? w.fromPinId : 'loc_' + oldPt.x + '_' + cornerY,
-                toCompId: '',
-                toPinId: 'loc_' + newPt.x + '_' + cornerY,
-                startPoint: { x: oldPt.x, y: cornerY },
-                endPoint: { x: newPt.x, y: cornerY },
-                value: w.value,
-                isBus: w.isBus,
-                bitWidth: w.bitWidth,
-              });
-              w.startPoint = { x: newPt.x, y: cornerY };
-              w.endPoint = { x: newPt.x, y: newPt.y };
-              w.fromCompId = '';
-              w.fromPinId = 'loc_' + newPt.x + '_' + cornerY;
-            } else {
-              w.endPoint = { x: newPt.x, y: newPt.y };
-            }
-          }
-        } else {
-          // att.end === 'start'
-          w.fromCompId = compId;
-          w.fromPinId = targetPin.id;
-
-          if (dy !== 0 || dx !== 0) {
-            const endPt = snapPt10(w.endPoint);
-            if (dy !== 0 && endPt.y === oldPt.y && endPt.x !== newPt.x) {
-              const dist = Math.abs(endPt.x - newPt.x);
-              const cornerX = dist >= 30 ? (newPt.x < endPt.x ? newPt.x + 20 : newPt.x - 20) : endPt.x;
-              additionalWires.push({
-                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: '',
-                fromPinId: 'loc_' + cornerX + '_' + newPt.y,
-                toCompId: cornerX === endPt.x ? w.toCompId : '',
-                toPinId: cornerX === endPt.x ? w.toPinId : 'loc_' + cornerX + '_' + oldPt.y,
-                startPoint: { x: cornerX, y: newPt.y },
-                endPoint: { x: cornerX, y: oldPt.y },
-                value: w.value,
-                isBus: w.isBus,
-                bitWidth: w.bitWidth,
-              });
-              if (cornerX !== endPt.x) {
-                additionalWires.push({
-                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
-                  toCompId: w.toCompId,
-                  toPinId: w.toPinId,
-                  startPoint: { x: cornerX, y: oldPt.y },
-                  endPoint: { ...w.endPoint },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                });
-              }
-              w.startPoint = { x: newPt.x, y: newPt.y };
-              w.endPoint = { x: cornerX, y: newPt.y };
-              w.toCompId = '';
-              w.toPinId = 'loc_' + cornerX + '_' + newPt.y;
-            } else if (dx !== 0 && endPt.x === oldPt.x && endPt.y !== newPt.y) {
-              const dist = Math.abs(endPt.y - newPt.y);
-              const cornerY = dist >= 30 ? (newPt.y < endPt.y ? newPt.y + 20 : newPt.y - 20) : endPt.y;
-              additionalWires.push({
-                id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: '',
-                fromPinId: 'loc_' + newPt.x + '_' + cornerY,
-                toCompId: cornerY === endPt.y ? w.toCompId : '',
-                toPinId: cornerY === endPt.y ? w.toPinId : 'loc_' + oldPt.x + '_' + cornerY,
-                startPoint: { x: newPt.x, y: cornerY },
-                endPoint: { x: oldPt.x, y: cornerY },
-                value: w.value,
-                isBus: w.isBus,
-                bitWidth: w.bitWidth,
-              });
-              if (cornerY !== endPt.y) {
-                additionalWires.push({
-                  id: 'w_jog1_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                  fromCompId: '',
-                  fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
-                  toCompId: w.toCompId,
-                  toPinId: w.toPinId,
-                  startPoint: { x: oldPt.x, y: cornerY },
-                  endPoint: { ...w.endPoint },
-                  value: w.value,
-                  isBus: w.isBus,
-                  bitWidth: w.bitWidth,
-                });
-              }
-              w.startPoint = { x: newPt.x, y: newPt.y };
-              w.endPoint = { x: newPt.x, y: cornerY };
-              w.toCompId = '';
-              w.toPinId = 'loc_' + newPt.x + '_' + cornerY;
-            } else {
-              w.startPoint = { x: newPt.x, y: newPt.y };
-            }
-          }
-        }
-      }
-
-      const allWires = [...Array.from(wireMap.values()), ...additionalWires];
-
-      // 6. Update component list and repair wires to normalize segments and junctions
       const nextComps = components.map((c) => (c.id === compId ? updatedComp : c));
-      const repaired = repairWires(allWires, nextComps);
+      const repaired = rerouteWiresToRemappedPins(normalizedWires, components, nextComps, pinRemap);
       const sim = simulateCircuit(nextComps, repaired);
 
       setWires(sim.wires);
@@ -3684,8 +3521,8 @@ ${wireXmls.join('\n')}
       case 'and': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={12} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path
@@ -3705,8 +3542,8 @@ ${wireXmls.join('\n')}
       case 'or': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={14} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path
@@ -3726,8 +3563,8 @@ ${wireXmls.join('\n')}
       case 'nand': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={12} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path
@@ -3748,8 +3585,8 @@ ${wireXmls.join('\n')}
       case 'nor': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={14} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path
@@ -3770,8 +3607,8 @@ ${wireXmls.join('\n')}
       case 'xor': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={10} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path
@@ -3797,8 +3634,8 @@ ${wireXmls.join('\n')}
       case 'xnor': {
         return (
           <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.inputs.map((pin, idx) => {
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
               return <line key={pin.id} x1={0} y1={relY} x2={10} y2={relY} stroke="#64748b" strokeWidth={2} />;
             })}
             <path d="M 6,10 Q 20,30 6,50" fill="none" stroke={strokeColor} strokeWidth={strokeWidth} />
@@ -5464,7 +5301,7 @@ ${wireXmls.join('\n')}
     return null;
   };
 
-  // Count outgoing wires per output pin to detect branching junctions
+  // Compute Logisim solder dots (locations with >= 3 wire endpoints)
   const circuitJunctions = useMemo(() => {
     return computeCircuitJunctions(wires, getWireStartPt, getWireEndPt, findPinById);
   }, [wires, components]);
@@ -5570,10 +5407,1596 @@ ${wireXmls.join('\n')}
     return items;
   }, [paletteQuery, customSubcircuits, sheets, activeSheetId]);
 
+  // DESKTOP EDA: Toolbox Groups for Left Explorer Panel
+  const DESKTOP_TOOLBOX_GROUPS = useMemo(() => [
+    {
+      id: 'wiring',
+      title: 'Kablolama & Giriş / Çıkış',
+      icon: '🔌',
+      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'probe', 'splitter4', 'tunnel'] as ComponentType[],
+    },
+    {
+      id: 'gates',
+      title: 'Temel Mantık Kapıları',
+      icon: '🚪',
+      types: ['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'] as ComponentType[],
+    },
+    {
+      id: 'plexers',
+      title: 'Plexers & Seçiciler',
+      icon: '🔀',
+      types: ['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'bcdTo7Seg', 'priorityEncoder4to2'] as ComponentType[],
+    },
+    {
+      id: 'arithmetic',
+      title: 'Aritmetik Devreler',
+      icon: '➕',
+      types: ['halfAdder', 'fullAdder', 'halfSubtractor', 'fullSubtractor', 'comparator4', 'alu4'] as ComponentType[],
+    },
+    {
+      id: 'memory',
+      title: 'Bellek & Sıralı Devreler',
+      icon: '💾',
+      types: ['srLatch', 'dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'register4', 'counter4', 'shiftRegister4', 'ram16x4', 'rom16x4'] as ComponentType[],
+    },
+    {
+      id: 'displays',
+      title: 'Göstergeler & Çıkışlar',
+      icon: '💡',
+      types: ['led', 'ledBar4', 'sevenSegment', 'hexDisplay', 'dotMatrix8x8', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
+    },
+    {
+      id: 'audio',
+      title: 'Ses & Donanım',
+      icon: '🔊',
+      types: ['buzzer'] as ComponentType[],
+    },
+  ], []);
+
+  // Render Desktop Menu Bar (File, Edit, Simulation, Tools, View, Help)
+  const renderDesktopMenuBar = () => {
+    const isDark = cadTheme === 'dark';
+
+    return (
+      <div className={`h-7 border-b flex items-center px-2 text-xs font-medium select-none relative z-40 transition-colors ${
+        isDark ? 'bg-[#0B0F19] border-slate-800 text-slate-300' : 'bg-slate-100/90 border-slate-200 text-slate-700'
+      }`}>
+        <div className="flex items-center gap-1.5 mr-4 font-bold">
+          <Cpu className={`w-3.5 h-3.5 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+          <span className={`tracking-wide font-extrabold ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>LogicDesign</span>
+          <span className={`text-[10px] font-mono px-1 rounded ${isDark ? 'bg-blue-950 text-blue-300' : 'bg-blue-100 text-blue-800'}`}>CAD</span>
+        </div>
+
+        {/* Menus */}
+        <div className="flex items-center gap-1">
+          {/* Dosya (File) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'file' ? null : 'file')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'file'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Dosya
+            </button>
+            {activeDesktopMenu === 'file' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-64 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    handleClearCanvas();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><FilePlus className="w-3.5 h-3.5 text-blue-500" /> Yeni Proje</span>
+                  <span className="text-[10px] text-slate-400">Ctrl+N</span>
+                </button>
+                <button
+                  onClick={() => {
+                    fileInputRef.current?.click();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><FolderOpen className="w-3.5 h-3.5 text-amber-500" /> Proje Aç...</span>
+                  <span className="text-[10px] text-slate-400">Ctrl+O</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportJSON();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><Save className="w-3.5 h-3.5 text-emerald-500" /> Projeyi Kaydet</span>
+                  <span className="text-[10px] text-slate-400">Ctrl+S</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <button
+                  onClick={() => {
+                    setShowPresetsModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" /> Hazır Devre Şablonları...</span>
+                  <span className="text-[10px] text-amber-500 font-bold px-1.5 py-0.2 bg-amber-500/10 rounded-full">{CIRCUIT_PRESETS.length}</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <button
+                  onClick={() => {
+                    handleExportCirc();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><Download className="w-3.5 h-3.5 text-indigo-500" /> Logisim Dışa Aktar</span>
+                  <span className="text-[10px] text-slate-400 font-mono">.circ</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportPNG();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><ImageIcon className="w-3.5 h-3.5 text-pink-500" /> Resim Olarak Kaydet</span>
+                  <span className="text-[10px] text-slate-400 font-mono">.png</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportSVG();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><FileCode className="w-3.5 h-3.5 text-purple-500" /> Vektör Kaydet</span>
+                  <span className="text-[10px] text-slate-400 font-mono">.svg</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Düzen (Edit) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'edit' ? null : 'edit')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'edit'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Düzen
+            </button>
+            {activeDesktopMenu === 'edit' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-52 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    handleUndo();
+                    setActiveDesktopMenu(null);
+                  }}
+                  disabled={historyStack.length === 0}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between disabled:opacity-30 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><Undo2 className="w-3.5 h-3.5" /> Geri Al</span>
+                  <span className="text-[10px] text-slate-400">Ctrl+Z</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleRedo();
+                    setActiveDesktopMenu(null);
+                  }}
+                  disabled={redoStack.length === 0}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between disabled:opacity-30 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><Redo2 className="w-3.5 h-3.5" /> İleri Al</span>
+                  <span className="text-[10px] text-slate-400">Ctrl+Y</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <button
+                  onClick={() => {
+                    handleDeleteSelected();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-red-500 hover:text-white text-red-500 flex items-center justify-between cursor-pointer transition-colors"
+                >
+                  <span className="flex items-center gap-2"><Trash2 className="w-3.5 h-3.5" /> Seçilenleri Sil</span>
+                  <span className="text-[10px]">Del</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleClearCanvas();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-red-500 hover:text-white text-red-500 flex items-center justify-between cursor-pointer transition-colors"
+                >
+                  <span className="flex items-center gap-2"><Trash2 className="w-3.5 h-3.5" /> Tüm Tuvali Temizle</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Simülasyon (Simulation) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'sim' ? null : 'sim')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'sim'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Simülasyon
+            </button>
+            {activeDesktopMenu === 'sim' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-56 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    setIsRunning(!isRunning);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    {isRunning ? <Pause className="w-3.5 h-3.5 text-amber-500" /> : <Play className="w-3.5 h-3.5 text-emerald-500" />}
+                    {isRunning ? 'Durdur' : 'Çalıştır'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">Boşluk</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleSingleStep();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span className="flex items-center gap-2"><StepForward className="w-3.5 h-3.5 text-blue-500" /> Tek Adım İlerle</span>
+                  <span className="text-[10px] text-slate-400">F10</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase">Saat Frekansı</div>
+                {[0.5, 1, 2, 4, 8, 16, 32].map((hz) => (
+                  <button
+                    key={hz}
+                    onClick={() => {
+                      setClockHz(hz);
+                      setActiveDesktopMenu(null);
+                    }}
+                    className={`w-full text-left px-3 py-1 flex items-center justify-between cursor-pointer transition-colors ${
+                      clockHz === hz ? 'text-blue-600 font-bold bg-blue-50/50' : isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    <span>{hz} Hz</span>
+                    {clockHz === hz && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Araçlar (Tools) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'tools' ? null : 'tools')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'tools'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Araçlar
+            </button>
+            {activeDesktopMenu === 'tools' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-64 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    setShowPresetsModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                  <span>Hazır Devre Şablonları ({CIRCUIT_PRESETS.length})</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <button
+                  onClick={() => {
+                    setShowKMapModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Calculator className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Karnaugh Haritası (K-Map Solver)</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowNumberConverterModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Binary className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Sayı Sistemleri & Taban Dönüştürücü</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowTruthTable(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Table className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Doğruluk Tablosu & Analiz</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowWaveform((p) => !p);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Activity className="w-3.5 h-3.5 text-cyan-500" />
+                  <span>Mantık Analizörü & Osiloskop</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setHdlActiveTab('verilog');
+                    setShowHdlModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <FileCode className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Donanım Tanımlama Dili (HDL) & FPGA</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSynthesizer(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Boole Fonksiyonundan Devre Sentezle</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSubcircuitModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Package className="w-3.5 h-3.5 text-purple-500" />
+                  <span>Özel Entegre (IC) Paketleyici</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowStatsModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-teal-500" />
+                  <span>Devre İstatistikleri & BOM Raporu</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Görünüm (View) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'view' ? null : 'view')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'view'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Görünüm
+            </button>
+            {activeDesktopMenu === 'view' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-56 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    setShowLeftToolbox(!showLeftToolbox);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span>Sol Bileşen Paleti</span>
+                  {showLeftToolbox && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setWireStyle((prev) => (prev === 'orthogonal' ? 'bezier' : 'orthogonal'));
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span>90° Dik Kablo Modu</span>
+                  {wireStyle === 'orthogonal' && <Check className="w-3.5 h-3.5 text-blue-600" />}
+                </button>
+                <button
+                  onClick={() => {
+                    setGridMode((m) => (m === 'dots' ? 'lines' : m === 'lines' ? 'clean' : 'dots'));
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span>Izgara Kılavuzları</span>
+                  <span className="text-[10px] text-slate-400 font-mono">{gridMode}</span>
+                </button>
+                <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
+                <button
+                  onClick={() => {
+                    handleResetView();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span>Görünümü Sıfırla (%100)</span>
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    toggleCadTheme();
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <span>CAD Teması ({isDark ? 'Karanlık Mod' : 'Aydınlık Mod'})</span>
+                  {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Yardım (Help) Menu */}
+          <div className="relative">
+            <button
+              onClick={() => setActiveDesktopMenu(activeDesktopMenu === 'help' ? null : 'help')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors cursor-pointer ${
+                activeDesktopMenu === 'help'
+                  ? 'bg-blue-600 text-white font-bold'
+                  : isDark
+                  ? 'hover:bg-slate-800 text-slate-200'
+                  : 'hover:bg-slate-200/80 text-slate-700'
+              }`}
+            >
+              Yardım
+            </button>
+            {activeDesktopMenu === 'help' && (
+              <div className={`absolute top-full left-0 mt-0.5 w-56 rounded-xl shadow-2xl py-1 text-xs border z-50 ${
+                isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+              }`}>
+                <button
+                  onClick={() => {
+                    setShowAboutModal(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Info className="w-3.5 h-3.5 text-blue-500" />
+                  <span>LogicDesign Studio Hakkında</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Dismiss overlay if activeDesktopMenu is open */}
+        {activeDesktopMenu && (
+          <div
+            onClick={() => setActiveDesktopMenu(null)}
+            className="fixed inset-0 z-30"
+          />
+        )}
+      </div>
+    );
+  };
+
+  // Render Desktop Ribbon Quick Toolbar (2-Tier Non-Scrolling Layout)
+  const renderDesktopRibbon = () => {
+    const isDark = cadTheme === 'dark';
+
+    return (
+      <div className={`flex flex-col select-none transition-colors shrink-0 ${
+        isDark ? 'bg-[#0D1322] text-slate-300' : 'bg-white text-slate-700'
+      }`}>
+        {/* Tier 1: Core Operations, Simulation & View (Eski Temel Format) */}
+        <div className={`h-9 border-b flex items-center justify-between px-3 text-xs ${
+          isDark ? 'border-slate-800' : 'border-slate-200 shadow-2xs'
+        }`}>
+          {/* Left: File actions, Undo/Redo & Simulation */}
+          <div className="flex items-center gap-1.5">
+            {/* File Quick Actions */}
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => handleClearCanvas()}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+                }`}
+                title="Yeni Devre (Ctrl+N)"
+              >
+                <FilePlus className="w-3.5 h-3.5 text-blue-500" />
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+                }`}
+                title="Devre Aç (Ctrl+O)"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+              </button>
+              <button
+                onClick={() => handleExportJSON()}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+                }`}
+                title="JSON Kaydet (Ctrl+S)"
+              >
+                <Save className="w-3.5 h-3.5 text-emerald-500" />
+              </button>
+            </div>
+
+            <div className={`w-[1px] h-4 mx-1 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+            {/* Undo / Redo / Delete */}
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => handleUndo()}
+                disabled={historyStack.length === 0}
+                className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+                }`}
+                title="Geri Al (Ctrl+Z)"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => handleRedo()}
+                disabled={redoStack.length === 0}
+                className={`p-1.5 rounded-lg transition-colors disabled:opacity-30 cursor-pointer ${
+                  isDark ? 'hover:bg-slate-800 text-slate-300 hover:text-white' : 'hover:bg-slate-100 text-slate-700 hover:text-slate-900'
+                }`}
+                title="İleri Al (Ctrl+Y)"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => handleDeleteSelected()}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                  isDark ? 'hover:bg-red-900/50 text-slate-300 hover:text-red-300' : 'hover:bg-red-50 text-slate-700 hover:text-red-600'
+                }`}
+                title="Seçilenleri Sil (Del)"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className={`w-[1px] h-4 mx-1 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+            {/* Simulation Engine Controls */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setIsRunning(!isRunning)}
+                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all focus:outline-none select-none ${
+                  isRunning
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white active:scale-95'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-95'
+                }`}
+              >
+                {isRunning ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                <span>{isRunning ? 'Durdur' : 'Çalıştır'}</span>
+              </button>
+
+              <button
+                onClick={handleSingleStep}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold border shadow-2xs flex items-center gap-1 cursor-pointer transition-colors select-none ${
+                  isDark
+                    ? 'bg-slate-800 hover:bg-slate-700 text-blue-300 border-slate-700'
+                    : 'bg-slate-50 hover:bg-blue-50 text-blue-700 border-slate-200'
+                }`}
+                title="Sinyali tek bir adım / saat darbesi ilerletir"
+              >
+                <StepForward className="w-3.5 h-3.5 text-blue-500" />
+                <span>Tek Adım</span>
+              </button>
+
+              {/* Clock Frequency Segmented Control */}
+              <div className={`flex items-center gap-0.5 p-0.5 rounded-lg border text-xs ${
+                isDark
+                  ? 'bg-slate-800/90 border-slate-700 text-slate-300'
+                  : 'bg-slate-100/80 border-slate-200 text-slate-600'
+              }`}>
+                <span className="px-1 text-[10.5px] font-semibold flex items-center gap-1">
+                  <Activity className="w-3 h-3 text-blue-500" />
+                  <span>Saat:</span>
+                </span>
+                {[0.5, 1, 2, 4, 6, 8].map((hz) => (
+                  <button
+                    key={hz}
+                    onClick={() => setClockHz(hz)}
+                    className={`px-1.5 py-0.5 rounded text-[10.5px] font-mono font-bold cursor-pointer transition-colors outline-none select-none ${
+                      clockHz === hz
+                        ? isDark
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white text-blue-700 shadow-xs'
+                        : isDark
+                        ? 'text-slate-400 hover:text-slate-100'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {hz}Hz
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Export Cluster & View Controls */}
+          <div className="flex items-center gap-1.5">
+            {/* Quick Export Cluster */}
+            <div className={`flex items-center gap-0.5 p-0.5 rounded-lg border shadow-2xs ${
+              isDark ? 'bg-slate-800/90 border-slate-700' : 'bg-slate-100/90 border-slate-200'
+            }`}>
+              <button
+                onClick={handleExportPNG}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
+                  isDark ? 'text-slate-300 hover:text-emerald-400 hover:bg-slate-700' : 'text-slate-700 hover:text-emerald-700 hover:bg-white'
+                }`}
+                title="PNG Resim Olarak İndir"
+              >
+                <ImageIcon className="w-3 h-3 text-emerald-400" />
+                <span>PNG</span>
+              </button>
+              <button
+                onClick={handleExportSVG}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
+                  isDark ? 'text-slate-300 hover:text-indigo-400 hover:bg-slate-700' : 'text-slate-700 hover:text-indigo-700 hover:bg-white'
+                }`}
+                title="Vektörel SVG Olarak İndir"
+              >
+                <Download className="w-3 h-3 text-indigo-400" />
+                <span>SVG</span>
+              </button>
+              <button
+                onClick={handleExportCirc}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
+                  isDark ? 'text-slate-300 hover:text-sky-400 hover:bg-slate-700' : 'text-slate-700 hover:text-sky-700 hover:bg-white'
+                }`}
+                title="Logisim (.circ) CAD Dosyası Olarak İndir"
+              >
+                <FileCode className="w-3 h-3 text-sky-400" />
+                <span>.circ</span>
+              </button>
+            </div>
+
+            <div className={`w-[1px] h-4 mx-1 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+            <div
+              className="px-2 py-0.5 rounded-lg text-[11px] font-mono font-bold border border-blue-500/40 bg-blue-500/10 text-blue-500 select-none flex items-center gap-1"
+              title="90° Standart Logisim CAD Hatları"
+            >
+              <Activity className="w-3 h-3 text-blue-500" />
+              <span>90° Dik Tel</span>
+            </div>
+
+            <button
+              onClick={() => toggleCadTheme()}
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                isDark ? 'hover:bg-slate-800 text-amber-400' : 'hover:bg-slate-100 text-indigo-600'
+              }`}
+              title={`Tema: ${isDark ? 'Aydınlık Moda Geç' : 'Karanlık Moda Geç'}`}
+            >
+              {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Tier 2: Alt Sıra - Analiz & Mühendislik Suite (Yeni Eklenenler) */}
+        <div className={`h-9 border-b flex items-center justify-between px-3 text-xs ${
+          isDark ? 'bg-[#090E1A] border-slate-800' : 'bg-slate-50 border-slate-200'
+        }`}>
+          {/* Left: Analiz Suite Butonları */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mr-1">
+              Analiz Suite:
+            </span>
+
+            {/* Doğruluk Tablosu */}
+            <button
+              onClick={() => setShowTruthTable(true)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border-indigo-800/60'
+                  : 'bg-indigo-50/80 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80'
+              }`}
+              title="Devrenin Tüm Doğruluk Tablosunu Üret"
+            >
+              <Table className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Doğruluk Tablosu</span>
+            </button>
+
+            {/* Boole Sentez */}
+            <button
+              onClick={() => setShowSynthesizer(true)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border-amber-800/60'
+                  : 'bg-amber-50/80 hover:bg-amber-100 text-amber-800 border-amber-200/80'
+              }`}
+              title="Boole Fonksiyonundan Otomatik Mantık Devresi Sentezle"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>Boole Sentez</span>
+            </button>
+
+            {/* Osiloskop */}
+            <button
+              onClick={() => setShowWaveform((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                showWaveform
+                  ? 'bg-slate-900 text-cyan-300 border-slate-700'
+                  : isDark
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+              title="Sayısal Zamanlama Diyagramı / Osiloskop Panelini Aç/Kapat"
+            >
+              <Activity className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Osiloskop</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            </button>
+
+            {/* FSM Tasarla */}
+            <button
+              onClick={() => setShowFsmModal(true)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-pink-950/60 hover:bg-pink-900/80 text-pink-300 border-pink-800/60'
+                  : 'bg-pink-50/80 hover:bg-pink-100 text-pink-700 border-pink-200/80'
+              }`}
+              title="Durum Makinesi (FSM) Tasarla ve Devreye Dönüştür"
+            >
+              <Workflow className="w-3.5 h-3.5 text-pink-400" />
+              <span>FSM Tasarla</span>
+            </button>
+
+            {/* Testbench */}
+            <button
+              onClick={() => {
+                if (!testbenchText) handleAutoGenerateTestbench();
+                setShowTestbenchModal(true);
+              }}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-violet-950/60 hover:bg-violet-900/80 text-violet-300 border-violet-800/60'
+                  : 'bg-violet-50/80 hover:bg-violet-100 text-violet-700 border-violet-200/80'
+              }`}
+              title="Otomatik Test Vektörleri ve Testbench Koşturucu"
+            >
+              <FlaskConical className="w-3.5 h-3.5 text-violet-400" />
+              <span>Testbench</span>
+            </button>
+
+            {/* Hex Bellek */}
+            <button
+              onClick={() => handleOpenHexEditor()}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-sky-950/60 hover:bg-sky-900/80 text-sky-300 border-sky-800/60'
+                  : 'bg-sky-50/80 hover:bg-sky-100 text-sky-800 border-sky-200/80'
+              }`}
+              title="RAM ve ROM Bellek Hücrelerini Hex Matrisinde Canlı Düzenle"
+            >
+              <Binary className="w-3.5 h-3.5 text-sky-400" />
+              <span>Hex Bellek</span>
+            </button>
+
+            {/* HDL & FPGA */}
+            <button
+              onClick={() => {
+                setHdlActiveTab('verilog');
+                setShowHdlModal(true);
+              }}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border-emerald-800/60'
+                  : 'bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border-emerald-200/80'
+              }`}
+              title="Sentezlenebilir Verilog, VHDL ve FPGA Kısıt Kodlarını Üret"
+            >
+              <FileCode className="w-3.5 h-3.5 text-emerald-400" />
+              <span>HDL & FPGA</span>
+            </button>
+
+            {/* İstatistik & CMOS */}
+            <button
+              onClick={handleOpenStatsModal}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-blue-950/60 hover:bg-blue-900/80 text-blue-300 border-blue-800/60'
+                  : 'bg-blue-50/80 hover:bg-blue-100 text-blue-700 border-blue-200/80'
+              }`}
+              title="Devre İstatistikleri, CMOS Transistör Sayısı ve Mantık Derinliği Raporu"
+            >
+              <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
+              <span>İstatistik & CMOS</span>
+            </button>
+          </div>
+
+          {/* Right: Entegre Paketleme, Datasheets, K-Map & Sayı Dönüşümü */}
+          <div className="flex items-center gap-1.5">
+            {/* IC Paketle */}
+            <button
+              onClick={() => setShowSubcircuitModal(true)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-blue-950/70 hover:bg-blue-900/90 text-blue-300 border-blue-800/60'
+                  : 'bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 text-blue-800 border-blue-200'
+              }`}
+              title="Tuvaldeki Devreyi Özel Entegre (IC / Alt Devre) Olarak Paketle"
+            >
+              <Package className="w-3.5 h-3.5 text-blue-400" />
+              <span>IC Paketle</span>
+            </button>
+
+            {/* Datasheets */}
+            <button
+              onClick={() => setShowDatasheetModal(true)}
+              className={`px-2.5 py-1 rounded-xl text-xs font-semibold border flex items-center gap-1 cursor-pointer transition-colors shadow-2xs ${
+                isDark
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+              title="74xx Serisi ve Entegre Bacak Şemaları"
+            >
+              <FileText className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Datasheets</span>
+            </button>
+
+            <div className={`w-[1px] h-4 mx-0.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+            {/* K-Map */}
+            <button
+              onClick={() => setShowKMapModal(true)}
+              className={`px-2 py-1 rounded-xl text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border ${
+                isDark
+                  ? 'bg-blue-950/70 hover:bg-blue-900 border-blue-800 text-blue-300'
+                  : 'bg-blue-50 hover:bg-blue-100 border-blue-200 text-blue-700'
+              }`}
+              title="Karnaugh Haritası (K-Map Solver)"
+            >
+              <Calculator className="w-3.5 h-3.5 text-blue-500" />
+              <span>K-Map</span>
+            </button>
+
+            {/* Sayı Dönüşümü */}
+            <button
+              onClick={() => setShowNumberConverterModal(true)}
+              className={`px-2 py-1 rounded-xl text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border ${
+                isDark
+                  ? 'bg-emerald-950/70 hover:bg-emerald-900 border-emerald-800 text-emerald-300'
+                  : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+              }`}
+              title="Sayı Sistemleri Taban Dönüştürücü"
+            >
+              <Binary className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Taban</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render Desktop Left Component Toolbox (Logisim Explorer Panel)
+  const renderDesktopLeftToolbox = () => {
+    const isDark = cadTheme === 'dark';
+    const q = desktopToolboxSearch.trim().toLowerCase();
+
+    return (
+      <div className={`w-64 h-full border-r flex flex-col shrink-0 select-none overflow-hidden text-xs transition-colors ${
+        isDark ? 'bg-[#0B0F19] border-slate-800 text-slate-200' : 'bg-slate-50 border-slate-200 text-slate-800'
+      }`}>
+        {/* Header & Search */}
+        <div className={`p-2.5 border-b space-y-2 ${isDark ? 'border-slate-800 bg-[#0B0F19]' : 'border-slate-200 bg-white'}`}>
+          <div className="flex items-center justify-between font-bold uppercase tracking-wider text-[11px]">
+            <span className={isDark ? 'text-slate-400' : 'text-slate-600'}>Bileşen Kütüphanesi</span>
+            <span className={`font-mono px-1.5 py-0.2 rounded text-[9px] ${isDark ? 'bg-blue-950 text-blue-400' : 'bg-blue-100 text-blue-700'}`}>
+              CAD
+            </span>
+          </div>
+          <div className="relative">
+            <Search className={`w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
+            <input
+              type="text"
+              placeholder="Eleman ara (örn. AND, MUX)..."
+              value={desktopToolboxSearch}
+              onChange={(e) => setDesktopToolboxSearch(e.target.value)}
+              className={`w-full pl-8 pr-2.5 py-1 rounded-lg text-xs outline-none transition-colors border ${
+                isDark
+                  ? 'bg-slate-900 border-slate-800 text-slate-200 placeholder-slate-500 focus:border-blue-500'
+                  : 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-400 focus:bg-white focus:border-blue-500'
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Scrollable Categories List */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+          {/* Circuit Presets (Hazır Devreler) Collapsible Section */}
+          <div
+            className={`rounded-xl overflow-hidden border transition-colors ${
+              isDark
+                ? 'border-amber-900/60 bg-amber-950/20'
+                : 'border-amber-200/90 bg-amber-50/40 shadow-2xs'
+            }`}
+          >
+            <button
+              onClick={() => toggleToolboxCategory('presets')}
+              className={`w-full px-2.5 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                isDark
+                  ? 'hover:bg-amber-900/40 text-amber-300 font-semibold'
+                  : 'hover:bg-amber-100/70 text-amber-900 font-bold'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm">⚡</span>
+                <span className="text-xs">Hazır Örnek Devreler</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[9.5px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                  isDark ? 'bg-amber-900/60 text-amber-300' : 'bg-amber-200 text-amber-900'
+                }`}>
+                  {CIRCUIT_PRESETS.length}
+                </span>
+                {toolboxCategoryOpen['presets'] ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-amber-500" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-amber-500" />
+                )}
+              </div>
+            </button>
+
+            {toolboxCategoryOpen['presets'] && (
+              <div className={`p-1 space-y-1 border-t ${
+                isDark ? 'border-amber-900/40 bg-slate-950/40' : 'border-amber-100 bg-white'
+              }`}>
+                {/* Button to open full modal */}
+                <button
+                  onClick={() => setShowPresetsModal(true)}
+                  className={`w-full py-1 px-2 rounded-lg text-center font-bold text-[11px] transition-colors border flex items-center justify-center gap-1.5 cursor-pointer ${
+                    isDark
+                      ? 'bg-amber-600/20 hover:bg-amber-600/30 border-amber-700/60 text-amber-300'
+                      : 'bg-amber-100 hover:bg-amber-200 border-amber-300 text-amber-900'
+                  }`}
+                >
+                  <Zap className="w-3 h-3 fill-amber-500 text-amber-500" />
+                  <span>Tüm Şablonları Aç...</span>
+                </button>
+
+                {/* Quick presets list */}
+                <div className="space-y-0.5 max-h-48 overflow-y-auto pr-0.5">
+                  {CIRCUIT_PRESETS.map((preset) => (
+                    <div
+                      key={preset.id}
+                      onClick={() => handleLoadPreset(preset.id)}
+                      className={`px-2 py-1 rounded-lg border transition-all cursor-pointer flex items-center justify-between text-xs ${
+                        isDark
+                          ? 'border-transparent hover:bg-amber-600/20 hover:text-amber-200 text-slate-300'
+                          : 'border-transparent hover:bg-amber-50 hover:text-amber-900 text-slate-700'
+                      }`}
+                      title={preset.description}
+                    >
+                      <span className="truncate font-medium">{preset.name}</span>
+                      <span className={`text-[9px] font-mono shrink-0 px-1 rounded ${
+                        isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {preset.components.length}e
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Built-in Categories */}
+          {DESKTOP_TOOLBOX_GROUPS.map((group) => {
+            const isOpen = toolboxCategoryOpen[group.id] || !!q;
+            const filteredTypes = group.types.filter((t) => {
+              if (!q) return true;
+              const meta = COMPACT_COMPONENT_NAMES[t];
+              const label = meta?.label || t;
+              const badge = meta?.badge || '';
+              return (
+                t.toLowerCase().includes(q) ||
+                label.toLowerCase().includes(q) ||
+                badge.toLowerCase().includes(q)
+              );
+            });
+
+            if (q && filteredTypes.length === 0) return null;
+
+            return (
+              <div
+                key={group.id}
+                className={`rounded-xl overflow-hidden border transition-colors ${
+                  isDark
+                    ? 'border-slate-800/80 bg-slate-900/40'
+                    : 'border-slate-200/90 bg-white shadow-2xs'
+                }`}
+              >
+                <button
+                  onClick={() => toggleToolboxCategory(group.id)}
+                  className={`w-full px-2.5 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                    isDark
+                      ? 'hover:bg-slate-800/70 text-slate-300 font-semibold'
+                      : 'hover:bg-slate-100 text-slate-800 font-bold'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">{group.icon}</span>
+                    <span className="text-xs">{group.title}</span>
+                  </div>
+                  {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-slate-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
+                </button>
+
+                {isOpen && (
+                  <div className={`p-1 space-y-0.5 border-t ${
+                    isDark ? 'border-slate-800/60 bg-slate-950/30' : 'border-slate-100 bg-slate-50/60'
+                  }`}>
+                    {filteredTypes.map((type) => {
+                      const meta = COMPACT_COMPONENT_NAMES[type] || { label: type };
+                      return (
+                        <div
+                          key={type}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('application/logic-component', type);
+                          }}
+                          onClick={() => handleAddComponent(type)}
+                          className={`px-2 py-1 rounded-lg border transition-all cursor-pointer flex items-center justify-between group text-xs ${
+                            isDark
+                              ? 'border-transparent hover:bg-blue-600/20 hover:text-blue-300 hover:border-blue-500/30 text-slate-300'
+                              : 'border-transparent hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200 text-slate-700'
+                          }`}
+                          title="Tıkla veya Tuvale Sürükle-Bırak"
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 group-hover:scale-125 transition-transform ${
+                              isDark ? 'bg-blue-400' : 'bg-blue-600'
+                            }`} />
+                            <span className="font-medium truncate group-hover:font-semibold">
+                              {meta.label}
+                            </span>
+                          </div>
+                          {meta.badge && (
+                            <span className={`text-[9.5px] font-mono px-1.5 py-0.2 rounded shrink-0 transition-colors ${
+                              isDark
+                                ? 'bg-slate-800 text-slate-400 group-hover:bg-blue-900/80 group-hover:text-blue-200'
+                                : 'bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-700'
+                            }`}>
+                              {meta.badge}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Custom Subcircuits (User ICs) */}
+          {customSubcircuits.length > 0 && (
+            <div className={`rounded-xl overflow-hidden border transition-colors ${
+              isDark ? 'border-purple-900/50 bg-purple-950/20' : 'border-purple-200 bg-purple-50/50 shadow-2xs'
+            }`}>
+              <button
+                onClick={() => toggleToolboxCategory('subcircuits')}
+                className={`w-full px-2.5 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
+                  isDark ? 'hover:bg-purple-900/30 text-purple-300' : 'hover:bg-purple-100/60 text-purple-900 font-bold'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">🧩</span>
+                  <span>Özel Entegrelerim</span>
+                </div>
+                {toolboxCategoryOpen['subcircuits'] ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-purple-400" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-purple-400" />
+                )}
+              </button>
+
+              {toolboxCategoryOpen['subcircuits'] && (
+                <div className={`p-1 space-y-0.5 border-t ${
+                  isDark ? 'border-purple-900/40 bg-slate-950/40' : 'border-purple-100 bg-white'
+                }`}>
+                  {customSubcircuits.map((sub) => (
+                    <div
+                      key={sub.id}
+                      onClick={() => handleAddSubcircuit(sub)}
+                      className={`px-2 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-between text-xs ${
+                        isDark ? 'hover:bg-purple-600/30 text-slate-300 hover:text-purple-200' : 'hover:bg-purple-100 text-purple-900'
+                      }`}
+                      title={sub.description}
+                    >
+                      <span className="font-medium truncate">{sub.name}</span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 bg-purple-600 text-white rounded font-bold">
+                        {sub.chipCode || 'IC'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Render Desktop Bottom Status Bar - Jitter Free Absolute Center and Tabular-Nums
+  const renderDesktopStatusBar = () => {
+    const isDark = cadTheme === 'dark';
+
+    return (
+      <div className={`h-7 border-t flex items-center justify-between px-3 text-[11px] font-mono select-none transition-colors relative ${
+        isDark ? 'bg-[#0B0F19] border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-600 shadow-2xs'
+      }`}>
+        {/* Left items */}
+        <div className="flex items-center gap-3">
+          {/* Running status badge */}
+          <div className="flex items-center gap-1.5 font-bold">
+            <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+            <span className={isRunning ? 'text-emerald-600' : 'text-amber-600'}>
+              {isRunning ? 'ÇALIŞIYOR' : 'DURAKLATILDI'}
+            </span>
+          </div>
+
+          <div className={`w-[1px] h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+          {/* Speed */}
+          <span>Saat: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{clockHz} Hz</strong></span>
+
+          <div className={`w-[1px] h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+          {/* Active Sheet */}
+          <span>Sayfa: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{sheets.find((s) => s.id === activeSheetId)?.name || 'Sayfa 1'}</strong></span>
+
+          <div className={`w-[1px] h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+          {/* Component & Wire counts */}
+          <span>Bileşen: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{components.length}</strong></span>
+          <span>Bağlantı: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{wires.length}</strong></span>
+          <span>Adım: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{stepCount}</strong></span>
+        </div>
+
+        {/* Center tip: completely decoupled and fixed in absolute center to prevent any jitter */}
+        <div className="hidden xl:block absolute left-1/2 -translate-x-1/2 pointer-events-none text-center text-slate-400 text-[10px] whitespace-nowrap">
+          Boşluk: Oynat/Durdur · Del: Sil · Ctrl+Z: Geri Al · Sürükle-Bırak: Eleman Ekle
+        </div>
+
+        {/* Right items: fixed width tabular-nums to prevent layout shift */}
+        <div className="flex items-center gap-3">
+          <div className="w-28 text-right tabular-nums whitespace-nowrap">
+            <span>X: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{Math.round(mousePos.x)}</strong> Y: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{Math.round(mousePos.y)}</strong></span>
+          </div>
+          <div className={`w-[1px] h-3.5 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
+          <div className="w-16 text-right tabular-nums whitespace-nowrap">
+            <span>Yakınlaştırma: <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{Math.round(zoom * 100)}%</strong></span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render Extra Desktop Modals (K-Map, Number Converter, Presets, About)
+  const renderDesktopExtraModals = () => {
+    const isDark = cadTheme === 'dark';
+
+    return (
+      <>
+        {/* Hazır Devreler (Circuit Presets) Gallery Modal */}
+        {showPresetsModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className={`rounded-3xl max-w-5xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border animate-in fade-in zoom-in-95 duration-150 ${
+              isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              {/* Modal Header */}
+              <div className={`px-6 py-4 border-b flex items-center justify-between ${isDark ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-amber-500/15 text-amber-500 rounded-2xl border border-amber-500/20">
+                    <Zap className="w-5 h-5 fill-amber-500" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base flex items-center gap-2">
+                      <span>Hazır Devre Şablonları & Örnek Kütüphanesi</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-mono font-bold ${
+                        isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {CIRCUIT_PRESETS.length} Devre
+                      </span>
+                    </h3>
+                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Kombinasyonel mantık, bellek elemanları, işlemci mimarisi ve retro ses/grafik donanımları
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowPresetsModal(false)}
+                  className={`p-2 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Search & Category Filter Bar */}
+              <div className={`p-4 border-b space-y-3 ${isDark ? 'bg-slate-950/30 border-slate-800' : 'bg-slate-50/50 border-slate-200'}`}>
+                <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+                  {/* Category Pills */}
+                  <div className="flex flex-wrap gap-1.5 w-full sm:w-auto">
+                    {[
+                      { id: 'all', label: 'Tümü', icon: '🌟' },
+                      { id: 'arithmetic', label: 'Aritmetik', icon: '🧮' },
+                      { id: 'sequential', label: 'Ardışıl / Bellek', icon: '⚙️' },
+                      { id: 'basic', label: 'Temel Kapılar', icon: '🔌' },
+                      { id: 'bus', label: 'Veri Yolu / MUX', icon: '🚌' },
+                      { id: 'music_graphics', label: 'Retro Medya / GPU', icon: '🎮' },
+                    ].map((cat) => {
+                      const isActive = presetFilterCat === cat.id;
+                      const count = cat.id === 'all'
+                        ? CIRCUIT_PRESETS.length
+                        : CIRCUIT_PRESETS.filter((p) => (p.category || 'basic') === cat.id).length;
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => setPresetFilterCat(cat.id)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : isDark
+                              ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                              : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          <span>{cat.icon}</span>
+                          <span>{cat.label}</span>
+                          <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                            isActive ? 'bg-white/20 text-white' : isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Search Input */}
+                  <div className="relative w-full sm:w-64 shrink-0">
+                    <Search className={`w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
+                    <input
+                      type="text"
+                      placeholder="Devre şablonu ara..."
+                      value={presetModalSearch}
+                      onChange={(e) => setPresetModalSearch(e.target.value)}
+                      className={`w-full pl-9 pr-3 py-1.5 rounded-xl text-xs outline-none transition-colors border ${
+                        isDark
+                          ? 'bg-slate-800 border-slate-700 text-slate-200 placeholder-slate-500 focus:border-blue-500'
+                          : 'bg-white border-slate-300 text-slate-800 placeholder-slate-400 focus:border-blue-500'
+                      }`}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Presets Grid */}
+              <div className="p-6 overflow-y-auto flex-1 max-h-[60vh]">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {CIRCUIT_PRESETS.filter((preset) => {
+                    const cat = preset.category || 'basic';
+                    if (presetFilterCat !== 'all' && cat !== presetFilterCat) {
+                      return false;
+                    }
+                    if (presetModalSearch.trim()) {
+                      const q = presetModalSearch.trim().toLowerCase();
+                      return (
+                        preset.name.toLowerCase().includes(q) ||
+                        preset.description.toLowerCase().includes(q) ||
+                        cat.toLowerCase().includes(q)
+                      );
+                    }
+                    return true;
+                  }).map((preset) => {
+                    const isSelected = selectedPresetId === preset.id;
+                    return (
+                      <div
+                        key={preset.id}
+                        className={`rounded-2xl p-4 border flex flex-col justify-between transition-all group ${
+                          isSelected
+                            ? isDark
+                              ? 'border-blue-500 bg-blue-950/20 ring-1 ring-blue-500'
+                              : 'border-blue-500 bg-blue-50/50 ring-1 ring-blue-500'
+                            : isDark
+                            ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700 hover:bg-slate-800/40'
+                            : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-md'
+                        }`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md uppercase font-bold tracking-wider ${
+                              preset.category === 'arithmetic'
+                                ? 'bg-blue-500/15 text-blue-500'
+                                : preset.category === 'sequential'
+                                ? 'bg-purple-500/15 text-purple-500'
+                                : preset.category === 'music_graphics'
+                                ? 'bg-pink-500/15 text-pink-500'
+                                : preset.category === 'bus'
+                                ? 'bg-indigo-500/15 text-indigo-500'
+                                : 'bg-emerald-500/15 text-emerald-500'
+                            }`}>
+                              {preset.category}
+                            </span>
+                            <div className="flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
+                              <span>{preset.components.length} eleman</span>
+                              <span>·</span>
+                              <span>{preset.wires.length} tel</span>
+                            </div>
+                          </div>
+
+                          <h4 className="font-bold text-sm leading-snug group-hover:text-blue-500 transition-colors">
+                            {preset.name}
+                          </h4>
+
+                          <p className={`text-xs leading-relaxed line-clamp-3 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            {preset.description}
+                          </p>
+                        </div>
+
+                        <div className="pt-4 mt-2 border-t border-dashed border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            ID: {preset.id}
+                          </span>
+                          <button
+                            onClick={() => {
+                              handleLoadPreset(preset.id);
+                              setShowPresetsModal(false);
+                            }}
+                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
+                          >
+                            <Zap className="w-3.5 h-3.5 fill-current" />
+                            <span>Tuvale Yükle</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className={`p-4 border-t flex items-center justify-between ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  Bir şablon yüklendiğinde mevcut çalışma geçmişe kaydedilir (Ctrl+Z ile geri alınabilir).
+                </span>
+                <button
+                  onClick={() => setShowPresetsModal(false)}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
+                    isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                  }`}
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* K-Map Modal */}
+        {showKMapModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className={`rounded-3xl max-w-4xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border animate-in fade-in zoom-in-95 duration-150 ${
+              isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              <div className={`px-6 py-4 border-b flex items-center justify-between ${isDark ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-500/15 text-blue-600 rounded-xl border border-blue-500/20">
+                    <Calculator className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base">Karnaugh Haritası (K-Map) Çözücü</h3>
+                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>2, 3 ve 4 Değişkenli Karnaugh Haritaları ile Minimum SOP / POS Çözümleri</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowKMapModal(false)}
+                  className={`p-2 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                <StandaloneKMapSolver />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Number Converter Modal */}
+        {showNumberConverterModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className={`rounded-3xl max-w-4xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border animate-in fade-in zoom-in-95 duration-150 ${
+              isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              <div className={`px-6 py-4 border-b flex items-center justify-between ${isDark ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-emerald-500/15 text-emerald-600 rounded-xl border border-emerald-500/20">
+                    <Binary className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base">Sayı Sistemleri & Taban Dönüştürücü</h3>
+                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>İkili (Bin), Onlu (Dec), Onaltılı (Hex) ve Sekizli (Oct) Taban Dönüşümü</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowNumberConverterModal(false)}
+                  className={`p-2 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                <StandaloneNumberConverter />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* About Modal */}
+        {showAboutModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className={`rounded-3xl max-w-lg w-full shadow-2xl flex flex-col overflow-hidden border animate-in fade-in zoom-in-95 duration-150 ${
+              isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              <div className={`p-6 border-b flex items-center justify-between ${isDark ? 'border-slate-800 bg-slate-950/60' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-600/15 text-blue-600 rounded-2xl border border-blue-600/20">
+                    <Cpu className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">LogicDesign Studio</h3>
+                    <p className="text-xs text-blue-600 font-mono">v1.0.0 — Profesyonel Mantık CAD Simülatörü</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowAboutModal(false)}
+                  className={`p-2 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-slate-900'}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className={`p-6 space-y-4 text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                <p>
+                  LogicDesign Studio; mantık kapıları, aritmetik birimler, çoklayıcılar, flip-floplar, bellek elemanları, K-Map çözücü, sayı taban dönüştürücü ve ses sentezleyicisi barındıran tam teşekküllü masaüstü EDA CAD ortamıdır.
+                </p>
+                <div className={`grid grid-cols-2 gap-2.5 p-3 rounded-2xl border font-mono text-[11px] ${
+                  isDark ? 'bg-slate-950/80 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}>
+                  <div>⚡ Simülasyon: 32Hz & Turbo</div>
+                  <div>📊 K-Map Çözücü: 2-4 Değişken</div>
+                  <div>🔢 Sayı Dönüşümü: 4 Taban</div>
+                  <div>🎵 Chiptune: 8-Bit Ses</div>
+                  <div>📈 Osiloskop: Zamanlama Analizi</div>
+                  <div>🧩 Alt Devre: IC Paketleme</div>
+                </div>
+              </div>
+              <div className={`p-4 border-t flex justify-end ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <button
+                  onClick={() => setShowAboutModal(false)}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-xs"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Educational Header - Clean, Spacious & Responsive */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
+    <div className={desktopMode ? `w-screen h-screen overflow-hidden flex flex-col select-none transition-colors ${cadTheme === 'dark' ? 'bg-[#090D16] text-slate-100' : 'bg-slate-50 text-slate-900'}` : "space-y-6 max-w-7xl mx-auto"}>
+      {desktopMode ? (
+        <>
+          {renderDesktopMenuBar()}
+          {renderDesktopRibbon()}
+        </>
+      ) : (
+        <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
         {/* Title and Description */}
         <div className="space-y-3">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
@@ -5716,14 +7139,20 @@ ${wireXmls.join('\n')}
           )}
         </div>
       </div>
+      )}
 
       {/* Main Simulation Stage Card */}
-      <div className={`rounded-3xl border overflow-hidden flex flex-col transition-colors ${
+      <div className={desktopMode ? "flex-1 w-full min-h-0 flex flex-row overflow-hidden relative" : `rounded-3xl border overflow-hidden flex flex-col transition-colors ${
         cadTheme === 'dark'
           ? 'bg-[#0B0F19] border-slate-800 shadow-2xl text-slate-100'
           : 'bg-white border-slate-200 shadow-xs text-slate-900'
       }`}>
-        {/* Top Control Bar: Tier 1 - Simulation & Analysis Suite */}
+        {desktopMode && showLeftToolbox && renderDesktopLeftToolbox()}
+
+        <div className={desktopMode ? "flex-1 min-w-0 h-full flex flex-col overflow-hidden relative" : "flex flex-col w-full"}>
+          {!desktopMode && (
+            <>
+              {/* Top Control Bar: Tier 1 - Simulation & Analysis Suite */}
         <div className={`px-4 py-2.5 border-b flex flex-wrap items-center justify-between gap-3 shadow-2xs transition-colors ${
           cadTheme === 'dark' ? 'bg-[#0F172A] border-slate-800' : 'bg-white border-slate-200'
         }`}>
@@ -5837,6 +7266,24 @@ ${wireXmls.join('\n')}
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
             </button>
 
+            {/* HDL & FPGA */}
+            <button
+              onClick={() => {
+                setHdlActiveTab('verilog');
+                setShowHdlModal(true);
+              }}
+              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs ${
+                cadTheme === 'dark'
+                  ? 'bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border-emerald-800/60'
+                  : 'bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border-emerald-200/80'
+              }`}
+              title="Sentezlenebilir Verilog, VHDL ve FPGA Kısıt Kodlarını Üret"
+            >
+              <FileCode className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden lg:inline">HDL & FPGA</span>
+              <span className="lg:hidden">HDL</span>
+            </button>
+
             {/* FSM Designer */}
             <button
               onClick={() => setShowFsmModal(true)}
@@ -5881,24 +7328,6 @@ ${wireXmls.join('\n')}
             >
               <Binary className="w-3.5 h-3.5 text-sky-400" />
               <span className="hidden md:inline">Hex Bellek</span>
-            </button>
-
-            {/* HDL & FPGA */}
-            <button
-              onClick={() => {
-                setHdlActiveTab('verilog');
-                setShowHdlModal(true);
-              }}
-              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs ${
-                cadTheme === 'dark'
-                  ? 'bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border-emerald-800/60'
-                  : 'bg-emerald-50/80 hover:bg-emerald-100 text-emerald-800 border-emerald-200/80'
-              }`}
-              title="Sentezlenebilir Verilog, VHDL ve FPGA Kısıt Kodlarını Üret"
-            >
-              <FileCode className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden lg:inline">HDL & FPGA</span>
-              <span className="lg:hidden">HDL</span>
             </button>
 
             {/* Circuit Statistics & CMOS Transistor Report */}
@@ -6459,6 +7888,9 @@ ${wireXmls.join('\n')}
           </div>
         </div>
 
+        </>
+          )}
+
         {/* Multi-Sheet Project Workspace Tabs Header */}
         <div className={`border-b px-4 py-2 flex flex-wrap items-center justify-between gap-3 select-none transition-colors ${
           cadTheme === 'dark' ? 'bg-[#090D16] border-slate-800 text-slate-300' : 'bg-slate-100/90 border-slate-200 text-slate-600'
@@ -6596,10 +8028,12 @@ ${wireXmls.join('\n')}
         {/* Interactive SVG Canvas */}
         <div
           ref={canvasContainerRef}
-          className={`relative w-full overflow-hidden select-none transition-colors ${
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleCanvasDrop}
+          className={`relative flex-1 w-full h-full min-h-0 overflow-hidden select-none transition-colors ${
             cadTheme === 'dark' ? 'bg-[#070A12]' : 'bg-slate-50/60'
           }`}
-          style={{ minHeight: '560px' }}
+          style={desktopMode ? { width: '100%', height: '100%' } : { minHeight: '560px' }}
         >
           {/* Floating Active Wiring Status Pill */}
           {wiringFrom && (
@@ -6630,7 +8064,7 @@ ${wireXmls.join('\n')}
                 ? 'cursor-grab'
                 : 'cursor-crosshair'
             }`}
-            style={{ minHeight: '560px' }}
+            style={desktopMode ? { width: '100%', height: '100%' } : { minHeight: '560px' }}
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
@@ -6951,30 +8385,31 @@ ${wireXmls.join('\n')}
               const effectiveMidX = wire.elbowX !== undefined ? snapTo10(wire.elbowX) : defaultMidX;
               const midX = effectiveMidX;
               const midY = snapTo10((startPt.y + endPt.y) / 2);
+              const isStraightHoriz = startPt.y === endPt.y && (!wire.waypoints || wire.waypoints.length === 0);
+              const isStraightVert = startPt.x === endPt.x && (!wire.waypoints || wire.waypoints.length === 0);
 
               return (
                 <g
                   key={wire.id}
                   onMouseEnter={() => setHoveredWireId(wire.id)}
                   onMouseLeave={() => setHoveredWireId(null)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                  }}
                   onMouseDown={(e) => {
                     if (e.button !== 0) return;
                     e.stopPropagation();
-                    const coords = getCanvasCoords(e);
-                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
 
+                    const clickCoords = getCanvasCoords(e);
+                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, clickCoords, effectiveMidX, wire.waypoints);
+
+                    // If user is already drawing a wire and clicks on this wire, finish the wire here!
                     if (wiringFrom) {
-                      connectBranchToWire(wire, tap);
+                      finishWireAtPoint(tap);
                       return;
                     }
 
-                    // Logisim EditTool + WiringTool:
-                    // Pressing on any point of a wire starts `wiringFrom` at `tap` on the 10px grid:
-                    // - Releasing without dragging selects `wire.id`!
-                    // - Dragging pulls a new wire from `tap` (or shortens `wire` if dragging from its endpoint back along itself)!
+                    // Logisim WiringTool behavior:
+                    // Pressing and dragging from ANY point on ANY wire (interior or endpoint, selected or unselected)
+                    // starts drawing a new wire (or shortening if dragged inward from an endpoint).
+                    // If the user releases without dragging, handleCanvasMouseUp selects this wire!
                     wiringStartTimeRef.current = Date.now();
                     setWiringFrom({
                       compId: wire.fromCompId,
@@ -6990,31 +8425,30 @@ ${wireXmls.join('\n')}
                     });
                   }}
                   onMouseUp={(e) => {
-                    if (e.button !== 0 || !wiringFrom) return;
-                    e.stopPropagation();
-                    const coords = getCanvasCoords(e);
-                    const tap = getClosestPointOnOrthogonalWire(startPt, endPt, coords, effectiveMidX, wire.waypoints);
-                    const startW = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
-                    const didDrag = wiringFrom.hasDragged || tap.x !== startW.x || tap.y !== startW.y;
-
-                    if (didDrag) {
-                      finishWireAtPoint(tap);
-                    } else if (wiringFrom.clickedWireId) {
-                      const wId = wiringFrom.clickedWireId;
-                      if (e.shiftKey) {
-                        setSelectedWireIds((prev) =>
-                          prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
-                        );
-                      } else {
-                        setSelectedWireIds([wId]);
-                        setSelectedCompIds([]);
+                    if (wiringFrom) {
+                      e.stopPropagation();
+                      const upCoords = getCanvasCoords(e);
+                      const tap = getClosestPointOnOrthogonalWire(startPt, endPt, upCoords, effectiveMidX, wire.waypoints);
+                      const wStart = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
+                      if (wStart.x !== tap.x || wStart.y !== tap.y || wiringFrom.hasDragged) {
+                        finishWireAtPoint(tap);
+                      } else if (wiringFrom.clickedWireId) {
+                        const wId = wiringFrom.clickedWireId;
+                        if (e.shiftKey) {
+                          setSelectedWireIds((prev) =>
+                            prev.includes(wId) ? prev.filter((id) => id !== wId) : [...prev, wId]
+                          );
+                        } else {
+                          setSelectedWireIds([wId]);
+                          setSelectedCompIds([]);
+                        }
+                        setWiringFrom(null);
                       }
-                      setWiringFrom(null);
                     }
                   }}
-                  className="cursor-pointer group"
+                  className="cursor-crosshair group"
                 >
-                  {/* Thick hover/click hitbox with explicit pointerEvents="stroke" */}
+                  {/* Thick hover/click hitbox along the wire */}
                   <path
                     d={pathD}
                     fill="none"
@@ -7086,7 +8520,7 @@ ${wireXmls.join('\n')}
                         ? 3.5
                         : isHigh
                         ? 3
-                        : 2
+                        : 2.5
                     }
                     strokeDasharray={wire.hasConflict ? '6,4' : isSelected ? '6,3' : undefined}
                     strokeLinecap="round"
@@ -7148,102 +8582,53 @@ ${wireXmls.join('\n')}
                     </g>
                   )}
 
-                  {/* Logisim EditTool Subtle 10px Grid Hover Ring (pointer-events-none so it never blocks clicking or dragging) */}
+                  {/* Logisim Hover Snap Dot: subtle 4px preview showing the exact 10px grid point on the wire */}
                   {hoveredWireId === wire.id && !draggingWireJoint && (() => {
                     const tap = getClosestPointOnOrthogonalWire(startPt, endPt, mousePos, effectiveMidX, wire.waypoints);
                     return (
-                      <g transform={`translate(${tap.x}, ${tap.y})`} className="pointer-events-none">
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={4.5}
-                          fill="none"
-                          stroke="#22c55e"
-                          strokeWidth={2}
-                        />
-                      </g>
+                      <circle
+                        cx={tap.x}
+                        cy={tap.y}
+                        r={4}
+                        fill="#3b82f6"
+                        stroke="#ffffff"
+                        strokeWidth={1.5}
+                        className="pointer-events-none"
+                      />
                     );
                   })()}
 
-                  {/* Selected Wire Handles (Logisim Wire.drawHandles at endpoints + midpoint segment move handle) */}
+                  {/* Selected Wire Handles: Endpoint squares + Orthogonal segment drag handle */}
                   {isSelected && !wiringFrom && (
                     <g>
-                      {/* Endpoint 0 Handle (Drag to extend or shorten wire) */}
-                      <g
-                        transform={`translate(${startPt.x}, ${startPt.y})`}
-                        className="cursor-crosshair"
-                        onMouseDown={(e) => {
-                          if (e.button !== 0) return;
-                          e.stopPropagation();
-                          e.preventDefault();
-                          setWiringFrom({
-                            compId: wire.fromCompId,
-                            pinId: wire.fromPinId,
-                            pinType: 'output',
-                            x: startPt.x,
-                            y: startPt.y,
-                            direction: DIR_NONE,
-                            hasDragged: false,
-                            clickedWireId: wire.id,
-                          });
-                        }}
-                      >
-                        <circle cx={0} cy={0} r={10} fill="transparent" />
-                        <rect
-                          x={-4}
-                          y={-4}
-                          width={8}
-                          height={8}
-                          fill="#ffffff"
-                          stroke="#2563eb"
-                          strokeWidth={2}
-                          pointerEvents="none"
-                        />
-                        <title>Kablo Ucu (Uzatmak veya kısaltmak için sürükleyin)</title>
-                      </g>
-
-                      {/* Endpoint 1 Handle (Drag to extend or shorten wire) */}
-                      <g
-                        transform={`translate(${endPt.x}, ${endPt.y})`}
-                        className="cursor-crosshair"
-                        onMouseDown={(e) => {
-                          if (e.button !== 0) return;
-                          e.stopPropagation();
-                          e.preventDefault();
-                          setWiringFrom({
-                            compId: wire.fromCompId,
-                            pinId: wire.toPinId || wire.fromPinId,
-                            pinType: 'output',
-                            x: endPt.x,
-                            y: endPt.y,
-                            direction: DIR_NONE,
-                            hasDragged: false,
-                            clickedWireId: wire.id,
-                          });
-                        }}
-                      >
-                        <circle cx={0} cy={0} r={10} fill="transparent" />
-                        <rect
-                          x={-4}
-                          y={-4}
-                          width={8}
-                          height={8}
-                          fill="#ffffff"
-                          stroke="#2563eb"
-                          strokeWidth={2}
-                          pointerEvents="none"
-                        />
-                        <title>Kablo Ucu (Uzatmak veya kısaltmak için sürükleyin)</title>
-                      </g>
-
-                      {/* Midpoint Segment Move Handle */}
+                      <rect
+                        x={startPt.x - 4}
+                        y={startPt.y - 4}
+                        width={8}
+                        height={8}
+                        fill="#ffffff"
+                        stroke="#2563eb"
+                        strokeWidth={2}
+                        className="pointer-events-none"
+                      />
+                      <rect
+                        x={endPt.x - 4}
+                        y={endPt.y - 4}
+                        width={8}
+                        height={8}
+                        fill="#ffffff"
+                        stroke="#2563eb"
+                        strokeWidth={2}
+                        className="pointer-events-none"
+                      />
+                      {/* Midpoint handle to slide segment orthogonally */}
                       <g
                         transform={`translate(${midX}, ${midY})`}
-                        className={startPt.x === endPt.x ? 'cursor-ew-resize' : 'cursor-ns-resize'}
+                        className={isStraightHoriz ? 'cursor-ns-resize' : isStraightVert ? 'cursor-ew-resize' : 'cursor-move'}
                         onMouseDown={(e) => {
-                          if (e.button !== 0) return;
                           e.stopPropagation();
                           e.preventDefault();
+                          segmentDragStartRef.current = { components, wires, didMove: false };
                           draggingWireJointRef.current = { wireId: wire.id, type: 'segment' };
                           setDraggingWireJoint({ wireId: wire.id, type: 'segment' });
                         }}
@@ -7252,21 +8637,20 @@ ${wireXmls.join('\n')}
                         <circle
                           cx={0}
                           cy={0}
-                          r={5}
+                          r={5.5}
                           fill="#2563eb"
                           stroke="#ffffff"
                           strokeWidth={1.8}
-                          pointerEvents="none"
                         />
-                        <title>Kablo Segmentini Taşı</title>
+                        <title>Segmenti Taşı (Sürükle)</title>
                       </g>
                     </g>
                   )}
 
-                  {/* Selected Wire: Floating Action Toolbar Pill (Delete & Bus Toggle) */}
+                  {/* Selected Wire: Compact Floating Action Pill (Delete / Toggle Bus) */}
                   {isSelected && !wiringFrom && !draggingWireJoint && !draggingWireJointRef.current && (
                     <g
-                      transform={`translate(${midX}, ${midY < 55 ? midY + 32 : midY - 32})`}
+                      transform={`translate(${midX}, ${midY < 55 ? midY + 28 : midY - 28})`}
                       className="select-none"
                       onMouseDown={(e) => {
                         e.stopPropagation();
@@ -7280,20 +8664,19 @@ ${wireXmls.join('\n')}
                       }}
                     >
                       <rect
-                        x={-32}
-                        y={-14}
-                        width={64}
-                        height={28}
-                        rx={14}
+                        x={-28}
+                        y={-13}
+                        width={56}
+                        height={26}
+                        rx={13}
                         fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
                         stroke={cadTheme === 'dark' ? '#334155' : '#cbd5e1'}
                         strokeWidth={1.5}
                         filter="drop-shadow(0 4px 8px rgba(0,0,0,0.25))"
                       />
-
-                      {/* Action 1: Delete Wire Segment Button */}
+                      {/* Delete Wire Segment */}
                       <g
-                        transform="translate(-14, 0)"
+                        transform="translate(-13, 0)"
                         onMouseDown={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
@@ -7307,25 +8690,13 @@ ${wireXmls.join('\n')}
                         }}
                         className="cursor-pointer group/del"
                       >
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={9.5}
-                          fill="#ef4444"
-                          className="group-hover/del:opacity-80 transition-opacity"
-                        />
-                        <path
-                          d="M -3,-3 L 3,3 M 3,-3 L -3,3"
-                          stroke="#ffffff"
-                          strokeWidth={1.8}
-                          strokeLinecap="round"
-                        />
-                        <title>Seçili Kablo Parçasını Sil (Del / Backspace)</title>
+                        <circle cx={0} cy={0} r={9} fill="#ef4444" className="group-hover/del:opacity-80 transition-opacity" />
+                        <path d="M -3,-3 L 3,3 M 3,-3 L -3,3" stroke="#ffffff" strokeWidth={1.8} strokeLinecap="round" />
+                        <title>Kablo Segmentini Sil (Del / Backspace)</title>
                       </g>
-
-                      {/* Action 2: Toggle Bus Width Mode Button */}
+                      {/* Toggle Bus Width */}
                       <g
-                        transform="translate(14, 0)"
+                        transform="translate(13, 0)"
                         onMouseDown={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
@@ -7342,13 +8713,13 @@ ${wireXmls.join('\n')}
                         <circle
                           cx={0}
                           cy={0}
-                          r={9.5}
+                          r={9}
                           fill={wire.isBus ? '#6366f1' : '#64748b'}
                           className="group-hover/bus:opacity-80 transition-opacity"
                         />
                         <text
                           x={0}
-                          y={3.5}
+                          y={3}
                           textAnchor="middle"
                           fill="#ffffff"
                           fontSize={8}
@@ -7363,7 +8734,7 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Floating Live Signal Tooltip on Hover */}
-                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && !wiringFrom && (
+                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && (
                     <g transform={`translate(${midX}, ${midY - 16})`} className="pointer-events-none select-none">
                       <rect
                         x={-52}
@@ -7392,13 +8763,13 @@ ${wireXmls.join('\n')}
               );
             })}
 
-            {/* Dynamic Logisim Solder Dots (strictly rendered where >= 3 wire segments meet) */}
+            {/* Dynamic Logisim Solder Dots (strictly rendered at locations with >= 3 wire endpoints) */}
             {circuitJunctions.map((j, idx) => (
               <g key={`dynamic_junc_${j.x}_${j.y}_${idx}`} className="pointer-events-none">
                 <circle
                   cx={j.x}
                   cy={j.y}
-                  r={j.isBus ? 6.5 : 4.5}
+                  r={j.isBus ? 6 : 4.5}
                   fill={
                     j.hasConflict
                       ? '#ef4444'
@@ -7407,28 +8778,23 @@ ${wireXmls.join('\n')}
                       : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')
                   }
                   stroke={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
-                  strokeWidth={1.8}
+                  strokeWidth={1.5}
                 />
               </g>
             ))}
 
-            {/* Dynamic Active Wire being drawn (Logisim WiringTool direction-locked preview) */}
+            {/* Dynamic Active Wire being drawn (Logisim WiringTool direction-locked L-bend preview) */}
             {wiringFrom && (() => {
               const p0 = snapPt10({ x: wiringFrom.x, y: wiringFrom.y });
               const p1 = snapPt10(mousePos);
-
               if (p0.x === p1.x && p0.y === p1.y) return null;
 
-              const previewDir = computeLogisimWireDirection(
-                p0,
-                p1,
-                wiringFrom.direction ?? DIR_NONE
-              );
-              const previewSegs = getLogisimWiringToolSegments(p0, p1, previewDir, components);
-              if (previewSegs.length === 0) return null;
+              const dir = computeLogisimWireDirection(p0, p1, wiringFrom.direction || DIR_NONE);
+              const segs = getLogisimWiringToolSegments(p0, p1, dir, components);
+              if (segs.length === 0) return null;
 
-              let previewPath = `M ${previewSegs[0].e0.x},${previewSegs[0].e0.y}`;
-              for (const seg of previewSegs) {
+              let previewPath = `M ${segs[0].e0.x},${segs[0].e0.y}`;
+              for (const seg of segs) {
                 previewPath += ` L ${seg.e1.x},${seg.e1.y}`;
               }
 
@@ -7454,11 +8820,17 @@ ${wireXmls.join('\n')}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                  {/* Cursor Crosshair Snap Dot */}
+                  {/* Start & End Snap Dots */}
+                  <circle
+                    cx={p0.x}
+                    cy={p0.y}
+                    r={4}
+                    fill={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
+                  />
                   <circle
                     cx={p1.x}
                     cy={p1.y}
-                    r={4.5}
+                    r={5}
                     fill="none"
                     stroke={cadTheme === 'dark' ? '#38bdf8' : '#2563eb'}
                     strokeWidth={2}
@@ -7470,9 +8842,9 @@ ${wireXmls.join('\n')}
             {/* Render Components */}
             {components.map((comp) => {
               const meta = COMPONENT_CATALOG[comp.type];
+              const isSelected = selectedCompIds.includes(comp.id);
               const compW = comp.type === 'subcircuit' ? 120 : meta.width;
               const compH = comp.type === 'subcircuit' ? Math.max(60, (Math.max(comp.inputs.length, comp.outputs.length) + 1) * 20) : meta.height;
-              const isSelected = selectedCompIds.includes(comp.id);
 
               return (
                 <g
@@ -7507,6 +8879,7 @@ ${wireXmls.join('\n')}
                       stroke="#3b82f6"
                       strokeWidth={1.5}
                       strokeDasharray="4,4"
+                      transform={comp.rotation ? `rotate(${comp.rotation}, ${compW / 2}, ${compH / 2})` : undefined}
                       className="pointer-events-none"
                     />
                   )}
@@ -7555,18 +8928,16 @@ ${wireXmls.join('\n')}
                         transform={`translate(${pin.x - comp.x}, ${pin.y - comp.y})`}
                         onMouseDown={(e) => {
                           e.stopPropagation();
-                          if (Date.now() - lastWireConnectedTimeRef.current < 300) {
-                            return;
-                          }
+                          suppressPinClickRef.current = false;
                           if (!wiringFrom && e.button === 0) {
-                            const sp = snapPt10({ x: pin.x, y: pin.y });
+                            const snappedPin = snapPt10({ x: pin.x, y: pin.y });
                             wiringStartTimeRef.current = Date.now();
                             setWiringFrom({
                               compId: comp.id,
                               pinId: pin.id,
                               pinType: pin.type,
-                              x: sp.x,
-                              y: sp.y,
+                              x: snappedPin.x,
+                              y: snappedPin.y,
                               direction: DIR_NONE,
                               hasDragged: false,
                             });
@@ -7636,18 +9007,16 @@ ${wireXmls.join('\n')}
                         transform={`translate(${pin.x - comp.x}, ${pin.y - comp.y})`}
                         onMouseDown={(e) => {
                           e.stopPropagation();
-                          if (Date.now() - lastWireConnectedTimeRef.current < 300) {
-                            return;
-                          }
+                          suppressPinClickRef.current = false;
                           if (!wiringFrom && e.button === 0) {
-                            const sp = snapPt10({ x: pin.x, y: pin.y });
+                            const snappedPin = snapPt10({ x: pin.x, y: pin.y });
                             wiringStartTimeRef.current = Date.now();
                             setWiringFrom({
                               compId: comp.id,
                               pinId: pin.id,
                               pinType: pin.type,
-                              x: sp.x,
-                              y: sp.y,
+                              x: snappedPin.x,
+                              y: snappedPin.y,
                               direction: DIR_NONE,
                               hasDragged: false,
                             });
@@ -8058,8 +9427,11 @@ ${wireXmls.join('\n')}
           </div>
         </div>
 
-        {/* Live Logic Analyzer / Truth Bar */}
-        <div className={`p-5 border-t flex flex-wrap items-center justify-between gap-4 text-xs transition-colors ${
+        {/* Bottom Bar: Desktop Status Bar vs Web Live Analyzer */}
+        {desktopMode ? (
+          renderDesktopStatusBar()
+        ) : (
+          <div className={`p-5 border-t flex flex-wrap items-center justify-between gap-4 text-xs transition-colors ${
           cadTheme === 'dark' ? 'bg-[#090D16] border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
         }`}>
           <div className="flex items-center gap-6">
@@ -8112,6 +9484,8 @@ ${wireXmls.join('\n')}
           <div className="text-slate-500 font-mono text-[11px]">
             Bileşen Sayısı: <strong>{components.length}</strong> • Kablo Sayısı: <strong>{wires.length}</strong> • Adım: <strong>{stepCount}</strong>
           </div>
+        </div>
+        )}
         </div>
       </div>
 
@@ -10685,6 +12059,9 @@ ${wireXmls.join('\n')}
           </div>
         </div>
       )}
+
+      {/* Desktop Extra Modals (K-Map, Number Converter, Presets, About) */}
+      {desktopMode && renderDesktopExtraModals()}
 
             {/* Secondary Confirmation Modal for Clear Canvas */}
       {showClearConfirmModal && (

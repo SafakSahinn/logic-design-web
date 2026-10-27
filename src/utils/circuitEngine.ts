@@ -9,7 +9,7 @@ import type {
 } from '../types/circuit';
 import type { LogicValue } from '../types/logic';
 import { evaluateSubcircuit, getSubcircuitDefinition } from './subcircuitManager';
-import { repairWires } from './wiringEngine';
+import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   switch: {
@@ -934,6 +934,19 @@ export function createComponentInstance(
   };
 }
 
+/**
+ * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
+ * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
+ */
+export function getMultiInputGatePinRelY(count: number, idx: number, height: number): number {
+  if (count === 2) return idx === 0 ? 20 : 40;
+  if (count === 3) return idx === 0 ? 10 : idx === 1 ? 30 : 50;
+  if (count === 4) return idx === 0 ? 10 : idx === 1 ? 20 : idx === 2 ? 40 : 50;
+  if (count === 5) return (idx + 1) * 10;
+  const spacing = height / (count + 1);
+  return Math.round((spacing * (idx + 1)) / 10) * 10;
+}
+
 export function updatePinPositions(comp: CircuitComponentInstance): CircuitComponentInstance {
   if (comp.type === 'subcircuit') {
     const width = 120;
@@ -993,19 +1006,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     let pinSuffix = `in${idx}`;
     if (isMultiInputGate) {
       relX = 0;
-      const count = comp.inputs.length;
-      if (count === 2) {
-        relY = idx === 0 ? 20 : 40;
-      } else if (count === 3) {
-        relY = idx === 0 ? 10 : (idx === 1 ? 30 : 50);
-      } else if (count === 4) {
-        relY = idx === 0 ? 10 : (idx === 1 ? 20 : (idx === 2 ? 40 : 50));
-      } else if (count === 5) {
-        relY = (idx + 1) * 10;
-      } else {
-        const spacing = meta.height / (count + 1);
-        relY = Math.round((spacing * (idx + 1)) / 10) * 10;
-      }
+      relY = getMultiInputGatePinRelY(comp.inputs.length, idx, meta.height);
       pinSuffix = meta.inputs[idx]?.id || `in${idx}`;
     } else {
       const pinDef = meta.inputs[idx] || { relX: 0, relY: 0, id: `in${idx}` };
@@ -1036,6 +1037,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     outputs: newOutputs,
   };
 }
+
+// Body sizes for the wire auto-router (same geometry updatePinPositions uses)
+setComponentBodySizeResolver((comp) => {
+  if (comp.type === 'subcircuit') {
+    const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
+    return { width: 120, height: Math.max(60, (maxPins + 1) * 20) };
+  }
+  const meta = COMPONENT_CATALOG[comp.type];
+  return meta ? { width: meta.width, height: meta.height } : null;
+});
 
 /**
  * Propagate logic values across wires and components
