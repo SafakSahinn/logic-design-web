@@ -2665,6 +2665,9 @@ ${wireXmls.join('\n')}
 
       recordHistory();
 
+      // Ensure all wires are normalized into canonical straight segments first
+      const normalizedWires = repairWires(wires, components);
+
       // 1. Snapshot previous input pins and their locations
       const oldInputs = comp.inputs;
       const oldPinLocations = oldInputs.map((p) => snapPt10({ x: p.x, y: p.y }));
@@ -2700,7 +2703,7 @@ ${wireXmls.join('\n')}
       }
       const attachments: WireAttachment[] = [];
 
-      for (const w of wires) {
+      for (const w of normalizedWires) {
         if (w.endPoint) {
           const ep = snapPt10(w.endPoint);
           for (let i = 0; i < currentCount; i++) {
@@ -2797,7 +2800,7 @@ ${wireXmls.join('\n')}
 
       // 5. Clone wire list and apply orthogonal adjustments
       const wireMap = new Map<string, CircuitWire>();
-      wires.forEach((w) => {
+      normalizedWires.forEach((w) => {
         wireMap.set(w.id, {
           ...w,
           startPoint: w.startPoint ? { ...w.startPoint } : undefined,
@@ -2855,8 +2858,8 @@ ${wireXmls.join('\n')}
               }
               additionalWires.push({
                 id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: '',
-                fromPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                fromCompId: cornerX === startPt.x ? w.fromCompId : '',
+                fromPinId: cornerX === startPt.x ? w.fromPinId : 'loc_' + cornerX + '_' + oldPt.y,
                 toCompId: '',
                 toPinId: 'loc_' + cornerX + '_' + newPt.y,
                 startPoint: { x: cornerX, y: oldPt.y },
@@ -2888,8 +2891,8 @@ ${wireXmls.join('\n')}
               }
               additionalWires.push({
                 id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-                fromCompId: '',
-                fromPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                fromCompId: cornerY === startPt.y ? w.fromCompId : '',
+                fromPinId: cornerY === startPt.y ? w.fromPinId : 'loc_' + oldPt.x + '_' + cornerY,
                 toCompId: '',
                 toPinId: 'loc_' + newPt.x + '_' + cornerY,
                 startPoint: { x: oldPt.x, y: cornerY },
@@ -2920,8 +2923,8 @@ ${wireXmls.join('\n')}
                 id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                 fromCompId: '',
                 fromPinId: 'loc_' + cornerX + '_' + newPt.y,
-                toCompId: '',
-                toPinId: 'loc_' + cornerX + '_' + oldPt.y,
+                toCompId: cornerX === endPt.x ? w.toCompId : '',
+                toPinId: cornerX === endPt.x ? w.toPinId : 'loc_' + cornerX + '_' + oldPt.y,
                 startPoint: { x: cornerX, y: newPt.y },
                 endPoint: { x: cornerX, y: oldPt.y },
                 value: w.value,
@@ -2953,8 +2956,8 @@ ${wireXmls.join('\n')}
                 id: 'w_jog2_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
                 fromCompId: '',
                 fromPinId: 'loc_' + newPt.x + '_' + cornerY,
-                toCompId: '',
-                toPinId: 'loc_' + oldPt.x + '_' + cornerY,
+                toCompId: cornerY === endPt.y ? w.toCompId : '',
+                toPinId: cornerY === endPt.y ? w.toPinId : 'loc_' + oldPt.x + '_' + cornerY,
                 startPoint: { x: newPt.x, y: cornerY },
                 endPoint: { x: oldPt.x, y: cornerY },
                 value: w.value,
