@@ -141,48 +141,99 @@ export function synthesizeFSM(
   const d0Sol = solveKMap(d0MintermValues, 3);
   const zSol = solveKMap(zMintermValues, 3);
 
-  // Construct circuit layout on canvas
+  // Construct the circuit that really implements D1, D0 and Z (K-map variables: A = Q1, B = Q0, C = X)
   const sx = Math.round(startX / 10) * 10;
   const sy = Math.round(startY / 10) * 10;
   const components: CircuitComponentInstance[] = [];
   const wires: CircuitWire[] = [];
+  // Unique ids: the FSM can be synthesised several times onto the same sheet
+  const uid = `fsm_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`;
+  let wireNo = 0;
+  const add = (type: Parameters<typeof createComponentInstance>[0], x: number, y: number, label: string, key: string, inputs?: number) => {
+    let comp = createComponentInstance(type, x, y, label, `${uid}_${key}`);
+    if (inputs && inputs > comp.inputs.length) {
+      comp.inputs = Array.from({ length: inputs }).map((_, k) => ({
+        id: `${comp.id}_in${k}`,
+        name: String.fromCharCode(65 + k),
+        type: 'input' as const,
+        value: 0 as LogicValue,
+        x,
+        y,
+      }));
+      comp.state = { ...comp.state, gateInputsCount: inputs };
+    }
+    comp = updatePinPositions(comp);
+    components.push(comp);
+    return comp;
+  };
+  const connect = (from: { compId: string; pinId: string }, to: CircuitComponentInstance, toPinIdx: number) => {
+    wires.push({
+      id: `${uid}_w${wireNo++}`,
+      fromCompId: from.compId,
+      fromPinId: from.pinId,
+      toCompId: to.id,
+      toPinId: to.inputs[toPinIdx].id,
+      value: 0,
+    });
+  };
 
-  // Input Components (Clock, Reset, Input X)
-  const compClk = { ...createComponentInstance('clock', sx, sy + 60, 'Sistem Saati (CLK)'), id: 'fsm_clk' };
-  const compRst = { ...createComponentInstance('switch', sx, sy + 160, 'Durum Girişi (S)'), id: 'fsm_rst', state: { on: true } };
-  const compX = { ...createComponentInstance('switch', sx, sy + 260, 'Giriş (X)'), id: 'fsm_x' };
+  const clk = add('clock', sx, sy, 'Sistem Saati (CLK)', 'clk');
+  const xIn = add('switch', sx, sy + 120, 'Giriş (X)', 'x');
+  const xNot = add('not', sx + 120, sy + 200, "X'", 'xnot');
+  connect({ compId: xIn.id, pinId: xIn.outputs[0].id }, xNot, 0);
+  const ff1 = add('dFlipFlop', sx + 620, sy + 40, 'Durum FF1 (Q1)', 'ff1');
+  const ff0 = add('dFlipFlop', sx + 620, sy + 220, 'Durum FF0 (Q0)', 'ff0');
+  connect({ compId: clk.id, pinId: clk.outputs[0].id }, ff1, 1);
+  connect({ compId: clk.id, pinId: clk.outputs[0].id }, ff0, 1);
 
-  // D Flip-Flops for State Storage
-  const compFF1 = { ...createComponentInstance('dFlipFlop', sx + 380, sy + 80, 'Durum FF1 (Q1)'), id: 'fsm_ff1' };
-  const compFF0 = { ...createComponentInstance('dFlipFlop', sx + 380, sy + 240, 'Durum FF0 (Q0)'), id: 'fsm_ff0' };
+  // Literal sources: Q / Q' straight from the flip-flops, X from the switch, X' through the NOT gate
+  const literal = (name: string): { compId: string; pinId: string } => {
+    const neg = name.endsWith("'");
+    const v = name[0];
+    if (v === 'A') return { compId: ff1.id, pinId: ff1.outputs[neg ? 1 : 0].id };
+    if (v === 'B') return { compId: ff0.id, pinId: ff0.outputs[neg ? 1 : 0].id };
+    return neg ? { compId: xNot.id, pinId: xNot.outputs[0].id } : { compId: xIn.id, pinId: xIn.outputs[0].id };
+  };
 
-  // Logic Gates for Next State (AND, OR, NOT)
-  const compAnd1 = { ...createComponentInstance('and', sx + 200, sy + 70, 'D1 Mantık Kapısı'), id: 'fsm_and1' };
-  const compAnd0 = { ...createComponentInstance('and', sx + 200, sy + 230, 'D0 Mantık Kapısı'), id: 'fsm_and0' };
+  // Labels in state-machine names instead of the K-map letters
+  const named = (e: string) => e.replace(/A/g, 'Q1').replace(/B/g, 'Q0').replace(/C/g, 'X');
 
-  // Output Z LED
-  const compLedZ = { ...createComponentInstance('led', sx + 540, sy + 70, 'Çıkış (Z)'), id: 'fsm_led_z' };
+  // One SOP -> AND column + OR gate, driving `target` input `pinIdx`
+  let row = 0;
+  const buildSop = (sop: string, label: string, target: CircuitComponentInstance, pinIdx: number) => {
+    const expr = (sop || '0').trim();
+    if (expr === '0' || expr === '1') {
+      const c = add(expr === '1' ? 'vcc' : 'gnd', sx + 260, sy + row * 90, `${label} = ${expr}`, `${label}_const`);
+      row++;
+      connect({ compId: c.id, pinId: c.outputs[0].id }, target, pinIdx);
+      return;
+    }
+    const terms = expr.split('+').map((t) => t.trim()).filter(Boolean);
+    const firstRow = row;
+    const termOuts = terms.map((term, ti) => {
+      const lits = term.match(/[A-C]'?/g) || [];
+      if (lits.length === 1) return literal(lits[0]);
+      const gate = add('and', sx + 260, sy + row * 90, `${label}: ${named(term)}`, `${label}_and${ti}`, lits.length);
+      row++;
+      lits.forEach((l, k) => connect(literal(l), gate, k));
+      return { compId: gate.id, pinId: gate.outputs[0].id };
+    });
+    if (termOuts.length === 1) {
+      connect(termOuts[0], target, pinIdx);
+      return;
+    }
+    // Beside its own AND gates, or on a fresh row when every term is a single literal (never on top of
+    // another equation's OR gate: overlapping pins would short the two equations)
+    const orRow = row > firstRow ? Math.floor((firstRow + row - 1) / 2) : row++;
+    const orGate = add('or', sx + 440, sy + orRow * 90, `${label} = ${named(expr)}`, `${label}_or`, termOuts.length);
+    termOuts.forEach((o, k) => connect(o, orGate, k));
+    connect({ compId: orGate.id, pinId: orGate.outputs[0].id }, target, pinIdx);
+  };
 
-  const compsToAdd = [compClk, compRst, compX, compFF1, compFF0, compAnd1, compAnd0, compLedZ].map(updatePinPositions);
-  components.push(...compsToAdd);
-
-  // Wire connections
-  wires.push(
-    // Clock to both Flip-Flops
-    { id: 'fsm_w1', fromCompId: 'fsm_clk', fromPinId: 'fsm_clk_out', toCompId: 'fsm_ff1', toPinId: 'fsm_ff1_inClk', value: 0 },
-    { id: 'fsm_w2', fromCompId: 'fsm_clk', fromPinId: 'fsm_clk_out', toCompId: 'fsm_ff0', toPinId: 'fsm_ff0_inClk', value: 0 },
-    // Enable/State input to Next State logic
-    { id: 'fsm_w3', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_and1', toPinId: 'fsm_and1_in1', value: 1 },
-    { id: 'fsm_w4', fromCompId: 'fsm_rst', fromPinId: 'fsm_rst_out', toCompId: 'fsm_and0', toPinId: 'fsm_and0_in1', value: 1 },
-    // Input X to Next State logic
-    { id: 'fsm_w5', fromCompId: 'fsm_x', fromPinId: 'fsm_x_out', toCompId: 'fsm_and1', toPinId: 'fsm_and1_in0', value: 0 },
-    { id: 'fsm_w6', fromCompId: 'fsm_x', fromPinId: 'fsm_x_out', toCompId: 'fsm_and0', toPinId: 'fsm_and0_in0', value: 0 },
-    // Logic gate outputs to D inputs
-    { id: 'fsm_w7', fromCompId: 'fsm_and1', fromPinId: 'fsm_and1_out', toCompId: 'fsm_ff1', toPinId: 'fsm_ff1_inD', value: 0 },
-    { id: 'fsm_w8', fromCompId: 'fsm_and0', fromPinId: 'fsm_and0_out', toCompId: 'fsm_ff0', toPinId: 'fsm_ff0_inD', value: 0 },
-    // Output Z
-    { id: 'fsm_w9', fromCompId: 'fsm_ff1', fromPinId: 'fsm_ff1_outQ', toCompId: 'fsm_led_z', toPinId: 'fsm_led_z_in', value: 0 }
-  );
+  const ledZ = add('led', sx + 820, sy + 140, 'Çıkış (Z)', 'z');
+  buildSop(d1Sol.simplifiedSOP, 'D1', ff1, 0);
+  buildSop(d0Sol.simplifiedSOP, 'D0', ff0, 0);
+  buildSop(zSol.simplifiedSOP, 'Z', ledZ, 0);
 
   const normalizedWires = repairWires(wires, components);
   const sim = simulateCircuit(components, normalizedWires);

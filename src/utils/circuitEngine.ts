@@ -1452,7 +1452,8 @@ export function simulateCircuitStep(
       case 'register4': {
         const d = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
         const clk: LogicValue = inVals[4] === 1 ? 1 : 0;
-        const we: LogicValue = inVals[5] === 1 ? 1 : 0;
+        // Logisim: an unconnected enable counts as enabled
+        const we: LogicValue = !isPinConnected(comp.inputs[5]?.id ?? '') || inVals[5] === 1 ? 1 : 0;
         const rst: LogicValue = inVals[6] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? 0;
         const isRisingEdge = clk === 1 && prevClk === 0;
@@ -1483,7 +1484,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'decoder2to4': {
-        const en = inVals[0] ?? 1;
+        // Logisim: an unconnected enable counts as enabled
+        const en = isPinConnected(comp.inputs[0]?.id ?? '') ? inVals[0] : 1;
         const a0 = inVals[1] ?? 0;
         const a1 = inVals[2] ?? 0;
         const addr = a0 + a1 * 2;
@@ -1606,7 +1608,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'decoder3to8': {
-        const en = inVals[0] ?? 0;
+        const en = isPinConnected(comp.inputs[0]?.id ?? '') ? inVals[0] : 1;
         const a0 = inVals[1] ?? 0;
         const a1 = inVals[2] ?? 0;
         const a2 = inVals[3] ?? 0;
@@ -2876,6 +2878,42 @@ export const CHIPTUNE_NOTE_NAMES: Record<number, string> = {
 /**
  * Recursively trace boolean algebraic expressions backwards from an output pin to input switches
  */
+/**
+ * Names of the input switches/buttons as they appear in formulas and truth tables. A part keeps its own
+ * label when that label is unique and not the default one; the others become A, B, C ... (otherwise every
+ * fresh switch is called "Giriş Anahtarı" and formulas read "Giriş Anahtarı · Giriş Anahtarı").
+ */
+export function getInputSignalNames(components: CircuitComponentInstance[]): Map<string, string> {
+  const inputs = components.filter((c) => c.type === 'switch' || c.type === 'pushbutton');
+  const defaults = new Set([COMPONENT_CATALOG.switch.name, COMPONENT_CATALOG.pushbutton.name, '']);
+  const count = new Map<string, number>();
+  for (const c of inputs) {
+    const l = (c.label || '').trim();
+    count.set(l, (count.get(l) || 0) + 1);
+  }
+  const keepsLabel = (c: CircuitComponentInstance) => {
+    const l = (c.label || '').trim();
+    return !defaults.has(l) && count.get(l) === 1;
+  };
+  const used = new Set(inputs.filter(keepsLabel).map((c) => (c.label || '').trim()));
+  let letter = 0;
+  const names = new Map<string, string>();
+  for (const c of inputs) {
+    if (keepsLabel(c)) {
+      names.set(c.id, (c.label || '').trim());
+      continue;
+    }
+    let name = '';
+    do {
+      name = letter < 26 ? String.fromCharCode(65 + letter) : `X${letter - 25}`;
+      letter++;
+    } while (used.has(name));
+    used.add(name);
+    names.set(c.id, name);
+  }
+  return names;
+}
+
 export function generateBooleanExpression(
   compId: string,
   pinIndex: number | undefined,
@@ -2887,7 +2925,7 @@ export function generateBooleanExpression(
   if (!comp) return '?';
 
   if (comp.type === 'switch' || comp.type === 'pushbutton') {
-    return comp.label || (comp.type === 'switch' ? 'SW' : 'BTN');
+    return getInputSignalNames(components).get(comp.id) || (comp.type === 'switch' ? 'SW' : 'BTN');
   }
   if (comp.type === 'vcc') return '1';
   if (comp.type === 'gnd') return '0';
@@ -3117,7 +3155,8 @@ export function generateTruthTable(
     };
   } = {};
 
-  const varNames = activeSwitches.map((s) => s.label || 'Giriş');
+  const inputNames = getInputSignalNames(components);
+  const varNames = activeSwitches.map((s) => inputNames.get(s.id) || 'Giriş');
   outputList.forEach((out, outIdx) => {
     const mintermIndices: number[] = [];
     rows.forEach((r, rIdx) => {
@@ -3129,7 +3168,7 @@ export function generateTruthTable(
   });
 
   return {
-    inputs: activeSwitches.map((s) => ({ id: s.id, name: s.label || 'Giriş' })),
+    inputs: activeSwitches.map((s) => ({ id: s.id, name: inputNames.get(s.id) || 'Giriş' })),
     outputs: outputList.map((o) => ({ id: o.id, name: o.name })),
     booleanExpressions,
     minimalExpressions,
@@ -3353,13 +3392,30 @@ export function parseBooleanExpression(rawExpr: string): ASTNode {
     } else if (ch === '+' || ch === '^' || ch === '*' || ch === '&' || ch === '|' || ch === '!' || ch === '~') {
       tokens.push({ type: 'op', value: ch === '&' ? '*' : ch === '|' ? '+' : ch === '~' ? '!' : ch });
       i++;
+    } else if (ch === '⊙') {
+      tokens.push({ type: 'op', value: 'xnor' });
+      i++;
     } else if (/[A-Za-z0-9_]/.test(ch)) {
-      let varName = '';
+      let word = '';
       while (i < expr.length && /[A-Za-z0-9_]/.test(expr[i])) {
-        varName += expr[i];
+        word += expr[i];
         i++;
       }
-      tokens.push({ type: 'var', value: varName });
+      const kw = word.toUpperCase();
+      if (kw === 'AND') tokens.push({ type: 'op', value: '*' });
+      else if (kw === 'OR') tokens.push({ type: 'op', value: '+' });
+      else if (kw === 'XOR') tokens.push({ type: 'op', value: '^' });
+      else if (kw === 'XNOR') tokens.push({ type: 'op', value: 'xnor' });
+      else if (kw === 'NOT') tokens.push({ type: 'op', value: '!' });
+      else if (/^[A-Za-z]+$/.test(word)) {
+        // Textbook notation: "AB'C" is A·B'·C (the K-map and truth table write their results this way);
+        // names with digits/underscores (X1, IN_A) stay single variables
+        for (const letter of word) tokens.push({ type: 'var', value: letter });
+      } else if (/^[01]+$/.test(word)) {
+        for (const digit of word) tokens.push({ type: 'var', value: digit });
+      } else {
+        tokens.push({ type: 'var', value: word });
+      }
     } else {
       i++;
     }
@@ -3411,10 +3467,12 @@ export function parseBooleanExpression(rawExpr: string): ASTNode {
 
   function parseXor(): ASTNode {
     let node = parseAnd();
-    while (peek() && peek()!.type === 'op' && peek()!.value === '^') {
-      consume('^');
+    while (peek() && peek()!.type === 'op' && (peek()!.value === '^' || peek()!.value === 'xnor')) {
+      const isXnor = consume().value === 'xnor';
       const right = parseAnd();
-      if (node.type === 'xor' && node.children) {
+      if (isXnor) {
+        node = { type: 'not', child: { type: 'xor', children: [node, right] } };
+      } else if (node.type === 'xor' && node.children) {
         node.children.push(right);
       } else {
         node = { type: 'xor', children: [node, right] };
@@ -3483,7 +3541,13 @@ export interface SynthesisOptions {
 }
 
 /**
- * Automatically layout and wire a digital circuit from a parsed Boolean AST
+ * Automatically layout and wire a digital circuit from a parsed Boolean AST.
+ *
+ * - standard: AND / OR / XOR / NOT gates (more than 5 operands are split over several gates)
+ * - nand / nor: a real NAND-only / NOR-only network (NOT = NAND(a,a), OR = NAND(a',b'), XOR from 4 NANDs ...),
+ *   not just the same gates renamed, which would change the function
+ * The network is built first, then every gate is placed in the column of its logic level (inputs left,
+ * output right) and stacked inside that column, so no two parts ever share a pin location.
  */
 export function synthesizeCircuitFromBooleanExpression(
   rawExpr: string,
@@ -3495,131 +3559,179 @@ export function synthesizeCircuitFromBooleanExpression(
   const gateMode = options?.gateType ?? 'standard';
   const outLabel = options?.outputLabel ?? 'Çıkış F';
 
-  // 1. Collect all unique variable names
+  // 1. Collect all unique variable names (0 / 1 are constants)
   const varSet = new Set<string>();
+  let usesConst = false;
   function collectVars(node: ASTNode) {
-    if (node.type === 'var' && node.name) varSet.add(node.name);
+    if (node.type === 'var' && node.name) {
+      if (node.name === '0' || node.name === '1') usesConst = true;
+      else varSet.add(node.name);
+    }
     if (node.child) collectVars(node.child);
     if (node.children) node.children.forEach(collectVars);
   }
   collectVars(ast);
   const vars = Array.from(varSet).sort();
-  if (vars.length === 0) {
+  if (vars.length === 0 && !usesConst) {
     throw new Error('İfadede en az 1 mantıksal değişken (A, B vb.) bulunmalıdır.');
   }
 
+  // 2. Build the gate network (positions come later)
+  const uid = `syn_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`;
+  type Sig = { compId: string; pinId: string; level: number; key: string };
+  interface GateSpec {
+    id: string;
+    type: ComponentType;
+    inputs: Sig[];
+    level: number;
+  }
+  const gates: GateSpec[] = [];
+  const sources = new Map<string, { id: string; type: ComponentType; label: string }>();
+  const sourceSig = (name: string): Sig => {
+    if (!sources.has(name)) {
+      const type: ComponentType = name === '0' ? 'gnd' : name === '1' ? 'vcc' : 'switch';
+      const id = `${uid}_src_${sources.size}`;
+      sources.set(name, { id, type, label: type === 'switch' ? `Giriş ${name}` : name === '1' ? 'Sabit 1' : 'Sabit 0' });
+    }
+    const s = sources.get(name)!;
+    return { compId: s.id, pinId: `${s.id}_out`, level: 0, key: `src:${name}` };
+  };
+  // Identical gates on identical inputs are shared (e.g. one inverter per signal)
+  const gateCache = new Map<string, Sig>();
+  const gate = (type: ComponentType, inputs: Sig[]): Sig => {
+    const cacheKey = `${type}(${inputs.map((i) => i.key).join(',')})`;
+    const cached = gateCache.get(cacheKey);
+    if (cached) return cached;
+    const id = `${uid}_g${gates.length}`;
+    const level = Math.max(...inputs.map((i) => i.level)) + 1;
+    gates.push({ id, type, inputs, level });
+    const sig = { compId: id, pinId: `${id}_out`, level, key: cacheKey };
+    gateCache.set(cacheKey, sig);
+    return sig;
+  };
+  // n-ary gate limited to 5 inputs: wider ones are split, keeping the function
+  const wide = (type: 'and' | 'or' | 'xor', xs: Sig[]): Sig => {
+    if (xs.length === 1) return xs[0];
+    if (xs.length <= 5) return gate(type, xs);
+    const chunks: Sig[] = [];
+    for (let k = 0; k < xs.length; k += 5) chunks.push(wide(type, xs.slice(k, k + 5)));
+    return wide(type, chunks);
+  };
+
+  const notOf = (a: Sig): Sig => {
+    if (gateMode === 'nand') return gate('nand', [a, a]);
+    if (gateMode === 'nor') return gate('nor', [a, a]);
+    return gate('not', [a]);
+  };
+  const andOf = (xs: Sig[]): Sig => {
+    if (xs.length === 1) return xs[0];
+    if (gateMode === 'standard') return wide('and', xs);
+    if (gateMode === 'nand') {
+      if (xs.length > 5) return andOf([andOf(xs.slice(0, 5)), andOf(xs.slice(5))]);
+      return notOf(gate('nand', xs));
+    }
+    // NOR-only: a·b = (a' + b')'
+    if (xs.length > 5) return andOf([andOf(xs.slice(0, 5)), andOf(xs.slice(5))]);
+    return gate('nor', xs.map(notOf));
+  };
+  const orOf = (xs: Sig[]): Sig => {
+    if (xs.length === 1) return xs[0];
+    if (gateMode === 'standard') return wide('or', xs);
+    if (gateMode === 'nor') {
+      if (xs.length > 5) return orOf([orOf(xs.slice(0, 5)), orOf(xs.slice(5))]);
+      return notOf(gate('nor', xs));
+    }
+    // NAND-only: a + b = (a'·b')'
+    if (xs.length > 5) return orOf([orOf(xs.slice(0, 5)), orOf(xs.slice(5))]);
+    return gate('nand', xs.map(notOf));
+  };
+  const xor2 = (a: Sig, b: Sig): Sig => {
+    if (gateMode === 'nand') {
+      const t = gate('nand', [a, b]);
+      return gate('nand', [gate('nand', [a, t]), gate('nand', [b, t])]);
+    }
+    if (gateMode === 'nor') {
+      // 4 NORs give XNOR; one more inverts it
+      const t = gate('nor', [a, b]);
+      return notOf(gate('nor', [gate('nor', [a, t]), gate('nor', [b, t])]));
+    }
+    return gate('xor', [a, b]);
+  };
+  const xorOf = (xs: Sig[]): Sig => {
+    if (xs.length === 1) return xs[0];
+    if (gateMode === 'standard') return wide('xor', xs);
+    return xs.slice(1).reduce((acc, x) => xor2(acc, x), xs[0]);
+  };
+
+  const build = (node: ASTNode): Sig => {
+    if (node.type === 'var') return sourceSig(node.name!);
+    if (node.type === 'not') {
+      // Double negation needs no gates
+      if (node.child!.type === 'not') return build(node.child!.child!);
+      return notOf(build(node.child!));
+    }
+    const xs = (node.children || []).map(build);
+    if (node.type === 'and') return andOf(xs);
+    if (node.type === 'or') return orOf(xs);
+    return xorOf(xs);
+  };
+  const root = build(ast);
+
+  // 3. Layout: inputs in column 0, each gate in the column of its level, LED after the last level
+  const COL_W = 160;
   const components: CircuitComponentInstance[] = [];
   const wires: CircuitWire[] = [];
-
-  // 2. Create switches on the left column
-  const switchMap = new Map<string, CircuitComponentInstance>();
-  vars.forEach((vName, idx) => {
-    const sw = createComponentInstance('switch', startX, startY + idx * 80, `Giriş ${vName}`);
-    components.push(updatePinPositions(sw));
-    switchMap.set(vName, sw);
-  });
-
-  let nextGateId = 1;
-  let nextWireId = 1;
-
-  function buildSubcircuit(node: ASTNode, depth: number, yPos: number): { comp: CircuitComponentInstance; outputPinId: string; height: number } {
-    if (node.type === 'var') {
-      const sw = switchMap.get(node.name!)!;
-      return { comp: sw, outputPinId: sw.outputs[0].id, height: 60 };
+  let srcRow = 0;
+  for (const name of [...vars, ...(usesConst ? ['0', '1'] : [])]) {
+    const s = sources.get(name);
+    if (!s) continue;
+    components.push(updatePinPositions(createComponentInstance(s.type, startX, startY + srcRow * 80, s.label, s.id)));
+    srcRow++;
+  }
+  const colY = new Map<number, number>();
+  let gateNo = 1;
+  const placed = new Map<string, CircuitComponentInstance>();
+  for (const g of gates) {
+    const x = startX + g.level * COL_W;
+    const y = colY.get(g.level) ?? startY;
+    let comp = createComponentInstance(g.type, x, y, `${g.type.toUpperCase()}_${gateNo++}`, g.id);
+    if (g.type !== 'not' && g.inputs.length !== comp.inputs.length) {
+      comp.inputs = g.inputs.map((_, k) => ({
+        id: `${g.id}_in${k}`,
+        name: String.fromCharCode(65 + k),
+        type: 'input' as const,
+        value: 0 as LogicValue,
+        x,
+        y,
+      }));
+      comp.state = { ...comp.state, gateInputsCount: g.inputs.length };
     }
-
-    const colX = startX + 120 + depth * 140;
-
-    if (node.type === 'not') {
-      const childRes = buildSubcircuit(node.child!, depth, yPos);
-      const notComp = createComponentInstance('not', colX, yPos, `NOT_${nextGateId++}`);
-      const refreshedNot = updatePinPositions(notComp);
-      components.push(refreshedNot);
-
-      wires.push({
-        id: `wire_synth_${Date.now()}_${nextWireId++}`,
-        fromCompId: childRes.comp.id,
-        fromPinId: childRes.outputPinId,
-        toCompId: refreshedNot.id,
-        toPinId: refreshedNot.inputs[0].id,
-        value: 0,
-      });
-
-      return { comp: refreshedNot, outputPinId: refreshedNot.outputs[0].id, height: 50 };
-    }
-
-    let actualGateType: ComponentType = node.type === 'and' ? 'and' : node.type === 'xor' ? 'xor' : 'or';
-    if (gateMode === 'nand') {
-      actualGateType = 'nand';
-    } else if (gateMode === 'nor') {
-      actualGateType = 'nor';
-    }
-
-    const children = node.children || [];
-    const childResults: { comp: CircuitComponentInstance; outputPinId: string; height: number }[] = [];
-
-    let curY = yPos;
-    children.forEach((child) => {
-      const res = buildSubcircuit(child, depth, curY);
-      childResults.push(res);
-      curY += res.height + 20;
+    comp = updatePinPositions(comp);
+    colY.set(g.level, y + (COMPONENT_CATALOG[g.type]?.height || 60) + 40);
+    placed.set(g.id, comp);
+    components.push(comp);
+  }
+  let wireNo = 0;
+  const wireTo = (from: Sig, toComp: CircuitComponentInstance, pinIdx: number) => {
+    wires.push({
+      id: `${uid}_w${wireNo++}`,
+      fromCompId: from.compId,
+      fromPinId: from.pinId,
+      toCompId: toComp.id,
+      toPinId: toComp.inputs[pinIdx].id,
+      value: 0,
     });
-
-    const midY = Math.round(((yPos + curY - 20) / 2 - 20) / 10) * 10;
-    const gateComp = createComponentInstance(actualGateType, colX, Math.max(startY - 20, midY), `${actualGateType.toUpperCase()}_${nextGateId++}`);
-
-    if (children.length > 2) {
-      const numInputs = Math.min(5, children.length);
-      const meta = COMPONENT_CATALOG[actualGateType];
-      gateComp.inputs = Array.from({ length: numInputs }).map((_, idx) => {
-        const pinId = `${gateComp.id}_in${idx}`;
-        const spacing = meta.height / (numInputs + 1);
-        const relY = Math.round((spacing * (idx + 1)) / 10) * 10;
-        return {
-          id: pinId,
-          name: String.fromCharCode(65 + idx),
-          type: 'input' as const,
-          value: 0 as LogicValue,
-          x: gateComp.x,
-          y: gateComp.y + relY,
-        };
-      });
-      gateComp.state.gateInputsCount = numInputs;
-    }
-
-    const refreshedGate = updatePinPositions(gateComp);
-    components.push(refreshedGate);
-
-    childResults.forEach((cRes, idx) => {
-      if (refreshedGate.inputs[idx]) {
-        wires.push({
-          id: `wire_synth_${Date.now()}_${nextWireId++}`,
-          fromCompId: cRes.comp.id,
-          fromPinId: cRes.outputPinId,
-          toCompId: refreshedGate.id,
-          toPinId: refreshedGate.inputs[idx].id,
-          value: 0,
-        });
-      }
-    });
-
-    return { comp: refreshedGate, outputPinId: refreshedGate.outputs[0].id, height: curY - yPos };
+  };
+  for (const g of gates) {
+    const comp = placed.get(g.id)!;
+    g.inputs.forEach((sig, k) => wireTo(sig, comp, k));
   }
 
-  const rootResult = buildSubcircuit(ast, 1, startY);
-
-  const finalLed = createComponentInstance('led', rootResult.comp.x + 130, rootResult.comp.y, outLabel);
-  const refreshedLed = updatePinPositions(finalLed);
-  components.push(refreshedLed);
-
-  wires.push({
-    id: `wire_synth_${Date.now()}_${nextWireId++}`,
-    fromCompId: rootResult.comp.id,
-    fromPinId: rootResult.outputPinId,
-    toCompId: refreshedLed.id,
-    toPinId: refreshedLed.inputs[0].id,
-    value: 0,
-  });
+  const rootComp = placed.get(root.compId);
+  const ledY = rootComp ? rootComp.y : startY;
+  const led = updatePinPositions(createComponentInstance('led', startX + (root.level + 1) * COL_W, ledY, outLabel, `${uid}_out`));
+  components.push(led);
+  wireTo(root, led, 0);
 
   const normalizedWires = repairWires(wires, components);
   const sim = simulateCircuit(components, normalizedWires);

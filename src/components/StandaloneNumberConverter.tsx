@@ -8,27 +8,26 @@ export const StandaloneNumberConverter: React.FC = () => {
   const [inputBase, setInputBase] = useState<'10' | '2' | '8' | '16'>('10');
   const [inputValue, setInputValue] = useState<string>('53');
 
-  // Convert input value to decimal integer
-  const parseToDecimal = (val: string, base: string): number | null => {
-    const clean = val.trim();
-    if (!clean) return null;
-    try {
-      const radix = parseInt(base, 10);
-      const res = parseInt(clean, radix);
-      return isNaN(res) ? null : res;
-    } catch {
-      return null;
-    }
+  // Convert input value to an exact integer. Every character must be a digit of the chosen base
+  // (parseInt stops at the first bad digit: "102" in base 2 would silently become 2), and BigInt keeps
+  // large values exact (Number loses precision above 2^53, the bit operators above 2^31)
+  const DIGITS: Record<string, RegExp> = { '2': /^[01]+$/, '8': /^[0-7]+$/, '10': /^[0-9]+$/, '16': /^[0-9a-f]+$/i };
+  const parseToDecimal = (val: string, base: string): bigint | null => {
+    const clean = val.trim().replace(/[\s_]/g, '');
+    if (!clean || !DIGITS[base].test(clean)) return null;
+    const prefix = base === '2' ? '0b' : base === '8' ? '0o' : base === '16' ? '0x' : '';
+    return BigInt(prefix + clean);
   };
 
   const decNumber = parseToDecimal(inputValue, inputBase);
-  const isValid = decNumber !== null && decNumber >= 0;
+  const isValid = decNumber !== null;
+  const invalidText = inputValue.trim() ? 'Geçersiz' : '-';
 
-  const binStr = isValid ? decNumber.toString(2) : '-';
-  const octStr = isValid ? decNumber.toString(8) : '-';
-  const decStr = isValid ? decNumber.toString(10) : '-';
-  const hexStr = isValid ? decNumber.toString(16).toUpperCase() : '-';
-  const grayStr = isValid ? (decNumber ^ (decNumber >> 1)).toString(2) : '-';
+  const binStr = isValid ? decNumber.toString(2) : invalidText;
+  const octStr = isValid ? decNumber.toString(8) : invalidText;
+  const decStr = isValid ? decNumber.toString(10) : invalidText;
+  const hexStr = isValid ? decNumber.toString(16).toUpperCase() : invalidText;
+  const grayStr = isValid ? (decNumber ^ (decNumber >> 1n)).toString(2) : invalidText;
 
   // Division steps for decimal to binary
   const getDivisionSteps = (n: number) => {
@@ -44,7 +43,7 @@ export const StandaloneNumberConverter: React.FC = () => {
     return steps;
   };
 
-  const divisionSteps = isValid && decNumber <= 10000 ? getDivisionSteps(decNumber) : [];
+  const divisionSteps = isValid && decNumber <= 10000n ? getDivisionSteps(Number(decNumber)) : [];
 
   // 2's Complement State
   const [numA, setNumA] = useState<number>(45);
@@ -65,10 +64,14 @@ export const StandaloneNumberConverter: React.FC = () => {
   const binA = toTwosComplement(numA, bitWidth);
   const binB = toTwosComplement(numB, bitWidth);
   const sumVal = numA + numB;
-  const binSum = toTwosComplement(sumVal, bitWidth);
   const isOverflow =
     sumVal > Math.pow(2, bitWidth - 1) - 1 ||
     sumVal < -Math.pow(2, bitWidth - 1);
+  // On overflow the adder still produces bitWidth bits (the true sum modulo 2^n), show those
+  const binSum =
+    isOverflow && binA !== 'Aralık Dışı' && binB !== 'Aralık Dışı'
+      ? (((sumVal % 2 ** bitWidth) + 2 ** bitWidth) % 2 ** bitWidth).toString(2).padStart(bitWidth, '0')
+      : toTwosComplement(sumVal, bitWidth);
 
   // IEEE 754 Float32 State
   const [floatInput, setFloatInput] = useState<string>('13.625');
@@ -189,22 +192,22 @@ export const StandaloneNumberConverter: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-2">
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-1">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">İkili (Binary - Taban 2)</span>
-                <div className="text-xl font-mono font-bold text-blue-700 break-all">{binStr}₂</div>
+                <div className="text-xl font-mono font-bold text-blue-700 break-all">{binStr}{isValid && '₂'}</div>
               </div>
 
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-1">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Sekizli (Octal - Taban 8)</span>
-                <div className="text-xl font-mono font-bold text-slate-800 break-all">{octStr}₈</div>
+                <div className="text-xl font-mono font-bold text-slate-800 break-all">{octStr}{isValid && '₈'}</div>
               </div>
 
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-1">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Onlu (Decimal - Taban 10)</span>
-                <div className="text-xl font-mono font-bold text-slate-900 break-all">{decStr}₁₀</div>
+                <div className="text-xl font-mono font-bold text-slate-900 break-all">{decStr}{isValid && '₁₀'}</div>
               </div>
 
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-1">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Onaltılı (Hex - Taban 16)</span>
-                <div className="text-xl font-mono font-bold text-emerald-700 break-all">{hexStr}₁₆</div>
+                <div className="text-xl font-mono font-bold text-emerald-700 break-all">{hexStr}{isValid && '₁₆'}</div>
               </div>
 
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-1">

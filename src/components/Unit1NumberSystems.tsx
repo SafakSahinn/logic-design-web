@@ -11,12 +11,15 @@ export const Unit1NumberSystems: React.FC = () => {
 
   const [floatInput, setFloatInput] = useState<string>('13.625');
 
-  const parseDec = parseInt(decInput, 10);
-  const isValidDec = !isNaN(parseDec) && parseDec >= 0;
+  // Whole input must be decimal digits ("12abc" is not 12); BigInt keeps large values exact
+  const decClean = decInput.trim();
+  const isValidDec = /^[0-9]+$/.test(decClean);
+  const parseDec = isValidDec ? BigInt(decClean) : 0n;
+  const invalidText = decClean ? 'Geçersiz' : '-';
 
-  const binValue = isValidDec ? parseDec.toString(2) : '-';
-  const octValue = isValidDec ? parseDec.toString(8) : '-';
-  const hexValue = isValidDec ? parseDec.toString(16).toUpperCase() : '-';
+  const binValue = isValidDec ? parseDec.toString(2) : invalidText;
+  const octValue = isValidDec ? parseDec.toString(8) : invalidText;
+  const hexValue = isValidDec ? parseDec.toString(16).toUpperCase() : invalidText;
 
   const toTwosComplement = (val: number, bits: number): string => {
     const maxVal = Math.pow(2, bits - 1) - 1;
@@ -32,10 +35,14 @@ export const Unit1NumberSystems: React.FC = () => {
   const binA = toTwosComplement(numA, bitWidth);
   const binB = toTwosComplement(numB, bitWidth);
   const sumVal = numA + numB;
-  const binSum = toTwosComplement(sumVal, bitWidth);
   const isOverflow =
     sumVal > Math.pow(2, bitWidth - 1) - 1 ||
     sumVal < -Math.pow(2, bitWidth - 1);
+  // On overflow the adder still produces bitWidth bits (the true sum modulo 2^n), show those
+  const binSum =
+    isOverflow && binA !== 'Aralık Dışı' && binB !== 'Aralık Dışı'
+      ? (((sumVal % 2 ** bitWidth) + 2 ** bitWidth) % 2 ** bitWidth).toString(2).padStart(bitWidth, '0')
+      : toTwosComplement(sumVal, bitWidth);
 
   const getIEEE754 = (valStr: string) => {
     const f = parseFloat(valStr);
@@ -57,7 +64,7 @@ export const Unit1NumberSystems: React.FC = () => {
   };
 
   const ieeeData = getIEEE754(floatInput);
-  const toGray = (n: number) => (n ^ (n >> 1)).toString(2);
+  const toGray = (n: bigint) => (n ^ (n >> 1n)).toString(2);
   const grayResult = isValidDec ? toGray(parseDec) : '-';
 
   return (

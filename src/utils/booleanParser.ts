@@ -6,15 +6,23 @@ export interface Token {
 }
 
 export function extractVariables(expr: string): string[] {
-  const matches = expr.toUpperCase().match(/[A-Z]/g);
-  if (!matches) return [];
-  const uniqueVars = Array.from(new Set(matches)).sort();
-  // Filter out any reserved tokens if they were matched as single letters (like 'V' if used as OR, but let's allow letters A-Z)
-  return uniqueVars;
+  // Use the tokenizer so operator keywords (AND, OR, NOT, XOR, XNOR) and an "F =" prefix are not
+  // mistaken for variables ("A AND B" has two variables, not A, B, D, N)
+  try {
+    const vars = tokenize(expr)
+      .filter((t) => t.type === 'VAR')
+      .map((t) => t.value);
+    return Array.from(new Set(vars)).sort();
+  } catch {
+    const matches = expr.toUpperCase().match(/[A-Z]/g);
+    return matches ? Array.from(new Set(matches)).sort() : [];
+  }
 }
 
 export function tokenize(expr: string): Token[] {
-  const cleanExpr = expr.trim();
+  // "F = A + B" / "Y=AB": only the right-hand side is the expression
+  const eqIdx = expr.indexOf('=');
+  const cleanExpr = (eqIdx !== -1 ? expr.slice(eqIdx + 1) : expr).trim();
   const tokens: Token[] = [];
   let i = 0;
 

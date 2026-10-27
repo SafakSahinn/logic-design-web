@@ -1,6 +1,20 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import type { LogicValue } from '../types/logic';
-import { simulateCircuit } from './circuitEngine';
+import { COMPONENT_CATALOG, getInputSignalNames, simulateCircuit } from './circuitEngine';
+
+// Unique column names for output parts: own label when unique and not the default, else OUT0, OUT1...
+// (records keyed by a shared default label like "Işıklı Gösterge (LED)" would merge the columns)
+const getOutputSignalNames = (outputs: CircuitComponentInstance[]): Map<string, string> => {
+  const count = new Map<string, number>();
+  for (const c of outputs) count.set((c.label || '').trim(), (count.get((c.label || '').trim()) || 0) + 1);
+  const names = new Map<string, string>();
+  outputs.forEach((c, i) => {
+    const l = (c.label || '').trim();
+    const isDefault = !l || l === COMPONENT_CATALOG[c.type]?.name;
+    names.set(c.id, !isDefault && count.get(l) === 1 ? l : `OUT${i}`);
+  });
+  return names;
+};
 
 export interface TestVectorRow {
   index: number;
@@ -32,8 +46,10 @@ export function generateExhaustiveTestVector(
 
   if (inputs.length === 0) return '# Tuvalde test edilecek giriş (anahtar) bulunamadı.';
 
-  const inputNames = inputs.slice(0, maxInputs).map((c, i) => c.label || `IN${i}`);
-  const outputNames = outputs.map((c, i) => c.label || `OUT${i}`);
+  const signalNames = getInputSignalNames(components);
+  const outNames = getOutputSignalNames(outputs);
+  const inputNames = inputs.slice(0, maxInputs).map((c, i) => signalNames.get(c.id) || `IN${i}`);
+  const outputNames = outputs.map((c, i) => outNames.get(c.id) || `OUT${i}`);
 
   const lines: string[] = [];
   lines.push(`# Testbench: ${inputNames.join(' ')} | ${outputNames.join(' ')}`);
@@ -61,6 +77,8 @@ export function runCircuitTestbench(
 
   const inputComps = components.filter((c) => ['switch', 'pushbutton'].includes(c.type));
   const outputComps = components.filter((c) => ['led', 'probe', 'buzzer'].includes(c.type));
+  const inNames = getInputSignalNames(components);
+  const outNames = getOutputSignalNames(outputComps);
 
   const textLines = rawVectorText
     .split('\n')
@@ -94,7 +112,7 @@ export function runCircuitTestbench(
       const inIdx = inputComps.findIndex((ic) => ic.id === c.id);
       if (inIdx !== -1 && inIdx < inBits.length) {
         const val = inBits[inIdx];
-        inputValues[c.label || c.id] = val;
+        inputValues[inNames.get(c.id) || c.id] = val;
         cloned.state.on = val === 1;
         if (cloned.outputs[0]) cloned.outputs[0].value = val;
       }
@@ -103,7 +121,7 @@ export function runCircuitTestbench(
 
     outputComps.forEach((oc, oIdx) => {
       if (oIdx < expBits.length) {
-        expectedOutputs[oc.label || oc.id] = expBits[oIdx];
+        expectedOutputs[outNames.get(oc.id) || oc.id] = expBits[oIdx];
       }
     });
 
@@ -118,7 +136,7 @@ export function runCircuitTestbench(
     outputComps.forEach((oc, oIdx) => {
       const target = sim.components.find((c) => c.id === oc.id);
       const actualVal = (target?.inputs[0]?.value ?? 0) as LogicValue;
-      const key = oc.label || oc.id;
+      const key = outNames.get(oc.id) || oc.id;
       actualOutputs[key] = actualVal;
 
       if (oIdx < expBits.length) {

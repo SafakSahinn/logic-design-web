@@ -110,8 +110,14 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
         return;
       }
 
-      // Determine required numVars
-      const neededVars = Math.max(Math.min(vars.length, 4), 2);
+      // The map's variables are A, B, C, D: the size follows the highest letter used ("A + C" needs A, B, C)
+      const mapVars = ['A', 'B', 'C', 'D'];
+      const unsupported = vars.filter((v) => !mapVars.includes(v));
+      if (unsupported.length > 0) {
+        setExprError(`K-Map yalnızca A, B, C ve D değişkenlerini destekler (ifadede: ${unsupported.join(', ')}).`);
+        return;
+      }
+      const neededVars = Math.max(2, ...vars.map((v) => mapVars.indexOf(v) + 1));
       if (neededVars !== numVars) {
         setNumVars(neededVars);
       }

@@ -41,6 +41,8 @@ import {
   generateTruthTable,
   synthesizeCircuitFromBooleanExpression,
   getMultiInputGatePinRelY,
+  getInputSignalNames,
+  minimizeBooleanExpression,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -503,6 +505,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [fsmStates, setFsmStates] = useState<FSMState[]>(FSM_PRESETS[0].states);
   const [fsmTransitions, setFsmTransitions] = useState<FSMTransition[]>(FSM_PRESETS[0].transitions);
   const [fsmSelectedPreset, setFsmSelectedPreset] = useState<string>('seq_101');
+  // Live excitation / output equations for the FSM dialog (K-map variables A, B, C are Q1, Q0, X)
+  const fsmEquations = useMemo(() => {
+    try {
+      const res = synthesizeFSM(fsmStates, fsmTransitions);
+      const named = (e: string) => e.replace(/A/g, 'Q1').replace(/B/g, 'Q0').replace(/C/g, 'X');
+      return { d1: named(res.d1Expression), d0: named(res.d0Expression), z: named(res.zExpression) };
+    } catch {
+      return null;
+    }
+  }, [fsmStates, fsmTransitions]);
 
   // Preset Shelf Filter & Collapsible State
   const [isPresetsExpanded, setIsPresetsExpanded] = useState<boolean>(false);
@@ -723,7 +735,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const saved = localStorage.getItem('logic_workspace_autosave');
       if (saved) {
         const data = JSON.parse(saved);
-        if (data && Array.isArray(data.components) && data.components.length > 0) {
+        // Restore when any sheet has content (the active sheet may be an empty one)
+        const hasSheetContent =
+          Array.isArray(data?.sheets) &&
+          data.sheets.some((sh: CircuitSheet) => (sh.components?.length || 0) > 0 || (sh.wires?.length || 0) > 0);
+        if (data && Array.isArray(data.components) && (data.components.length > 0 || hasSheetContent)) {
           const refreshedComps = data.components.map((c: CircuitComponentInstance) =>
             updatePinPositions({ ...c, x: snapTo10(c.x), y: snapTo10(c.y) })
           );
@@ -756,9 +772,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Debounced Auto-Save to localStorage
   useEffect(() => {
-    if (components.length === 0 && wires.length === 0) return;
     const timer = setTimeout(() => {
       try {
+        const sheetsHaveContent = sheets.some((s) => s.components.length > 0 || s.wires.length > 0);
+        if (components.length === 0 && wires.length === 0 && annotations.length === 0 && !sheetsHaveContent) {
+          // Cleared workspace: forget the old session instead of restoring it next time
+          localStorage.removeItem('logic_workspace_autosave');
+          return;
+        }
         localStorage.setItem(
           'logic_workspace_autosave',
           JSON.stringify({
@@ -1555,7 +1576,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Export Circuit Project to JSON File (Multi-Sheet supported)
   const handleExportJSON = () => {
     const updatedSheets = sheets.map((s) =>
-      s.id === activeSheetId ? { ...s, components, wires } : s
+      s.id === activeSheetId ? { ...s, components, wires, annotations } : s
     );
     const data = {
       version: '2.0',
@@ -1565,6 +1586,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       sheets: updatedSheets,
       components,
       wires,
+      annotations,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1842,6 +1864,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const sim = simulateCircuit(newSheets[0].components, newSheets[0].wires);
             setComponents(sim.components);
             setWires(sim.wires);
+            setAnnotations([]);
             setSelectedCompId(null);
             setSelectedWireId(null);
             handleResetView();
@@ -1870,6 +1893,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const sim = simulateCircuit(firstSheet.components, firstSheet.wires);
           setComponents(sim.components);
           setWires(sim.wires);
+          setAnnotations(firstSheet.annotations || (Array.isArray(json.annotations) ? json.annotations : []));
           setSelectedCompId(null);
           setSelectedWireId(null);
           handleResetView();
@@ -1888,6 +1912,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           setActiveSheetId('sheet_1');
           setComponents(sim.components);
           setWires(sim.wires);
+          setAnnotations(Array.isArray(json.annotations) ? json.annotations : []);
           setSelectedCompId(null);
           setSelectedWireId(null);
           handleResetView();
@@ -2030,7 +2055,7 @@ ${wireXmls.join('\n')}
 
     // Persist current active sheet before switching
     setSheets((prev) =>
-      prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires } : s))
+      prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires, annotations } : s))
     );
 
     setActiveSheetId(targetSheetId);
@@ -2038,6 +2063,12 @@ ${wireXmls.join('\n')}
     const sim = simulateCircuit(refreshedComps, target.wires);
     setComponents(sim.components);
     setWires(sim.wires);
+    // Notes belong to their sheet (otherwise the sync effect would copy this sheet's notes onto the target)
+    setAnnotations(target.annotations || []);
+    setSelectedAnnotationId(null);
+    // Undo history belongs to one sheet: undoing after a switch would paste the other sheet here
+    setHistoryStack([]);
+    setRedoStack([]);
     setSelectedCompIds([]);
     setSelectedWireIds([]);
     setWiringFrom(null);
@@ -2048,12 +2079,17 @@ ${wireXmls.join('\n')}
     const newId = `sheet_${Date.now()}`;
     const newName = `Sayfa ${sheets.length + 1}`;
     setSheets((prev) => [
-      ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires } : s)),
-      { id: newId, name: newName, components: [], wires: [] },
+      ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires, annotations } : s)),
+      { id: newId, name: newName, components: [], wires: [], annotations: [] },
     ]);
     setActiveSheetId(newId);
     setComponents([]);
     setWires([]);
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    // Undo history belongs to one sheet: undoing after a switch would paste the other sheet here
+    setHistoryStack([]);
+    setRedoStack([]);
     setSelectedCompIds([]);
     setSelectedWireIds([]);
     setWiringFrom(null);
@@ -2063,7 +2099,7 @@ ${wireXmls.join('\n')}
   const handleDuplicateSheet = (sheetId: string) => {
     const source =
       sheetId === activeSheetId
-        ? { id: activeSheetId, name: sheets.find((s) => s.id === activeSheetId)?.name || 'Sayfa', components, wires }
+        ? { id: activeSheetId, name: sheets.find((s) => s.id === activeSheetId)?.name || 'Sayfa', components, wires, annotations }
         : sheets.find((s) => s.id === sheetId);
     if (!source) return;
 
@@ -2094,13 +2130,19 @@ ${wireXmls.join('\n')}
       toPinId: mapPinRef(w.toPinId),
     }));
 
+    const clonedAnnotations = (source.annotations || []).map((a, idx) => ({ ...a, id: `ann_${stamp}_${idx}` }));
     setSheets((prev) => [
-      ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires } : s)),
-      { id: newId, name: newName, components: clonedComps, wires: clonedWires },
+      ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires, annotations } : s)),
+      { id: newId, name: newName, components: clonedComps, wires: clonedWires, annotations: clonedAnnotations },
     ]);
     setActiveSheetId(newId);
     setComponents(clonedComps);
     setWires(clonedWires);
+    setAnnotations(clonedAnnotations);
+    setSelectedAnnotationId(null);
+    // Undo history belongs to one sheet: undoing after a switch would paste the other sheet here
+    setHistoryStack([]);
+    setRedoStack([]);
   };
 
   // Delete Circuit Sheet (Minimum 1 sheet must remain)
@@ -2115,6 +2157,11 @@ ${wireXmls.join('\n')}
       const sim = simulateCircuit(refreshedComps, nextSheet.wires);
       setComponents(sim.components);
       setWires(sim.wires);
+      setAnnotations(nextSheet.annotations || []);
+      setSelectedAnnotationId(null);
+      // Undo history belongs to one sheet: undoing after a switch would paste the other sheet here
+      setHistoryStack([]);
+      setRedoStack([]);
       setSelectedCompIds([]);
       setSelectedWireIds([]);
       setWiringFrom(null);
@@ -2970,8 +3017,9 @@ ${wireXmls.join('\n')}
     ];
     let cIdx = 0;
 
+    const inputNames = getInputSignalNames(components);
     components.forEach((c) => {
-      const name = c.label || c.type;
+      const name = inputNames.get(c.id) || c.label || c.type;
       if (c.type === 'clock') {
         list.push({ key: c.id, name: `${name} (CLK)`, color: colors[cIdx++ % colors.length], type: 'clock' });
       } else if (c.type === 'switch' || c.type === 'pushbutton') {
@@ -3298,7 +3346,7 @@ ${wireXmls.join('\n')}
     setSelectedCompIds([]);
     setSelectedWireIds([]);
     try {
-      localStorage.removeItem('logic_circuit_autosave');
+      localStorage.removeItem('logic_workspace_autosave');
     } catch {}
   };
 
@@ -6210,14 +6258,6 @@ ${wireXmls.join('\n')}
             </div>
 
             <div className={`w-[1px] h-4 mx-1 ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`} />
-
-            <div
-              className="px-2 py-0.5 rounded-lg text-[11px] font-mono font-bold border border-blue-500/40 bg-blue-500/10 text-blue-500 select-none flex items-center gap-1"
-              title="90° Standart Logisim CAD Hatları"
-            >
-              <Activity className="w-3 h-3 text-blue-500" />
-              <span>90° Dik Tel</span>
-            </div>
 
             <button
               onClick={() => toggleCadTheme()}
@@ -10044,10 +10084,23 @@ ${wireXmls.join('\n')}
                                   <button
                                     onClick={() => {
                                       try {
-                                        const expr = truthTableData.minimalExpressions![activeOut.name].expression;
+                                        // Synthesise with one-letter variables (input names may be words like
+                                        // "Cin", which the parser would read as C·i·n), then give the
+                                        // switches their real names back
+                                        const outIdx = truthTableData.outputs.findIndex((o) => o.name === activeOut.name);
+                                        const minterms = truthTableData.rows
+                                          .map((r, rIdx) => (r.outputValues[outIdx] === 1 ? rIdx : -1))
+                                          .filter((m) => m >= 0);
+                                        const letters = truthTableData.inputs.map((_, k) => String.fromCharCode(65 + k));
+                                        const expr = minimizeBooleanExpression(letters, minterms).expression;
                                         const synthesized = synthesizeCircuitFromBooleanExpression(expr);
+                                        const renamed = synthesized.components.map((c) => {
+                                          const m = c.type === 'switch' ? /^Giriş ([A-Z])$/.exec(c.label || '') : null;
+                                          const original = m ? truthTableData.inputs[m[1].charCodeAt(0) - 65]?.name : undefined;
+                                          return original ? { ...c, label: original } : c;
+                                        });
                                         recordHistory();
-                                        commitCircuit(synthesized.components, synthesized.wires);
+                                        commitCircuit(renamed, synthesized.wires);
                                         setSelectedCompIds([]);
                                         setSelectedWireIds([]);
                                         setShowTruthTable(false);
@@ -11823,13 +11876,13 @@ ${wireXmls.join('\n')}
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-xs">
                   <div className="p-2 bg-white rounded-xl border border-pink-200 text-slate-800">
-                    <strong className="text-pink-700">D1 =</strong> Q1⁺ uyarım denklemi
+                    <strong className="text-pink-700">D1 =</strong> {fsmEquations ? fsmEquations.d1 : '—'}
                   </div>
                   <div className="p-2 bg-white rounded-xl border border-pink-200 text-slate-800">
-                    <strong className="text-pink-700">D0 =</strong> Q0⁺ uyarım denklemi
+                    <strong className="text-pink-700">D0 =</strong> {fsmEquations ? fsmEquations.d0 : '—'}
                   </div>
                   <div className="p-2 bg-white rounded-xl border border-pink-200 text-slate-800">
-                    <strong className="text-emerald-700">Z =</strong> Çıkış lojik denklemi
+                    <strong className="text-emerald-700">Z =</strong> {fsmEquations ? fsmEquations.z : '—'}
                   </div>
                 </div>
               </div>

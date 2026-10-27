@@ -149,6 +149,68 @@ interface RawGroup {
   w: number;
 }
 
+/**
+ * Minimum cover of `targets` by prime implicant groups: essential PIs first, then an exact search over the
+ * remaining PIs for the fewest terms (ties: fewest literals, i.e. largest groups). A greedy "covers most"
+ * pick is not minimal (e.g. it can return 6 terms / 18 literals where 5 terms / 15 literals exist).
+ * Maps have at most 16 cells, so the search is tiny.
+ */
+function selectMinimalCover(
+  primes: RawGroup[],
+  targets: number[]
+): { essentials: Array<{ group: RawGroup; minterm: number }>; rest: RawGroup[] } {
+  const essentials: Array<{ group: RawGroup; minterm: number }> = [];
+  for (const m of targets) {
+    const covering = primes.filter((pi) => pi.cells.includes(m));
+    if (covering.length === 1 && !essentials.some((e) => e.group === covering[0])) {
+      essentials.push({ group: covering[0], minterm: m });
+    }
+  }
+  const uncovered = targets.filter((m) => !essentials.some((e) => e.group.cells.includes(m)));
+  if (uncovered.length === 0) return { essentials, rest: [] };
+
+  // Only PIs that cover something still uncovered; drop PIs dominated by another (same or more coverage, not smaller)
+  let candidates = primes.filter((pi) => !essentials.some((e) => e.group === pi) && pi.cells.some((c) => uncovered.includes(c)));
+  const covers = (pi: RawGroup) => uncovered.filter((m) => pi.cells.includes(m));
+  candidates = candidates.filter(
+    (pi) =>
+      !candidates.some((other) => {
+        if (other === pi) return false;
+        const a = covers(pi);
+        const b = covers(other);
+        const superset = a.every((m) => b.includes(m));
+        if (!superset) return false;
+        return b.length > a.length || other.cells.length > pi.cells.length || (other.cells.length === pi.cells.length && candidates.indexOf(other) < candidates.indexOf(pi));
+      })
+  );
+
+  let best: RawGroup[] | null = null;
+  let bestLiterals = Infinity;
+  const literalsOf = (set: RawGroup[]) => set.reduce((sum, g) => sum - Math.log2(g.cells.length), 0);
+  for (let k = 1; k <= candidates.length && !best; k++) {
+    const pick: RawGroup[] = [];
+    const search = (start: number) => {
+      if (pick.length === k) {
+        if (uncovered.every((m) => pick.some((g) => g.cells.includes(m)))) {
+          const lit = literalsOf(pick);
+          if (lit < bestLiterals) {
+            bestLiterals = lit;
+            best = [...pick];
+          }
+        }
+        return;
+      }
+      for (let i = start; i < candidates.length; i++) {
+        pick.push(candidates[i]);
+        search(i + 1);
+        pick.pop();
+      }
+    };
+    search(0);
+  }
+  return { essentials, rest: best || candidates };
+}
+
 export function solveKMap(
   values: Record<number, LogicValue>,
   numVars: number
@@ -259,57 +321,17 @@ export function solveKMap(
   // Sort prime implicants by size descending
   primeImplicantsRaw.sort((a, b) => b.cells.length - a.cells.length);
 
-  // Essential Prime Implicant Selection (Quine-McCluskey / Petrick's greedy resolution)
-  const uncoveredMinterms = new Set<number>(minterms);
-  const selectedRawGroups: RawGroup[] = [];
+  // Step 1: Essential Prime Implicants, Step 2: minimum cover of the remaining minterms
   const steps: string[] = [];
-
-  // Step 1: Identify Essential Prime Implicants
-  for (const m of minterms) {
-    const coveringPIs = primeImplicantsRaw.filter((pi) => pi.cells.includes(m));
-    if (coveringPIs.length === 1) {
-      const epi = coveringPIs[0];
-      if (!selectedRawGroups.includes(epi)) {
-        selectedRawGroups.push(epi);
-        steps.push(`Temel Asal Bileşen (EPI): m${m} mintermi yalnızca tek bir asal bileşen tarafından kaplandığı için bu grup zorunludur.`);
-      }
-    }
+  const cover = selectMinimalCover(primeImplicantsRaw, minterms);
+  const selectedRawGroups: RawGroup[] = [];
+  for (const { group, minterm } of cover.essentials) {
+    selectedRawGroups.push(group);
+    steps.push(`Temel Asal Bileşen (EPI): m${minterm} mintermi yalnızca tek bir asal bileşen tarafından kaplandığı için bu grup zorunludur.`);
   }
-
-  // Remove minterms covered by EPIs
-  for (const group of selectedRawGroups) {
-    for (const c of group.cells) {
-      uncoveredMinterms.delete(c);
-    }
-  }
-
-  // Step 2: Cover remaining minterms using minimal remaining prime implicants
-  while (uncoveredMinterms.size > 0) {
-    const remainingPIs = primeImplicantsRaw.filter((pi) => !selectedRawGroups.includes(pi));
-    if (remainingPIs.length === 0) break;
-
-    // Pick PI that covers the maximum number of remaining uncovered minterms
-    let bestPI = remainingPIs[0];
-    let maxCovered = -1;
-
-    for (const pi of remainingPIs) {
-      let count = 0;
-      for (const c of pi.cells) {
-        if (uncoveredMinterms.has(c)) count++;
-      }
-      if (count > maxCovered) {
-        maxCovered = count;
-        bestPI = pi;
-      }
-    }
-
-    if (maxCovered <= 0) break;
-
-    selectedRawGroups.push(bestPI);
-    for (const c of bestPI.cells) {
-      uncoveredMinterms.delete(c);
-    }
-    steps.push(`Kalan mintermleri en az sayıda grupla kaplamak için ${bestPI.cells.length}'li grup seçildi.`);
+  for (const group of cover.rest) {
+    selectedRawGroups.push(group);
+    steps.push(`Kalan mintermleri en az sayıda (ve en büyük) grupla kaplamak için ${group.cells.length}'li grup seçildi.`);
   }
 
   // Convert raw groups to KMapGroup with coordinates and terms
@@ -436,38 +458,8 @@ function solvePOS(values: Record<number, LogicValue>, numVars: number): string {
   });
   primePIs.sort((a, b) => b.cells.length - a.cells.length);
 
-  const uncovered = new Set<number>(zeros);
-  const selected: RawGroup[] = [];
-
-  // EPIs
-  for (const z of zeros) {
-    const covering = primePIs.filter((p) => p.cells.includes(z));
-    if (covering.length === 1 && !selected.includes(covering[0])) {
-      selected.push(covering[0]);
-    }
-  }
-
-  for (const g of selected) {
-    for (const c of g.cells) uncovered.delete(c);
-  }
-
-  while (uncovered.size > 0) {
-    const remaining = primePIs.filter((p) => !selected.includes(p));
-    if (remaining.length === 0) break;
-    let best = remaining[0];
-    let maxC = -1;
-    for (const p of remaining) {
-      let cnt = 0;
-      for (const c of p.cells) if (uncovered.has(c)) cnt++;
-      if (cnt > maxC) {
-        maxC = cnt;
-        best = p;
-      }
-    }
-    if (maxC <= 0) break;
-    selected.push(best);
-    for (const c of best.cells) uncovered.delete(c);
-  }
+  const cover = selectMinimalCover(primePIs, zeros);
+  const selected: RawGroup[] = [...cover.essentials.map((e) => e.group), ...cover.rest];
 
   const posTerms = selected.map((g) => getPOSTermFromMaxterms(g.cells, numVars).term);
   return posTerms.join(' · ') || '1';
