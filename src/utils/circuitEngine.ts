@@ -849,7 +849,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     type: 'subcircuit',
     name: 'Özel Alt Devre (IC)',
     category: 'custom',
-    width: 130,
+    width: 120,
     height: 80,
     inputs: [],
     outputs: [],
@@ -936,17 +936,33 @@ export function createComponentInstance(
 
 export function updatePinPositions(comp: CircuitComponentInstance): CircuitComponentInstance {
   if (comp.type === 'subcircuit') {
-    const width = 130;
-    const height = Math.max(76, (Math.max(comp.inputs.length, comp.outputs.length) + 1) * 22);
+    const width = 120;
+    const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
+    const height = Math.max(60, (maxPins + 1) * 20);
+    const rot = comp.rotation || 0;
+    const cx = width / 2;
+    const cy = height / 2;
+    const rotatePoint = (relX: number, relY: number) => {
+      if (rot === 0) return { x: Math.round(relX / 10) * 10, y: Math.round(relY / 10) * 10 };
+      const rad = (rot * Math.PI) / 180;
+      const cos = Math.round(Math.cos(rad));
+      const sin = Math.round(Math.sin(rad));
+      const dx = relX - cx;
+      const dy = relY - cy;
+      const rx = cx + (dx * cos - dy * sin);
+      const ry = cy + (dx * sin + dy * cos);
+      return { x: Math.round(rx / 10) * 10, y: Math.round(ry / 10) * 10 };
+    };
+
     const newInputs = comp.inputs.map((pin, idx) => {
-      const spacing = height / (comp.inputs.length + 1);
-      const relY = Math.round(spacing * (idx + 1));
-      return { ...pin, x: comp.x, y: comp.y + relY };
+      const relY = 20 * (idx + 1);
+      const pt = rotatePoint(0, relY);
+      return { ...pin, x: comp.x + pt.x, y: comp.y + pt.y };
     });
     const newOutputs = comp.outputs.map((pin, idx) => {
-      const spacing = height / (comp.outputs.length + 1);
-      const relY = Math.round(spacing * (idx + 1));
-      return { ...pin, x: comp.x + width, y: comp.y + relY };
+      const relY = 20 * (idx + 1);
+      const pt = rotatePoint(width, relY);
+      return { ...pin, x: comp.x + pt.x, y: comp.y + pt.y };
     });
     return { ...comp, inputs: newInputs, outputs: newOutputs };
   }

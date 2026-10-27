@@ -258,13 +258,11 @@ export function createSubcircuitInstance(
   const inPorts = subDef.ports.filter((p) => p.type === 'input');
   const outPorts = subDef.ports.filter((p) => p.type === 'output');
 
-  const width = subDef.width || 130;
-  const height = Math.max(76, (Math.max(inPorts.length, outPorts.length) + 1) * 22);
+  const width = subDef.width || 120;
 
-  // Position inputs along the left edge
+  // Position inputs along the left edge strictly locked to 20px multiples (10px grid)
   const inputs = inPorts.map((port, idx) => {
-    const spacing = height / (inPorts.length + 1);
-    const relY = Math.round(spacing * (idx + 1));
+    const relY = 20 * (idx + 1);
     return {
       id: `${compId}_${port.id}`,
       name: port.name,
@@ -275,10 +273,9 @@ export function createSubcircuitInstance(
     };
   });
 
-  // Position outputs along the right edge
+  // Position outputs along the right edge strictly locked to 20px multiples (10px grid)
   const outputs = outPorts.map((port, idx) => {
-    const spacing = height / (outPorts.length + 1);
-    const relY = Math.round(spacing * (idx + 1));
+    const relY = 20 * (idx + 1);
     return {
       id: `${compId}_${port.id}`,
       name: port.name,

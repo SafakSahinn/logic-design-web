@@ -1409,8 +1409,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const enclosedComps = components
           .filter((c) => {
             const meta = COMPONENT_CATALOG[c.type];
-            const compW = meta?.width || (c.type === 'subcircuit' ? 130 : 60);
-            const compH = meta?.height || (c.type === 'subcircuit' ? 80 : 50);
+            const compW = meta?.width || (c.type === 'subcircuit' ? 120 : 60);
+            const compH = meta?.height || (c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : 50);
             return (
               c.x + compW >= minX &&
               c.x <= maxX &&
@@ -1420,28 +1420,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           })
           .map((c) => c.id);
 
-        // Enclosed wires (supports open stubs, branches, and box crossing)
+        // Enclosed wires: exact geometric intersection of orthogonal segments with the selection rectangle
         const enclosedWires = wires
           .filter((w) => {
             const startPt = getWireStartPt(w);
             const toP = findPinById(w.toPinId);
             const endPt = toP ? { x: toP.x, y: toP.y } : (w.endPoint || startPt);
 
-            // Check if start, end, or any waypoint is inside selection box
-            if (startPt.x >= minX && startPt.x <= maxX && startPt.y >= minY && startPt.y <= maxY) return true;
-            if (endPt.x >= minX && endPt.x <= maxX && endPt.y >= minY && endPt.y <= maxY) return true;
-            if (w.waypoints && w.waypoints.some((pt) => pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY)) return true;
-
-            // Check if wire's bounding envelope overlaps selection box
-            const allPts = [startPt, ...(w.waypoints || []), endPt];
-            const wMinX = Math.min(...allPts.map((p) => p.x));
-            const wMaxX = Math.max(...allPts.map((p) => p.x));
-            const wMinY = Math.min(...allPts.map((p) => p.y));
-            const wMaxY = Math.max(...allPts.map((p) => p.y));
-
-            const overlaps = wMinX <= maxX && wMaxX >= minX && wMinY <= maxY && wMaxY >= minY;
-            const compsSelected = (w.fromCompId && enclosedComps.includes(w.fromCompId)) || (w.toCompId && enclosedComps.includes(w.toCompId));
-            return overlaps || compsSelected;
+            const segs = getWireOrthogonalSegments(w, startPt, endPt);
+            return segs.some((s) => {
+              if (s.isVertical) {
+                return (
+                  s.x1 >= minX &&
+                  s.x1 <= maxX &&
+                  Math.max(s.y1, s.y2) >= minY &&
+                  Math.min(s.y1, s.y2) <= maxY
+                );
+              } else {
+                return (
+                  s.y1 >= minY &&
+                  s.y1 <= maxY &&
+                  Math.max(s.x1, s.x2) >= minX &&
+                  Math.min(s.x1, s.x2) <= maxX
+                );
+              }
+            });
           })
           .map((w) => w.id);
 
@@ -2393,24 +2396,68 @@ ${wireXmls.join('\n')}
     }
   }, [selectedCompIds, selectedWireIds, recordHistory, components, wires]);
 
-  // Rotate selected components 90 degrees clockwise
+  // Rotate selected components 90 degrees clockwise while strictly preserving connected wires
   const handleRotateSelected = useCallback(() => {
     if (selectedCompIds.length === 0) return;
     recordHistory();
-    setComponents((prev) => {
-      const rotated = prev.map((c) => {
-        if (selectedCompIds.includes(c.id)) {
-          const nextRot = (((c.rotation || 0) + 90) % 360) as 0 | 90 | 180 | 270;
-          return updatePinPositions({ ...c, rotation: nextRot });
+
+    // Map old pin positions for selected components
+    const oldPinMap = new Map<string, { x: number; y: number; pinId: string; compId: string }>();
+    for (const c of components) {
+      if (selectedCompIds.includes(c.id)) {
+        for (const p of [...c.inputs, ...c.outputs]) {
+          const sp = snapPt10(p);
+          oldPinMap.set(p.id, { x: sp.x, y: sp.y, pinId: p.id, compId: c.id });
         }
-        return c;
-      });
-      const repaired = repairWires(wires, rotated);
-      const sim = simulateCircuit(rotated, repaired);
-      setWires(sim.wires);
-      return sim.components;
+      }
+    }
+
+    const rotated = components.map((c) => {
+      if (selectedCompIds.includes(c.id)) {
+        const nextRot = (((c.rotation || 0) + 90) % 360) as 0 | 90 | 180 | 270;
+        return updatePinPositions({ ...c, rotation: nextRot });
+      }
+      return c;
     });
-  }, [selectedCompIds, recordHistory, wires]);
+
+    // Update wires that were attached to rotated pins so repairWires re-routes them cleanly to the rotated pin locations
+    const updatedWires: CircuitWire[] = wires.map((wire) => {
+      let modified = { ...wire };
+      const sPt = wire.startPoint ? snapPt10(wire.startPoint) : null;
+      const ePt = wire.endPoint ? snapPt10(wire.endPoint) : null;
+
+      for (const [pinId, oldPin] of oldPinMap) {
+        if (
+          (wire.fromCompId === oldPin.compId && wire.fromPinId === pinId) ||
+          (sPt && sPt.x === oldPin.x && sPt.y === oldPin.y)
+        ) {
+          modified.fromCompId = oldPin.compId;
+          modified.fromPinId = pinId;
+          modified.startPoint = undefined;
+          break;
+        }
+      }
+
+      for (const [pinId, oldPin] of oldPinMap) {
+        if (
+          (wire.toCompId === oldPin.compId && wire.toPinId === pinId) ||
+          (ePt && ePt.x === oldPin.x && ePt.y === oldPin.y)
+        ) {
+          modified.toCompId = oldPin.compId;
+          modified.toPinId = pinId;
+          modified.endPoint = undefined;
+          break;
+        }
+      }
+
+      return modified;
+    });
+
+    const repaired = repairWires(updatedWires, rotated);
+    const sim = simulateCircuit(rotated, repaired);
+    setComponents(sim.components);
+    setWires(sim.wires);
+  }, [selectedCompIds, recordHistory, components, wires]);
 
   // Duplicate selected components and any interconnecting wires
   const handleDuplicateSelected = useCallback(() => {
@@ -4271,18 +4318,18 @@ ${wireXmls.join('\n')}
       }
 
       case 'subcircuit': {
-        const chipWidth = 130;
+        const chipWidth = 120;
         const inCount = comp.inputs.length;
         const outCount = comp.outputs.length;
-        const chipHeight = Math.max(76, (Math.max(inCount, outCount) + 1) * 22);
+        const chipHeight = Math.max(60, (Math.max(inCount, outCount) + 1) * 20);
         const code = comp.state.subcircuitCode || 'IC-CUSTOM';
         const name = (comp.state.subcircuitName || comp.label || 'Özel Alt Devre').toUpperCase();
 
         return (
           <g filter="url(#gateShadow)">
-            {/* Left and Right IC Pin Legs with signal labels */}
-            {comp.inputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {/* Left and Right IC Pin Legs with signal labels (in local unrotated frame) */}
+            {comp.inputs.map((pin, idx) => {
+              const relY = 20 * (idx + 1);
               return (
                 <g key={pin.id}>
                   <rect x={-8} y={relY - 3} width={8} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
@@ -4292,8 +4339,8 @@ ${wireXmls.join('\n')}
                 </g>
               );
             })}
-            {comp.outputs.map((pin) => {
-              const relY = pin.y - comp.y;
+            {comp.outputs.map((pin, idx) => {
+              const relY = 20 * (idx + 1);
               return (
                 <g key={pin.id}>
                   <rect x={chipWidth} y={relY - 3} width={8} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
@@ -7423,6 +7470,8 @@ ${wireXmls.join('\n')}
             {/* Render Components */}
             {components.map((comp) => {
               const meta = COMPONENT_CATALOG[comp.type];
+              const compW = comp.type === 'subcircuit' ? 120 : meta.width;
+              const compH = comp.type === 'subcircuit' ? Math.max(60, (Math.max(comp.inputs.length, comp.outputs.length) + 1) * 20) : meta.height;
               const isSelected = selectedCompIds.includes(comp.id);
 
               return (
@@ -7451,8 +7500,8 @@ ${wireXmls.join('\n')}
                     <rect
                       x={-6}
                       y={-6}
-                      width={meta.width + 12}
-                      height={meta.height + 12}
+                      width={compW + 12}
+                      height={compH + 12}
                       rx={14}
                       fill="none"
                       stroke="#3b82f6"
@@ -7463,20 +7512,20 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Component Shape Body with Rotation */}
-                  <g transform={comp.rotation ? `rotate(${comp.rotation}, ${meta.width / 2}, ${meta.height / 2})` : undefined}>
+                  <g transform={comp.rotation ? `rotate(${comp.rotation}, ${compW / 2}, ${compH / 2})` : undefined}>
                     {renderGateBody(comp)}
                   </g>
 
                   {/* Component Label Text with Alignment (Top, Bottom, Center, Hidden) */}
                   {comp.label && comp.state.labelPos !== 'hidden' && (
                     <text
-                      x={meta.width / 2}
+                      x={compW / 2}
                       y={
                         comp.state.labelPos === 'top'
                           ? -10
                           : comp.state.labelPos === 'center'
-                          ? meta.height / 2 + 4
-                          : meta.height + 16
+                          ? compH / 2 + 4
+                          : compH + 16
                       }
                       textAnchor="middle"
                       className="text-[10px] font-sans font-semibold fill-slate-500 select-none pointer-events-none"
