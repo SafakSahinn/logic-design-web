@@ -1,4 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
+import { getLogicalConnections } from './wiringEngine';
 
 export interface CMOSGateStats {
   gateType: string;
@@ -191,7 +192,8 @@ export function analyzeCircuit(
 
   breakdown.sort((a, b) => b.totalTransistors - a.totalTransistors);
 
-  const criticalPathDepth = calculateCriticalPath(components, wires);
+  // Dependency graph from the electrical nets (canvas wires are positional segments, not pin-to-pin)
+  const criticalPathDepth = calculateCriticalPath(components, getLogicalConnections(components, wires));
 
   return {
     totalComponents: components.length,

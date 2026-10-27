@@ -124,7 +124,8 @@ export const getLogisimWiringToolSegments = (
   start: WirePoint,
   cur: WirePoint,
   direction: LogisimWireDirection,
-  components?: CircuitComponentInstance[]
+  components?: CircuitComponentInstance[],
+  wires?: CircuitWire[]
 ): Array<{ e0: WirePoint; e1: WirePoint }> => {
   const s = snapPt10(start);
   const c = snapPt10(cur);
@@ -142,7 +143,39 @@ export const getLogisimWiringToolSegments = (
     }
   }
 
+  // Existing wires: passing over one of their endpoints/corners, or running along one of them, would make
+  // WireRepair join the new wire to that net. Only the new wire's own two ends may touch other wires.
+  const wireSegs: Array<{ a: WirePoint; b: WirePoint }> = [];
+  if (wires) {
+    for (const w of wires) {
+      if (!w.startPoint || !w.endPoint) continue;
+      const wa = snapPt10(w.startPoint);
+      const wb = snapPt10(w.endPoint);
+      if (wa.x !== wb.x && wa.y !== wb.y) continue;
+      wireSegs.push({ a: wa, b: wb });
+      for (const p of [wa, wb]) {
+        if ((p.x === s.x && p.y === s.y) || (p.x === c.x && p.y === c.y)) continue;
+        obstaclePins.add(`${p.x},${p.y}`);
+      }
+    }
+  }
+  const overlapsWire = (a: WirePoint, b: WirePoint): boolean => {
+    for (const w of wireSegs) {
+      if (a.x === b.x && w.a.x === w.b.x && a.x === w.a.x) {
+        const lo = Math.max(Math.min(a.y, b.y), Math.min(w.a.y, w.b.y));
+        const hi = Math.min(Math.max(a.y, b.y), Math.max(w.a.y, w.b.y));
+        if (hi > lo) return true;
+      } else if (a.y === b.y && w.a.y === w.b.y && a.y === w.a.y) {
+        const lo = Math.max(Math.min(a.x, b.x), Math.min(w.a.x, w.b.x));
+        const hi = Math.min(Math.max(a.x, b.x), Math.max(w.a.x, w.b.x));
+        if (hi > lo) return true;
+      }
+    }
+    return false;
+  };
+
   const segHitsObstacle = (a: WirePoint, b: WirePoint): boolean => {
+    if (overlapsWire(a, b)) return true;
     if (obstaclePins.size === 0) return false;
     if (a.x === b.x) {
       const minY = Math.min(a.y, b.y);
@@ -489,6 +522,165 @@ export const isPointOnWireSegment = (
     return Math.abs(pt.y - startPt.y) <= tolerance && pt.x >= x0 - tolerance && pt.x <= x1 + tolerance;
   }
   return false;
+};
+
+/**
+ * Logical pin-to-pin view of the circuit for netlist consumers (HDL export, circuit analysis).
+ * Canvas wires are straight segments whose ends are usually corners, so "which output drives this input"
+ * has to come from the electrical nets (pins + wire endpoints by grid location, legacy pin-to-pin wires,
+ * matching tunnel labels), exactly like the simulator sees them. Returns one connection per driven pin:
+ * fromPinId = the net's driver (first output pin), toPinId = every other pin of the net.
+ */
+export const getLogicalConnections = (
+  components: CircuitComponentInstance[],
+  wires: CircuitWire[]
+): CircuitWire[] => {
+  const parent = new Map<string, string>();
+  const find = (k: string): string => {
+    if (!parent.has(k)) parent.set(k, k);
+    let r = k;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    let c = k;
+    while (parent.get(c) !== r) {
+      const n = parent.get(c)!;
+      parent.set(c, r);
+      c = n;
+    }
+    return r;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  const loc = (p: WirePoint) => `loc_${snapTo10(p.x)}_${snapTo10(p.y)}`;
+
+  const pinOwner = new Map<string, CircuitComponentInstance>();
+  const pinIsOutput = new Map<string, boolean>();
+  const order: string[] = [];
+  for (const c of components) {
+    for (const p of [...c.inputs, ...c.outputs]) {
+      pinOwner.set(p.id, c);
+      pinIsOutput.set(p.id, p.type === 'output');
+      order.push(p.id);
+      union(p.id, loc(p));
+    }
+  }
+  const tunnelByLabel = new Map<string, string>();
+  for (const c of components) {
+    if (c.type !== 'tunnel') continue;
+    const pins = [...c.inputs, ...c.outputs];
+    for (let i = 1; i < pins.length; i++) union(pins[0].id, pins[i].id);
+    const label = (c.label || 'Tünel').trim();
+    if (pins[0]) {
+      if (tunnelByLabel.has(label)) union(tunnelByLabel.get(label)!, pins[0].id);
+      else tunnelByLabel.set(label, pins[0].id);
+    }
+  }
+  for (const w of wires) {
+    if (w.startPoint && w.endPoint) {
+      union(loc(w.startPoint), loc(w.endPoint));
+    } else {
+      if (w.fromPinId && w.toPinId) union(w.fromPinId, w.toPinId);
+      if (w.branchPoint && w.toPinId) union(loc(w.branchPoint), w.toPinId);
+    }
+  }
+
+  const nets = new Map<string, string[]>();
+  for (const id of order) {
+    const r = find(id);
+    if (!nets.has(r)) nets.set(r, []);
+    nets.get(r)!.push(id);
+  }
+  const result: CircuitWire[] = [];
+  let n = 0;
+  for (const pins of nets.values()) {
+    if (pins.length < 2) continue;
+    const driver =
+      pins.find((id) => pinIsOutput.get(id) && pinOwner.get(id)?.type !== 'tunnel') ||
+      pins.find((id) => pinIsOutput.get(id)) ||
+      pins[0];
+    for (const id of pins) {
+      if (id === driver) continue;
+      result.push({
+        id: `net_${n++}`,
+        fromCompId: pinOwner.get(driver)!.id,
+        fromPinId: driver,
+        toCompId: pinOwner.get(id)!.id,
+        toPinId: id,
+        value: 0,
+      });
+    }
+  }
+  return result;
+};
+
+/**
+ * Ids of every wire segment electrically joined to `wireId` through shared endpoints (one Logisim wire / net).
+ */
+export const getConnectedWireIds = (wires: CircuitWire[], wireId: string): string[] => {
+  const keyOf = (p: WirePoint) => `${snapTo10(p.x)},${snapTo10(p.y)}`;
+  const atLoc = new Map<string, CircuitWire[]>();
+  for (const w of wires) {
+    if (!w.startPoint || !w.endPoint) continue;
+    for (const k of [keyOf(w.startPoint), keyOf(w.endPoint)]) {
+      if (!atLoc.has(k)) atLoc.set(k, []);
+      atLoc.get(k)!.push(w);
+    }
+  }
+  const start = wires.find((w) => w.id === wireId);
+  if (!start || !start.startPoint || !start.endPoint) return start ? [start.id] : [];
+  const seen = new Set<string>([start.id]);
+  const queue: CircuitWire[] = [start];
+  while (queue.length > 0) {
+    const w = queue.shift()!;
+    for (const k of [keyOf(w.startPoint!), keyOf(w.endPoint!)]) {
+      for (const o of atLoc.get(k) || []) {
+        if (!seen.has(o.id)) {
+          seen.add(o.id);
+          queue.push(o);
+        }
+      }
+    }
+  }
+  return Array.from(seen);
+};
+
+/**
+ * Wire clusters (connected through endpoints) that only touch pins of the given components, i.e. the wiring
+ * that belongs entirely to a selection. Used to copy a selection together with its internal wiring.
+ */
+export const getInternalWires = (
+  wires: CircuitWire[],
+  components: CircuitComponentInstance[],
+  selectedCompIds: string[]
+): CircuitWire[] => {
+  const keyOf = (p: WirePoint) => `${snapTo10(p.x)},${snapTo10(p.y)}`;
+  const pinOwner = new Map<string, string>();
+  for (const c of components) {
+    for (const p of [...c.inputs, ...c.outputs]) pinOwner.set(keyOf(p), c.id);
+  }
+  const selected = new Set(selectedCompIds);
+  const result: CircuitWire[] = [];
+  const done = new Set<string>();
+  for (const w of wires) {
+    if (done.has(w.id) || !w.startPoint || !w.endPoint) continue;
+    const cluster = new Set(getConnectedWireIds(wires, w.id));
+    cluster.forEach((id) => done.add(id));
+    const members = wires.filter((x) => cluster.has(x.id));
+    let touchesSelected = false;
+    let touchesOther = false;
+    for (const m of members) {
+      for (const p of [m.startPoint!, m.endPoint!]) {
+        const owner = pinOwner.get(keyOf(p));
+        if (!owner) continue;
+        if (selected.has(owner)) touchesSelected = true;
+        else touchesOther = true;
+      }
+    }
+    if (touchesSelected && !touchesOther) result.push(...members);
+  }
+  return result;
 };
 
 /**
@@ -1607,7 +1799,8 @@ export const computeGroupDragDeltas = (
 export const translateWiresForMovedComponents = (
   rawInitialWires: CircuitWire[],
   initialComps: CircuitComponentInstance[],
-  movedCompDeltas: Map<string, { dx: number; dy: number }>
+  movedCompDeltas: Map<string, { dx: number; dy: number }>,
+  selectedWireIds?: Set<string>
 ): CircuitWire[] => {
   if (movedCompDeltas.size === 0 || rawInitialWires.length === 0) return rawInitialWires;
 
@@ -1705,6 +1898,15 @@ export const translateWiresForMovedComponents = (
 
     // Case A: Entire wire cluster is attached ONLY to uniformly moving component(s) (no stationary pins!)
     // Translate the entire wire cluster rigidly 1:1 with the component!
+    // A selected wire that hangs free (touches no pin at all) moves with the selection too, like Logisim.
+    if (
+      !uniformMovingDelta &&
+      !touchesStationaryPin &&
+      selectedWireIds &&
+      clusterIndices.some((idx) => selectedWireIds.has(initialWires[idx].id))
+    ) {
+      uniformMovingDelta = movedCompDeltas.values().next().value ?? null;
+    }
     if (uniformMovingDelta && !touchesStationaryPin && !hasConflictingDeltas) {
       rigidGroups.push({ indices: [...clusterIndices], delta: uniformMovingDelta });
       clusterIndices.forEach((i) => removedWire.add(i));

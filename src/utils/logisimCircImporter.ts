@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire, ComponentType } from '../types/circuit';
-import { createComponentInstance } from './circuitEngine';
+import { createComponentInstance, updatePinPositions } from './circuitEngine';
 
 export interface ImportedCircuitSheet {
   name: string;
@@ -75,8 +75,32 @@ function parseCoord(coordStr: string | null): { x: number; y: number } | null {
   return { x: parseInt(match[1], 10), y: parseInt(match[2], 10) };
 }
 
+interface Pt {
+  x: number;
+  y: number;
+}
+
+const GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+
+// Logisim draws every part facing east by default; other facings turn the part around its anchor (loc)
+const FACING_ROTATION: Record<string, 0 | 90 | 180 | 270> = { east: 0, south: 90, west: 180, north: 270 };
+
+// Local (east-facing) offset -> canvas offset for a facing
+const rotateOffset = (p: Pt, rot: number): Pt => {
+  if (rot === 90) return { x: -p.y, y: p.x };
+  if (rot === 180) return { x: -p.x, y: -p.y };
+  if (rot === 270) return { x: p.y, y: -p.x };
+  return p;
+};
+const unrotateOffset = (p: Pt, rot: number): Pt => rotateOffset(p, (360 - rot) % 360);
+
 /**
  * Parses Standard CAD XML (.circ) file and converts to native project sheets.
+ *
+ * Logisim stores a wire as many straight segments that only touch the parts at their pin locations, and
+ * Logisim parts have other sizes than ours. So the importer rebuilds the electrical nets from the wire
+ * geometry (segments joined at endpoints, or an endpoint on another segment), finds which Logisim pin
+ * location each net reaches, and connects the matching pins of our parts. repairWires then routes them.
  */
 export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
   const parser = new DOMParser();
@@ -93,142 +117,202 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
     const circuitElem = circuits[cIdx];
     const circuitName = circuitElem.getAttribute('name') || `Devre ${cIdx + 1}`;
 
-    const rawComps = circuitElem.getElementsByTagName('comp');
-    const rawWires = circuitElem.getElementsByTagName('wire');
+    // Only direct children: a <circuit> never nests, but be safe against stray matches
+    const rawComps = Array.from(circuitElem.getElementsByTagName('comp'));
+    const rawWires = Array.from(circuitElem.getElementsByTagName('wire'));
 
+    // 1. Wire segments and nets (union-find over grid points)
+    const segs: Array<{ a: Pt; b: Pt }> = [];
+    for (const wireNode of rawWires) {
+      const a = parseCoord(wireNode.getAttribute('from'));
+      const b = parseCoord(wireNode.getAttribute('to'));
+      if (a && b && (a.x !== b.x || a.y !== b.y)) segs.push({ a, b });
+    }
+    const key = (p: Pt) => `${p.x},${p.y}`;
+    const parent = new Map<string, string>();
+    const find = (k: string): string => {
+      if (!parent.has(k)) parent.set(k, k);
+      let r = k;
+      while (parent.get(r) !== r) r = parent.get(r)!;
+      let c = k;
+      while (parent.get(c) !== r) {
+        const n = parent.get(c)!;
+        parent.set(c, r);
+        c = n;
+      }
+      return r;
+    };
+    const union = (a: string, b: string) => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    const onSeg = (p: Pt, s: { a: Pt; b: Pt }) =>
+      (s.a.x === s.b.x && p.x === s.a.x && p.y >= Math.min(s.a.y, s.b.y) && p.y <= Math.max(s.a.y, s.b.y)) ||
+      (s.a.y === s.b.y && p.y === s.a.y && p.x >= Math.min(s.a.x, s.b.x) && p.x <= Math.max(s.a.x, s.b.x));
+    const endpoints = new Map<string, Pt>();
+    for (const s of segs) {
+      union(key(s.a), key(s.b));
+      endpoints.set(key(s.a), s.a);
+      endpoints.set(key(s.b), s.b);
+    }
+    // An endpoint lying on another segment connects to it (Logisim splits the wire there)
+    for (const p of endpoints.values()) {
+      for (const s of segs) if (onSeg(p, s)) union(key(p), key(s.a));
+    }
+    // Net of a Logisim pin location: an endpoint there, or a segment passing over it
+    const netAt = (p: Pt): string | null => {
+      if (endpoints.has(key(p))) return find(key(p));
+      for (const s of segs) if (onSeg(p, s)) return find(key(s.a));
+      return null;
+    };
+
+    // 2. Parts: create ours and remember which Logisim pin location belongs to which of our pins
     const components: CircuitComponentInstance[] = [];
-    const compPinMap = new Map<string, { compId: string; pinId: string; pinType: 'input' | 'output'; x: number; y: number }>();
+    const attach: Array<{ at: Pt; compId: string; pinId: string; isOutput: boolean }> = [];
+    // Our parts are bigger than Logisim's (an AND gate is 80px instead of 50px), spread the layout out
+    const SCALE = 1.6;
+    const scaled = (p: Pt): Pt => ({ x: Math.round((p.x * SCALE) / 10) * 10, y: Math.round((p.y * SCALE) / 10) * 10 });
 
-    // Calculate bounding box to normalize coordinates
-    let minX = Infinity;
-    let minY = Infinity;
-
-    for (let i = 0; i < rawComps.length; i++) {
-      const pt = parseCoord(rawComps[i].getAttribute('loc'));
-      if (pt) {
-        if (pt.x < minX) minX = pt.x;
-        if (pt.y < minY) minY = pt.y;
-      }
-    }
-    for (let i = 0; i < rawWires.length; i++) {
-      const fromPt = parseCoord(rawWires[i].getAttribute('from'));
-      const toPt = parseCoord(rawWires[i].getAttribute('to'));
-      if (fromPt) {
-        if (fromPt.x < minX) minX = fromPt.x;
-        if (fromPt.y < minY) minY = fromPt.y;
-      }
-      if (toPt) {
-        if (toPt.x < minX) minX = toPt.x;
-        if (toPt.y < minY) minY = toPt.y;
-      }
-    }
-
-    if (minX === Infinity) minX = 0;
-    if (minY === Infinity) minY = 0;
-
-    const offsetX = 80 - Math.min(minX, 0);
-    const offsetY = 80 - Math.min(minY, 0);
-
-    // Process components
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
       const loc = parseCoord(compNode.getAttribute('loc'));
       if (!loc) continue;
 
-      // Extract attributes like output=true, val=0, label=...
       const attrs = compNode.getElementsByTagName('a');
       let isOutput = false;
       let constVal: string | undefined = undefined;
       let label: string | undefined = undefined;
-
+      let facing = 'east';
+      let size = 0;
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
         const aVal = attrs[a].getAttribute('val') || attrs[a].textContent || '';
         if (aName === 'output' && aVal === 'true') isOutput = true;
         if (aName === 'val') constVal = aVal;
         if (aName === 'label' && aVal) label = aVal;
+        if (aName === 'facing') facing = aVal;
+        if (aName === 'size') size = parseInt(aVal, 10) || 0;
       }
 
       const nativeType = mapCircCompType(compName, isOutput, constVal);
       if (!nativeType) continue;
+      const rot = FACING_ROTATION[facing] ?? 0;
+      const isGate = GATE_TYPES.includes(nativeType);
+      const isInverterLike = nativeType === 'not' || nativeType === 'triState';
+      const anchor = scaled(loc);
 
-      const normX = Math.round((loc.x + offsetX) / 10) * 10;
-      const normY = Math.round((loc.y + offsetY) / 10) * 10;
-
-      const compInstance = createComponentInstance(nativeType, normX, normY);
-      if (label) compInstance.label = label;
-
-      components.push(compInstance);
-
-      // Register pins in map
-      compInstance.inputs.forEach((p) => {
-        compPinMap.set(`${p.x},${p.y}`, { compId: compInstance.id, pinId: p.id, pinType: 'input', x: p.x, y: p.y });
-      });
-      compInstance.outputs.forEach((p) => {
-        compPinMap.set(`${p.x},${p.y}`, { compId: compInstance.id, pinId: p.id, pinType: 'output', x: p.x, y: p.y });
-      });
-    }
-
-    // Process wires
-    const wires: CircuitWire[] = [];
-    for (let w = 0; w < rawWires.length; w++) {
-      const wireNode = rawWires[w];
-      const fromPt = parseCoord(wireNode.getAttribute('from'));
-      const toPt = parseCoord(wireNode.getAttribute('to'));
-      if (!fromPt || !toPt) continue;
-
-      const normFromX = Math.round((fromPt.x + offsetX) / 10) * 10;
-      const normFromY = Math.round((fromPt.y + offsetY) / 10) * 10;
-      const normToX = Math.round((toPt.x + offsetX) / 10) * 10;
-      const normToY = Math.round((toPt.y + offsetY) / 10) * 10;
-
-      // Find closest pins within 25px radius
-      let bestFrom: { compId: string; pinId: string; pinType: 'input' | 'output' } | null = null;
-      let bestTo: { compId: string; pinId: string; pinType: 'input' | 'output' } | null = null;
-      let minFromDist = 25;
-      let minToDist = 25;
-
-      components.forEach((c) => {
-        [...c.inputs, ...c.outputs].forEach((p) => {
-          const dFrom = Math.hypot(p.x - normFromX, p.y - normFromY);
-          if (dFrom < minFromDist) {
-            minFromDist = dFrom;
-            bestFrom = { compId: c.id, pinId: p.id, pinType: p.type };
-          }
-          const dTo = Math.hypot(p.x - normToX, p.y - normToY);
-          if (dTo < minToDist) {
-            minToDist = dTo;
-            bestTo = { compId: c.id, pinId: p.id, pinType: p.type };
-          }
-        });
-      });
-
-      // If we found connection between output and input
-      if (bestFrom && bestTo) {
-        const bf: { compId: string; pinId: string; pinType: 'input' | 'output' } = bestFrom;
-        const bt: { compId: string; pinId: string; pinType: 'input' | 'output' } = bestTo;
-        if (bf.compId !== bt.compId) {
-          const outPin = bf.pinType === 'output' ? bf : bt.pinType === 'output' ? bt : null;
-          const inPin = bf.pinType === 'input' ? bf : bt.pinType === 'input' ? bt : null;
-
-          if (outPin && inPin) {
-            // Avoid duplicate wires
-            const exists = wires.some(
-              (ew) => ew.fromPinId === outPin.pinId && ew.toPinId === inPin.pinId
-            );
-            if (!exists) {
-              wires.push({
-                id: `wire_circ_${w}_${Math.random().toString(36).substring(2, 6)}`,
-                fromCompId: outPin.compId,
-                fromPinId: outPin.pinId,
-                toCompId: inPin.compId,
-                toPinId: inPin.pinId,
-                value: 0,
-              });
-            }
+      if (isGate || isInverterLike) {
+        // Logisim gate: output at loc, inputs on the back edge (size+bubble/XOR curve behind it)
+        const back = isGate ? (size || 50) : size || 30;
+        const halfSpan = isGate ? (size || 50) / 2 + 5 : 15;
+        const found: Array<{ p: Pt; lateral: number }> = [];
+        for (const p of endpoints.values()) {
+          const local = unrotateOffset({ x: p.x - loc.x, y: p.y - loc.y }, rot);
+          if (local.x <= -back + 15 && local.x >= -back - 25 && Math.abs(local.y) <= halfSpan) {
+            found.push({ p, lateral: local.y });
           }
         }
+        found.sort((u, v) => u.lateral - v.lateral);
+
+        let inst = createComponentInstance(nativeType, 0, 0);
+        if (isGate && found.length > 2) {
+          const n = Math.min(5, found.length);
+          inst.inputs = Array.from({ length: n }).map((_, k) => ({
+            id: `${inst.id}_in${k}`,
+            name: String.fromCharCode(65 + k),
+            type: 'input' as const,
+            value: 0 as const,
+            x: 0,
+            y: 0,
+          }));
+          inst.state = { ...inst.state, gateInputsCount: n };
+        }
+        inst.rotation = rot;
+        inst = updatePinPositions(inst);
+        // Put our output pin exactly on the (scaled) Logisim anchor
+        const out = inst.outputs[0];
+        inst = updatePinPositions({ ...inst, x: anchor.x - out.x, y: anchor.y - out.y });
+        if (label) inst.label = label;
+        components.push(inst);
+
+        attach.push({ at: loc, compId: inst.id, pinId: inst.outputs[0].id, isOutput: true });
+        const n = inst.inputs.length;
+        found.forEach((f, k) => {
+          if (k >= 5) return;
+          // first -> first input, last -> last input, the rest spread evenly (like our gate input remap)
+          const idx = found.length === 1 ? 0 : Math.round((k / (found.length - 1)) * (n - 1));
+          attach.push({ at: f.p, compId: inst.id, pinId: inst.inputs[idx].id, isOutput: false });
+        });
+        continue;
+      }
+
+      let inst = updatePinPositions(createComponentInstance(nativeType, 0, 0));
+      const pins = [...inst.inputs, ...inst.outputs];
+      if (pins.length === 1) {
+        // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
+        inst = updatePinPositions({ ...inst, x: anchor.x - pins[0].x, y: anchor.y - pins[0].y });
+        if (label) inst.label = label;
+        components.push(inst);
+        const pin = [...inst.inputs, ...inst.outputs][0];
+        attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        continue;
+      }
+
+      // Larger chips: geometry differs too much; connect wire endpoints near each of our pins
+      inst = updatePinPositions({ ...inst, x: anchor.x, y: anchor.y });
+      if (label) inst.label = label;
+      components.push(inst);
+      for (const pin of [...inst.inputs, ...inst.outputs]) {
+        let best: Pt | null = null;
+        let bestD = 30;
+        for (const p of endpoints.values()) {
+          const sp = scaled(p);
+          const d = Math.hypot(sp.x - pin.x, sp.y - pin.y);
+          if (d < bestD) {
+            bestD = d;
+            best = p;
+          }
+        }
+        if (best) attach.push({ at: best, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+      }
+    }
+
+    // 3. One star of pin-to-pin connections per net, driven from an output pin when there is one
+    const byNet = new Map<string, typeof attach>();
+    for (const at of attach) {
+      const net = netAt(at.at) ?? `pin:${key(at.at)}`; // parts touching pin-to-pin without a wire
+      if (!byNet.has(net)) byNet.set(net, []);
+      byNet.get(net)!.push(at);
+    }
+    const wires: CircuitWire[] = [];
+    let wireNo = 0;
+    for (const members of byNet.values()) {
+      const unique = members.filter((m, i) => members.findIndex((o) => o.pinId === m.pinId) === i);
+      if (unique.length < 2) continue;
+      const driver = unique.find((m) => m.isOutput) || unique[0];
+      for (const m of unique) {
+        if (m === driver) continue;
+        wires.push({
+          id: `wire_circ_${cIdx}_${wireNo++}`,
+          fromCompId: driver.compId,
+          fromPinId: driver.pinId,
+          toCompId: m.compId,
+          toPinId: m.pinId,
+          value: 0,
+        });
+      }
+    }
+
+    // 4. Keep everything on the positive canvas with a margin
+    if (components.length > 0) {
+      const minX = Math.min(...components.map((c) => Math.min(c.x, ...[...c.inputs, ...c.outputs].map((p) => p.x))));
+      const minY = Math.min(...components.map((c) => Math.min(c.y, ...[...c.inputs, ...c.outputs].map((p) => p.y))));
+      const dx = Math.round((60 - minX) / 10) * 10;
+      const dy = Math.round((60 - minY) / 10) * 10;
+      for (let k = 0; k < components.length; k++) {
+        components[k] = updatePinPositions({ ...components[k], x: components[k].x + dx, y: components[k].y + dy });
       }
     }
 

@@ -1,4 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
+import { getLogicalConnections } from './wiringEngine';
 
 function sanitizeName(name: string): string {
   const clean = name
@@ -29,8 +30,10 @@ function getSignalName(
 export function generateVerilog(
   circuitName: string,
   components: CircuitComponentInstance[],
-  wires: CircuitWire[]
+  canvasWires: CircuitWire[]
 ): string {
+  // Driver lookups need pin-to-pin connections; canvas wires are positional segments
+  const wires = getLogicalConnections(components, canvasWires);
   const modName = sanitizeName(circuitName || 'digital_circuit');
   const timestamp = new Date().toISOString();
 
@@ -342,8 +345,10 @@ endmodule
 export function generateVHDL(
   circuitName: string,
   components: CircuitComponentInstance[],
-  wires: CircuitWire[]
+  canvasWires: CircuitWire[]
 ): string {
+  // Driver lookups need pin-to-pin connections; canvas wires are positional segments
+  const wires = getLogicalConnections(components, canvasWires);
   const entityName = sanitizeName(circuitName || 'digital_circuit');
   const timestamp = new Date().toISOString();
 

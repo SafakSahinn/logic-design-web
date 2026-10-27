@@ -8,6 +8,8 @@ import {
   moveWireSegment,
   repairWires,
   rerouteWiresToRemappedPins,
+  getConnectedWireIds,
+  getInternalWires,
   translateWiresForMovedComponents,
   computeGroupDragDeltas,
   getWireOrthogonalSegments,
@@ -56,7 +58,6 @@ import {
   Edit3,
   Table,
   X,
-  Sliders,
   ZoomIn,
   ZoomOut,
   Maximize2,
@@ -234,14 +235,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   const handleAddComponentAt = (type: ComponentType, posX: number, posY: number) => {
     recordHistory();
-    const newComp = updatePinPositions(createComponentInstance(type, snapTo10(posX), snapTo10(posY)));
-    setComponents((prev) => {
-      const updated = [...prev, newComp];
-      const repaired = repairWires(wires, updated);
-      const sim = simulateCircuit(updated, repaired);
-      setWires(sim.wires);
-      return sim.components;
-    });
+    // Keep the drop point unless the part would land on other parts/wires, then use the nearest free spot
+    const spot = findFreeSpot(updatePinPositions(createComponentInstance(type, 0, 0)), { x: posX, y: posY });
+    const newComp = updatePinPositions(createComponentInstance(type, spot.x, spot.y));
+    commitCircuit([...components, newComp], wires);
     setSelectedCompId(newComp.id);
     setSelectedWireId(null);
   };
@@ -363,7 +360,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // Wire Routing Style: Orthogonal (Manhattan / 90 degrees) vs Bezier (Curved)
-  const [wireStyle, setWireStyle] = useState<'orthogonal' | 'bezier'>('orthogonal');
 
   // Zoom & Pan Viewport State (Canvas Navigation)
   const [zoom, setZoom] = useState<number>(1);
@@ -546,6 +542,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   } | null>(null);
 
   const wiringStartTimeRef = useRef<number>(0);
+  const canvasMouseUpRef = useRef<((e: React.MouseEvent) => void) | null>(null);
+  const wiringFromRef = useRef<object | null>(null);
   // Set when a wire is finished on mouseup, so the click event of that same gesture doesn't start a new wire
   const suppressPinClickRef = useRef<boolean>(false);
   // Wires/components as they were when a segment drag started (segment moves are recomputed from it)
@@ -596,6 +594,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     },
     [components, wires]
   );
+
+  // Put a circuit on the canvas the way every edit does: Logisim WireRepair + simulation.
+  // Synthesised, imported or pasted wires are pin-to-pin connections that still need routing.
+  const commitCircuit = (nextComps: CircuitComponentInstance[], nextWires: CircuitWire[]) => {
+    const repaired = repairWires(nextWires, nextComps);
+    const sim = simulateCircuit(nextComps, repaired);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    return sim;
+  };
+
+  // Right-most x used by the current circuit (parts and wires), for appending new blocks beside it
+  const getCircuitRightEdge = () => {
+    let right = 0;
+    for (const c of components) {
+      const meta = COMPONENT_CATALOG[c.type];
+      right = Math.max(right, c.x + (meta?.width || 120), ...[...c.inputs, ...c.outputs].map((p) => p.x));
+    }
+    for (const w of wires) {
+      if (w.startPoint) right = Math.max(right, w.startPoint.x);
+      if (w.endPoint) right = Math.max(right, w.endPoint.x);
+    }
+    return right;
+  };
 
   // Keep active sheet in sync with canvas components, wires, and annotations
   useEffect(() => {
@@ -1307,7 +1329,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const translatedWires = translateWiresForMovedComponents(
               initialWires,
               initialComps,
-              movedCompDeltas
+              movedCompDeltas,
+              new Set(selectedWireIds)
             );
             setWires(translatedWires);
           }
@@ -1326,6 +1349,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Canvas mouse up: stop dragging, stop panning, or finalize box selection
   const handleCanvasMouseUp = (e: React.MouseEvent) => {
+    if (isNaN(e.clientX)) return;
     if (dragRafRef.current) {
       cancelAnimationFrame(dragRafRef.current);
       dragRafRef.current = null;
@@ -1401,7 +1425,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
         const translatedWires =
           initialWires.length > 0 && movedCompDeltas.size > 0
-            ? translateWiresForMovedComponents(initialWires, initialComps, movedCompDeltas)
+            ? translateWiresForMovedComponents(initialWires, initialComps, movedCompDeltas, new Set(selectedWireIds))
             : initialWires;
 
         const repaired = repairWires(translatedWires, finalComps);
@@ -1422,10 +1446,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       dragGroupOffsetsRef.current.clear();
     }
     if (selectionBox) {
-      const minX = Math.min(selectionBox.startX, selectionBox.currentX);
-      const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
-      const minY = Math.min(selectionBox.startY, selectionBox.currentY);
-      const maxY = Math.max(selectionBox.startY, selectionBox.currentY);
+      // Use the release point: a quick drag can end before the last mousemove was rendered
+      const upCoords = getCanvasCoords(e);
+      const minX = Math.min(selectionBox.startX, upCoords.x);
+      const maxX = Math.max(selectionBox.startX, upCoords.x);
+      const minY = Math.min(selectionBox.startY, upCoords.y);
+      const maxY = Math.max(selectionBox.startY, upCoords.y);
 
       if (maxX - minX > 5 || maxY - minY > 5) {
         didDragSelectionBoxRef.current = true;
@@ -1483,6 +1509,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setSelectionBox(null);
     }
   };
+  // Latest handlers/state for the window-level mouseup (drags released outside the canvas)
+  canvasMouseUpRef.current = handleCanvasMouseUp;
+  wiringFromRef.current = wiringFrom;
 
   // Wheel Zoom: only zoom when Ctrl key is held (standard CAD/Figma convention);
   // normal mouse wheel scrolls the web page up and down naturally without zooming the canvas.
@@ -1756,13 +1785,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Synthesize FSM onto canvas
   const handleSynthesizeFSM = () => {
     try {
-      const maxX = components.length > 0 ? Math.max(...components.map((c) => c.x)) : 60;
-      const startX = maxX > 60 ? maxX + 180 : 80;
+      const startX = components.length > 0 ? snapTo10(getCircuitRightEdge() + 100) : 80;
       const res = synthesizeFSM(fsmStates, fsmTransitions, startX, 80);
 
       recordHistory();
-      setComponents((prev) => [...prev, ...res.components]);
-      setWires((prev) => [...prev, ...res.wires]);
+      commitCircuit([...components, ...res.components], [...wires, ...res.wires]);
       setShowFsmModal(false);
       showToast('FSM Durum Makinesi başarıyla tuvale sentezlendi!');
     } catch (err: unknown) {
@@ -1808,6 +1835,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               components: c.components.map(updatePinPositions),
               wires: c.wires,
             }));
+            // Imported connections are pin-to-pin: route every sheet once so they are stored as real wires
+            for (const sh of newSheets) sh.wires = repairWires(sh.wires, sh.components);
             setSheets(newSheets);
             setActiveSheetId(newSheets[0].id);
             const sim = simulateCircuit(newSheets[0].components, newSheets[0].wires);
@@ -2040,33 +2069,30 @@ ${wireXmls.join('\n')}
 
     const newId = `sheet_${Date.now()}`;
     const newName = `${source.name} (Kopya)`;
+    // New ids for parts and pins, same geometry: the copy lives on its own sheet, so nothing has to move
+    // (the old version shifted the parts by 20px but not their pins/wires and wired every wire to pin 0).
+    const stamp = Date.now();
+    const pinIdMap = new Map<string, string>();
     const compIdMap = new Map<string, string>();
-    const clonedComps = source.components.map((c) => {
-      const newCompId = `${c.type}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const clonedComps = source.components.map((c, idx) => {
+      const newCompId = `${c.type}_${stamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       compIdMap.set(c.id, newCompId);
-      return {
-        ...c,
-        id: newCompId,
-        x: c.x + 20,
-        y: c.y + 20,
-        inputs: c.inputs.map((pin) => ({ ...pin, id: `${newCompId}_in_${pin.name}` })),
-        outputs: c.outputs.map((pin) => ({ ...pin, id: `${newCompId}_out_${pin.name}` })),
+      const clonePin = (pin: CircuitPin) => {
+        const newPinId = pin.id.startsWith(`${c.id}_`) ? `${newCompId}${pin.id.slice(c.id.length)}` : `${newCompId}_${pin.id}`;
+        pinIdMap.set(pin.id, newPinId);
+        return { ...pin, id: newPinId };
       };
+      return { ...c, id: newCompId, inputs: c.inputs.map(clonePin), outputs: c.outputs.map(clonePin) };
     });
-    const clonedWires = source.wires.map((w) => {
-      const fromC = clonedComps.find((c) => compIdMap.get(w.fromCompId) === c.id);
-      const toC = clonedComps.find((c) => compIdMap.get(w.toCompId) === c.id);
-      const fromPin = fromC ? fromC.outputs[0]?.id || w.fromPinId : w.fromPinId;
-      const toPin = toC ? toC.inputs[0]?.id || w.toPinId : w.toPinId;
-      return {
-        ...w,
-        id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        fromCompId: compIdMap.get(w.fromCompId) || w.fromCompId,
-        fromPinId: fromPin,
-        toCompId: compIdMap.get(w.toCompId) || w.toCompId,
-        toPinId: toPin,
-      };
-    });
+    const mapPinRef = (pinId: string) => pinIdMap.get(pinId) || pinId;
+    const clonedWires = source.wires.map((w, idx) => ({
+      ...w,
+      id: `wire_${stamp}_${idx}`,
+      fromCompId: compIdMap.get(w.fromCompId) || w.fromCompId,
+      fromPinId: mapPinRef(w.fromPinId),
+      toCompId: compIdMap.get(w.toCompId) || w.toCompId,
+      toPinId: mapPinRef(w.toPinId),
+    }));
 
     setSheets((prev) => [
       ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires } : s)),
@@ -2188,22 +2214,25 @@ ${wireXmls.join('\n')}
 
     saveCustomSubcircuit(subDef);
 
-    const posX = Math.max(80, Math.round((-panOffset.x + 360) / 20) * 20);
-    const posY = Math.max(80, Math.round((-panOffset.y + 200) / 20) * 20);
-    const instance = createSubcircuitInstance(subDef, posX, posY, sheet.name);
+    const spot = findFreeSpot(updatePinPositions(createSubcircuitInstance(subDef, 0, 0, sheet.name)));
+    const instance = updatePinPositions(createSubcircuitInstance(subDef, spot.x, spot.y, sheet.name));
 
     recordHistory();
-    setComponents((prev) => [...prev, instance]);
+    commitCircuit([...components, instance], wires);
     setSelectedCompIds([instance.id]);
     showToast(`"${sheet.name}" sayfası entegre çip olarak tuvale eklendi!`);
   };
 
   // Toggle wire between 1-Bit single line and 4-Bit Multi-bit Bus
   const handleToggleWireBus = (wireId: string) => {
+    const target = wires.find((w) => w.id === wireId);
+    if (!target) return;
     recordHistory();
-    setWires((prev) =>
-      prev.map((w) => (w.id === wireId ? { ...w, isBus: !w.isBus, bitWidth: w.isBus ? 1 : 4 } : w))
-    );
+    // Every segment of the same connected wire gets the new width; a mixed net would be re-merged by
+    // repairWires into whatever its segments happen to say
+    const net = new Set(getConnectedWireIds(wires, wireId));
+    const makeBus = !target.isBus;
+    setWires((prev) => prev.map((w) => (net.has(w.id) ? { ...w, isBus: makeBus, bitWidth: makeBus ? 4 : 1 } : w)));
   };
 
 
@@ -2286,7 +2315,7 @@ ${wireXmls.join('\n')}
       } else {
         // 2. Otherwise compute the 1 or 2 orthogonal segments from Logisim's direction-locked L-bend
         const dir = computeLogisimWireDirection(startPt, endPt, wiringFrom.direction || DIR_NONE);
-        const segs = getLogisimWiringToolSegments(startPt, endPt, dir, components);
+        const segs = getLogisimWiringToolSegments(startPt, endPt, dir, components, prev);
         if (segs.length === 0) return prev;
 
         const addedWires: CircuitWire[] = segs.map((seg, idx) => ({
@@ -2375,15 +2404,15 @@ ${wireXmls.join('\n')}
   };
 
   // Add component from catalog to canvas
-  const handleAddComponent = (type: ComponentType) => {
-    recordHistory();
-
-    // Place the new part on free space inside the visible canvas: a part dropped onto another part or
-    // a wire would share pin locations with it and silently short those nets.
-    const compBox = (c: { type: ComponentType; x: number; y: number; inputs: CircuitPin[]; outputs: CircuitPin[]; rotation?: number }) => {
+  // Free spot for a new part (given as an instance placed at 0,0). A part dropped onto another part or a
+  // wire would share pin locations with it and silently short those nets.
+  // - with `prefer`: the nearest free spot around that point (drag & drop keeps the user's spot if free)
+  // - without: the first free spot in the visible canvas, scanning from its top-left corner
+  const findFreeSpot = (probe: CircuitComponentInstance, prefer?: { x: number; y: number }) => {
+    const compBox = (c: CircuitComponentInstance) => {
       const meta = COMPONENT_CATALOG[c.type];
-      const w = meta?.width || 120;
-      const h = meta?.height || Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20);
+      const w = c.type === 'subcircuit' ? 120 : meta?.width || 120;
+      const h = c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : meta?.height || 60;
       const quarterTurn = c.rotation === 90 || c.rotation === 270;
       const cx = c.x + w / 2;
       const cy = c.y + h / 2;
@@ -2400,37 +2429,51 @@ ${wireXmls.join('\n')}
         x1: Math.max(w.startPoint!.x, w.endPoint!.x),
         y1: Math.max(w.startPoint!.y, w.endPoint!.y),
       }));
-    const probe = updatePinPositions(createComponentInstance(type, 0, 0));
-    const size = compBox(probe);
-    const MARGIN = 30;
+    const size = compBox({ ...probe, x: 0, y: 0 });
+    const margin = prefer ? 10 : 30;
+    const isFree = (x: number, y: number) => {
+      const b = { x0: x + size.x0 - margin, y0: y + size.y0 - margin, x1: x + size.x1 + margin, y1: y + size.y1 + margin };
+      const hits = (o: { x0: number; y0: number; x1: number; y1: number }) =>
+        o.x0 <= b.x1 && o.x1 >= b.x0 && o.y0 <= b.y1 && o.y1 >= b.y0;
+      return x + size.x0 >= 10 && y + size.y0 >= 10 && !occupied.some(hits) && !wireBoxes.some(hits);
+    };
+
+    if (prefer) {
+      const px = snapTo10(prefer.x);
+      const py = snapTo10(prefer.y);
+      if (isFree(px, py)) return { x: px, y: py };
+      for (let r = 10; r <= 300; r += 10) {
+        for (let dx = -r; dx <= r; dx += 10) {
+          for (const dy of [-r, r]) {
+            if (isFree(px + dx, py + dy)) return { x: px + dx, y: py + dy };
+            if (isFree(px + dy, py + dx)) return { x: px + dy, y: py + dx };
+          }
+        }
+      }
+      return { x: Math.max(10, px), y: Math.max(10, py) };
+    }
+
     const viewW = (svgRef.current?.clientWidth || 900) / zoom;
     const viewH = (svgRef.current?.clientHeight || 560) / zoom;
     const viewX0 = snapTo10(Math.max(10, -panOffset.x / zoom + 40));
     const viewY0 = snapTo10(Math.max(10, -panOffset.y / zoom + 40));
-    const isFree = (x: number, y: number) => {
-      const b = { x0: x - MARGIN, y0: y - MARGIN, x1: x + size.x1 + MARGIN, y1: y + size.y1 + MARGIN };
-      const hits = (o: { x0: number; y0: number; x1: number; y1: number }) =>
-        o.x0 <= b.x1 && o.x1 >= b.x0 && o.y0 <= b.y1 && o.y1 >= b.y0;
-      return !occupied.some(hits) && !wireBoxes.some(hits);
-    };
-    // Fallback when the view is full: just below everything on the sheet
-    let posX = viewX0;
-    let posY = snapTo10(Math.max(viewY0, ...occupied.map((o) => o.y1 + 40), ...wireBoxes.map((o) => o.y1 + 40)));
-    search: for (let y = viewY0; y < viewY0 + Math.max(200, viewH - size.y1 - 40); y += 20) {
+    for (let y = viewY0; y < viewY0 + Math.max(200, viewH - size.y1 - 40); y += 20) {
       for (let x = viewX0; x < viewX0 + Math.max(200, viewW - size.x1 - 40); x += 20) {
-        if (isFree(x, y)) {
-          posX = x;
-          posY = y;
-          break search;
-        }
+        if (isFree(x, y)) return { x, y };
       }
     }
+    // The view is full: just below everything on the sheet
+    return {
+      x: viewX0,
+      y: snapTo10(Math.max(viewY0, ...occupied.map((o) => o.y1 + 40), ...wireBoxes.map((o) => o.y1 + 40))),
+    };
+  };
 
-    const newComp = updatePinPositions(createComponentInstance(type, posX, posY));
-    const updated = [...components, newComp];
-    const sim = simulateCircuit(updated, repairWires(wires, updated));
-    setComponents(sim.components);
-    setWires(sim.wires);
+  const handleAddComponent = (type: ComponentType) => {
+    recordHistory();
+    const spot = findFreeSpot(updatePinPositions(createComponentInstance(type, 0, 0)));
+    const newComp = updatePinPositions(createComponentInstance(type, spot.x, spot.y));
+    commitCircuit([...components, newComp], wires);
     setSelectedCompId(newComp.id);
     setSelectedWireId(null);
   };
@@ -2488,76 +2531,102 @@ ${wireXmls.join('\n')}
     if (selectedCompIds.length === 0) return;
     recordHistory();
 
-    const idMap = new Map<string, string>();
-    const newComps: CircuitComponentInstance[] = [];
+    // Copy the selected parts together with ALL their internal wiring (every wire cluster that only touches
+    // selected parts, whatever its number of segments) and drop the copy on free space, so its pins and
+    // wires can't land on the original and short it.
+    const canonical = repairWires(wires, components);
+    const internalWires = getInternalWires(canonical, components, selectedCompIds);
+    const selComps = components.filter((c) => selectedCompIds.includes(c.id));
 
-    // Duplicate components with offset
-    components.forEach((c) => {
-      if (selectedCompIds.includes(c.id)) {
-        const cloned = createComponentInstance(
-          c.type,
-          c.x + 40,
-          c.y + 40,
-          c.label ? `${c.label} (Kopya)` : undefined
-        );
-        cloned.rotation = c.rotation;
-        cloned.state = { ...c.state };
-        idMap.set(c.id, cloned.id);
-        newComps.push(updatePinPositions(cloned));
-      }
+    type Box = { x0: number; y0: number; x1: number; y1: number };
+    const compBox = (c: CircuitComponentInstance): Box => {
+      const meta = COMPONENT_CATALOG[c.type];
+      const w = c.type === 'subcircuit' ? 120 : meta?.width || 60;
+      const h = c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : meta?.height || 50;
+      const q = c.rotation === 90 || c.rotation === 270;
+      const cx = c.x + w / 2;
+      const cy = c.y + h / 2;
+      const hw = (q ? h : w) / 2;
+      const hh = (q ? w : h) / 2;
+      return { x0: cx - hw, y0: cy - hh, x1: cx + hw, y1: cy + hh };
+    };
+    const segBox = (w: CircuitWire): Box => ({
+      x0: Math.min(w.startPoint!.x, w.endPoint!.x),
+      y0: Math.min(w.startPoint!.y, w.endPoint!.y),
+      x1: Math.max(w.startPoint!.x, w.endPoint!.x),
+      y1: Math.max(w.startPoint!.y, w.endPoint!.y),
     });
-
-    // Duplicate wires interconnecting the duplicated components
-    const newWires: CircuitWire[] = [];
-    wires.forEach((w) => {
-      const newFromCompId = idMap.get(w.fromCompId);
-      const newToCompId = idMap.get(w.toCompId);
-      if (newFromCompId && newToCompId) {
-        const origFromComp = components.find((c) => c.id === w.fromCompId);
-        const origToComp = components.find((c) => c.id === w.toCompId);
-        const fromPinIdx = origFromComp?.outputs.findIndex((p) => p.id === w.fromPinId) ?? -1;
-        const toPinIdx = origToComp?.inputs.findIndex((p) => p.id === w.toPinId) ?? -1;
-
-        const duplicatedFromComp = newComps.find((c) => c.id === newFromCompId);
-        const duplicatedToComp = newComps.find((c) => c.id === newToCompId);
-
-        if (
-          duplicatedFromComp &&
-          duplicatedToComp &&
-          fromPinIdx >= 0 &&
-          toPinIdx >= 0 &&
-          duplicatedFromComp.outputs[fromPinIdx] &&
-          duplicatedToComp.inputs[toPinIdx]
-        ) {
-          const startPt = w.startPoint ? { x: w.startPoint.x + 40, y: w.startPoint.y + 40 } : undefined;
-          const endPt = w.endPoint ? { x: w.endPoint.x + 40, y: w.endPoint.y + 40 } : undefined;
-          const waypoints = w.waypoints?.map((wp) => ({ x: wp.x + 40, y: wp.y + 40 }));
-
-          newWires.push({
-            id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            fromCompId: newFromCompId,
-            fromPinId: duplicatedFromComp.outputs[fromPinIdx].id,
-            toCompId: newToCompId,
-            toPinId: duplicatedToComp.inputs[toPinIdx].id,
-            startPoint: startPt,
-            endPoint: endPt,
-            waypoints,
-            elbowX: w.elbowX !== undefined ? w.elbowX + 40 : undefined,
-            isBus: w.isBus,
-            bitWidth: w.bitWidth,
-            value: 0,
-          });
+    const groupBoxes = [...selComps.map(compBox), ...internalWires.map(segBox)];
+    const sel = {
+      x0: Math.min(...groupBoxes.map((b) => b.x0)),
+      y0: Math.min(...groupBoxes.map((b) => b.y0)),
+      x1: Math.max(...groupBoxes.map((b) => b.x1)),
+      y1: Math.max(...groupBoxes.map((b) => b.y1)),
+    };
+    const obstacles = [...components.map(compBox), ...canonical.filter((w) => w.startPoint && w.endPoint).map(segBox)];
+    const GAP = 30;
+    const isFree = (dx: number, dy: number) =>
+      groupBoxes.every((b) =>
+        obstacles.every(
+          (o) => o.x1 < b.x0 + dx - GAP || o.x0 > b.x1 + dx + GAP || o.y1 < b.y0 + dy - GAP || o.y0 > b.y1 + dy + GAP
+        )
+      );
+    const stepX = snapTo10(sel.x1 - sel.x0 + 40);
+    const stepY = snapTo10(sel.y1 - sel.y0 + 40);
+    let offset = { dx: 0, dy: stepY };
+    search: for (let k = 1; k <= 12; k++) {
+      for (const cand of [
+        { dx: 0, dy: k * stepY },
+        { dx: k * stepX, dy: 0 },
+        { dx: k * stepX, dy: k * stepY },
+      ]) {
+        if (isFree(cand.dx, cand.dy)) {
+          offset = cand;
+          break search;
         }
       }
+    }
+
+    const stamp = Date.now();
+    const pinIdMap = new Map<string, string>();
+    const newComps: CircuitComponentInstance[] = selComps.map((c, idx) => {
+      const newId = `comp_${c.type}_${stamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+      const clonePin = (pin: CircuitPin) => {
+        const newPinId = pin.id.startsWith(`${c.id}_`) ? `${newId}${pin.id.slice(c.id.length)}` : `${newId}_${pin.id}`;
+        pinIdMap.set(pin.id, newPinId);
+        return { ...pin, id: newPinId };
+      };
+      return updatePinPositions({
+        ...c,
+        id: newId,
+        label: c.label ? `${c.label} (Kopya)` : c.label,
+        state: { ...c.state },
+        x: c.x + offset.dx,
+        y: c.y + offset.dy,
+        inputs: c.inputs.map(clonePin),
+        outputs: c.outputs.map(clonePin),
+      });
+    });
+    const newWires: CircuitWire[] = internalWires.map((w, idx) => {
+      const a = { x: w.startPoint!.x + offset.dx, y: w.startPoint!.y + offset.dy };
+      const b = { x: w.endPoint!.x + offset.dx, y: w.endPoint!.y + offset.dy };
+      return {
+        ...w,
+        id: `wire_${stamp}_${idx}`,
+        fromCompId: '',
+        fromPinId: pinIdMap.get(w.fromPinId) || `loc_${a.x}_${a.y}`,
+        toCompId: '',
+        toPinId: pinIdMap.get(w.toPinId) || `loc_${b.x}_${b.y}`,
+        startPoint: a,
+        endPoint: b,
+        value: 0,
+      };
     });
 
-    const updatedComps = [...components, ...newComps];
-    const repairedWires = repairWires([...wires, ...newWires], updatedComps);
-    const sim = simulateCircuit(updatedComps, repairedWires);
-    setComponents(sim.components);
-    setWires(sim.wires);
+    const sim = commitCircuit([...components, ...newComps], [...canonical, ...newWires]);
     setSelectedCompIds(newComps.map((c) => c.id));
-    setSelectedWireIds(newWires.map((w) => w.id));
+    const newWireIds = new Set(newWires.map((w) => w.id));
+    setSelectedWireIds(sim.wires.filter((w) => newWireIds.has(w.id)).map((w) => w.id));
   }, [selectedCompIds, components, wires, recordHistory]);
 
   // Open Rename Modal
@@ -2655,8 +2724,7 @@ ${wireXmls.join('\n')}
         exprToBuild = solved;
       }
 
-      const maxX = components.length > 0 ? Math.max(...components.map((c) => c.x)) : 60;
-      const startX = synthPlacement === 'append' ? maxX + 180 : 80;
+      const startX = synthPlacement === 'append' && components.length > 0 ? snapTo10(getCircuitRightEdge() + 100) : 80;
       const startY = 80;
 
       const result = synthesizeCircuitFromBooleanExpression(exprToBuild, {
@@ -2668,11 +2736,9 @@ ${wireXmls.join('\n')}
 
       recordHistory();
       if (synthPlacement === 'append') {
-        setComponents((prev) => [...prev, ...result.components]);
-        setWires((prev) => [...prev, ...result.wires]);
+        commitCircuit([...components, ...result.components], [...wires, ...result.wires]);
       } else {
-        setComponents(result.components);
-        setWires(result.wires);
+        commitCircuit(result.components, result.wires);
         setPanOffset({ x: 0, y: 0 });
         setZoom(1);
       }
@@ -2688,16 +2754,10 @@ ${wireXmls.join('\n')}
 
   // Add custom subcircuit from library to canvas
   const handleAddSubcircuit = (subDef: CustomSubcircuit) => {
-    const posX = 160 + (components.length % 5) * 40;
-    const posY = 120 + (components.length % 4) * 50;
     recordHistory();
-    const newComp = updatePinPositions(createSubcircuitInstance(subDef, posX, posY));
-    setComponents((prev) => {
-      const updated = [...prev, newComp];
-      const sim = simulateCircuit(updated, wires);
-      setWires(sim.wires);
-      return sim.components;
-    });
+    const spot = findFreeSpot(updatePinPositions(createSubcircuitInstance(subDef, 0, 0)));
+    const newComp = updatePinPositions(createSubcircuitInstance(subDef, spot.x, spot.y));
+    commitCircuit([...components, newComp], wires);
     setSelectedCompId(newComp.id);
     setSelectedWireId(null);
     showToast(`"${subDef.name}" (${subDef.chipCode || 'IC'}) tuvale eklendi.`);
@@ -2724,7 +2784,7 @@ ${wireXmls.join('\n')}
       subcircuitName,
       subcircuitDesc,
       targetComps,
-      wires
+      repairWires(wires, components)
     );
 
     setCustomSubcircuits(getAllSubcircuits());
@@ -3158,7 +3218,18 @@ ${wireXmls.join('\n')}
 
   // Global release for tactile pushbuttons (guarantees buttons never get stuck when mouse leaves window, drags, or opens modal)
   useEffect(() => {
-    const handleGlobalRelease = () => {
+    const handleGlobalRelease = (e: Event) => {
+      // A drag released outside the canvas never reaches handleCanvasMouseUp: finish component / segment
+      // drags as if released at that point, and drop a wire being drawn instead of leaving it armed
+      // (otherwise the next click anywhere would silently finish it there).
+      const insideCanvas = e.type === 'mouseup' && !!svgRef.current?.contains(e.target as Node);
+      if (!insideCanvas) {
+        if (wiringFromRef.current) {
+          setWiringFrom(null);
+        } else if (e.type === 'mouseup') {
+          canvasMouseUpRef.current?.(e as unknown as React.MouseEvent);
+        }
+      }
       draggingWireJointRef.current = null;
       setDraggingWireJoint(null);
       setComponents((prev) => {
@@ -5875,18 +5946,6 @@ ${wireXmls.join('\n')}
                 </button>
                 <button
                   onClick={() => {
-                    setWireStyle((prev) => (prev === 'orthogonal' ? 'bezier' : 'orthogonal'));
-                    setActiveDesktopMenu(null);
-                  }}
-                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
-                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
-                  }`}
-                >
-                  <span>90° Dik Kablo Modu</span>
-                  {wireStyle === 'orthogonal' && <Check className="w-3.5 h-3.5 text-blue-600" />}
-                </button>
-                <button
-                  onClick={() => {
                     setGridMode((m) => (m === 'dots' ? 'lines' : m === 'lines' ? 'clean' : 'dots'));
                     setActiveDesktopMenu(null);
                   }}
@@ -7506,20 +7565,6 @@ ${wireXmls.join('\n')}
 
           {/* Center/Right: Canvas Display, Routing & Step 5 Theme Toggle */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Wire Style: Orthogonal vs Bezier */}
-            <button
-              onClick={() => setWireStyle(wireStyle === 'orthogonal' ? 'bezier' : 'orthogonal')}
-              className={`px-2.5 py-1 rounded-xl font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs ${
-                cadTheme === 'dark'
-                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
-              title="Kablo Türü: Dik Açılı (Manhattan CAD) vs Eğik (Bezier)"
-            >
-              <Sliders className="w-3.5 h-3.5 text-blue-500" />
-              <span>{wireStyle === 'orthogonal' ? 'Dik Açılı Hat' : 'Eğik Hat'}</span>
-            </button>
-
             {/* Wire Bus Mode */}
             <button
               onClick={() => {
@@ -8648,7 +8693,7 @@ ${wireXmls.join('\n')}
                   )}
 
                   {/* Selected Wire: Compact Floating Action Pill (Delete / Toggle Bus) */}
-                  {isSelected && !wiringFrom && !draggingWireJoint && !draggingWireJointRef.current && (
+                  {isSelected && selectedWireIds.length === 1 && !wiringFrom && !draggingWireJoint && !draggingWireJointRef.current && (
                     <g
                       transform={`translate(${midX}, ${midY < 55 ? midY + 28 : midY - 28})`}
                       className="select-none"
@@ -8790,7 +8835,7 @@ ${wireXmls.join('\n')}
               if (p0.x === p1.x && p0.y === p1.y) return null;
 
               const dir = computeLogisimWireDirection(p0, p1, wiringFrom.direction || DIR_NONE);
-              const segs = getLogisimWiringToolSegments(p0, p1, dir, components);
+              const segs = getLogisimWiringToolSegments(p0, p1, dir, components, wires);
               if (segs.length === 0) return null;
 
               let previewPath = `M ${segs[0].e0.x},${segs[0].e0.y}`;
@@ -10002,8 +10047,7 @@ ${wireXmls.join('\n')}
                                         const expr = truthTableData.minimalExpressions![activeOut.name].expression;
                                         const synthesized = synthesizeCircuitFromBooleanExpression(expr);
                                         recordHistory();
-                                        setComponents(synthesized.components);
-                                        setWires(synthesized.wires);
+                                        commitCircuit(synthesized.components, synthesized.wires);
                                         setSelectedCompIds([]);
                                         setSelectedWireIds([]);
                                         setShowTruthTable(false);

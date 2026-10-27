@@ -10,6 +10,7 @@ import {
   simulateCircuitStep,
   updatePinPositions,
 } from './circuitEngine';
+import { getInternalWires, snapTo10 } from './wiringEngine';
 
 const SUBCIRCUITS_STORAGE_KEY = 'logicdesign_custom_subcircuits_v1';
 
@@ -258,7 +259,9 @@ export function createSubcircuitInstance(
   const inPorts = subDef.ports.filter((p) => p.type === 'input');
   const outPorts = subDef.ports.filter((p) => p.type === 'output');
 
-  const width = subDef.width || 120;
+  // Same body width as updatePinPositions/the renderer use for every subcircuit chip (subDef.width is
+  // only a library hint); otherwise the outputs would sit off the chip until the next pin update
+  const width = 120;
 
   // Position inputs along the left edge strictly locked to 20px multiples (10px grid)
   const inputs = inPorts.map((port, idx) => {
@@ -374,12 +377,18 @@ export function packageSelectionIntoSubcircuit(
   selectedComponents: CircuitComponentInstance[],
   allWires: CircuitWire[]
 ): CustomSubcircuit {
-  const compIdSet = new Set(selectedComponents.map((c) => c.id));
-
-  // Extract internal wires: both endpoints must be inside the selection
-  const internalWires = allWires.filter(
-    (w) => compIdSet.has(w.fromCompId) && compIdSet.has(w.toCompId)
+  // Internal wiring: every wire cluster that only touches pins of the selection, however many segments it
+  // has (canvas wires are straight segments whose ends are mostly corners, not pins)
+  const internalWires = getInternalWires(
+    allWires,
+    selectedComponents,
+    selectedComponents.map((c) => c.id)
   );
+  const internalWireEnds = new Set<string>();
+  for (const w of internalWires) {
+    if (w.startPoint) internalWireEnds.add(`${snapTo10(w.startPoint.x)},${snapTo10(w.startPoint.y)}`);
+    if (w.endPoint) internalWireEnds.add(`${snapTo10(w.endPoint.x)},${snapTo10(w.endPoint.y)}`);
+  }
 
   // Detect input ports: switches, clocks, buttons, or un-driven component inputs
   const inPorts: SubcircuitPortDefinition[] = [];
@@ -417,10 +426,8 @@ export function packageSelectionIntoSubcircuit(
   if (inPorts.length === 0) {
     selectedComponents.forEach((c) => {
       c.inputs.forEach((p) => {
-        // If this input has no incoming internal wire, it is an external port
-        const isDrivenInternally = internalWires.some(
-          (w) => w.toCompId === c.id && w.toPinId === p.id
-        );
+        // If no internal wire reaches this input, it is an external port
+        const isDrivenInternally = internalWireEnds.has(`${snapTo10(p.x)},${snapTo10(p.y)}`);
         if (!isDrivenInternally) {
           inPorts.push({
             id: `port_in_${inPortCount++}`,
@@ -457,13 +464,25 @@ export function packageSelectionIntoSubcircuit(
   const minX = Math.min(...selectedComponents.map((c) => c.x));
   const minY = Math.min(...selectedComponents.map((c) => c.y));
 
+  const dx = 40 - minX;
+  const dy = 40 - minY;
   const normalizedComps = selectedComponents.map((c) =>
     updatePinPositions({
       ...c,
-      x: c.x - minX + 40,
-      y: c.y - minY + 40,
+      x: c.x + dx,
+      y: c.y + dy,
     })
   );
+  // Wires move with their parts (connectivity is positional)
+  const shift = (p: { x: number; y: number }) => ({ x: p.x + dx, y: p.y + dy });
+  const normalizedWires = internalWires.map((w) => ({
+    ...w,
+    startPoint: w.startPoint ? shift(w.startPoint) : undefined,
+    endPoint: w.endPoint ? shift(w.endPoint) : undefined,
+    waypoints: w.waypoints?.map(shift),
+    branchPoint: w.branchPoint ? shift(w.branchPoint) : undefined,
+    elbowX: w.elbowX !== undefined ? w.elbowX + dx : undefined,
+  }));
 
   const subDef: CustomSubcircuit = {
     id: `sub_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
@@ -476,7 +495,7 @@ export function packageSelectionIntoSubcircuit(
     height,
     ports,
     components: normalizedComps,
-    wires: internalWires,
+    wires: normalizedWires,
     createdAt: Date.now(),
   };
 
