@@ -2692,14 +2692,6 @@ ${wireXmls.join('\n')}
         },
       });
 
-      // Proportional mapping: top pin stays at top, bottom pin stays at bottom, new pins in middle
-      const mapOldInputIndexToNew = (oldIdx: number, oldCount: number, targetCount: number): number => {
-        if (oldIdx === 0) return 0;
-        if (oldIdx === oldCount - 1) return targetCount - 1;
-        const fraction = oldIdx / (oldCount - 1);
-        return Math.round(fraction * (targetCount - 1));
-      };
-
       // Helper to detect which input pin index an existing wire endpoint or pin ID was connected to
       const getOldInputIndex = (pinId?: string, pt?: WirePoint): number => {
         if (pinId) {
@@ -2724,14 +2716,79 @@ ${wireXmls.join('\n')}
         return -1;
       };
 
-      // Build mapping from old input index to target pin
-      const targetMap = new Map<number, CircuitPin>();
-      const claimedTargets = new Set<number>();
+      // Detect which old input pins actually have connected wires
+      const connectedOldIndices: number[] = [];
       for (let i = 0; i < currentCount; i++) {
-        const targetIdx = mapOldInputIndexToNew(i, currentCount, newCount);
-        if (!claimedTargets.has(targetIdx) && targetIdx >= 0 && targetIdx < newCount) {
-          targetMap.set(i, updatedComp.inputs[targetIdx]);
-          claimedTargets.add(targetIdx);
+        const hasWire = wires.some((w) => {
+          const toIdx = (w.toCompId === compId || w.endPoint) ? getOldInputIndex(w.toPinId, w.endPoint) : -1;
+          const fromIdx = (w.fromCompId === compId || w.startPoint) ? getOldInputIndex(w.fromPinId, w.startPoint) : -1;
+          return toIdx === i || fromIdx === i;
+        });
+        if (hasWire) connectedOldIndices.push(i);
+      }
+
+      // Build collision-free smart target mapping so NO connected wires are lost during increase or decrease
+      const targetMap = new Map<number, CircuitPin>();
+      const claimedNewIndices = new Set<number>();
+
+      if (connectedOldIndices.length <= newCount) {
+        // All connected wires fit into the new gate!
+        if (connectedOldIndices.length === 1) {
+          const oldIdx = connectedOldIndices[0];
+          const newIdx = (oldIdx === currentCount - 1 && newCount > 1) ? newCount - 1 : 0;
+          targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
+          claimedNewIndices.add(newIdx);
+        } else if (connectedOldIndices.length === 2 && newCount >= 2) {
+          targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
+          targetMap.set(connectedOldIndices[1], updatedComp.inputs[newCount - 1]);
+          claimedNewIndices.add(0);
+          claimedNewIndices.add(newCount - 1);
+        } else {
+          connectedOldIndices.forEach((oldIdx, i) => {
+            let newIdx: number;
+            if (i === 0) {
+              newIdx = 0;
+            } else if (i === connectedOldIndices.length - 1) {
+              newIdx = newCount - 1;
+            } else {
+              const frac = i / (connectedOldIndices.length - 1);
+              newIdx = Math.round(frac * (newCount - 1));
+            }
+            while (claimedNewIndices.has(newIdx) && newIdx < newCount - 1) newIdx++;
+            while (claimedNewIndices.has(newIdx) && newIdx > 0) newIdx--;
+            targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
+            claimedNewIndices.add(newIdx);
+          });
+        }
+      } else {
+        // More connected wires than available pins (e.g. 3 wires, reduced to 2 pins)
+        const firstOld = connectedOldIndices[0];
+        const lastOld = connectedOldIndices[connectedOldIndices.length - 1];
+        targetMap.set(firstOld, updatedComp.inputs[0]);
+        claimedNewIndices.add(0);
+        if (newCount > 1) {
+          targetMap.set(lastOld, updatedComp.inputs[newCount - 1]);
+          claimedNewIndices.add(newCount - 1);
+        }
+        for (let i = 1; i < connectedOldIndices.length - 1; i++) {
+          const oldIdx = connectedOldIndices[i];
+          for (let cand = 1; cand < newCount - 1; cand++) {
+            if (!claimedNewIndices.has(cand)) {
+              targetMap.set(oldIdx, updatedComp.inputs[cand]);
+              claimedNewIndices.add(cand);
+              break;
+            }
+          }
+        }
+      }
+
+      // Also map remaining slots to unconnected pins for clean reference stability
+      for (let i = 0; i < currentCount; i++) {
+        if (!targetMap.has(i)) {
+          if (i < newCount && !claimedNewIndices.has(i)) {
+            targetMap.set(i, updatedComp.inputs[i]);
+            claimedNewIndices.add(i);
+          }
         }
       }
 
