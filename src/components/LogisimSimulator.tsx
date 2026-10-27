@@ -2458,12 +2458,22 @@ ${wireXmls.join('\n')}
           duplicatedFromComp.outputs[fromPinIdx] &&
           duplicatedToComp.inputs[toPinIdx]
         ) {
+          const startPt = w.startPoint ? { x: w.startPoint.x + 40, y: w.startPoint.y + 40 } : undefined;
+          const endPt = w.endPoint ? { x: w.endPoint.x + 40, y: w.endPoint.y + 40 } : undefined;
+          const waypoints = w.waypoints?.map((wp) => ({ x: wp.x + 40, y: wp.y + 40 }));
+
           newWires.push({
             id: `wire_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
             fromCompId: newFromCompId,
             fromPinId: duplicatedFromComp.outputs[fromPinIdx].id,
             toCompId: newToCompId,
             toPinId: duplicatedToComp.inputs[toPinIdx].id,
+            startPoint: startPt,
+            endPoint: endPt,
+            waypoints,
+            elbowX: w.elbowX !== undefined ? w.elbowX + 40 : undefined,
+            isBus: w.isBus,
+            bitWidth: w.bitWidth,
             value: 0,
           });
         }
@@ -2471,8 +2481,8 @@ ${wireXmls.join('\n')}
     });
 
     const updatedComps = [...components, ...newComps];
-    const updatedWires = [...wires, ...newWires];
-    const sim = simulateCircuit(updatedComps, updatedWires);
+    const repairedWires = repairWires([...wires, ...newWires], updatedComps);
+    const sim = simulateCircuit(updatedComps, repairedWires);
     setComponents(sim.components);
     setWires(sim.wires);
     setSelectedCompIds(newComps.map((c) => c.id));
