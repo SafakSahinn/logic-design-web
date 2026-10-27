@@ -16,10 +16,10 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     type: 'switch',
     name: 'Giriş Anahtarı',
     category: 'inputs',
-    width: 66,
-    height: 56,
+    width: 70,
+    height: 60,
     inputs: [],
-    outputs: [{ id: 'out', name: 'Q', type: 'output', relX: 66, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Q', type: 'output', relX: 70, relY: 30 }],
     description: '0 veya 1 mantık seviyesi sağlayan açma/kapama anahtarı',
   },
   pushbutton: {
@@ -148,52 +148,52 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     type: 'nand',
     name: 'NAND Kapısı (VE DEĞİL)',
     category: 'gates',
-    width: 86,
+    width: 80,
     height: 60,
     inputs: [
       { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
       { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
     ],
-    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 86, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: "AND kapısının değili: (A · B)'",
   },
   nor: {
     type: 'nor',
     name: 'NOR Kapısı (VEYA DEĞİL)',
     category: 'gates',
-    width: 86,
+    width: 80,
     height: 60,
     inputs: [
       { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
       { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
     ],
-    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 86, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: "OR kapısının değili: (A + B)'",
   },
   xor: {
     type: 'xor',
     name: 'XOR Kapısı (Özel VEYA)',
     category: 'gates',
-    width: 84,
+    width: 80,
     height: 60,
     inputs: [
       { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
       { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
     ],
-    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 84, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: 'Girişler birbirinden farklı olduğunda 1 verir (A ⊕ B)',
   },
   xnor: {
     type: 'xnor',
     name: 'XNOR Kapısı (Özel VEYA DEĞİL)',
     category: 'gates',
-    width: 88,
+    width: 80,
     height: 60,
     inputs: [
       { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
       { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
     ],
-    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 88, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: 'Girişler birbirine eşit olduğunda 1 verir (Eşitlik kapısı)',
   },
   triState: {
@@ -957,15 +957,15 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
   const cy = meta.height / 2;
 
   const rotatePoint = (relX: number, relY: number) => {
-    if (rot === 0) return { x: relX, y: relY };
+    if (rot === 0) return { x: Math.round(relX / 10) * 10, y: Math.round(relY / 10) * 10 };
     const rad = (rot * Math.PI) / 180;
     const cos = Math.round(Math.cos(rad));
     const sin = Math.round(Math.sin(rad));
     const dx = relX - cx;
     const dy = relY - cy;
     return {
-      x: cx + (dx * cos - dy * sin),
-      y: cy + (dx * sin + dy * cos),
+      x: Math.round((cx + (dx * cos - dy * sin)) / 10) * 10,
+      y: Math.round((cy + (dx * sin + dy * cos)) / 10) * 10,
     };
   };
 

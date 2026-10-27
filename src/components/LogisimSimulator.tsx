@@ -3370,6 +3370,8 @@ ${wireXmls.join('\n')}
             <circle cx={60.5} cy={5.5} r={1.5} fill="#64748b" />
             <circle cx={5.5} cy={50.5} r={1.5} fill="#64748b" />
             <circle cx={60.5} cy={50.5} r={1.5} fill="#64748b" />
+            {/* Terminal Lead to 10px grid pin */}
+            <line x1={66} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
 
             {/* Recessed Bezel Plate */}
             <rect
@@ -3678,7 +3680,7 @@ ${wireXmls.join('\n')}
               strokeWidth={strokeWidth}
             />
             <circle cx={70} cy={30} r={5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={75} y1={30} x2={86} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={75} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
             <text x={35} y={34} textAnchor="middle" className="text-[11px] font-bold fill-slate-800 select-none">
               NAND{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
             </text>
@@ -3700,7 +3702,7 @@ ${wireXmls.join('\n')}
               strokeWidth={strokeWidth}
             />
             <circle cx={73} cy={30} r={5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={78} y1={30} x2={86} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={78} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
             <text x={36} y={34} textAnchor="middle" className="text-[11px] font-bold fill-slate-800 select-none">
               NOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
             </text>
@@ -3727,7 +3729,7 @@ ${wireXmls.join('\n')}
               stroke={strokeColor}
               strokeWidth={strokeWidth}
             />
-            <line x1={72} y1={30} x2={84} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={72} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
             <text x={38} y={34} textAnchor="middle" className="text-xs font-bold fill-slate-800 select-none">
               XOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
             </text>
@@ -3749,8 +3751,8 @@ ${wireXmls.join('\n')}
               stroke={strokeColor}
               strokeWidth={strokeWidth}
             />
-            <circle cx={77} cy={30} r={5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={82} y1={30} x2={88} y2={30} stroke="#64748b" strokeWidth={2} />
+            <circle cx={75} cy={30} r={4.5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
+            <line x1={79.5} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
             <text x={38} y={34} textAnchor="middle" className="text-[10px] font-bold fill-slate-800 select-none">
               XNOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
             </text>
