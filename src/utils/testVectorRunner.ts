@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { LogicValue, SignalValue } from '../types/logic';
 import { COMPONENT_CATALOG, getInputSignalNames, simulateCircuit } from './circuitEngine';
 
 // Unique column names for output parts: own label when unique and not the default, else OUT0, OUT1...
@@ -18,9 +18,9 @@ const getOutputSignalNames = (outputs: CircuitComponentInstance[]): Map<string, 
 
 export interface TestVectorRow {
   index: number;
-  inputValues: Record<string, LogicValue>;
+  inputValues: Record<string, SignalValue>;
   expectedOutputs: Record<string, LogicValue>;
-  actualOutputs?: Record<string, LogicValue>;
+  actualOutputs?: Record<string, SignalValue>;
   passed?: boolean;
   mismatches?: string[];
 }
@@ -114,10 +114,10 @@ export function runCircuitTestbench(
     const badExp = expTokens.filter((b) => !['0', '1', 'x', 'X', '-'].includes(b));
     if (badExp.length > 0) formatErrors.push(`geçersiz beklenen değer: ${badExp.join(', ')}`);
 
-    const inBits = inTokens.map((b) => (b === '1' ? 1 : 0) as LogicValue);
+    const inBits = inTokens.map((b) => (b === '1' ? 1 : 0) as SignalValue);
     const expBits = expTokens.map((b) => (b === '1' ? 1 : b === '0' ? 0 : 'X') as LogicValue);
 
-    const inputValues: Record<string, LogicValue> = {};
+    const inputValues: Record<string, SignalValue> = {};
     const expectedOutputs: Record<string, LogicValue> = {};
 
     // 1. Clone components and set input values
@@ -149,13 +149,13 @@ export function runCircuitTestbench(
     const sim = simulateCircuit(testComps, wires);
 
     // 3. Read actual outputs
-    const actualOutputs: Record<string, LogicValue> = {};
+    const actualOutputs: Record<string, SignalValue> = {};
     const mismatches: string[] = formatErrors.map((m) => `Satır biçimi: ${m}`);
     let isRowPassed = formatErrors.length === 0;
 
     outputComps.forEach((oc, oIdx) => {
       const target = sim.components.find((c) => c.id === oc.id);
-      const actualVal = (target?.inputs[0]?.value ?? 0) as LogicValue;
+      const actualVal = (target?.inputs[0]?.value ?? 0) as SignalValue;
       const key = outNames.get(oc.id) || oc.id;
       actualOutputs[key] = actualVal;
 

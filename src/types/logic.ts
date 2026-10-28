@@ -1,5 +1,9 @@
 export type LogicValue = 0 | 1 | 'X';
 
+// Circuit signal value (Logisim model): 'X' unknown, 'Z' floating, 'E' error (driver conflict).
+// LogicValue above is the truth-table/K-map value where 'X' means don't care.
+export type SignalValue = 0 | 1 | 'X' | 'Z' | 'E';
+
 export interface GateInfo {
   id: string;
   name: string;

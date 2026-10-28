@@ -1,4 +1,4 @@
-import type { LogicValue } from './logic';
+import type { SignalValue } from './logic';
 
 export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'sequential' | 'custom';
 
@@ -84,7 +84,7 @@ export interface CircuitPin {
   id: string; // e.g. "comp1_in_0"
   name: string;
   type: 'input' | 'output';
-  value: LogicValue;
+  value: SignalValue;
   x: number; // absolute canvas coordinates
   y: number;
 }
@@ -105,9 +105,9 @@ export interface CircuitComponentInstance {
     clockRateHz?: number;
     lastClockTick?: number;
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
-    q?: LogicValue;
-    qBar?: LogicValue;
-    lastClk?: LogicValue;
+    q?: SignalValue;
+    qBar?: SignalValue;
+    lastClk?: SignalValue;
     hexVal?: number;
     count?: number;
     regVal?: number;
@@ -174,7 +174,7 @@ export interface CircuitWire {
   fromPinId: string;
   toCompId: string;
   toPinId: string;
-  value: LogicValue;
+  value: SignalValue;
   hasConflict?: boolean;
   branchPoint?: { x: number; y: number };
   isBus?: boolean;
@@ -210,8 +210,8 @@ export interface TruthTableData {
     };
   };
   rows: {
-    inputValues: LogicValue[];
-    outputValues: LogicValue[];
+    inputValues: SignalValue[];
+    outputValues: SignalValue[];
     isCurrentState?: boolean;
   }[];
   // Caveats shown above the table (inputs left out, stateful parts)

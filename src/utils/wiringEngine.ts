@@ -1,5 +1,5 @@
 import type { CircuitWire, CircuitPin, CircuitComponentInstance } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { SignalValue } from '../types/logic';
 
 export const GRID_SIZE = 10;
 
@@ -70,7 +70,7 @@ export interface WireSegment {
 export interface CircuitJunction {
   x: number;
   y: number;
-  value: LogicValue;
+  value: SignalValue;
   hasConflict: boolean;
   isBus: boolean;
 }
@@ -455,7 +455,7 @@ interface CanonicalSeg {
   isVertical: boolean;
   isBus: boolean;
   bitWidth: number;
-  value: LogicValue;
+  value: SignalValue;
   hasConflict: boolean;
   preferredId?: string;
 }
@@ -463,7 +463,7 @@ interface CanonicalSeg {
 const createCanonicalSeg = (
   a: WirePoint,
   b: WirePoint,
-  meta: { isBus?: boolean; bitWidth?: number; value?: LogicValue; hasConflict?: boolean; id?: string }
+  meta: { isBus?: boolean; bitWidth?: number; value?: SignalValue; hasConflict?: boolean; id?: string }
 ): CanonicalSeg | null => {
   const p0 = snapPt10(a);
   const p1 = snapPt10(b);
@@ -1567,7 +1567,7 @@ export const computeCircuitJunctions = (
 ): CircuitJunction[] => {
   const allSegments: WireSegment[] = [];
   const endpointPoints = new Map<string, WirePoint>();
-  const pointWireValues = new Map<string, { value: LogicValue; hasConflict: boolean; isBus: boolean }>();
+  const pointWireValues = new Map<string, { value: SignalValue; hasConflict: boolean; isBus: boolean }>();
 
   const keyOf = (x: number, y: number) => `${x},${y}`;
 

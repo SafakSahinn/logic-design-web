@@ -4,7 +4,7 @@ import type {
   CustomSubcircuit,
   SubcircuitPortDefinition,
 } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { SignalValue } from '../types/logic';
 import {
   createComponentInstance,
   simulateCircuitStep,
@@ -270,7 +270,7 @@ export function createSubcircuitInstance(
       id: `${compId}_${port.id}`,
       name: port.name,
       type: 'input' as const,
-      value: 0 as LogicValue,
+      value: 0 as SignalValue,
       x: x,
       y: y + relY,
     };
@@ -283,7 +283,7 @@ export function createSubcircuitInstance(
       id: `${compId}_${port.id}`,
       name: port.name,
       type: 'output' as const,
-      value: 0 as LogicValue,
+      value: 0 as SignalValue,
       x: x + width,
       y: y + relY,
     };
@@ -310,9 +310,9 @@ export function createSubcircuitInstance(
  */
 export function evaluateSubcircuit(
   subDef: CustomSubcircuit,
-  inputVals: LogicValue[],
+  inputVals: SignalValue[],
   previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
-): LogicValue[] {
+): SignalValue[] {
   return evaluateSubcircuitStateful(subDef, inputVals, previous).outputs;
 }
 
@@ -324,9 +324,9 @@ const PORT_DRIVER_PREFIX = '__port_driver_';
 
 export function evaluateSubcircuitStateful(
   subDef: CustomSubcircuit,
-  inputVals: LogicValue[],
+  inputVals: SignalValue[],
   previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
-): { outputs: LogicValue[]; internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] } } {
+): { outputs: SignalValue[]; internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] } } {
   const inPorts = subDef.ports.filter((p) => p.type === 'input');
   const outPorts = subDef.ports.filter((p) => p.type === 'output');
 
@@ -386,15 +386,15 @@ export function evaluateSubcircuitStateful(
   // Read outputs
   const outputs = outPorts.map((port) => {
     const comp = curComps.find((c) => c.id === port.targetCompId);
-    if (!comp) return 0 as LogicValue;
+    if (!comp) return 0 as SignalValue;
     if (comp.type === 'led' || comp.type === 'probe') {
-      return (comp.inputs[0]?.value ?? 0) as LogicValue;
+      return (comp.inputs[0]?.value ?? 0) as SignalValue;
     }
     const pOut = comp.outputs.find((p) => p.id === port.targetPinId);
     if (pOut) return pOut.value;
     const pIn = comp.inputs.find((p) => p.id === port.targetPinId);
     if (pIn) return pIn.value;
-    return 0 as LogicValue;
+    return 0 as SignalValue;
   });
   // The hidden port drivers are rebuilt every evaluation; keep only the IC's own parts as its state
   return { outputs, internal: { components: curComps.filter((c) => !c.id.startsWith(PORT_DRIVER_PREFIX)), wires: curWires } };

@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { LogicValue, SignalValue } from '../types/logic';
 import { createComponentInstance, simulateCircuit, updatePinPositions } from './circuitEngine';
 import { solveKMap } from './kmapSolver';
 import { repairWires } from './wiringEngine';
@@ -181,7 +181,7 @@ export function synthesizeFSM(
         id: `${comp.id}_in${k}`,
         name: String.fromCharCode(65 + k),
         type: 'input' as const,
-        value: 0 as LogicValue,
+        value: 0 as SignalValue,
         x,
         y,
       }));

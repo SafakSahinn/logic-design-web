@@ -7,7 +7,7 @@ import type {
   CircuitPreset,
   TruthTableData,
 } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
@@ -1095,19 +1095,19 @@ export function simulateCircuitStep(
   // Step 1: Update source components outputs (switch, vcc, gnd, clock)
   newComps.forEach((comp) => {
     if (comp.type === 'switch') {
-      const targetVal: LogicValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.on ? 1 : 0;
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
       }
     } else if (comp.type === 'pushbutton') {
-      const targetVal: LogicValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.on ? 1 : 0;
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
       }
     } else if (comp.type === 'clock') {
-      const targetVal: LogicValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.on ? 1 : 0;
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
@@ -1125,7 +1125,7 @@ export function simulateCircuitStep(
     } else if (comp.type === 'dipSwitch4') {
       const switches = comp.state.dipSwitches || [false, false, false, false];
       for (let i = 0; i < 4; i++) {
-        const targetVal: LogicValue = switches[i] ? 1 : 0;
+        const targetVal: SignalValue = switches[i] ? 1 : 0;
         if (comp.outputs[i] && comp.outputs[i].value !== targetVal) {
           comp.outputs[i].value = targetVal;
           hasChanged = true;
@@ -1133,9 +1133,9 @@ export function simulateCircuitStep(
       }
     } else if (comp.type === 'asciiKeyboard') {
       const code = comp.state.asciiCode ?? 65;
-      const strobeVal: LogicValue = comp.state.strobe ? 1 : 0;
+      const strobeVal: SignalValue = comp.state.strobe ? 1 : 0;
       for (let i = 0; i < 7; i++) {
-        const targetBit: LogicValue = (code & (1 << i)) ? 1 : 0;
+        const targetBit: SignalValue = (code & (1 << i)) ? 1 : 0;
         if (comp.outputs[i] && comp.outputs[i].value !== targetBit) {
           comp.outputs[i].value = targetBit;
           hasChanged = true;
@@ -1268,7 +1268,7 @@ export function simulateCircuitStep(
     });
 
     // Determine the resolved logic value on this net
-    let resolvedValue: LogicValue = 0;
+    let resolvedValue: SignalValue = 0;
     if (hasConflict) {
       resolvedValue = 0; // State in conflict
     } else if (driverPins.length > 0) {
@@ -1316,7 +1316,7 @@ export function simulateCircuitStep(
 
     switch (comp.type) {
       case 'not': {
-        const val: LogicValue = inVals[0] === 1 ? 0 : 1;
+        const val: SignalValue = inVals[0] === 1 ? 0 : 1;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1324,7 +1324,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'and': {
-        const val: LogicValue = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1) ? 1 : 0;
+        const val: SignalValue = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1) ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1332,7 +1332,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'or': {
-        const val: LogicValue = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1) ? 1 : 0;
+        const val: SignalValue = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1) ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1341,7 +1341,7 @@ export function simulateCircuitStep(
       }
       case 'nand': {
         const allOnes = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1);
-        const val: LogicValue = hasAnyConnectedInput ? (allOnes ? 0 : 1) : 0;
+        const val: SignalValue = hasAnyConnectedInput ? (allOnes ? 0 : 1) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1350,7 +1350,7 @@ export function simulateCircuitStep(
       }
       case 'nor': {
         const anyOnes = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1);
-        const val: LogicValue = hasAnyConnectedInput ? (anyOnes ? 0 : 1) : 0;
+        const val: SignalValue = hasAnyConnectedInput ? (anyOnes ? 0 : 1) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1359,7 +1359,7 @@ export function simulateCircuitStep(
       }
       case 'xor': {
         const onesCount = connectedInputs.filter((p) => p.value === 1).length;
-        const val: LogicValue = hasAnyConnectedInput && onesCount % 2 === 1 ? 1 : 0;
+        const val: SignalValue = hasAnyConnectedInput && onesCount % 2 === 1 ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1368,7 +1368,7 @@ export function simulateCircuitStep(
       }
       case 'xnor': {
         const onesCount = connectedInputs.filter((p) => p.value === 1).length;
-        const val: LogicValue = hasAnyConnectedInput ? (onesCount % 2 === 0 ? 1 : 0) : 0;
+        const val: SignalValue = hasAnyConnectedInput ? (onesCount % 2 === 0 ? 1 : 0) : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1380,7 +1380,7 @@ export function simulateCircuitStep(
         const en = inVals[1] === 1 ? 1 : 0;
         const isHiZ = en === 0;
         comp.state.hiZ = isHiZ;
-        const val: LogicValue = isHiZ ? 0 : (a === 1 ? 1 : 0);
+        const val: SignalValue = isHiZ ? 0 : (a === 1 ? 1 : 0);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1389,7 +1389,7 @@ export function simulateCircuitStep(
       }
       case 'splitter4': {
         for (let i = 0; i < 4; i++) {
-          const bitVal: LogicValue = inVals[i] === 1 ? 1 : 0;
+          const bitVal: SignalValue = inVals[i] === 1 ? 1 : 0;
           if (comp.outputs[i] && comp.outputs[i].value !== bitVal) {
             comp.outputs[i].value = bitVal;
             hasChanged = true;
@@ -1400,8 +1400,8 @@ export function simulateCircuitStep(
       case 'demux2': {
         const d = inVals[0] === 1 ? 1 : 0;
         const s = inVals[1] === 1 ? 1 : 0;
-        const y0: LogicValue = d === 1 && s === 0 ? 1 : 0;
-        const y1: LogicValue = d === 1 && s === 1 ? 1 : 0;
+        const y0: SignalValue = d === 1 && s === 0 ? 1 : 0;
+        const y1: SignalValue = d === 1 && s === 1 ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== y0) {
           comp.outputs[0].value = y0;
           hasChanged = true;
@@ -1438,18 +1438,18 @@ export function simulateCircuitStep(
           cout = 0;
         }
 
-        const isZero: LogicValue = result === 0 ? 1 : 0;
+        const isZero: SignalValue = result === 0 ? 1 : 0;
         comp.state.aluResult = result;
 
         for (let bit = 0; bit < 4; bit++) {
-          const bitVal: LogicValue = ((result >> bit) & 1) === 1 ? 1 : 0;
+          const bitVal: SignalValue = ((result >> bit) & 1) === 1 ? 1 : 0;
           if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
             comp.outputs[bit].value = bitVal;
             hasChanged = true;
           }
         }
         if (comp.outputs[4] && comp.outputs[4].value !== cout) {
-          comp.outputs[4].value = cout as LogicValue;
+          comp.outputs[4].value = cout as SignalValue;
           hasChanged = true;
         }
         if (comp.outputs[5] && comp.outputs[5].value !== isZero) {
@@ -1460,10 +1460,10 @@ export function simulateCircuitStep(
       }
       case 'register4': {
         const d = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
-        const clk: LogicValue = inVals[4] === 1 ? 1 : 0;
+        const clk: SignalValue = inVals[4] === 1 ? 1 : 0;
         // Logisim: an unconnected enable counts as enabled
-        const we: LogicValue = !isPinConnected(comp.inputs[5]?.id ?? '') || inVals[5] === 1 ? 1 : 0;
-        const rst: LogicValue = inVals[6] === 1 ? 1 : 0;
+        const we: SignalValue = !isPinConnected(comp.inputs[5]?.id ?? '') || inVals[5] === 1 ? 1 : 0;
+        const rst: SignalValue = inVals[6] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
@@ -1484,7 +1484,7 @@ export function simulateCircuitStep(
         }
 
         for (let bit = 0; bit < 4; bit++) {
-          const bitVal: LogicValue = ((curVal >> bit) & 1) === 1 ? 1 : 0;
+          const bitVal: SignalValue = ((curVal >> bit) & 1) === 1 ? 1 : 0;
           if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
             comp.outputs[bit].value = bitVal;
             hasChanged = true;
@@ -1499,7 +1499,7 @@ export function simulateCircuitStep(
         const a1 = inVals[2] ?? 0;
         const addr = a0 + a1 * 2;
         for (let i = 0; i < 4; i++) {
-          const val: LogicValue = en === 1 && addr === i ? 1 : 0;
+          const val: SignalValue = en === 1 && addr === i ? 1 : 0;
           if (comp.outputs[i] && comp.outputs[i].value !== val) {
             comp.outputs[i].value = val;
             hasChanged = true;
@@ -1510,9 +1510,9 @@ export function simulateCircuitStep(
       case 'comparator4': {
         const a = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
         const b = (inVals[4] || 0) + (inVals[5] || 0) * 2 + (inVals[6] || 0) * 4 + (inVals[7] || 0) * 8;
-        const gt: LogicValue = a > b ? 1 : 0;
-        const eq: LogicValue = a === b ? 1 : 0;
-        const lt: LogicValue = a < b ? 1 : 0;
+        const gt: SignalValue = a > b ? 1 : 0;
+        const eq: SignalValue = a === b ? 1 : 0;
+        const lt: SignalValue = a < b ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== gt) {
           comp.outputs[0].value = gt;
           hasChanged = true;
@@ -1528,8 +1528,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'counter4': {
-        const clk: LogicValue = inVals[0] === 1 ? 1 : 0;
-        const rst: LogicValue = inVals[1] === 1 ? 1 : 0;
+        const clk: SignalValue = inVals[0] === 1 ? 1 : 0;
+        const rst: SignalValue = inVals[1] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
@@ -1548,7 +1548,7 @@ export function simulateCircuitStep(
         }
 
         for (let bit = 0; bit < 4; bit++) {
-          const bitVal: LogicValue = ((curCount >> bit) & 1) === 1 ? 1 : 0;
+          const bitVal: SignalValue = ((curCount >> bit) & 1) === 1 ? 1 : 0;
           if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
             comp.outputs[bit].value = bitVal;
             hasChanged = true;
@@ -1557,8 +1557,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'halfAdder': {
-        const s: LogicValue = inVals[0] !== inVals[1] ? 1 : 0;
-        const c: LogicValue = inVals[0] === 1 && inVals[1] === 1 ? 1 : 0;
+        const s: SignalValue = inVals[0] !== inVals[1] ? 1 : 0;
+        const c: SignalValue = inVals[0] === 1 && inVals[1] === 1 ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== s) {
           comp.outputs[0].value = s;
           hasChanged = true;
@@ -1573,8 +1573,8 @@ export function simulateCircuitStep(
         const a = inVals[0];
         const b = inVals[1];
         const cin = inVals[2] || 0;
-        const s: LogicValue = ((a ^ b ^ cin) === 1 ? 1 : 0);
-        const cout: LogicValue = (((a & b) | (cin & (a ^ b))) === 1 ? 1 : 0);
+        const s: SignalValue = ((a ^ b ^ cin) === 1 ? 1 : 0);
+        const cout: SignalValue = (((a & b) | (cin & (a ^ b))) === 1 ? 1 : 0);
         if (comp.outputs[0] && comp.outputs[0].value !== s) {
           comp.outputs[0].value = s;
           hasChanged = true;
@@ -1588,8 +1588,8 @@ export function simulateCircuitStep(
       case 'halfSubtractor': {
         const a = inVals[0] ?? 0;
         const b = inVals[1] ?? 0;
-        const diff: LogicValue = ((a ^ b) === 1 ? 1 : 0);
-        const borrow: LogicValue = (a === 0 && b === 1 ? 1 : 0);
+        const diff: SignalValue = ((a ^ b) === 1 ? 1 : 0);
+        const borrow: SignalValue = (a === 0 && b === 1 ? 1 : 0);
         if (comp.outputs[0] && comp.outputs[0].value !== diff) {
           comp.outputs[0].value = diff;
           hasChanged = true;
@@ -1604,8 +1604,8 @@ export function simulateCircuitStep(
         const a = inVals[0] ?? 0;
         const b = inVals[1] ?? 0;
         const bin = inVals[2] ?? 0;
-        const diff: LogicValue = (((a ^ b ^ bin) & 1) === 1 ? 1 : 0);
-        const bout: LogicValue = ((a === 0 && b === 1) || ((a ^ b) === 0 && bin === 1) ? 1 : 0);
+        const diff: SignalValue = (((a ^ b ^ bin) & 1) === 1 ? 1 : 0);
+        const bout: SignalValue = ((a === 0 && b === 1) || ((a ^ b) === 0 && bin === 1) ? 1 : 0);
         if (comp.outputs[0] && comp.outputs[0].value !== diff) {
           comp.outputs[0].value = diff;
           hasChanged = true;
@@ -1623,7 +1623,7 @@ export function simulateCircuitStep(
         const a2 = inVals[3] ?? 0;
         const sel = en === 1 ? a0 + a1 * 2 + a2 * 4 : -1;
         for (let i = 0; i < 8; i++) {
-          const val: LogicValue = sel === i ? 1 : 0;
+          const val: SignalValue = sel === i ? 1 : 0;
           if (comp.outputs[i] && comp.outputs[i].value !== val) {
             comp.outputs[i].value = val;
             hasChanged = true;
@@ -1638,7 +1638,7 @@ export function simulateCircuitStep(
         const d = inVals[3] ?? 0;
         const num = (a === 1 ? 1 : 0) | ((b === 1 ? 1 : 0) << 1) | ((c === 1 ? 1 : 0) << 2) | ((d === 1 ? 1 : 0) << 3);
         const map = HEX_7SEG_MAP[num % 16] || HEX_7SEG_MAP[0];
-        const segs: LogicValue[] = [
+        const segs: SignalValue[] = [
           map.a ? 1 : 0,
           map.b ? 1 : 0,
           map.c ? 1 : 0,
@@ -1659,7 +1659,7 @@ export function simulateCircuitStep(
         const d0 = inVals[0];
         const d1 = inVals[1];
         const s = inVals[2] || 0;
-        const y: LogicValue = s === 1 ? d1 : d0;
+        const y: SignalValue = s === 1 ? d1 : d0;
         if (comp.outputs[0] && comp.outputs[0].value !== y) {
           comp.outputs[0].value = y;
           hasChanged = true;
@@ -1675,7 +1675,7 @@ export function simulateCircuitStep(
         const s1 = inVals[5] ?? 0;
         const sel = s0 + s1 * 2;
         const chosen = sel === 0 ? d0 : sel === 1 ? d1 : sel === 2 ? d2 : d3;
-        const y: LogicValue = chosen === 1 ? 1 : 0;
+        const y: SignalValue = chosen === 1 ? 1 : 0;
         if (comp.outputs[0] && comp.outputs[0].value !== y) {
           comp.outputs[0].value = y;
           hasChanged = true;
@@ -1688,8 +1688,8 @@ export function simulateCircuitStep(
         const s2 = inVals[10] ?? 0;
         const sel = s0 + s1 * 2 + s2 * 4;
         const chosen = inVals[sel] ?? 0;
-        const y: LogicValue = chosen === 1 ? 1 : 0;
-        const w: LogicValue = y === 1 ? 0 : 1;
+        const y: SignalValue = chosen === 1 ? 1 : 0;
+        const w: SignalValue = y === 1 ? 0 : 1;
         if (comp.outputs[0] && comp.outputs[0].value !== y) {
           comp.outputs[0].value = y;
           hasChanged = true;
@@ -1706,7 +1706,7 @@ export function simulateCircuitStep(
         const s1 = inVals[2] ?? 0;
         const sel = s0 + s1 * 2;
         for (let i = 0; i < 4; i++) {
-          const val: LogicValue = sel === i && d === 1 ? 1 : 0;
+          const val: SignalValue = sel === i && d === 1 ? 1 : 0;
           if (comp.outputs[i] && comp.outputs[i].value !== val) {
             comp.outputs[i].value = val;
             hasChanged = true;
@@ -1719,9 +1719,9 @@ export function simulateCircuitStep(
         const d1 = inVals[1] ?? 0;
         const d2 = inVals[2] ?? 0;
         const d3 = inVals[3] ?? 0;
-        let y1: LogicValue = 0;
-        let y0: LogicValue = 0;
-        let v: LogicValue = 0;
+        let y1: SignalValue = 0;
+        let y0: SignalValue = 0;
+        let v: SignalValue = 0;
         if (d3 === 1) {
           y1 = 1; y0 = 1; v = 1;
         } else if (d2 === 1) {
@@ -1777,7 +1777,7 @@ export function simulateCircuitStep(
         comp.state.lastClk = clk;
 
         for (let b = 0; b < 4; b++) {
-          const bitVal: LogicValue = comp.state.regBits[b] === 1 ? 1 : 0;
+          const bitVal: SignalValue = comp.state.regBits[b] === 1 ? 1 : 0;
           if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
             comp.outputs[b].value = bitVal;
             hasChanged = true;
@@ -1885,15 +1885,15 @@ export function simulateCircuitStep(
         break;
       }
       case 'dFlipFlop': {
-        const d: LogicValue = inVals[0] === 1 ? 1 : 0;
-        const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
+        const d: SignalValue = inVals[0] === 1 ? 1 : 0;
+        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
         if (isRisingEdge) {
           const nextQ = d;
-          const nextQBar: LogicValue = d === 1 ? 0 : 1;
+          const nextQBar: SignalValue = d === 1 ? 0 : 1;
           if (comp.state.q !== nextQ) {
             comp.state.q = nextQ;
             comp.state.qBar = nextQBar;
@@ -1913,9 +1913,9 @@ export function simulateCircuitStep(
         break;
       }
       case 'jkFlipFlop': {
-        const j: LogicValue = inVals[0] === 1 ? 1 : 0;
-        const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
-        const k: LogicValue = inVals[2] === 1 ? 1 : 0;
+        const j: SignalValue = inVals[0] === 1 ? 1 : 0;
+        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
+        const k: SignalValue = inVals[2] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
@@ -1926,7 +1926,7 @@ export function simulateCircuitStep(
           else if (j === 1 && k === 0) nextQ = 1;
           else if (j === 1 && k === 1) nextQ = nextQ === 1 ? 0 : 1;
 
-          const nextQBar: LogicValue = nextQ === 1 ? 0 : 1;
+          const nextQBar: SignalValue = nextQ === 1 ? 0 : 1;
           if (comp.state.q !== nextQ) {
             comp.state.q = nextQ;
             comp.state.qBar = nextQBar;
@@ -1946,8 +1946,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'srLatch': {
-        const s: LogicValue = inVals[0] === 1 ? 1 : 0;
-        const r: LogicValue = inVals[1] === 1 ? 1 : 0;
+        const s: SignalValue = inVals[0] === 1 ? 1 : 0;
+        const r: SignalValue = inVals[1] === 1 ? 1 : 0;
         if (s === 1 && r === 0) {
           if (comp.state.q !== 1) {
             comp.state.q = 1;
@@ -1974,9 +1974,9 @@ export function simulateCircuitStep(
         break;
       }
       case 'tFlipFlop': {
-        const t: LogicValue = inVals[0] === 1 ? 1 : 0;
-        const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
-        const rst: LogicValue = inVals[2] === 1 ? 1 : 0;
+        const t: SignalValue = inVals[0] === 1 ? 1 : 0;
+        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
+        const rst: SignalValue = inVals[2] === 1 ? 1 : 0;
         const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
@@ -1993,12 +1993,12 @@ export function simulateCircuitStep(
           if (t === 1) {
             curQ = curQ === 1 ? 0 : 1;
             comp.state.q = curQ;
-            comp.state.qBar = (curQ === 1 ? 0 : 1) as LogicValue;
+            comp.state.qBar = (curQ === 1 ? 0 : 1) as SignalValue;
             hasChanged = true;
           }
         }
-        const qVal: LogicValue = comp.state.q ?? 0;
-        const qBarVal: LogicValue = comp.state.qBar ?? 1;
+        const qVal: SignalValue = comp.state.q ?? 0;
+        const qBarVal: SignalValue = comp.state.qBar ?? 1;
         if (comp.outputs[0] && comp.outputs[0].value !== qVal) {
           comp.outputs[0].value = qVal;
           hasChanged = true;
@@ -2030,7 +2030,7 @@ export function simulateCircuitStep(
 
         const storedVal = comp.state.ramData[addr] ?? 0;
         for (let b = 0; b < 4; b++) {
-          const bitVal: LogicValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
+          const bitVal: SignalValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
           if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
             comp.outputs[b].value = bitVal;
             hasChanged = true;
@@ -2046,7 +2046,7 @@ export function simulateCircuitStep(
         const addr = (inVals[0] ?? 0) + (inVals[1] ?? 0) * 2 + (inVals[2] ?? 0) * 4 + (inVals[3] ?? 0) * 8;
         const storedVal = comp.state.romData[addr] ?? 0;
         for (let b = 0; b < 4; b++) {
-          const bitVal: LogicValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
+          const bitVal: SignalValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
           if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
             comp.outputs[b].value = bitVal;
             hasChanged = true;
@@ -3199,9 +3199,9 @@ export function generateTruthTable(
 
   for (let i = 0; i < numCombinations; i++) {
     // Generate binary representation
-    const inputVals: LogicValue[] = [];
+    const inputVals: SignalValue[] = [];
     for (let bit = activeSwitches.length - 1; bit >= 0; bit--) {
-      inputVals.push(((i >> bit) & 1) as LogicValue);
+      inputVals.push(((i >> bit) & 1) as SignalValue);
     }
 
     // Clone components with new input switch states
@@ -3219,14 +3219,14 @@ export function generateTruthTable(
     const sim = simulateCircuit(testComps, wires);
 
     // Read outputs
-    const outputVals: LogicValue[] = outputList.map((out) => {
+    const outputVals: SignalValue[] = outputList.map((out) => {
       const found = sim.components.find((c) => c.id === out.compId);
       if (!found) return 0;
       if (found.type === 'led' || found.type === 'probe' || found.type === 'buzzer') {
-        return (found.inputs[0]?.value === 1 ? 1 : 0) as LogicValue;
+        return (found.inputs[0]?.value === 1 ? 1 : 0) as SignalValue;
       }
       if (out.pinIndex !== undefined && found.outputs[out.pinIndex]) {
-        return (found.outputs[out.pinIndex].value === 1 ? 1 : 0) as LogicValue;
+        return (found.outputs[out.pinIndex].value === 1 ? 1 : 0) as SignalValue;
       }
       return 0;
     });
@@ -3871,7 +3871,7 @@ export function synthesizeCircuitFromBooleanExpression(
         id: `${g.id}_in${k}`,
         name: String.fromCharCode(65 + k),
         type: 'input' as const,
-        value: 0 as LogicValue,
+        value: 0 as SignalValue,
         x,
         y,
       }));
