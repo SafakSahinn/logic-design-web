@@ -288,6 +288,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Command Palette / Spotlight Quick Search (Ctrl+K)
   const [showCommandPalette, setShowCommandPalette] = useState<boolean>(false);
   const [paletteQuery, setPaletteQuery] = useState<string>('');
+  const [paletteIndex, setPaletteIndex] = useState<number>(0);
 
   // Palette horizontal scroll track ref & helper (Fixed non-jumping toolbar)
   const paletteScrollRef = useRef<HTMLDivElement | null>(null);
@@ -774,23 +775,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     return () => clearInterval(timer);
   }, [isRunning, clockHz, clockRatesKey, wires]);
 
+  // Read once at the first render: the mount effect removes it from the address (and may run twice in dev)
+  const urlPresetIdRef = useRef<string | null>(
+    typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('preset')
+  );
+
   // Initial simulation run & auto-load saved workspace from localStorage or URL preset on mount
   useEffect(() => {
+    // A ?preset= link opens that preset on a new sheet next to the saved session (loading it in place used
+    // to skip the restore, and the next autosave then overwrote the saved session with the preset)
+    const urlPresetId = urlPresetIdRef.current;
+    const urlPreset = urlPresetId ? CIRCUIT_PRESETS.find((p) => p.id === urlPresetId) : undefined;
+    let restored = false;
     try {
-      const urlPreset = new URLSearchParams(window.location.search).get('preset');
-      if (urlPreset) {
-        handleLoadPreset(urlPreset);
-        return;
-      }
-
       const saved = localStorage.getItem('logic_workspace_autosave');
       if (saved) {
         const data = JSON.parse(saved);
         // Restore when any sheet has content (the active sheet may be an empty one)
         const hasSheetContent =
           Array.isArray(data?.sheets) &&
-          data.sheets.some((sh: CircuitSheet) => (sh.components?.length || 0) > 0 || (sh.wires?.length || 0) > 0);
-        if (data && Array.isArray(data.components) && (data.components.length > 0 || hasSheetContent)) {
+          data.sheets.some(
+            (sh: CircuitSheet) =>
+              (sh.components?.length || 0) > 0 || (sh.wires?.length || 0) > 0 || (sh.annotations?.length || 0) > 0
+          );
+        const hasNotes = Array.isArray(data?.annotations) && data.annotations.length > 0;
+        if (data && Array.isArray(data.components) && (data.components.length > 0 || hasNotes || hasSheetContent)) {
           const refreshedComps = data.components.map((c: CircuitComponentInstance) =>
             updatePinPositions({ ...c, x: snapTo10(c.x), y: snapTo10(c.y) })
           );
@@ -798,21 +807,53 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const sim = simulateCircuit(refreshedComps, repaired);
           setComponents(sim.components);
           setWires(sim.wires);
-          if (Array.isArray(data.sheets) && data.sheets.length > 0) {
-            setSheets(data.sheets);
+          const restoredActiveId: string =
+            Array.isArray(data.sheets) && data.sheets.some((sh: CircuitSheet) => sh.id === data.activeSheetId)
+              ? data.activeSheetId
+              : 'sheet_1';
+          const restoredAnnotations: CircuitAnnotation[] = Array.isArray(data.annotations) ? data.annotations : [];
+          // The active sheet's entry gets the restored canvas explicitly: with a preset sheet added below, the
+          // sync effect never writes it back
+          const activeEntry = { components: sim.components, wires: sim.wires, annotations: restoredAnnotations };
+          setSheets(
+            Array.isArray(data.sheets) && data.sheets.length > 0
+              ? data.sheets.map((sh: CircuitSheet) => (sh.id === restoredActiveId ? { ...sh, ...activeEntry } : sh))
+              : [{ id: 'sheet_1', name: 'Ana Devre', ...activeEntry }]
+          );
+          setActiveSheetId(restoredActiveId);
+          setAnnotations(restoredAnnotations);
+          restored = true;
+          if (!urlPreset) {
+            showToast('Önceki çalışma oturumunuz otomatik olarak geri yüklendi.');
+            return;
           }
-          if (data.activeSheetId) {
-            setActiveSheetId(data.activeSheetId);
-          }
-          if (Array.isArray(data.annotations)) {
-            setAnnotations(data.annotations);
-          }
-          showToast('Önceki çalışma oturumunuz otomatik olarak geri yüklendi.');
-          return;
         }
       }
     } catch {
       // ignore
+    }
+
+    if (urlPreset) {
+      // Handled once: a reload must not open the preset on yet another sheet
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('preset');
+        window.history.replaceState(window.history.state, '', url.toString());
+      } catch {
+        // ignore
+      }
+      if (restored) {
+        const newId = `sheet_${Date.now()}`;
+        setSheets((prev) => [...prev, { id: newId, name: urlPreset.name, components: [], wires: [], annotations: [] }]);
+        setActiveSheetId(newId);
+        setAnnotations([]);
+        showToast(`"${urlPreset.name}" yeni bir sayfada açıldı; önceki çalışmanız diğer sayfalarda duruyor.`);
+      }
+      handleLoadPreset(urlPreset.id);
+      // Nothing to undo on a freshly opened sheet
+      setHistoryStack([]);
+      setRedoStack([]);
+      return;
     }
 
     const sim = simulateCircuit(components, wires);
@@ -821,34 +862,44 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Debounced Auto-Save to localStorage
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const sheetsHaveContent = sheets.some((s) => s.components.length > 0 || s.wires.length > 0);
-        if (components.length === 0 && wires.length === 0 && annotations.length === 0 && !sheetsHaveContent) {
-          // Cleared workspace: forget the old session instead of restoring it next time
-          localStorage.removeItem('logic_workspace_autosave');
-          return;
-        }
-        localStorage.setItem(
-          'logic_workspace_autosave',
-          JSON.stringify({
-            components,
-            wires,
-            annotations,
-            sheets,
-            activeSheetId,
-            timestamp: Date.now(),
-          })
-        );
-      } catch {
-        // quota exceeded or private mode
+  // Debounced Auto-Save to localStorage. A running clock changes the circuit every tick and would push the
+  // debounce back forever, so a save is never more than 5 s late, and the page also saves when closed/hidden.
+  const autosaveSnapshotRef = useRef({ components, wires, annotations, sheets, activeSheetId });
+  autosaveSnapshotRef.current = { components, wires, annotations, sheets, activeSheetId };
+  const lastAutosaveRef = useRef(Date.now());
+  const writeAutosave = useCallback(() => {
+    const snap = autosaveSnapshotRef.current;
+    lastAutosaveRef.current = Date.now();
+    try {
+      const sheetsHaveContent = snap.sheets.some(
+        (s) => s.components.length > 0 || s.wires.length > 0 || (s.annotations || []).length > 0
+      );
+      if (snap.components.length === 0 && snap.wires.length === 0 && snap.annotations.length === 0 && !sheetsHaveContent) {
+        // Cleared workspace: forget the old session instead of restoring it next time
+        localStorage.removeItem('logic_workspace_autosave');
+        return;
       }
-    }, 1200);
-
+      localStorage.setItem('logic_workspace_autosave', JSON.stringify({ ...snap, timestamp: Date.now() }));
+    } catch {
+      // quota exceeded or private mode
+    }
+  }, []);
+  useEffect(() => {
+    const overdue = Date.now() - lastAutosaveRef.current > 5000;
+    const timer = setTimeout(writeAutosave, overdue ? 0 : 1200);
     return () => clearTimeout(timer);
-  }, [components, wires, annotations, sheets, activeSheetId]);
+  }, [components, wires, annotations, sheets, activeSheetId, writeAutosave]);
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') writeAutosave();
+    };
+    window.addEventListener('pagehide', writeAutosave);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', writeAutosave);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, [writeAutosave]);
 
   // Single step tick execution (User requested: "adım adım çalışan")
   const handleSingleStep = () => {
@@ -2215,7 +2266,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Add New Circuit Sheet
   const handleAddSheet = () => {
     const newId = `sheet_${Date.now()}`;
-    const newName = `Sayfa ${sheets.length + 1}`;
+    // First free number: after a delete, "Sayfa N+1" may already exist
+    let num = sheets.length + 1;
+    while (sheets.some((s) => s.name === `Sayfa ${num}`)) num++;
+    const newName = `Sayfa ${num}`;
     setSheets((prev) => [
       ...prev.map((s) => (s.id === activeSheetId ? { ...s, components, wires, annotations } : s)),
       { id: newId, name: newName, components: [], wires: [], annotations: [] },
@@ -2281,11 +2335,26 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     // Undo history belongs to one sheet: undoing after a switch would paste the other sheet here
     setHistoryStack([]);
     setRedoStack([]);
+    setSelectedCompIds([]);
+    setSelectedWireIds([]);
+    setWiringFrom(null);
   };
 
-  // Delete Circuit Sheet (Minimum 1 sheet must remain)
+  // Delete Circuit Sheet (Minimum 1 sheet must remain). Deleting cannot be undone, so a sheet with content
+  // asks first: the first click arms its delete button for a few seconds, the second click deletes
+  const [pendingDeleteSheetId, setPendingDeleteSheetId] = useState<string | null>(null);
+  const pendingDeleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleDeleteSheet = (sheetId: string) => {
     if (sheets.length <= 1) return;
+    const target = sheetId === activeSheetId ? { components, annotations } : sheets.find((s) => s.id === sheetId);
+    const hasContent = !!target && (target.components.length > 0 || (target.annotations || []).length > 0);
+    if (hasContent && pendingDeleteSheetId !== sheetId) {
+      setPendingDeleteSheetId(sheetId);
+      if (pendingDeleteTimerRef.current) clearTimeout(pendingDeleteTimerRef.current);
+      pendingDeleteTimerRef.current = setTimeout(() => setPendingDeleteSheetId(null), 3000);
+      return;
+    }
+    setPendingDeleteSheetId(null);
     const remaining = sheets.filter((s) => s.id !== sheetId);
     setSheets(remaining);
     if (activeSheetId === sheetId) {
@@ -3483,6 +3552,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         e.preventDefault();
         setShowCommandPalette((prev) => !prev);
         setPaletteQuery('');
+        setPaletteIndex(0);
         return;
       }
 
@@ -3637,6 +3707,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const sim = simulateCircuit(refreshedComps, repaired);
     setComponents(sim.components);
     setWires(sim.wires);
+    // The old circuit's notes would float over the preset (undo brings them back with the old circuit)
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
 
     // If preset is music or graphics, set appropriate clock tempo & auto-run
     const clkComp = preset.components.find((c) => c.type === 'clock');
@@ -5780,9 +5853,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     return { inputs, outputs };
   }, [components]);
 
-  // Filtered Components & Sheets for Command Palette (Ctrl+K)
-  const filteredPaletteItems = useMemo(() => {
-    const q = paletteQuery.toLowerCase().trim();
+  // Filtered Components & Sheets for Command Palette (Ctrl+K). Rebuilt on every render: the actions close
+  // over the current circuit, and a memoised list kept handlers that appended to a stale component list
+  const filteredPaletteItems = (() => {
+    const q = paletteQuery.toLocaleLowerCase('tr').trim();
+    const has = (text: string | undefined) => !!text && text.toLocaleLowerCase('tr').includes(q);
     const items: {
       id: string;
       title: string;
@@ -5794,12 +5869,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     // 1. Standard Components
     Object.values(COMPONENT_CATALOG).forEach((meta) => {
       if (meta.type === 'subcircuit') return;
-      if (
-        !q ||
-        meta.name.toLowerCase().includes(q) ||
-        meta.type.toLowerCase().includes(q) ||
-        meta.description.toLowerCase().includes(q)
-      ) {
+      if (!q || has(meta.name) || has(meta.type) || has(meta.description)) {
         items.push({
           id: meta.type,
           title: meta.name,
@@ -5812,12 +5882,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     // 2. Custom Subcircuits (ICs)
     customSubcircuits.forEach((sub) => {
-      if (
-        !q ||
-        sub.name.toLowerCase().includes(q) ||
-        (sub.chipCode && sub.chipCode.toLowerCase().includes(q)) ||
-        sub.description.toLowerCase().includes(q)
-      ) {
+      if (!q || has(sub.name) || has(sub.chipCode) || has(sub.description)) {
         items.push({
           id: sub.id,
           title: sub.name,
@@ -5830,7 +5895,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     // 3. Project Sheets as ICs
     sheets.forEach((s) => {
-      if (s.id !== activeSheetId && (!q || s.name.toLowerCase().includes(q))) {
+      if (s.id !== activeSheetId && (!q || has(s.name) || has('sayfa'))) {
         items.push({
           id: `sheet_ic_${s.id}`,
           title: `Sayfa Çipi: ${s.name}`,
@@ -5842,7 +5907,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     });
 
     // 4. Annotations
-    if (!q || 'çerçeve'.includes(q) || 'frame'.includes(q) || 'kutu'.includes(q)) {
+    if (!q || ['gruplama çerçevesi', 'frame', 'kutu', 'açıklama'].some(has)) {
       items.push({
         id: 'ann_frame_cmd',
         title: 'Gruplama Çerçevesi Ekle',
@@ -5851,7 +5916,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         action: () => handleAddAnnotation('frame'),
       });
     }
-    if (!q || 'not'.includes(q) || 'note'.includes(q) || 'yapışkan'.includes(q)) {
+    if (!q || ['yapışkan not', 'note', 'açıklama'].some(has)) {
       items.push({
         id: 'ann_note_cmd',
         title: 'Yapışkan Not Ekle',
@@ -5862,7 +5927,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }
 
     return items;
-  }, [paletteQuery, customSubcircuits, sheets, activeSheetId]);
+  })();
+  const paletteActiveIdx = Math.min(paletteIndex, Math.max(0, filteredPaletteItems.length - 1));
+  const runPaletteItem = (item: (typeof filteredPaletteItems)[number] | undefined) => {
+    if (!item) return;
+    item.action();
+    setShowCommandPalette(false);
+  };
 
   // DESKTOP EDA: Toolbox Groups for Left Explorer Panel
   const DESKTOP_TOOLBOX_GROUPS = useMemo(() => [
@@ -7923,6 +7994,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               onClick={() => {
                 setShowCommandPalette(true);
                 setPaletteQuery('');
+                setPaletteIndex(0);
               }}
               className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-medium flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs border border-slate-700"
               title="Hızlı Bileşen Ara ve Ekle (Ctrl + K veya /)"
@@ -8401,16 +8473,29 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   )}
 
                   {sheets.length > 1 && !isEditing && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteSheet(sheet.id);
-                      }}
-                      className="p-0.5 hover:text-rose-400 text-slate-400 rounded hover:bg-rose-500/10 ml-0.5"
-                      title="Sayfayı Sil"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
+                    pendingDeleteSheetId === sheet.id ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteSheet(sheet.id);
+                        }}
+                        className="px-1.5 py-0.5 ml-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold"
+                        title="Sayfa ve içindeki devre kalıcı olarak silinir (geri alınamaz)"
+                      >
+                        Sil?
+                      </button>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteSheet(sheet.id);
+                        }}
+                        className="p-0.5 hover:text-rose-400 text-slate-400 rounded hover:bg-rose-500/10 ml-0.5"
+                        title="Sayfayı Sil"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )
                   )}
                 </div>
               );
@@ -12444,16 +12529,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 type="text"
                 placeholder="Kapı, entegre, alt devre veya sayfa ara... (örn: XOR, D-FF, ALU, Sayfa)"
                 value={paletteQuery}
-                onChange={(e) => setPaletteQuery(e.target.value)}
+                onChange={(e) => {
+                  setPaletteQuery(e.target.value);
+                  setPaletteIndex(0);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') setShowCommandPalette(false);
-                  if (e.key === 'Enter') {
-                    const firstMatch = filteredPaletteItems[0];
-                    if (firstMatch) {
-                      firstMatch.action();
-                      setShowCommandPalette(false);
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const n = filteredPaletteItems.length;
+                    if (n > 0) {
+                      const next = (paletteActiveIdx + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+                      setPaletteIndex(next);
+                      document.getElementById(`palette-item-${next}`)?.scrollIntoView({ block: 'nearest' });
                     }
                   }
+                  if (e.key === 'Enter') runPaletteItem(filteredPaletteItems[paletteActiveIdx]);
                 }}
                 className="w-full text-sm font-semibold text-slate-800 placeholder:text-slate-400 outline-none bg-transparent"
               />
@@ -12475,11 +12566,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 filteredPaletteItems.map((item, idx) => (
                   <button
                     key={`${item.id}_${idx}`}
-                    onClick={() => {
-                      item.action();
-                      setShowCommandPalette(false);
-                    }}
-                    className="w-full px-3 py-2.5 hover:bg-blue-50/70 rounded-xl flex items-center justify-between text-left cursor-pointer transition-colors group"
+                    id={`palette-item-${idx}`}
+                    onClick={() => runPaletteItem(item)}
+                    onMouseEnter={() => setPaletteIndex(idx)}
+                    className={`w-full px-3 py-2.5 ${idx === paletteActiveIdx ? 'bg-blue-50/70' : ''} hover:bg-blue-50/70 rounded-xl flex items-center justify-between text-left cursor-pointer transition-colors group`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-600 transition-colors shrink-0">
@@ -12505,7 +12595,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {/* Footer Hints */}
             <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
               <div className="flex items-center gap-2">
-                <span>Gezinme: <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600">Enter</kbd> ile Ekle</span>
+                <span>Gezinme: <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600">↑ ↓</kbd>, <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600">Enter</kbd> ile Ekle</span>
               </div>
               <span>Kapat: <kbd className="font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600">Esc</kbd></span>
             </div>
