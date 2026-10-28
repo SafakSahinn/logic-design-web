@@ -117,7 +117,7 @@ import {
   getSubcircuitDefinition,
 } from '../utils/subcircuitManager';
 import type { CustomSubcircuit } from '../types/circuit';
-import type { LogicValue } from '../types/logic';
+import type { LogicValue, SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
@@ -143,6 +143,10 @@ export interface CircuitSheet {
   wires: CircuitWire[];
   annotations?: CircuitAnnotation[];
 }
+
+// Pin dot colour per signal value (Logisim: blue = floating/unknown, red = error)
+const pinDotFill = (v: SignalValue): string =>
+  v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
 
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
@@ -4299,7 +4303,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'probe': {
-        const inVal = comp.inputs[0]?.value === 1 ? '1' : '0';
+        const probeVal = comp.inputs[0]?.value ?? 0;
+        const inVal = probeVal === 1 ? '1' : probeVal === 0 ? '0' : probeVal === 'Z' ? 'x' : probeVal;
+        const probeFloat = probeVal === 'Z' || probeVal === 'X';
         return (
           <g filter="url(#gateShadow)">
             <rect
@@ -4318,7 +4324,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               width={42}
               height={30}
               rx={4}
-              fill={inVal === '1' ? '#ecfdf5' : '#f8fafc'}
+              fill={inVal === '1' ? '#ecfdf5' : probeVal === 'E' ? '#fef2f2' : probeFloat ? '#eef2ff' : '#f8fafc'}
               stroke="#334155"
               strokeWidth={1}
             />
@@ -4327,7 +4333,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               y={27}
               textAnchor="middle"
               className={`text-xl font-mono font-extrabold select-none ${
-                inVal === '1' ? 'fill-emerald-600' : 'fill-slate-600'
+                inVal === '1' ? 'fill-emerald-600' : probeVal === 'E' ? 'fill-red-600' : probeFloat ? 'fill-indigo-600' : 'fill-slate-600'
               }`}
             >
               {inVal}
@@ -4338,7 +4344,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               textAnchor="middle"
               className="text-[7px] font-mono font-bold fill-slate-400 select-none"
             >
-              {inVal === '1' ? 'HIGH' : 'LOW'}
+              {inVal === '1' ? 'HIGH' : inVal === '0' ? 'LOW' : probeVal === 'E' ? 'ERROR' : probeVal === 'Z' ? 'HI-Z' : 'UNKNOWN'}
             </text>
           </g>
         );
@@ -8915,6 +8921,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               if (!toPin && !wire.endPoint) return null;
 
               const isHigh = wire.value === 1;
+              const isError = wire.hasConflict || wire.value === 'E';
+              // Multi-bit buses get their own value model in a later stage
+              const isFloating = !wire.isBus && (wire.value === 'Z' || wire.value === 'X');
               const isSelected = selectedWireIds.includes(wire.id);
 
               const startPt = getWireStartPt(wire);
@@ -9016,7 +9025,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     pointerEvents="stroke"
                   />
                   {/* Outer wire / glow if HIGH or SELECTED or CONFLICT */}
-                  {wire.hasConflict ? (
+                  {isError ? (
                     <path
                       d={pathD}
                       fill="none"
@@ -9053,26 +9062,28 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     fill="none"
                     pointerEvents="none"
                     stroke={
-                      wire.hasConflict
+                      isError
                         ? '#ef4444'
                         : isSelected
                         ? (cadTheme === 'dark' ? '#38bdf8' : '#2563eb')
                         : isHigh
                         ? (cadTheme === 'dark' ? '#22c55e' : '#16a34a')
+                        : isFloating
+                        ? (cadTheme === 'dark' ? '#818cf8' : '#4f46e5')
                         : wire.isBus
                         ? (cadTheme === 'dark' ? '#06b6d4' : '#3b82f6')
                         : (cadTheme === 'dark' ? '#334155' : '#64748b')
                     }
                     strokeWidth={
                       wire.isBus
-                        ? wire.hasConflict
+                        ? isError
                           ? 6
                           : isSelected
                           ? 6.5
                           : isHigh
                           ? 5.5
                           : 4.5
-                        : wire.hasConflict
+                        : isError
                         ? 3.5
                         : isSelected
                         ? 3.5
@@ -9080,7 +9091,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         ? 3
                         : 2.5
                     }
-                    strokeDasharray={wire.hasConflict ? '6,4' : isSelected ? '6,3' : undefined}
+                    strokeDasharray={isError ? '6,4' : isSelected ? '6,3' : undefined}
                     strokeLinecap="round"
                   />
 
@@ -9329,10 +9340,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   cy={j.y}
                   r={j.isBus ? 6 : 4.5}
                   fill={
-                    j.hasConflict
+                    j.hasConflict || j.value === 'E'
                       ? '#ef4444'
                       : j.value === 1
                       ? (cadTheme === 'dark' ? '#22c55e' : '#16a34a')
+                      : !j.isBus && (j.value === 'Z' || j.value === 'X')
+                      ? (cadTheme === 'dark' ? '#818cf8' : '#4f46e5')
                       : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')
                   }
                   stroke={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
@@ -9467,7 +9480,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
                   {/* Input Pins */}
                   {comp.inputs.map((pin, pinIdx) => {
-                    const isPinHigh = pin.value === 1;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     // Clamped hit radius ensures neighboring pins (e.g. 10px apart on 5-input gates) never overlap
@@ -9533,7 +9545,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           cx={0}
                           cy={0}
                           r={4.5}
-                          fill={isPinHigh ? '#16a34a' : '#64748b'}
+                          fill={pinDotFill(pin.value)}
                           stroke="#ffffff"
                           strokeWidth={1.5}
                           className="group-hover:scale-125 transition-transform pointer-events-none"
@@ -9547,7 +9559,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
                   {/* Output Pins */}
                   {comp.outputs.map((pin, pinIdx) => {
-                    const isPinHigh = pin.value === 1;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     let minNeighborDist = 40;
@@ -9609,7 +9620,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           cx={0}
                           cy={0}
                           r={4.5}
-                          fill={isPinHigh ? '#16a34a' : '#64748b'}
+                          fill={pinDotFill(pin.value)}
                           stroke="#ffffff"
                           strokeWidth={1.5}
                           className="group-hover:scale-125 transition-transform pointer-events-none"

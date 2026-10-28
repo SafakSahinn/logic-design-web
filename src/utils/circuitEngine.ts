@@ -1255,8 +1255,10 @@ export function simulateCircuitStep(
       driverPins.push(pin);
     });
 
-    const drivenVals = new Set(driverPins.map((d) => d.value));
-    const hasConflict = drivenVals.has(0) && drivenVals.has(1);
+    // Logisim value model: floating drivers don't count, an undriven net floats (Z),
+    // and differing driven values short each other out (E)
+    const drivenVals = new Set(driverPins.map((d) => d.value).filter((v) => v !== 'Z'));
+    const hasConflict = drivenVals.size > 1;
 
     // If conflict detected, mark all wires in this net
     const wiresInThisNet = netWires.get(root) || [];
@@ -1268,11 +1270,11 @@ export function simulateCircuitStep(
     });
 
     // Determine the resolved logic value on this net
-    let resolvedValue: SignalValue = 0;
+    let resolvedValue: SignalValue = 'Z';
     if (hasConflict) {
-      resolvedValue = 0; // State in conflict
-    } else if (driverPins.length > 0) {
-      resolvedValue = driverPins[0].value;
+      resolvedValue = 'E';
+    } else if (drivenVals.size === 1) {
+      resolvedValue = drivenVals.values().next().value!;
     }
 
     // Assign resolved value to all wires in net
@@ -1380,7 +1382,7 @@ export function simulateCircuitStep(
         const en = inVals[1] === 1 ? 1 : 0;
         const isHiZ = en === 0;
         comp.state.hiZ = isHiZ;
-        const val: SignalValue = isHiZ ? 0 : (a === 1 ? 1 : 0);
+        const val: SignalValue = isHiZ ? 'Z' : (a === 1 ? 1 : 0);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
