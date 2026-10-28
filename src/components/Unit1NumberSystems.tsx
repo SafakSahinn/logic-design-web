@@ -35,18 +35,23 @@ export const Unit1NumberSystems: React.FC = () => {
   const binA = toTwosComplement(numA, bitWidth);
   const binB = toTwosComplement(numB, bitWidth);
   const sumVal = numA + numB;
+  const inputsInRange = binA !== 'Aralık Dışı' && binB !== 'Aralık Dışı';
   const isOverflow =
-    sumVal > Math.pow(2, bitWidth - 1) - 1 ||
-    sumVal < -Math.pow(2, bitWidth - 1);
+    inputsInRange &&
+    (sumVal > Math.pow(2, bitWidth - 1) - 1 ||
+    sumVal < -Math.pow(2, bitWidth - 1));
   // On overflow the adder still produces bitWidth bits (the true sum modulo 2^n), show those
-  const binSum =
-    isOverflow && binA !== 'Aralık Dışı' && binB !== 'Aralık Dışı'
+  const binSum = !inputsInRange
+    ? '-'
+    : isOverflow
       ? (((sumVal % 2 ** bitWidth) + 2 ** bitWidth) % 2 ** bitWidth).toString(2).padStart(bitWidth, '0')
       : toTwosComplement(sumVal, bitWidth);
 
   const getIEEE754 = (valStr: string) => {
-    const f = parseFloat(valStr);
-    if (isNaN(f)) return null;
+    const t = valStr.trim();
+    // Number() rejects trailing junk ("12abc"); "NaN" / "Infinity" are allowed on purpose
+    const f = t === '' ? NaN : Number(t);
+    if (isNaN(f) && !/^[+-]?nan$/i.test(t)) return null;
 
     const buffer = new ArrayBuffer(4);
     const view = new DataView(buffer);
@@ -59,8 +64,15 @@ export const Unit1NumberSystems: React.FC = () => {
     const mantissa = bits.slice(9);
     const expVal = parseInt(exponent, 2);
     const unbiasedExp = expVal - 127;
+    // Exponent field 0 = zero/denormal (true exponent -126), 255 = Infinity/NaN
+    const expText =
+      expVal === 0
+        ? mantissa.includes('1') ? '0 → denormal sayı (üs = −126)' : '0 → sıfır'
+        : expVal === 255
+          ? mantissa.includes('1') ? '255 → NaN' : '255 → sonsuz (∞)'
+          : `${expVal} - 127 = ${unbiasedExp}`;
 
-    return { sign, exponent, mantissa, expVal, unbiasedExp, hex: uint32.toString(16).toUpperCase().padStart(8, '0') };
+    return { sign, exponent, mantissa, expVal, unbiasedExp, expText, hex: uint32.toString(16).toUpperCase().padStart(8, '0') };
   };
 
   const ieeeData = getIEEE754(floatInput);
@@ -191,14 +203,14 @@ export const Unit1NumberSystems: React.FC = () => {
               Taban Dönüşüm Formülü
             </h2>
             <p className="leading-relaxed">
-              Herhangi bir $r$ tabanındaki bir sayı, basamak ağırlıklarının toplamı şeklinde ondalık sayıya çevrilir:
+              Herhangi bir r tabanındaki bir sayı, basamak ağırlıklarının toplamı şeklinde ondalık sayıya çevrilir:
             </p>
             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 font-mono text-center text-slate-800 font-bold text-sm">
               (aₙ...a₁a₀)ᵣ = aₙ·rⁿ + ... + a₁·r¹ + a₀·r⁰
             </div>
             <p className="leading-relaxed">
               <strong>Örnek (Kitaptan):</strong> (110101)₂ sayısının açılımı:<br />
-              $1\cdot 2^5 + 1\cdot 2^4 + 0\cdot 2^3 + 1\cdot 2^2 + 0\cdot 2^1 + 1\cdot 2^0 = 32 + 16 + 0 + 4 + 0 + 1 = 53_{10}$
+              <span className="font-mono">1·2⁵ + 1·2⁴ + 0·2³ + 1·2² + 0·2¹ + 1·2⁰ = 32 + 16 + 0 + 4 + 0 + 1 = (53)₁₀</span>
             </p>
           </div>
         </div>
@@ -263,6 +275,11 @@ export const Unit1NumberSystems: React.FC = () => {
                 <span className="font-bold text-blue-700">{binSum}</span>
               </div>
 
+              {!inputsInRange && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs sm:text-sm font-semibold">
+                  Girişlerden en az biri {bitWidth} bit ile gösterilemiyor (geçerli aralık: {-Math.pow(2, bitWidth - 1)} ile {Math.pow(2, bitWidth - 1) - 1}).
+                </div>
+              )}
               {isOverflow && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs sm:text-sm font-semibold">
                   ⚠️ Taşma (Overflow) Gerçekleşti! {bitWidth}-bit sınırları aşıldı (Geçerli aralık: {-Math.pow(2, bitWidth-1)} ile {Math.pow(2, bitWidth-1)-1}).
@@ -277,13 +294,13 @@ export const Unit1NumberSystems: React.FC = () => {
               Tümleyenler Mantığı (Complements)
             </h2>
             <p className="leading-relaxed">
-              Sayısal donanımda çıkarma devresi kurmak yerine, çıkarılan sayının <strong>2'ye tümleyeni</strong> alınarak toplama devresi kullanılır ($A - B = A + (-B)$).
+              Sayısal donanımda çıkarma devresi kurmak yerine, çıkarılan sayının <strong>2'ye tümleyeni</strong> alınarak toplama devresi kullanılır (<span className="font-mono">A − B = A + (−B)</span>).
             </p>
             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 font-mono text-xs">
               2'ye tümleyen kuralı: Tüm bitleri tersle (1'e tümleyen) ve +1 ekle.
             </div>
             <p className="leading-relaxed">
-              <strong>Örnek:</strong> $+19 = 00010011_2 \implies$ 1'e tümleyen: $11101100_2 \implies$ 2'ye tümleyen ($-19$): $11101101_2$.
+              <strong>Örnek:</strong> <span className="font-mono">+19 = (00010011)₂ ⇒</span> 1'e tümleyen: <span className="font-mono">(11101100)₂ ⇒</span> 2'ye tümleyen (−19): <span className="font-mono">(11101101)₂</span>.
             </p>
           </div>
         </div>
@@ -340,7 +357,7 @@ export const Unit1NumberSystems: React.FC = () => {
                   </div>
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                     <span className="text-[10px] text-slate-400 font-sans font-bold uppercase block">Hesaplanan Üs</span>
-                    <span className="font-bold text-slate-800">{ieeeData.expVal} - 127 = {ieeeData.unbiasedExp}</span>
+                    <span className="font-bold text-slate-800">{ieeeData.expText}</span>
                   </div>
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                     <span className="text-[10px] text-slate-400 font-sans font-bold uppercase block">Hex Değeri</span>
@@ -397,7 +414,7 @@ export const Unit1NumberSystems: React.FC = () => {
                         {(val ^ (val >> 1)).toString(2).padStart(4, '0')}
                       </td>
                       <td className="py-2.5 px-4 text-emerald-800">
-                        {val <= 9 ? val.toString(2).padStart(4, '0') : 'Geçersiz (Hata)'}
+                        {String(val).split('').map((d) => Number(d).toString(2).padStart(4, '0')).join(' ')}
                       </td>
                     </tr>
                   ))}
@@ -415,7 +432,11 @@ export const Unit1NumberSystems: React.FC = () => {
               Gray kodunda ardışık iki sayı arasında <strong>yalnızca tek bir bit</strong> değişir (Hamming mesafesi = 1).
             </p>
             <p className="leading-relaxed">
-              Bu özellik, Karnaugh haritalarında komşu hücrelerin yalnızca bir değişken farkıyla sıralanmasını sağlar ($00, 01, 11, 10$) ve harita gruplaması yapıldığında değişen değişkenin sadeleşerek elenmesini mümkün kılar.
+              BCD her onlu haneyi ayrı ayrı 4 bitle kodlar; bu yüzden 10 sayısı <span className="font-mono">0001 0000</span> olarak yazılır.
+              4 bitlik <span className="font-mono">1010–1111</span> desenleri BCD'de hiçbir haneye karşılık gelmez (geçersizdir).
+            </p>
+            <p className="leading-relaxed">
+              Bu özellik, Karnaugh haritalarında komşu hücrelerin yalnızca bir değişken farkıyla sıralanmasını sağlar (00, 01, 11, 10) ve harita gruplaması yapıldığında değişen değişkenin sadeleşerek elenmesini mümkün kılar.
             </p>
           </div>
         </div>

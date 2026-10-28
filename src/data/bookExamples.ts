@@ -116,8 +116,8 @@ export const BOOK_KMAP_EXAMPLES: BookExampleKMap[] = [
     variables: ['A', 'B', 'C', 'D'],
     minterms: [2, 3, 5, 7, 11, 13],
     dontCares: [],
-    expectedSOP: "A'C + B'CD + A'BD + BC'D",
-    explanation: "Sayısal tasarımda sıkça kullanılan aritmetik dedektör örneğidir; 4 bitlik giriş asal sayıya eşit olduğunda çıkış 1 olur.",
+    expectedSOP: "A'B'C + A'BD + B'CD + BC'D",
+    explanation: "Dört adet 2'li grup gerekir: A'B'C (2,3), A'BD (5,7), B'CD (3,11) ve BC'D (5,13). A'C yazılamaz, çünkü 6 asal olmadığı hâlde o grup m6'yı da 1 yapar.",
   },
   {
     id: 'orn-3-10',

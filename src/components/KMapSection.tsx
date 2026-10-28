@@ -1,16 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import type { LogicValue } from '../types/logic';
-import { solveKMap, getGridConfig, GROUP_COLORS } from '../utils/kmapSolver';
+import { solveKMap, getGridConfig, GROUP_COLORS, DEFAULT_VAR_NAMES } from '../utils/kmapSolver';
 import { Grid, Sparkles, Copy, Check, RotateCcw, Info, CheckCircle2, ChevronRight, Layers, X } from 'lucide-react';
 
 interface KMapSectionProps {
   initialValues?: Record<number, LogicValue>;
   initialNumVars?: number;
+  /** Variable names (e.g. a book example's x, y, z); used only while the map has that many variables. */
+  variables?: string[];
 }
 
 export const KMapSection: React.FC<KMapSectionProps> = ({
   initialValues,
   initialNumVars = 3,
+  variables,
 }) => {
   const [numVars, setNumVars] = useState<number>(initialNumVars);
   const [values, setValues] = useState<Record<number, LogicValue>>(
@@ -23,11 +26,12 @@ export const KMapSection: React.FC<KMapSectionProps> = ({
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
-  const config = useMemo(() => getGridConfig(numVars), [numVars]);
+  const varNames = variables && variables.length === numVars ? variables : DEFAULT_VAR_NAMES;
+  const config = useMemo(() => getGridConfig(numVars, varNames), [numVars, varNames]);
 
   const solution = useMemo(() => {
-    return solveKMap(values, numVars);
-  }, [values, numVars]);
+    return solveKMap(values, numVars, varNames);
+  }, [values, numVars, varNames]);
 
   const activeGroupId = hoveredGroupId ?? selectedGroupId;
   const activeGroup = useMemo(
@@ -133,7 +137,7 @@ export const KMapSection: React.FC<KMapSectionProps> = ({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              {v} Değişken ({['A, B', 'A, B, C', 'A, B, C, D'][v - 2]})
+              {v} Değişken ({(variables && variables.length === v ? variables : DEFAULT_VAR_NAMES.slice(0, v)).join(', ')})
             </button>
           ))}
         </div>
@@ -342,7 +346,7 @@ export const KMapSection: React.FC<KMapSectionProps> = ({
             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs sm:text-sm text-slate-600 flex items-start sm:items-center gap-3">
               <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5 sm:mt-0" />
               <span>
-                <strong>Simit (Torus) Bitişikliği:</strong> Haritanın en sol ve en sağ sütunları ile en üst ve en alt satırları birbiriyle komşudur. 4 köşe hücresi ($m_0, m_2, m_8, m_{10}$) birleştirilerek tek bir 4'lü grup oluşturabilir.
+                <strong>Simit (Torus) Bitişikliği:</strong> Haritanın en sol ve en sağ sütunları ile en üst ve en alt satırları birbiriyle komşudur. 4 köşe hücresi (m₀, m₂, m₈, m₁₀) birleştirilerek tek bir 4'lü grup oluşturabilir.
               </span>
             </div>
           </div>

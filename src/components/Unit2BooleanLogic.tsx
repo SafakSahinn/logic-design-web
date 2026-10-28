@@ -22,7 +22,7 @@ export const Unit2BooleanLogic: React.FC<Unit2Props> = ({ onTransferToKMap }) =>
               Bölüm 2 (Sıfırdan İşlemciye)
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-              Bool Cebri ve Mantık Kapıları
+              Bool Cebiri ve Mantık Kapıları
             </h1>
             <p className="text-slate-600 text-xs sm:text-sm leading-relaxed">
               Bu bölümde ikili mantık değişkenleri, Huntington aksiyomları, düalite ilkesi,
@@ -116,8 +116,8 @@ export const Unit2BooleanLogic: React.FC<Unit2Props> = ({ onTransferToKMap }) =>
                 Düalite İlkesi & Konsensüs Teoremi
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                <strong>Düalite (İkizlik) İlkesi:</strong> Geçerli bir Boole denklemindeki tüm $+$ işlemleri $\cdot$ ile,
-                tüm $\cdot$ işlemleri $+$ ile, $0$'lar $1$ ile ve $1$'ler $0$ ile değiştirilirse elde edilen yeni denklem de daima doğrudur.
+                <strong>Düalite (İkizlik) İlkesi:</strong> Geçerli bir Boole denklemindeki tüm <code>+</code> işlemleri <code>·</code> ile,
+                tüm <code>·</code> işlemleri <code>+</code> ile, 0'lar 1 ile ve 1'ler 0 ile değiştirilirse elde edilen yeni denklem de daima doğrudur.
               </p>
 
               <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200 space-y-1.5 text-xs">
@@ -126,8 +126,8 @@ export const Unit2BooleanLogic: React.FC<Unit2Props> = ({ onTransferToKMap }) =>
                   xy + x'z + yz = xy + x'z
                 </div>
                 <p className="text-slate-600 text-[11px] leading-relaxed">
-                  İspat Adımı: $yz$ terimi $yz \cdot 1 = yz(x + x') = xyz + x'yz$ olarak açılır.
-                  $xy + xyz = xy(1+z) = xy$ ve $x'z + x'yz = x'z(1+y) = x'z$ terimleri birbirini yutar ve $yz$ terimi elenir.
+                  İspat Adımı: <span className="font-mono">yz</span> terimi <span className="font-mono">yz · 1 = yz(x + x') = xyz + x'yz</span> olarak açılır.
+                  <span className="font-mono">xy + xyz = xy(1+z) = xy</span> ve <span className="font-mono">x'z + x'yz = x'z(1+y) = x'z</span> olduğundan yeni terimler yutulur ve <span className="font-mono">yz</span> terimi elenir.
                 </p>
               </div>
 

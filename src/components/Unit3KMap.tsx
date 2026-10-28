@@ -63,7 +63,7 @@ export const Unit3KMap: React.FC<Unit3Props> = ({
             </p>
           </div>
           <span className="text-xs font-mono font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 self-start sm:self-auto">
-            12 Doğrulanmış Örnek
+            {BOOK_KMAP_EXAMPLES.length} Doğrulanmış Örnek
           </span>
         </div>
 
@@ -125,6 +125,7 @@ export const Unit3KMap: React.FC<Unit3Props> = ({
         key={`${numVars}-${JSON.stringify(kmapValues)}`}
         initialValues={kmapValues}
         initialNumVars={numVars}
+        variables={selectedExample?.variables}
       />
     </div>
   );

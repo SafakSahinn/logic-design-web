@@ -9826,7 +9826,7 @@ ${wireXmls.join('\n')}
                     <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-2">
                       <div className="flex items-center gap-2 text-xs font-bold text-indigo-900 uppercase tracking-wider">
                         <Cpu className="w-4 h-4 text-indigo-600" />
-                        <span>Çıkarılan Boole Cebri İfadeleri (Boolean Logic Formula)</span>
+                        <span>Çıkarılan Bool Cebiri İfadeleri (Boolean Logic Formula)</span>
                       </div>
                       <div className="flex flex-wrap gap-2.5">
                         {Object.entries(truthTableData.booleanExpressions).map(([outName, expr]) => (

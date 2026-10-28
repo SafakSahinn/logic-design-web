@@ -42,7 +42,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectUnit }) => {
     {
       id: 'unit2' as UnitTab,
       num: '02',
-      title: 'Bool Cebri ve Mantık Kapıları',
+      title: 'Bool Cebiri ve Mantık Kapıları',
       subtitle: 'Aksiyomlar, Düalite, Mantık Kapıları, Doğruluk Tablosu & Kanonik Formlar',
       desc: 'Sayısal devrelerin cebirsel temeli olan Huntington aksiyomları, düalite ilkesi, De Morgan teoremleri, mantık kapılarının (AND, OR, NOT, NAND, NOR, XOR, XNOR) iç yapısı ve TTL 74xx entegre devreleri.',
       topics: [

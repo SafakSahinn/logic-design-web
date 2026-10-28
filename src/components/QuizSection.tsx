@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { HelpCircle, CheckCircle, XCircle, RotateCcw, Award, ChevronLeft, ChevronRight, BookOpen } from 'lucide-react';
 
-export type QuizCategory = 'Tümü' | 'Sayı Sistemleri' | 'Boole Cebri' | 'K-Map' | 'Kombinasyonel' | 'Ardışıl Mantık';
+export type QuizCategory = 'Tümü' | 'Sayı Sistemleri' | 'Bool Cebiri' | 'K-Map' | 'Kombinasyonel' | 'Ardışıl Mantık';
 
 interface Question {
   id: number;
   question: string;
-  category: 'Sayı Sistemleri' | 'Boole Cebri' | 'K-Map' | 'Kombinasyonel' | 'Ardışıl Mantık';
+  category: 'Sayı Sistemleri' | 'Bool Cebiri' | 'K-Map' | 'Kombinasyonel' | 'Ardışıl Mantık';
   options: string[];
   correctIndex: number;
   explanation: string;
@@ -16,15 +16,15 @@ const QUESTIONS: Question[] = [
   {
     id: 1,
     question: "Hangi mantık kapısı yalnızca girişleri birbirinden FARKLI olduğunda (biri 1, diğeri 0) çıkışa 1 verir?",
-    category: 'Boole Cebri',
+    category: 'Bool Cebiri',
     options: ['AND (VE)', 'OR (VEYA)', 'XOR (Özel VEYA)', 'NAND (VE DEĞİL)'],
     correctIndex: 2,
     explanation: "XOR (Exclusive OR) kapısı, girişlerin birbirine eşit olmadığı durumlarda 1, eşit olduğu durumlarda (0-0 veya 1-1) 0 verir.",
   },
   {
     id: 2,
-    question: "Boole cebirinde De Morgan kuralına göre (A + B)' ifadesinin eşiti nedir?",
-    category: 'Boole Cebri',
+    question: "Bool cebirinde De Morgan kuralına göre (A + B)' ifadesinin eşiti nedir?",
+    category: 'Bool Cebiri',
     options: ["A' + B'", "A' · B'", "(A · B)'", "A + B'"],
     correctIndex: 1,
     explanation: "De Morgan teoremine göre toplamın değili, değillerin çarpımına eşittir: (A + B)' = A' · B'.",
@@ -53,7 +53,7 @@ const QUESTIONS: Question[] = [
   {
     id: 5,
     question: "Tek başına kullanılarak diğer TÜM mantık kapılarının yerine geçebilen 'Evrensel (Universal)' kapı çifti hangisidir?",
-    category: 'Boole Cebri',
+    category: 'Bool Cebiri',
     options: ['AND ve OR', 'NOT ve XOR', 'NAND ve NOR', 'BUFFER ve XNOR'],
     correctIndex: 2,
     explanation: "NAND ve NOR kapıları evrensel (universal) kapılardır. Yalnızca NAND veya yalnızca NOR kullanılarak AND, OR, NOT dahil tüm mantık kapıları üretilebilir.",
@@ -61,7 +61,7 @@ const QUESTIONS: Question[] = [
   {
     id: 6,
     question: "3 değişkenli bir doğruluk tablosunda kaç satır (giriş kombinasyonu) bulunur?",
-    category: 'Boole Cebri',
+    category: 'Bool Cebiri',
     options: ['3', '6', '8', '16'],
     correctIndex: 2,
     explanation: "n değişkenli bir tabloda 2^n kombinasyon bulunur. 3 değişken için 2^3 = 8 satır (0'dan 7'ye kadar mintermler) bulunur.",
@@ -110,8 +110,8 @@ const QUESTIONS: Question[] = [
   },
   {
     id: 11,
-    question: "Boole cebirinde AB + A'C + BC = AB + A'C denkleminde elenen 'BC' terimi hangi teorem gereğince fazlalıktır (redundant)?",
-    category: 'Boole Cebri',
+    question: "Bool cebirinde AB + A'C + BC = AB + A'C denkleminde elenen 'BC' terimi hangi teorem gereğince fazlalıktır (redundant)?",
+    category: 'Bool Cebiri',
     options: [
       'De Morgan Teoremi',
       'Konsensüs (Consensus) Teoremi',
@@ -124,7 +124,7 @@ const QUESTIONS: Question[] = [
   {
     id: 12,
     question: "Bir Boole ifadesine Düalite (Duality) ilkesi uygulanırken hangi dönüşümler yapılır?",
-    category: 'Boole Cebri',
+    category: 'Bool Cebiri',
     options: [
       'Yalnızca değişkenlerin değilleri alınır',
       'AND (·) ile OR (+) yer değiştirir, 0 ile 1 yer değiştirir; değişkenler DEĞİŞMEZ',
@@ -237,10 +237,9 @@ const QUESTIONS: Question[] = [
 
 export const QuizSection: React.FC = () => {
   const [currentIdx, setCurrentIdx] = useState<number>(0);
-  const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
-  const [showExplanation, setShowExplanation] = useState<boolean>(false);
-  const [score, setScore] = useState<number>(0);
-  const [answeredCount, setAnsweredCount] = useState<number>(0);
+  // Answers are kept per question id so revisiting a question shows the
+  // earlier choice instead of letting it be answered (and scored) again.
+  const [answers, setAnswers] = useState<Record<number, number>>({});
   const [activeCategory, setActiveCategory] = useState<QuizCategory>('Tümü');
 
   const filteredQuestions = useMemo(() => {
@@ -250,41 +249,33 @@ export const QuizSection: React.FC = () => {
 
   const safeIdx = Math.min(currentIdx, filteredQuestions.length - 1);
   const q = filteredQuestions[safeIdx] || filteredQuestions[0];
+  const selectedAnswer: number | null = answers[q.id] ?? null;
+  const showExplanation = selectedAnswer !== null;
+  const answeredCount = Object.keys(answers).length;
+  const score = QUESTIONS.filter((qq) => answers[qq.id] === qq.correctIndex).length;
 
   const handleSelect = (idx: number) => {
     if (selectedAnswer !== null) return;
-    setSelectedAnswer(idx);
-    setShowExplanation(true);
-    setAnsweredCount((prev) => prev + 1);
-    if (idx === q.correctIndex) {
-      setScore((prev) => prev + 1);
-    }
+    setAnswers((prev) => ({ ...prev, [q.id]: idx }));
   };
 
   const handleNext = () => {
-    setSelectedAnswer(null);
-    setShowExplanation(false);
     setCurrentIdx((prev) => (prev + 1) % filteredQuestions.length);
   };
 
   const handlePrev = () => {
-    setSelectedAnswer(null);
-    setShowExplanation(false);
     setCurrentIdx((prev) => (prev - 1 + filteredQuestions.length) % filteredQuestions.length);
   };
 
   const handleReset = () => {
     setCurrentIdx(0);
-    setSelectedAnswer(null);
-    setShowExplanation(false);
-    setScore(0);
-    setAnsweredCount(0);
+    setAnswers({});
   };
 
   const categories: QuizCategory[] = [
     'Tümü',
     'Sayı Sistemleri',
-    'Boole Cebri',
+    'Bool Cebiri',
     'K-Map',
     'Kombinasyonel',
     'Ardışıl Mantık',
@@ -330,8 +321,6 @@ export const QuizSection: React.FC = () => {
               onClick={() => {
                 setActiveCategory(cat);
                 setCurrentIdx(0);
-                setSelectedAnswer(null);
-                setShowExplanation(false);
               }}
               className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 activeCategory === cat

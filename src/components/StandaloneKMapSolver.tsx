@@ -29,6 +29,7 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
   // Minterm string inputs
   const [mintermsInput, setMintermsInput] = useState<string>('0, 2, 8, 10');
   const [dontCaresInput, setDontCaresInput] = useState<string>('');
+  const [mintermError, setMintermError] = useState<string | null>(null);
 
   // Boolean Expression input
   const [expressionInput, setExpressionInput] = useState<string>("A'B' + CD + A'C");
@@ -80,21 +81,37 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
     const newVals: Record<number, LogicValue> = {};
     for (let i = 0; i < total; i++) newVals[i] = 0;
 
+    // Reject anything that is not a whole minterm index of this map instead of silently dropping it
+    const bad: string[] = [];
     const parseNums = (str: string) =>
       str
         .split(/[,;\s]+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0 && !isNaN(Number(s)))
+        .filter((s) => s.length > 0)
+        .filter((s) => {
+          const ok = /^\d+$/.test(s) && Number(s) < total;
+          if (!ok) bad.push(s);
+          return ok;
+        })
         .map(Number);
 
     const mList = parseNums(mintermsInput);
     const dList = parseNums(dontCaresInput);
+    if (bad.length > 0) {
+      setMintermError(`Geçersiz giriş: ${bad.join(', ')}. ${numVars} değişkenli haritada indisler 0 ile ${total - 1} arasında tam sayı olmalıdır.`);
+      return;
+    }
+    const both = mList.filter((m) => dList.includes(m));
+    if (both.length > 0) {
+      setMintermError(`${both.join(', ')} hem minterm hem önemsiz (X) listesinde yer alıyor.`);
+      return;
+    }
+    setMintermError(null);
 
     mList.forEach((m) => {
-      if (m >= 0 && m < total) newVals[m] = 1;
+      newVals[m] = 1;
     });
     dList.forEach((d) => {
-      if (d >= 0 && d < total) newVals[d] = 'X';
+      newVals[d] = 'X';
     });
 
     setValues(newVals);
@@ -255,6 +272,13 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
               <Send className="w-4 h-4" />
               <span>Haritaya Uygula ve Çöz</span>
             </button>
+
+            {mintermError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span>{mintermError}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -263,7 +287,7 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
           <div className="space-y-4 pt-1">
             <div>
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-1.5">
-                Boole Cebri Fonksiyonu (Değişkenler: A, B, C, D):
+                Bool Cebiri Fonksiyonu (Değişkenler: A, B, C, D):
               </label>
               <div className="flex flex-col sm:flex-row gap-3">
                 <input
@@ -508,7 +532,7 @@ export const StandaloneKMapSolver: React.FC<StandaloneKMapSolverProps> = ({
             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs sm:text-sm text-slate-600 flex items-start sm:items-center gap-3">
               <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5 sm:mt-0" />
               <span>
-                <strong>Torus (Simit) Komşuluğu:</strong> Sağ-sol ve üst-alt kenarlar ile 4 köşe hücresi ($m_0, m_2, m_8, m_{10}$) birbirine komşudur ve tek grup oluşturabilir.
+                <strong>Torus (Simit) Komşuluğu:</strong> Sağ-sol ve üst-alt kenarlar ile 4 köşe hücresi (m₀, m₂, m₈, m₁₀) birbirine komşudur ve tek grup oluşturabilir.
               </span>
             </div>
           </div>

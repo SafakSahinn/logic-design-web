@@ -19,7 +19,7 @@ export const TruthTableSection: React.FC<TruthTableSectionProps> = ({ onTransfer
     { label: "A'B + BC' + AC", expr: "A'B + BC' + AC", desc: "3 Değişkenli SOP Sadeleşebilir Fonksiyon" },
     { label: "(A + B)(A' + C)", expr: "(A + B)(A' + C)", desc: "POS Formunda Çarpım İfadesi" },
     { label: "A ⊕ B ⊕ C", expr: "A ⊕ B ⊕ C", desc: "3 Girişli Parite Üreteci / XOR" },
-    { label: "A'B'C' + A'BC + AB'C + ABC'", expr: "A'B'C' + A'BC + AB'C + ABC'", desc: "4 Mintermli Eşitlik Fonksiyonu" },
+    { label: "A'B'C' + A'BC + AB'C + ABC'", expr: "A'B'C' + A'BC + AB'C + ABC'", desc: "4 Mintermli Çift Parite Fonksiyonu (A ⊕ B ⊕ C)'" },
     { label: "AB + CD + A'B'C'D'", expr: "AB + CD + A'B'C'D'", desc: "4 Değişkenli İfade" },
   ];
 
@@ -102,14 +102,24 @@ export const TruthTableSection: React.FC<TruthTableSectionProps> = ({ onTransfer
     });
   };
 
+  // The K-map supports 2-4 variables; a 5-variable table cannot be mapped
+  // without silently dropping half of its rows.
+  const canTransfer = activeVars.length >= 1 && activeVars.length <= 4;
+
   const handleTransfer = () => {
-    if (!onTransferToKMap) return;
+    if (!onTransferToKMap || !canTransfer) return;
     const valuesMap: Record<number, LogicValue> = {};
+    if (activeVars.length === 1) {
+      // Use the single variable as the map's first variable; the second one
+      // does not affect the output (index = a*2 + b).
+      for (let i = 0; i < 4; i++) valuesMap[i] = activeRows[i >> 1]?.out ?? 0;
+      onTransferToKMap(valuesMap, 2);
+      return;
+    }
     activeRows.forEach((r) => {
       valuesMap[r.index] = r.out;
     });
-    const varsCount = Math.min(Math.max(activeVars.length, 2), 4);
-    onTransferToKMap(valuesMap, varsCount);
+    onTransferToKMap(valuesMap, activeVars.length);
   };
 
   const insertSymbol = (sym: string) => {
@@ -123,7 +133,7 @@ export const TruthTableSection: React.FC<TruthTableSectionProps> = ({ onTransfer
         <div className="space-y-2 max-w-3xl">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
             <Table className="w-3.5 h-3.5" />
-            2. Ünite: Fonksiyon Temsili
+            Bölüm 2: Fonksiyon Temsili
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
             Doğruluk Tablosu & Kanonik İfadeler
@@ -162,7 +172,7 @@ export const TruthTableSection: React.FC<TruthTableSectionProps> = ({ onTransfer
       {mode === 'expression' ? (
         <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-xs space-y-5">
           <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-            Boole Cebri İfadesi
+            Bool Cebiri İfadesi
           </label>
 
           <div className="flex flex-col sm:flex-row gap-3">
@@ -355,13 +365,18 @@ export const TruthTableSection: React.FC<TruthTableSectionProps> = ({ onTransfer
           </div>
           <div>
             <h2 className="text-sm sm:text-base font-bold text-slate-900">Bu fonksiyonu Karnaugh Haritasında sadeleştir</h2>
-            <p className="text-xs sm:text-sm text-slate-600">Tablodaki mintermleri otomatik olarak K-Map'e aktarıp en sade devreyi bulun.</p>
+            <p className="text-xs sm:text-sm text-slate-600">
+              {canTransfer
+                ? "Tablodaki mintermleri otomatik olarak K-Map'e aktarıp en sade devreyi bulun."
+                : 'K-Map en fazla 4 değişkeni destekler; bu ifade ' + activeVars.length + ' değişken içeriyor.'}
+            </p>
           </div>
         </div>
 
         <button
           onClick={handleTransfer}
-          className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold rounded-2xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0"
+          disabled={!canTransfer}
+          className="px-5 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs sm:text-sm font-semibold rounded-2xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-all shrink-0"
         >
           <span>Karnaugh'da Çöz</span>
           <Send className="w-4 h-4" />

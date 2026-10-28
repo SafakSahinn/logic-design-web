@@ -32,7 +32,7 @@ export const LogicGatesSection: React.FC = () => {
       <div className="bg-white p-8 sm:p-10 rounded-3xl border border-slate-200 shadow-xs space-y-2">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
           <Cpu className="w-3.5 h-3.5" />
-          1. Ünite: Temel Mantık Elemanları
+          Bölüm 2: Temel Mantık Elemanları
         </div>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
           Mantık Kapıları ve İşlevleri (Logic Gates)
@@ -238,7 +238,7 @@ export const LogicGatesSection: React.FC = () => {
         <div>
           <h2 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-blue-600" />
-            Temel Boole Cebri Teoremleri ve Özdeşlikleri
+            Temel Bool Cebiri Teoremleri ve Özdeşlikleri
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
             Sayısal devrelerde kapı sayısını ve donanım maliyetini azaltmak için kullanılan cebirsel kurallar.

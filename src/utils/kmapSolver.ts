@@ -9,12 +9,14 @@ export interface GridConfig {
   grid: number[][]; // grid[row][col] = minterm index
 }
 
-export function getGridConfig(numVars: number): GridConfig {
+export const DEFAULT_VAR_NAMES = ['A', 'B', 'C', 'D'];
+
+export function getGridConfig(numVars: number, varNames: string[] = DEFAULT_VAR_NAMES): GridConfig {
   if (numVars === 2) {
     return {
       numVars: 2,
-      rowVars: ['A'],
-      colVars: ['B'],
+      rowVars: [varNames[0]],
+      colVars: [varNames[1]],
       rowCodes: ['0', '1'],
       colCodes: ['0', '1'],
       grid: [
@@ -27,8 +29,8 @@ export function getGridConfig(numVars: number): GridConfig {
   if (numVars === 3) {
     return {
       numVars: 3,
-      rowVars: ['A'],
-      colVars: ['B', 'C'],
+      rowVars: [varNames[0]],
+      colVars: [varNames[1], varNames[2]],
       rowCodes: ['0', '1'],
       colCodes: ['00', '01', '11', '10'],
       grid: [
@@ -41,8 +43,8 @@ export function getGridConfig(numVars: number): GridConfig {
   // 4 variables
   return {
     numVars: 4,
-    rowVars: ['A', 'B'],
-    colVars: ['C', 'D'],
+    rowVars: [varNames[0], varNames[1]],
+    colVars: [varNames[2], varNames[3]],
     rowCodes: ['00', '01', '11', '10'],
     colCodes: ['00', '01', '11', '10'],
     grid: [
@@ -71,8 +73,8 @@ function toBinary(val: number, len: number): string {
 }
 
 // Extract term from a group of minterm indices
-export function getTermFromMinterms(cells: number[], numVars: number): { term: string; explanation: string } {
-  const varNames = ['A', 'B', 'C', 'D'].slice(0, numVars);
+export function getTermFromMinterms(cells: number[], numVars: number, names: string[] = DEFAULT_VAR_NAMES): { term: string; explanation: string } {
+  const varNames = names.slice(0, numVars);
   const totalCells = cells.length;
 
   if (totalCells === 0) return { term: '0', explanation: 'Hiçbir terim seçilmedi.' };
@@ -113,8 +115,8 @@ export function getTermFromMinterms(cells: number[], numVars: number): { term: s
 }
 
 // Extract POS term from a group of 0-cells
-export function getPOSTermFromMaxterms(cells: number[], numVars: number): { term: string; explanation: string } {
-  const varNames = ['A', 'B', 'C', 'D'].slice(0, numVars);
+export function getPOSTermFromMaxterms(cells: number[], numVars: number, names: string[] = DEFAULT_VAR_NAMES): { term: string; explanation: string } {
+  const varNames = names.slice(0, numVars);
   const totalCells = cells.length;
 
   if (totalCells === 0) return { term: '1', explanation: 'Hiçbir terim seçilmedi.' };
@@ -213,10 +215,11 @@ function selectMinimalCover(
 
 export function solveKMap(
   values: Record<number, LogicValue>,
-  numVars: number
+  numVars: number,
+  varNames: string[] = DEFAULT_VAR_NAMES
 ): KMapSolution {
   const totalCells = Math.pow(2, numVars);
-  const config = getGridConfig(numVars);
+  const config = getGridConfig(numVars, varNames);
   const numRows = config.grid.length;
   const numCols = config.grid[0].length;
 
@@ -337,7 +340,7 @@ export function solveKMap(
   // Convert raw groups to KMapGroup with coordinates and terms
   const selectedGroups: KMapGroup[] = selectedRawGroups.map((g, idx) => {
     const color = GROUP_COLORS[idx % GROUP_COLORS.length].border;
-    const { term, explanation } = getTermFromMinterms(g.cells, numVars);
+    const { term, explanation } = getTermFromMinterms(g.cells, numVars, varNames);
 
     // Compute visual box coordinates
     // Check if group wraps around rows or cols
@@ -359,7 +362,7 @@ export function solveKMap(
   });
 
   const primeImplicants: KMapGroup[] = primeImplicantsRaw.map((g, idx) => {
-    const { term, explanation } = getTermFromMinterms(g.cells, numVars);
+    const { term, explanation } = getTermFromMinterms(g.cells, numVars, varNames);
     return {
       id: `pi-${idx}`,
       color: GROUP_COLORS[idx % GROUP_COLORS.length].border,
@@ -378,7 +381,7 @@ export function solveKMap(
   const simplifiedSOP = terms.join(' + ') || '0';
 
   // Also calculate POS by solving on 0s
-  const posTerms = solvePOS(values, numVars);
+  const posTerms = solvePOS(values, numVars, varNames);
 
   return {
     primeImplicants,
@@ -393,9 +396,9 @@ export function solveKMap(
 }
 
 // Function to solve POS by grouping 0s
-function solvePOS(values: Record<number, LogicValue>, numVars: number): string {
+function solvePOS(values: Record<number, LogicValue>, numVars: number, varNames: string[] = DEFAULT_VAR_NAMES): string {
   const totalCells = Math.pow(2, numVars);
-  const config = getGridConfig(numVars);
+  const config = getGridConfig(numVars, varNames);
   const numRows = config.grid.length;
   const numCols = config.grid[0].length;
 
@@ -461,6 +464,6 @@ function solvePOS(values: Record<number, LogicValue>, numVars: number): string {
   const cover = selectMinimalCover(primePIs, zeros);
   const selected: RawGroup[] = [...cover.essentials.map((e) => e.group), ...cover.rest];
 
-  const posTerms = selected.map((g) => getPOSTermFromMaxterms(g.cells, numVars).term);
+  const posTerms = selected.map((g) => getPOSTermFromMaxterms(g.cells, numVars, varNames).term);
   return posTerms.join(' · ') || '1';
 }

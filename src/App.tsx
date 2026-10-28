@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import type { UnitTab } from './components/Navbar';
 import { HomePage } from './components/HomePage';
@@ -14,18 +14,39 @@ import { QuizSection } from './components/QuizSection';
 import type { LogicValue } from './types/logic';
 import { GraduationCap, BookOpen, ExternalLink, ArrowLeft, ArrowRight, Home } from 'lucide-react';
 
+const VALID_TABS: UnitTab[] = [
+  'home', 'circuit-simulator', 'kmap-solver', 'number-converter', 'truth-table-tool',
+  'quiz', 'unit1', 'unit2', 'unit3', 'unit4',
+];
+
+const isValidTab = (t: string | null): t is UnitTab => !!t && (VALID_TABS as string[]).includes(t);
+
+// Unknown names fall back to the home page instead of rendering an empty page
+const readTabFromUrl = (): UnitTab => {
+  if (typeof window === 'undefined') return 'home';
+  const hash = window.location.hash.replace('#', '');
+  if (isValidTab(hash)) return hash;
+  const paramTab = new URLSearchParams(window.location.search).get('tab');
+  if (isValidTab(paramTab)) return paramTab;
+  return 'home';
+};
+
 export function App() {
-  const getInitialTab = (): UnitTab => {
-    if (typeof window !== 'undefined') {
-      const paramTab = new URLSearchParams(window.location.search).get('tab') as UnitTab;
-      if (paramTab) return paramTab;
-      const hash = window.location.hash.replace('#', '') as UnitTab;
-      if (hash) return hash;
+  const [activeTab, setActiveTabState] = useState<UnitTab>(readTabFromUrl);
+
+  // Each tab change gets its own history entry so the browser's back button works
+  const setActiveTab = (tab: UnitTab) => {
+    setActiveTabState(tab);
+    if (window.location.hash.replace('#', '') !== tab) {
+      window.history.pushState(null, '', `${window.location.pathname}#${tab}`);
     }
-    return 'home';
   };
 
-  const [activeTab, setActiveTab] = useState<UnitTab>(getInitialTab);
+  useEffect(() => {
+    const onNavigate = () => setActiveTabState(readTabFromUrl());
+    window.addEventListener('popstate', onNavigate);
+    return () => window.removeEventListener('popstate', onNavigate);
+  }, []);
   const [sharedKMapValues, setSharedKMapValues] = useState<Record<number, LogicValue> | undefined>(undefined);
   const [sharedNumVars, setSharedNumVars] = useState<number>(3);
 
@@ -43,7 +64,7 @@ export function App() {
 
   const UNIT_SEQUENCE: { id: UnitTab; title: string }[] = [
     { id: 'unit1', title: 'Bölüm 1: Sayı Sistemleri ve Kodlama' },
-    { id: 'unit2', title: 'Bölüm 2: Bool Cebri ve Mantık Kapıları' },
+    { id: 'unit2', title: 'Bölüm 2: Bool Cebiri ve Mantık Kapıları' },
     { id: 'unit3', title: 'Bölüm 3: K-map ile Sadeleştirme' },
     { id: 'unit4', title: 'Bölüm 4: Kombinasyonel Mantık Devreleri' },
   ];
@@ -233,7 +254,7 @@ export function App() {
                 </li>
                 <li>
                   <button onClick={() => { setActiveTab('unit2'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="hover:text-blue-600 transition-colors cursor-pointer text-left">
-                    Bölüm 2: Bool Cebri ve Mantık Kapıları
+                    Bölüm 2: Bool Cebiri ve Mantık Kapıları
                   </button>
                 </li>
                 <li>

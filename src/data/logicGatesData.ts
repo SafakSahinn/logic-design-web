@@ -67,7 +67,7 @@ export const LOGIC_GATES: GateInfo[] = [
     inputs: 2,
     description: 'Evrensel (Universal) kapıdır! Yalnızca NAND kapıları kullanılarak diğer TÜM mantık kapıları üretilebilir.',
     behavior: 'VE kapısının tam tersi çalışır: Yalnızca her iki giriş de 1 olduğunda çıkış 0 olur; diğer tüm durumlarda 1 çıkar.',
-    analogy: 'Tüm sayısal işlemcilerin temel yapı taşıdır çünkü silikon üzerinde CMOS transistörlerle en az transistörle üretilen kapıdır.',
+    analogy: 'Sayısal entegrelerin temel yapı taşıdır: CMOS’ta yalnızca 4 transistörle kurulur ve seri bağlı transistörleri hızlı NMOS tarafında olduğundan aynı boyuttaki NOR kapısından daha hızlıdır.',
     table: [
       { a: 0, b: 0, out: 1 },
       { a: 0, b: 1, out: 1 },
@@ -103,7 +103,7 @@ export const LOGIC_GATES: GateInfo[] = [
     altExpression: 'Y = A XOR B',
     icCode: '7486 (Dörtlü 2-Girişli XOR)',
     inputs: 2,
-    description: 'Girişler birbirinden FARKLI olduğunda çıkış 1 verir. Girişler eşitse çıkış 0 olur (Eşitlik kontrolörü / Yarım toplayıcı kalbi).',
+    description: 'Girişler birbirinden FARKLI olduğunda çıkış 1 verir. Girişler eşitse çıkış 0 olur (Eşitsizlik dedektörü / yarım toplayıcının toplam çıkışı).',
     behavior: 'A=1, B=0 veya A=0, B=1 iken çıkış 1\'dir. A=B olduğunda çıkış 0 olur. Parite üreteci ve toplayıcılarda kullanılır.',
     analogy: 'Vaviyen anahtar sistemi (koridor/merdiven aydınlatması): İki anahtardan biri değiştirildiğinde lambanın durumu tersine döner.',
     table: [
@@ -182,8 +182,8 @@ export const BOOLEAN_LAWS = [
   {
     name: 'Kuvvetsizlik (İdempotentlik)',
     laws: [
-      { rule: 'A + A = A', note: 'Aynı sinyalin VEYA lanması kendisidir' },
-      { rule: 'A · A = A', note: 'Aynı sinyalin VE lenmesi kendisidir' },
+      { rule: 'A + A = A', note: 'Aynı sinyalin kendisiyle VEYA’lanması yine kendisidir' },
+      { rule: 'A · A = A', note: 'Aynı sinyalin kendisiyle VE’lenmesi yine kendisidir' },
     ],
     desc: 'Gereksiz tekrarlanan giriş kablolarını sadeleştirmek için kullanılır.',
   },
