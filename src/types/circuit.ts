@@ -22,6 +22,7 @@ export type ComponentType =
   | 'xor'
   | 'xnor'
   | 'triState'
+  | 'controlledInverter'
   // Outputs
   | 'led'
   | 'probe'

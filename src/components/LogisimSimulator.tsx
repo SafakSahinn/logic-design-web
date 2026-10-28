@@ -198,6 +198,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   xor: { label: 'XOR', badge: 'Özel VEYA' },
   xnor: { label: 'XNOR', badge: 'Özel VEYA DEĞİL' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
+  controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
   dipSwitch4: { label: '4-Bit DIP SW', badge: 'DIP' },
@@ -4225,6 +4226,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'controlledInverter': {
+        const enVal = comp.inputs[1]?.value === 1;
+        return (
+          <g filter="url(#gateShadow)">
+            <line x1={0} y1={30} x2={16} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={35} y1={50} x2={35} y2={36} stroke="#64748b" strokeWidth={2} />
+            <circle cx={35} cy={50} r={3} fill={enVal ? '#3b82f6' : '#64748b'} />
+            <polygon
+              points="16,14 52,30 16,46"
+              fill={fillColor}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
+            />
+            <circle cx={57.5} cy={30} r={5.5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
+            <line x1={63} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <text x={29} y={33} textAnchor="middle" className="text-[9px] font-mono font-bold fill-slate-700 select-none">
+              TRI
+            </text>
+            <text x={44} y={48} className="text-[7.5px] font-mono font-bold fill-blue-600 select-none">
+              EN
+            </text>
+          </g>
+        );
+      }
+
       case 'led': {
         const inVal = comp.inputs[0]?.value === 1;
         const color = comp.state.ledColor || 'green';
@@ -5991,7 +6017,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'gates',
       title: 'Temel Mantık Kapıları',
       icon: '🚪',
-      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'] as ComponentType[],
+      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'] as ComponentType[],
     },
     {
       id: 'plexers',
@@ -9780,7 +9806,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               meta.category === 'gates' &&
               selectedComp.type !== 'not' &&
               selectedComp.type !== 'buffer' &&
-              selectedComp.type !== 'triState';
+              selectedComp.type !== 'triState' &&
+              selectedComp.type !== 'controlledInverter';
             const curInputCount = selectedComp.inputs.length;
 
             return (

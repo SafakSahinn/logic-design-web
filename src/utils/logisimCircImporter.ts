@@ -25,6 +25,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'xor gate') return 'xor';
   if (n === 'xnor gate') return 'xnor';
   if (n === 'controlled buffer') return 'triState';
+  if (n === 'controlled inverter') return 'controlledInverter';
   if (n === 'buffer') return 'buffer';
 
   if (n === 'pin') {
@@ -95,6 +96,16 @@ const rotateOffset = (p: Pt, rot: number): Pt => {
   if (rot === 180) return { x: -p.x, y: -p.y };
   if (rot === 270) return { x: p.y, y: -p.x };
   return p;
+};
+
+// Logisim controlled buffer / inverter: data input, then control input (below the body when
+// right-handed, above when left-handed). The inverter is 30 long unless its size is narrow (20).
+const controlledOffsets = (type: ComponentType, size: number, leftHanded: boolean): Pt[] => {
+  const len = type === 'controlledInverter' && size !== 20 ? 30 : 20;
+  return [
+    { x: -len, y: 0 },
+    { x: -(len - 10), y: leftHanded ? -10 : 10 },
+  ];
 };
 
 // Logisim 2.7 gate input spacing (AbstractGate), checked in Logisim for size 50 and 2..5 inputs
@@ -214,6 +225,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       size: number;
       inputsAttr: number;
       xorMode?: string;
+      leftHanded: boolean;
       where: string;
     };
     const parts: RawPart[] = [];
@@ -237,6 +249,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       let width = 1;
       let inputsAttr = 0;
       let xorMode: string | undefined;
+      let leftHanded = false;
       const negated: number[] = [];
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
@@ -249,6 +262,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         if (aName === 'width') width = parseInt(aVal, 10) || 1;
         if (aName === 'inputs') inputsAttr = parseInt(aVal, 10) || 0;
         if (aName === 'xor') xorMode = aVal;
+        if (aName === 'control') leftHanded = aVal === 'left';
         const neg = aName?.match(/^negate(\d+)$/);
         if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
       }
@@ -265,14 +279,13 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, where });
+      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, where });
 
       occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
       const ff = FF_POINTS[nativeType];
       if (ff) for (const off of [...ff.inputs, ...ff.outputs]) occupied.add(key(local(loc, off, rot)));
-      if (nativeType === 'triState') {
-        occupied.add(key(local(loc, { x: -20, y: 0 }, rot)));
-        occupied.add(key(local(loc, { x: -10, y: 10 }, rot)));
+      if (nativeType === 'triState' || nativeType === 'controlledInverter') {
+        for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
     }
     const used = (p: Pt) => netAt(p) !== null || occupied.has(key(p));
@@ -280,11 +293,12 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, where } = part;
+      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, where } = part;
       const anchor = scaled(loc);
       const isGate = GATE_TYPES.includes(nativeType);
 
-      if (isGate || nativeType === 'not' || nativeType === 'buffer' || nativeType === 'triState') {
+      const isControlled = nativeType === 'triState' || nativeType === 'controlledInverter';
+      if (isGate || nativeType === 'not' || nativeType === 'buffer' || isControlled) {
         let inputPoints: Pt[];
         if (isGate) {
           const isXor = nativeType === 'xor' || nativeType === 'xnor';
@@ -297,8 +311,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
           if (isXor && inputPoints.length > 2 && xorMode !== 'odd') {
             warnings.push(`${where}: Logisim bu XOR'u "yalnızca bir giriş 1" olarak hesaplar; burada tek sayıda 1 (parite) kuralı kullanılır.`);
           }
-        } else if (nativeType === 'triState') {
-          inputPoints = [local(loc, { x: -20, y: 0 }, rot), local(loc, { x: -10, y: 10 }, rot)];
+        } else if (isControlled) {
+          inputPoints = controlledOffsets(nativeType, size, leftHanded).map((off) => local(loc, off, rot));
         } else if (nativeType === 'buffer') {
           inputPoints = [local(loc, { x: -20, y: 0 }, rot)]; // Logisim buffer is 20 long, no size attribute
         } else {

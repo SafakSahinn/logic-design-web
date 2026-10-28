@@ -306,7 +306,7 @@ function buildModule(
           const bn = names.make(`bus_${compNames.get(c.id)}_${p.name}`, 'bus');
           busSignal.set(key, bn);
           declare(bn);
-          const allTri = drivers.every((d) => pinOwner.get(d)?.type === 'triState');
+          const allTri = drivers.every((d) => ['triState', 'controlledInverter'].includes(pinOwner.get(d)?.type ?? ''));
           if (!allTri) warnings.push(`${bn}: birden fazla sürücü var (çakışma); simülatör bu durumda 0 okur.`);
         }
         pinExpr.set(p.id, busSignal.get(key)!);
@@ -389,6 +389,9 @@ function buildModule(
       }
       case 'triState':
         emit(out[0], L.mux(inp(1), inp(0), L.hiZ));
+        break;
+      case 'controlledInverter':
+        emit(out[0], L.mux(inp(1), L.not(inp(0)), L.hiZ));
         break;
       case 'splitter4':
         for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], inp(i));

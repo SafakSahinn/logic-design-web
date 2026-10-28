@@ -26,7 +26,7 @@ type Prim =
   | { kind: 'gate'; type: GateKind; ins: string[]; out: string }
   | { kind: 'not'; in: string; out: string }
   | { kind: 'buf'; in: string; out: string }
-  | { kind: 'tri'; in: string; en: string; out: string }
+  | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: 0 | 1; out: string }
   | { kind: 'inpin'; label: string; out: string }
@@ -222,6 +222,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         case 'triState':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
+          break;
+        case 'controlledInverter':
+          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), inv: true });
           break;
         case 'splitter4':
           // An open bit leaves its output undriven: x in Logisim, as in the simulator
@@ -563,9 +566,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           tunnel(x, y, p.out, false);
           break;
         case 'tri':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Controlled Buffer"/>`);
-          tunnel(x - 20, y, p.in, true);
-          tunnel(x - 10, y + 10, p.en, true);
+          // Logisim's (wide) controlled inverter is 10 longer than the buffer
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}"/>`);
+          tunnel(x - (p.inv ? 30 : 20), y, p.in, true);
+          tunnel(x - (p.inv ? 20 : 10), y + 10, p.en, true);
           tunnel(x, y, p.out, false);
           break;
         case 'ff': {

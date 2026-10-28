@@ -220,6 +220,19 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'outY', name: 'Y', type: 'output', relX: 70, relY: 30 }],
     description: 'EN=1 iken A girişini çıkışa aktarır; EN=0 iken yüksek empedans (Hi-Z) verir',
   },
+  controlledInverter: {
+    type: 'controlledInverter',
+    name: 'Kontrollü Evirici',
+    category: 'gates',
+    width: 70,
+    height: 48,
+    inputs: [
+      { id: 'inA', name: 'A', type: 'input', relX: 0, relY: 30 },
+      { id: 'inEN', name: 'EN', type: 'input', relX: 40, relY: 50 },
+    ],
+    outputs: [{ id: 'outY', name: "A'", type: 'output', relX: 70, relY: 30 }],
+    description: "EN=1 iken A girişinin tersini çıkışa verir (A'); EN=0 iken yüksek empedans (Hi-Z) verir",
+  },
   led: {
     type: 'led',
     name: 'Işıklı Gösterge (LED)',
@@ -1135,7 +1148,7 @@ const risingEdge = (comp: CircuitComponentInstance, clk: SignalValue): boolean =
 
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
-const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
+const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter']);
 
 export function simulateCircuitStep(
   components: CircuitComponentInstance[],
@@ -1326,7 +1339,7 @@ export function simulateCircuitStep(
 
       // Find owner component
       const ownerComp = pinOwner.get(pinId);
-      if (ownerComp?.type === 'triState' && ownerComp.state.hiZ) {
+      if ((ownerComp?.type === 'triState' || ownerComp?.type === 'controlledInverter') && ownerComp.state.hiZ) {
         // High impedance tri-state buffer is not actively driving the bus net
         return;
       }
@@ -1480,6 +1493,19 @@ export function simulateCircuitStep(
         const isHiZ = en === 0;
         comp.state.hiZ = isHiZ;
         const val: SignalValue = isHiZ ? 'Z' : en === 1 ? data : 'E';
+        if (comp.outputs[0] && comp.outputs[0].value !== val) {
+          comp.outputs[0].value = val;
+          hasChanged = true;
+        }
+        break;
+      }
+      case 'controlledInverter': {
+        // Logisim controlled inverter: enable 1 gives NOT(data) (undefined data -> E), 0 floats,
+        // anything else is an error (Logisim 2.7.1; evolution floats on x/open enable instead)
+        const en = comp.inputs[1]?.value ?? 'Z';
+        const isHiZ = en === 0;
+        comp.state.hiZ = isHiZ;
+        const val: SignalValue = isHiZ ? 'Z' : en === 1 ? sigNot(comp.inputs[0]?.value ?? 'Z') : 'E';
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -3132,6 +3158,9 @@ function booleanExprOf(
       break;
     case 'triState':
       result = `(${inputExprs[1]} ? ${inputExprs[0]} : Z)`;
+      break;
+    case 'controlledInverter':
+      result = `(${inputExprs[1]} ? ${inputExprs[0].length === 1 ? `${inputExprs[0]}'` : `(${inputExprs[0]})'`} : Z)`;
       break;
     default:
       return `${comp.label || comp.type}`;
