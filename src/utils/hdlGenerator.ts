@@ -9,7 +9,12 @@ import { getSubcircuitDefinition } from './subcircuitManager';
  * Both languages share one netlist pass (nets, drivers, floating inputs, names) and one
  * per-component description whose behaviour mirrors simulateCircuit():
  *  - multi-input gates ignore unconnected inputs, a gate with no connected input outputs 0
- *  - an unconnected decoder EN / register WE counts as enabled, any other floating input is 0
+ *  - an unconnected decoder EN / register / RAM WE counts as enabled; carry / borrow-in, clock, reset,
+ *    S/R and priority encoder inputs read 0, as in the simulator
+ *  - any other floating input is x (or E) in the simulator; here it is tied to 0 so the code stays
+ *    synthesizable, and a comment under the part lists those inputs. A register / RAM whose D is
+ *    partly open never loads (the simulator skips undefined data), so its write is turned off; a
+ *    RAM / ROM with an open address bit keeps its power-up output 0 and never writes, as there.
  *  - several drivers on one net share a signal (tri-state buses resolve through 'z')
  *  - registers start at the simulator's reset state (Q=0, RAM = 0..15, ROM = its contents)
  *  - custom ICs (subcircuits) are emitted as their own module / entity
@@ -313,6 +318,11 @@ function buildModule(
     }
   }
 
+  // An input pin no part drives (and no IC port feeds)
+  const isFloating = (pinId: string) =>
+    !portBound.has(pinId) && netDrivers(pinId).length === 0 && !(netOfPin.get(pinId) || []).some((id) => portBound.has(id));
+  const floatingParts: string[] = [];
+
   // Value seen by an input pin
   const inputExpr = (pinId: string | undefined, floating: string = L.zero): string => {
     if (!pinId) return floating;
@@ -338,9 +348,20 @@ function buildModule(
   for (const c of internalComps) {
     const nm = compNames.get(c.id)!;
     const out = c.outputs.map((p) => pinExpr.get(p.id)!);
-    const inp = (i: number, floating?: string) => inputExpr(c.inputs[i]?.id, floating);
+    // Inputs read without a fixed level are x in the simulator when open: note them under the part
+    const openIns = new Set<string>();
+    const inp = (i: number, floating?: string) => {
+      const pin = c.inputs[i];
+      if (pin && floating === undefined && isFloating(pin.id)) openIns.add(pin.name);
+      return inputExpr(pin?.id, floating);
+    };
     const connectedIns = c.inputs.filter((p) => isConnected(p.id) || portBound.has(p.id)).map((p) => inputExpr(p.id));
+    // Open pins of a 4-bit data / address group: the simulator never stores an undefined word and
+    // a RAM / ROM ignores an undefined address
+    const openNibble = (from: number) =>
+      [0, 1, 2, 3].map((i) => c.inputs[from + i]).filter((p) => p && isFloating(p.id)).map((p) => p.name);
     body.push(L.comment(`${c.label || c.type} (${c.type})`));
+    const noteAt = body.length;
 
     switch (c.type) {
       case 'not':
@@ -353,6 +374,8 @@ function buildModule(
       case 'xor':
       case 'xnor': {
         if (connectedIns.length === 0) {
+          body.push(L.comment('hiçbir girişi bağlı değil: simülatörde çıkış E, burada 0'));
+          floatingParts.push(c.label || c.type);
           emit(out[0], L.zero);
           break;
         }
@@ -372,7 +395,7 @@ function buildModule(
         emit(out[1], L.and([inp(0), inp(1)]));
         break;
       case 'fullAdder': {
-        const [a, b, ci] = [inp(0), inp(1), inp(2)];
+        const [a, b, ci] = [inp(0), inp(1), inp(2, L.zero)];
         emit(out[0], L.xor([a, b, ci]));
         emit(out[1], L.or([L.and([a, b]), L.and([ci, L.xor([a, b])])]));
         break;
@@ -382,7 +405,7 @@ function buildModule(
         emit(out[1], L.and([L.not(inp(0)), inp(1)]));
         break;
       case 'fullSubtractor': {
-        const [a, b, bi] = [inp(0), inp(1), inp(2)];
+        const [a, b, bi] = [inp(0), inp(1), inp(2, L.zero)];
         emit(out[0], L.xor([a, b, bi]));
         emit(out[1], L.or([L.and([L.not(a), b]), L.and([L.not(L.xor([a, b])), bi])]));
         break;
@@ -428,7 +451,7 @@ function buildModule(
         break;
       }
       case 'priorityEncoder4to2': {
-        const [d0, d1, d2, d3] = [inp(0), inp(1), inp(2), inp(3)];
+        const [d0, d1, d2, d3] = [inp(0, L.zero), inp(1, L.zero), inp(2, L.zero), inp(3, L.zero)];
         if (out[0]) emit(out[0], L.or([d3, d2])); // Y1
         if (out[1]) emit(out[1], L.or([d3, L.and([L.not(d2), d1])])); // Y0
         if (out[2]) emit(out[2], L.or([d0, d1, d2, d3])); // V
@@ -436,6 +459,11 @@ function buildModule(
       }
       case 'bcdTo7Seg':
       case 'rom16x4': {
+        if (c.type === 'rom16x4' && openNibble(0).length > 0) {
+          body.push(L.comment(`boştaki adres girişi ${openNibble(0).join(', ')}: simülatörde çıkış başlangıçtaki 0'da kalır, burada da 0`));
+          out.forEach((o) => o && emit(o, L.zero));
+          break;
+        }
         // Constant lookup tables as sum-of-minterms over the 4 address bits (bit 0 = LSB)
         const addr = [inp(0), inp(1), inp(2), inp(3)];
         const table: number[] =
@@ -482,7 +510,7 @@ function buildModule(
       case 'alu4': {
         const a = [inp(3), inp(2), inp(1), inp(0)];
         const b = [inp(8), inp(7), inp(6), inp(5)];
-        const cin = inp(4);
+        const cin = inp(4, L.zero);
         const [s0, s1] = [inp(9), inp(10)];
         const r = names.make(`${nm}_result`, 'result');
         if (lang === 'verilog') {
@@ -542,8 +570,8 @@ function buildModule(
       case 'tFlipFlop': {
         const q = names.make(`${nm}_q_reg`, 'q_reg');
         declare(q, 1, '0');
-        const clk = inp(1);
-        const rst = c.type === 'tFlipFlop' ? inp(2) : L.zero;
+        const clk = inp(1, L.zero);
+        const rst = c.type === 'tFlipFlop' ? inp(2, L.zero) : L.zero;
         const next =
           c.type === 'dFlipFlop'
             ? inp(0)
@@ -559,7 +587,7 @@ function buildModule(
       case 'srLatch': {
         const q = names.make(`${nm}_q_reg`, 'q_reg');
         declare(q, 1, '0');
-        const [s, r] = [inp(0), inp(1)];
+        const [s, r] = [inp(0, L.zero), inp(1, L.zero)];
         if (lang === 'verilog') {
           body.push(
             `  always @(*) begin`,
@@ -594,18 +622,24 @@ function buildModule(
         let rst: string;
         let updates: [string, string][];
         if (c.type === 'counter4') {
-          clk = inp(0);
-          rst = inp(1);
+          clk = inp(0, L.zero);
+          rst = inp(1, L.zero);
           updates = [[r, lang === 'verilog' ? `${r} + 4'd1` : `std_logic_vector(unsigned(${r}) + 1)`]];
         } else if (c.type === 'register4') {
-          clk = inp(4);
-          rst = inp(6);
-          const we = inp(5, L.one); // unconnected write enable = enabled
-          const d = lang === 'verilog' ? `{${inp(3)}, ${inp(2)}, ${inp(1)}, ${inp(0)}}` : `${inp(3)} & ${inp(2)} & ${inp(1)} & ${inp(0)}`;
+          clk = inp(4, L.zero);
+          rst = inp(6, L.zero);
+          const dOpen = openNibble(0);
+          let we = inp(5, L.one); // unconnected write enable = enabled
+          if (dOpen.length > 0) {
+            body.push(L.comment(`boştaki veri girişi ${dOpen.join(', ')}: simülatör tanımsız veriyi yüklemez, burada yükleme kapalı`));
+            we = L.zero;
+          }
+          const dIn = (i: number) => inputExpr(c.inputs[i]?.id);
+          const d = lang === 'verilog' ? `{${dIn(3)}, ${dIn(2)}, ${dIn(1)}, ${dIn(0)}}` : `${dIn(3)} & ${dIn(2)} & ${dIn(1)} & ${dIn(0)}`;
           updates = [[r, lang === 'verilog' ? `${wrap(we)} ? ${d} : ${r}` : `__WE__(${we}|${d}|${r})`]];
         } else {
-          clk = inp(0);
-          rst = inp(1);
+          clk = inp(0, L.zero);
+          rst = inp(1, L.zero);
           const [sl, sr, s0, s1] = [inp(2), inp(3), inp(4), inp(5)];
           // 74HC194: mode 1 (S1S0=01) shifts right, SR enters Q0 and data moves toward Q3;
           // mode 2 (10) shifts left, SL enters Q3 and data moves toward Q0; else hold
@@ -625,12 +659,24 @@ function buildModule(
         break;
       }
       case 'ram16x4': {
+        if (openNibble(0).length > 0) {
+          body.push(L.comment(`boştaki adres girişi ${openNibble(0).join(', ')}: simülatörde bellek yazılmaz, çıkış başlangıçtaki 0'da kalır; burada da öyle`));
+          out.forEach((o) => o && emit(o, L.zero));
+          break;
+        }
         const mem = names.make(`${nm}_mem`, 'mem');
         const init = Array.isArray(c.state.ramData) && c.state.ramData.length === 16 ? c.state.ramData : Array.from({ length: 16 }, (_, i) => i);
-        const [clk, we] = [inp(8), inp(9)];
+        const clk = inp(8, L.zero);
+        let we = inp(9, L.one); // unconnected write enable = enabled, as in the simulator
+        const dOpen = openNibble(4);
+        if (dOpen.length > 0) {
+          body.push(L.comment(`boştaki veri girişi ${dOpen.join(', ')}: simülatör tanımsız veriyi yazmaz, burada yazma kapalı`));
+          we = L.zero;
+        }
+        const dIn = (i: number) => inputExpr(c.inputs[i]?.id);
         if (lang === 'verilog') {
           const addr = `{${inp(3)}, ${inp(2)}, ${inp(1)}, ${inp(0)}}`;
-          const din = `{${inp(7)}, ${inp(6)}, ${inp(5)}, ${inp(4)}}`;
+          const din = `{${dIn(7)}, ${dIn(6)}, ${dIn(5)}, ${dIn(4)}}`;
           extraDecls.push(`  reg [3:0] ${mem} [0:15];`, `  initial begin`, ...init.map((v, i) => `    ${mem}[${i}] = 4'd${v & 15};`), `  end`);
           if (isSignalName(clk)) {
             body.push(`  always @(posedge ${clk}) begin`, `    if (${we}) ${mem}[${addr}] <= ${din};`, `  end`);
@@ -653,7 +699,7 @@ function buildModule(
               `  process (${clk})`,
               `  begin`,
               `    if rising_edge(${clk}) then`,
-              `      if ${is1(we)} then ${mem}(to_integer(unsigned(${addrSig}))) <= ${inp(7)} & ${inp(6)} & ${inp(5)} & ${inp(4)}; end if;`,
+              `      if ${is1(we)} then ${mem}(to_integer(unsigned(${addrSig}))) <= ${dIn(7)} & ${dIn(6)} & ${dIn(5)} & ${dIn(4)}; end if;`,
               `    end if;`,
               `  end process;`
             );
@@ -679,7 +725,7 @@ function buildModule(
         const sub = subModules.get(def.id)!;
         const portNames = subPortNames(def.ports);
         const maps = [
-          ...c.inputs.map((p, i) => [portNames.inputs[i], inputExpr(p.id)] as const),
+          ...c.inputs.map((_p, i) => [portNames.inputs[i], inp(i)] as const),
           ...c.outputs.map((_p, i) => [portNames.outputs[i], out[i]] as const),
         ].filter(([pn]) => !!pn);
         const inst = names.make(`u_${nm}`, 'u_ic');
@@ -695,6 +741,15 @@ function buildModule(
         out.forEach((o) => o && emit(o, L.zero));
         break;
     }
+    if (openIns.size > 0) {
+      body.splice(noteAt, 0, L.comment(`boştaki giriş(ler) ${[...openIns].join(', ')}: simülatörde x, burada 0'a bağlandı`));
+      floatingParts.push(c.label || c.type);
+    }
+  }
+  if (floatingParts.length > 0) {
+    warnings.push(
+      `boşta girişi olan parçalar (${[...new Set(floatingParts)].join(', ')}): simülatörde x/E görünen bu girişler sentezlenebilirlik için 0'a bağlandı, sonuç simülatörden farklı olabilir.`
+    );
   }
 
   // --- output ports ---------------------------------------------------------
