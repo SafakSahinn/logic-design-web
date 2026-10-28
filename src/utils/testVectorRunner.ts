@@ -39,7 +39,7 @@ export interface TestbenchResult {
  */
 export function generateExhaustiveTestVector(
   components: CircuitComponentInstance[],
-  maxInputs = 4
+  maxInputs = 10
 ): string {
   const inputs = components.filter((c) => ['switch', 'pushbutton'].includes(c.type));
   const outputs = components.filter((c) => ['led', 'probe', 'buzzer'].includes(c.type));
@@ -48,15 +48,21 @@ export function generateExhaustiveTestVector(
 
   const signalNames = getInputSignalNames(components);
   const outNames = getOutputSignalNames(outputs);
-  const inputNames = inputs.slice(0, maxInputs).map((c, i) => signalNames.get(c.id) || `IN${i}`);
+  // Every row lists all inputs; beyond maxInputs only the first ones are enumerated (the rest stay 0)
+  const inputNames = inputs.map((c, i) => signalNames.get(c.id) || `IN${i}`);
   const outputNames = outputs.map((c, i) => outNames.get(c.id) || `OUT${i}`);
+  const swept = Math.min(inputs.length, maxInputs);
 
   const lines: string[] = [];
   lines.push(`# Testbench: ${inputNames.join(' ')} | ${outputNames.join(' ')}`);
+  lines.push('# Beklenen çıkışları (| sağı) doldurun: 0, 1 veya X (önemsiz).');
+  if (swept < inputs.length) {
+    lines.push(`# ${inputs.length} giriş var; yalnızca ilk ${swept} tanesinin tüm kombinasyonları üretildi.`);
+  }
 
-  const numRows = Math.pow(2, inputNames.length);
+  const numRows = Math.pow(2, swept);
   for (let r = 0; r < numRows; r++) {
-    const bits = r.toString(2).padStart(inputNames.length, '0').split('').join(' ');
+    const bits = (r.toString(2).padStart(swept, '0') + '0'.repeat(inputs.length - swept)).split('').join(' ');
     // Default expected output dummy placeholder or calculated
     const dummyOut = outputNames.map(() => '0').join(' ');
     lines.push(`${bits} | ${dummyOut}`);
@@ -92,10 +98,24 @@ export function runCircuitTestbench(
     const parts = line.split('|').map((p) => p.trim());
     if (parts.length < 1) return;
 
-    const inBits = parts[0].split(/\s+/).map((b) => (b === '1' ? 1 : 0) as LogicValue);
-    const expBits = parts.length > 1
-      ? parts[1].split(/\s+/).map((b) => (b === '1' ? 1 : 0) as LogicValue)
-      : [];
+    // Inputs must be exactly one 0/1 per input part; expected outputs are 0, 1 or X/- (don't care).
+    // A malformed row is reported as failed instead of silently reading bad bits as 0.
+    const inTokens = parts[0].split(/\s+/).filter(Boolean);
+    const expTokens = parts.length > 1 ? parts[1].split(/\s+/).filter(Boolean) : [];
+    const formatErrors: string[] = [];
+    if (inTokens.length !== inputComps.length) {
+      formatErrors.push(`${inputComps.length} giriş biti bekleniyordu, ${inTokens.length} yazılmış`);
+    }
+    const badIn = inTokens.filter((b) => b !== '0' && b !== '1');
+    if (badIn.length > 0) formatErrors.push(`geçersiz giriş değeri: ${badIn.join(', ')}`);
+    if (expTokens.length > outputComps.length) {
+      formatErrors.push(`${outputComps.length} çıkış var, ${expTokens.length} beklenen değer yazılmış`);
+    }
+    const badExp = expTokens.filter((b) => !['0', '1', 'x', 'X', '-'].includes(b));
+    if (badExp.length > 0) formatErrors.push(`geçersiz beklenen değer: ${badExp.join(', ')}`);
+
+    const inBits = inTokens.map((b) => (b === '1' ? 1 : 0) as LogicValue);
+    const expBits = expTokens.map((b) => (b === '1' ? 1 : b === '0' ? 0 : 'X') as LogicValue);
 
     const inputValues: Record<string, LogicValue> = {};
     const expectedOutputs: Record<string, LogicValue> = {};
@@ -130,8 +150,8 @@ export function runCircuitTestbench(
 
     // 3. Read actual outputs
     const actualOutputs: Record<string, LogicValue> = {};
-    const mismatches: string[] = [];
-    let isRowPassed = true;
+    const mismatches: string[] = formatErrors.map((m) => `Satır biçimi: ${m}`);
+    let isRowPassed = formatErrors.length === 0;
 
     outputComps.forEach((oc, oIdx) => {
       const target = sim.components.find((c) => c.id === oc.id);
@@ -141,7 +161,7 @@ export function runCircuitTestbench(
 
       if (oIdx < expBits.length) {
         const expectedVal = expBits[oIdx];
-        if (actualVal !== expectedVal) {
+        if (expectedVal !== 'X' && actualVal !== expectedVal) {
           isRowPassed = false;
           mismatches.push(`${key}: beklenen ${expectedVal}, alınan ${actualVal}`);
         }

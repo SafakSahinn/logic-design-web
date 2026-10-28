@@ -1,573 +1,976 @@
-import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
+import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
+import { HEX_7SEG_MAP } from './circuitEngine';
+import { getSubcircuitDefinition } from './subcircuitManager';
 
-function sanitizeName(name: string): string {
-  const clean = name
-    .trim()
-    .toLowerCase()
+/*
+ * Verilog / VHDL export.
+ *
+ * Both languages share one netlist pass (nets, drivers, floating inputs, names) and one
+ * per-component description whose behaviour mirrors simulateCircuit():
+ *  - multi-input gates ignore unconnected inputs, a gate with no connected input outputs 0
+ *  - an unconnected decoder EN / register WE counts as enabled, any other floating input is 0
+ *  - several drivers on one net share a signal (tri-state buses resolve through 'z')
+ *  - registers start at the simulator's reset state (Q=0, RAM = 0..15, ROM = its contents)
+ *  - custom ICs (subcircuits) are emitted as their own module / entity
+ */
+
+type Lang = 'verilog' | 'vhdl';
+
+const RESERVED = new Set(
+  (
+    // Verilog
+    'always and assign begin buf case casex casez default defparam disable edge else end endcase endfunction endmodule ' +
+    'endtask for force forever fork function if initial inout input integer join module nand negedge nor not or output ' +
+    'parameter posedge real reg repeat signed supply0 supply1 task time tri wait while wire xnor xor logic bit ' +
+    // VHDL
+    'abs access after alias all architecture array assert attribute block body buffer bus component configuration ' +
+    'constant disconnect downto elsif entity exit file generate generic group guarded impure in inertial is label ' +
+    'library linkage literal loop map mod new next null of on open others out package port postponed procedure process ' +
+    'pure range record register reject rem report return rol ror select severity shared sla sll sra srl subtype then to ' +
+    'transport type unaffected units until use variable when with std_logic std_logic_vector unsigned ieee work clk_in'
+  ).split(' ')
+);
+
+const TR_MAP: Record<string, string> = { ç: 'c', ğ: 'g', ı: 'i', i̇: 'i', ö: 'o', ş: 's', ü: 'u', â: 'a', î: 'i', û: 'u' };
+
+// Identifier legal in both languages: [a-z][a-z0-9_]*, no "__", no trailing "_", not a keyword
+function baseIdentifier(raw: string, fallback: string): string {
+  let s = (raw || '')
+    .replace(/'/g, '_n')
+    .replace(/>=/g, '_ge_')
+    .replace(/<=/g, '_le_')
+    .replace(/>/g, '_gt_')
+    .replace(/</g, '_lt_')
+    .replace(/=/g, '_eq_')
+    .toLocaleLowerCase('tr')
+    .replace(/[çğıöşüâîû]|i̇/g, (ch) => TR_MAP[ch] || '_')
+    .normalize('NFKD')
     .replace(/[^a-z0-9_]/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return clean || 'node';
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+  if (!s) s = fallback;
+  if (/^[0-9]/.test(s)) s = `u_${s}`;
+  if (s.length > 60) s = s.slice(0, 60).replace(/_$/, '');
+  if (RESERVED.has(s)) s = `${s}_s`;
+  return s;
 }
 
-function getSignalName(
-  compId: string,
-  pinId: string,
-  components: CircuitComponentInstance[],
-  pinNameMap: Map<string, string>
-): string {
-  if (pinNameMap.has(pinId)) {
-    return pinNameMap.get(pinId)!;
+class NameTable {
+  private used = new Set<string>();
+  constructor(reserved: string[] = []) {
+    reserved.forEach((r) => this.used.add(r));
   }
-  const comp = components.find((c) => c.id === compId);
-  const cName = sanitizeName(comp?.label || comp?.type || 'comp');
-  const shortPin = pinId.replace(`${compId}_`, '');
-  const sigName = `w_${cName}_${shortPin}`;
-  pinNameMap.set(pinId, sigName);
-  return sigName;
+  reserve(name: string) {
+    this.used.add(name);
+  }
+  make(raw: string, fallback = 'sig'): string {
+    const base = baseIdentifier(raw, fallback);
+    let name = base;
+    for (let i = 2; this.used.has(name); i++) name = `${base}_${i}`;
+    this.used.add(name);
+    return name;
+  }
 }
 
-export function generateVerilog(
-  circuitName: string,
-  components: CircuitComponentInstance[],
-  canvasWires: CircuitWire[]
-): string {
-  // Driver lookups need pin-to-pin connections; canvas wires are positional segments
-  const wires = getLogicalConnections(components, canvasWires);
-  const modName = sanitizeName(circuitName || 'digital_circuit');
-  const timestamp = new Date().toISOString();
+// ---------------------------------------------------------------------------
+// Language helpers for 1-bit expressions
+// ---------------------------------------------------------------------------
+interface LangOps {
+  zero: string;
+  one: string;
+  hiZ: string;
+  not: (a: string) => string;
+  and: (xs: string[]) => string;
+  or: (xs: string[]) => string;
+  xor: (xs: string[]) => string;
+  mux: (sel: string, whenOne: string, whenZero: string) => string;
+  assign: (lhs: string, rhs: string) => string;
+  comment: (text: string) => string;
+}
 
-  // 1. Identify primary input components & output components
-  const inputComps = components.filter((c) =>
-    ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4'].includes(c.type)
-  );
-  const outputComps = components.filter((c) =>
-    ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4'].includes(c.type)
-  );
-  const internalComps = components.filter(
-    (c) => !inputComps.includes(c) && !outputComps.includes(c)
-  );
+const VERILOG: LangOps = {
+  zero: "1'b0",
+  one: "1'b1",
+  hiZ: "1'bz",
+  not: (a) => `~${wrap(a)}`,
+  and: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' & ')),
+  or: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' | ')),
+  xor: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' ^ ')),
+  mux: (sel, a, b) => `${wrap(sel)} ? ${wrap(a)} : ${wrap(b)}`,
+  assign: (l, r) => `  assign ${l} = ${r};`,
+  comment: (t) => `  // ${t}`,
+};
 
-  const pinNameMap = new Map<string, string>();
-  const inputPorts: string[] = [];
-  const outputPorts: string[] = [];
+const VHDL: LangOps = {
+  zero: "'0'",
+  one: "'1'",
+  hiZ: "'Z'",
+  not: (a) => `not ${wrap(a)}`,
+  and: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' and ')),
+  or: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' or ')),
+  xor: (xs) => (xs.length === 1 ? xs[0] : xs.map(wrap).join(' xor ')),
+  // VHDL-93 has no conditional operator inside expressions, so mux is emitted via helper below
+  mux: (sel, a, b) => `__MUX__(${sel}|${a}|${b})`,
+  assign: (l, r) => `  ${l} <= ${r};`,
+  comment: (t) => `  -- ${t}`,
+};
 
-  // Register input ports
-  inputComps.forEach((c) => {
-    const baseName = sanitizeName(c.label || c.type);
-    if (c.type === 'clock') {
-      const pName = baseName.includes('clk') ? baseName : `clk_${baseName}`;
-      inputPorts.push(`input wire ${pName}`);
-      pinNameMap.set(c.outputs[0]?.id, pName);
-    } else if (c.type === 'dipSwitch4') {
-      const pName = `in_${baseName}`;
-      inputPorts.push(`input wire [3:0] ${pName}`);
-      c.outputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}[${idx}]`);
-      });
-    } else if (c.type === 'asciiKeyboard') {
-      const pName = `kbd_${baseName}`;
-      inputPorts.push(`input wire [6:0] ${pName}_data`);
-      inputPorts.push(`input wire ${pName}_strobe`);
-      c.outputs.slice(0, 7).forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}_data[${idx}]`);
-      });
-      if (c.outputs[7]) {
-        pinNameMap.set(c.outputs[7].id, `${pName}_strobe`);
-      }
-    } else if (c.type === 'switch' || c.type === 'pushbutton') {
-      const pName = `in_${baseName}`;
-      inputPorts.push(`input wire ${pName}`);
-      pinNameMap.set(c.outputs[0]?.id, pName);
-    } else if (c.type === 'vcc') {
-      pinNameMap.set(c.outputs[0]?.id, "1'b1");
-    } else if (c.type === 'gnd') {
-      pinNameMap.set(c.outputs[0]?.id, "1'b0");
+// Parenthesise anything that is not a plain identifier / literal / index
+function wrap(e: string): string {
+  return /^[A-Za-z0-9_'\\[\]().]+$/.test(e) && !/\s/.test(e) ? e : `(${e})`;
+}
+
+// ---------------------------------------------------------------------------
+// Netlist
+// ---------------------------------------------------------------------------
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
+const PASSIVE_TYPES = ['tunnel', 'textLabel'];
+
+export interface PortDecl {
+  name: string;
+  dir: 'in' | 'out';
+  width: number; // 1 = scalar
+  // Canvas part behind a top-level port (used by the FPGA pin constraints)
+  source?: { compId: string; type: string; group?: string };
+}
+
+interface ModuleSpec {
+  name: string;
+  components: CircuitComponentInstance[];
+  wires: CircuitWire[];
+  // subcircuit modules: explicit ports bound to internal pins
+  subPorts?: CustomSubcircuit['ports'];
+}
+
+interface BuiltModule {
+  name: string;
+  ports: PortDecl[];
+  signals: { name: string; width: number; init?: string }[];
+  body: string[];
+  extraDecls: string[]; // VHDL types/arrays, Verilog memories
+  warnings: string[];
+}
+
+function buildModule(
+  spec: ModuleSpec,
+  lang: Lang,
+  subModules: Map<string, { def: CustomSubcircuit; moduleName: string }>,
+  moduleNames: NameTable
+): BuiltModule {
+  const L = lang === 'verilog' ? VERILOG : VHDL;
+  const names = new NameTable();
+  const ports: PortDecl[] = [];
+  const signals: BuiltModule['signals'] = [];
+  const body: string[] = [];
+  const extraDecls: string[] = [];
+  const warnings: string[] = [];
+
+  const subNames = spec.subPorts ? subPortNames(spec.subPorts) : null;
+  if (subNames) [...subNames.inputs, ...subNames.outputs].forEach((n) => names.reserve(n));
+
+  const comps = spec.components;
+  const compById = new Map(comps.map((c) => [c.id, c]));
+  const pinOwner = new Map<string, CircuitComponentInstance>();
+  const pinIsOutput = new Map<string, boolean>();
+  for (const c of comps) {
+    for (const p of c.inputs) {
+      pinOwner.set(p.id, c);
+      pinIsOutput.set(p.id, false);
     }
-  });
-
-  // Register output ports
-  outputComps.forEach((c) => {
-    const baseName = sanitizeName(c.label || c.type);
-    if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
-      const pName = `out_${baseName}`;
-      outputPorts.push(`output wire ${pName}`);
-      pinNameMap.set(c.inputs[0]?.id, pName);
-    } else if (c.type === 'ledBar4') {
-      const pName = `out_${baseName}`;
-      outputPorts.push(`output wire [3:0] ${pName}`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}[${idx}]`);
-      });
-    } else if (c.type === 'sevenSegment') {
-      const pName = `out_seg_${baseName}`;
-      outputPorts.push(`output wire [6:0] ${pName}`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}[${idx}]`);
-      });
-    } else if (c.type === 'hexDisplay') {
-      const pName = `out_hex_${baseName}`;
-      outputPorts.push(`output wire [3:0] ${pName}`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}[${idx}]`);
-      });
-    } else if (c.type === 'dotMatrix8x8') {
-      const pName = `disp_${baseName}`;
-      outputPorts.push(`output wire [7:0] ${pName}_rows`);
-      outputPorts.push(`output wire [7:0] ${pName}_cols`);
-      c.inputs.slice(0, 8).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_rows[${idx}]`));
-      c.inputs.slice(8, 16).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_cols[${idx}]`));
-    } else if (c.type === 'rgbMatrix16x16') {
-      const pName = `gpu_${baseName}`;
-      outputPorts.push(`output wire [3:0] ${pName}_x`);
-      outputPorts.push(`output wire [3:0] ${pName}_y`);
-      outputPorts.push(`output wire [2:0] ${pName}_rgb`);
-      outputPorts.push(`output wire ${pName}_we`);
-      c.inputs.slice(0, 4).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_x[${idx}]`));
-      c.inputs.slice(4, 8).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_y[${idx}]`));
-      c.inputs.slice(8, 11).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_rgb[${idx}]`));
-      if (c.inputs[11]) pinNameMap.set(c.inputs[11].id, `${pName}_we`);
+    for (const p of c.outputs) {
+      pinOwner.set(p.id, c);
+      pinIsOutput.set(p.id, true);
     }
-  });
+  }
 
-  // Helper to find driver signal for an input pin via wires
-  const getWireDriver = (pinId: string): string => {
-    const w = wires.find((wire) => wire.toPinId === pinId);
-    if (!w) return "1'b0";
-    if (pinNameMap.has(w.fromPinId)) return pinNameMap.get(w.fromPinId)!;
-    return getSignalName(w.fromCompId, w.fromPinId, components, pinNameMap);
-  };
+  // Nets from the logical connections: driver pin + every other pin of the net
+  const conns = getLogicalConnections(comps, spec.wires);
+  const netOfPin = new Map<string, string[]>();
+  const byDriver = new Map<string, string[]>();
+  for (const w of conns) {
+    if (!byDriver.has(w.fromPinId)) byDriver.set(w.fromPinId, [w.fromPinId]);
+    byDriver.get(w.fromPinId)!.push(w.toPinId);
+  }
+  for (const pins of byDriver.values()) for (const p of pins) netOfPin.set(p, pins);
+  const isConnected = (pinId: string) => (netOfPin.get(pinId)?.length || 0) > 1;
 
-  // 2. Build internal wires declarations and logic
-  const internalWires = new Set<string>();
-  const logicLines: string[] = [];
-  const sequentialBlocks: string[] = [];
-
-  internalComps.forEach((comp) => {
-    const inSignals = comp.inputs.map((p) => getWireDriver(p.id));
-    const outSignals = comp.outputs.map((p) => {
-      const outName = getSignalName(comp.id, p.id, components, pinNameMap);
-      if (
-        !Array.from(outputPorts).some((op) => op.includes(outName)) &&
-        !outName.startsWith("1'b")
-      ) {
-        internalWires.add(outName);
-      }
-      return outName;
+  // Real drivers of a net: output pins of non-passive, non-sink parts
+  const netDrivers = (pinId: string): string[] =>
+    (netOfPin.get(pinId) || []).filter((id) => {
+      const owner = pinOwner.get(id);
+      return pinIsOutput.get(id) && owner && !PASSIVE_TYPES.includes(owner.type) && !OUTPUT_TYPES.includes(owner.type);
     });
 
-    switch (comp.type) {
+  // Expression for every output pin (ports, constants, internal signals)
+  const pinExpr = new Map<string, string>();
+  const declared = new Set<string>();
+  const declare = (name: string, width = 1, init?: string) => {
+    if (declared.has(name)) return;
+    declared.add(name);
+    signals.push({ name, width, init });
+  };
+  const vecIndex = (name: string, i: number) => (lang === 'verilog' ? `${name}[${i}]` : `${name}(${i})`);
+
+  const portBound = new Map<string, string>(); // internal pin id -> port expression (subcircuits)
+  const subInPorts = (spec.subPorts || []).filter((p) => p.type === 'input');
+  const subOutPorts = (spec.subPorts || []).filter((p) => p.type === 'output');
+
+  // --- input ports ---------------------------------------------------------
+  if (spec.subPorts) {
+    subInPorts.forEach((p, i) => {
+      const pn = subNames!.inputs[i];
+      ports.push({ name: pn, dir: 'in', width: 1 });
+      const target = compById.get(p.targetCompId);
+      if (target && (target.type === 'switch' || target.type === 'pushbutton')) {
+        if (target.outputs[0]) pinExpr.set(target.outputs[0].id, pn);
+      } else {
+        portBound.set(p.targetPinId, pn);
+        if (pinIsOutput.get(p.targetPinId)) pinExpr.set(p.targetPinId, pn);
+      }
+    });
+  }
+
+  for (const c of comps) {
+    if (!INPUT_TYPES.includes(c.type)) continue;
+    if (c.type === 'vcc') {
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, L.one);
+      continue;
+    }
+    if (c.type === 'gnd') {
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, L.zero);
+      continue;
+    }
+    if (spec.subPorts && (c.type === 'switch' || c.type === 'pushbutton')) {
+      // Inside an IC an unbound switch is a constant at its current position
+      if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) pinExpr.set(c.outputs[0].id, c.state.on ? L.one : L.zero);
+      continue;
+    }
+    const label = c.label || c.type;
+    if (c.type === 'clock') {
+      const pn = names.make(/clk|saat|clock/i.test(label) ? label : `clk_${label}`, 'clk');
+      ports.push({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
+    } else if (c.type === 'dipSwitch4') {
+      const pn = names.make(`in_${label}`, 'in_dip');
+      ports.push({ name: pn, dir: 'in', width: 4, source: { compId: c.id, type: c.type } });
+      c.outputs.forEach((p, i) => pinExpr.set(p.id, vecIndex(pn, i)));
+    } else if (c.type === 'asciiKeyboard') {
+      const pd = names.make(`kbd_${label}_data`, 'kbd_data');
+      const ps = names.make(`kbd_${label}_strobe`, 'kbd_strobe');
+      ports.push(
+        { name: pd, dir: 'in', width: 7, source: { compId: c.id, type: c.type, group: 'data' } },
+        { name: ps, dir: 'in', width: 1, source: { compId: c.id, type: c.type, group: 'strobe' } }
+      );
+      c.outputs.slice(0, 7).forEach((p, i) => pinExpr.set(p.id, vecIndex(pd, i)));
+      if (c.outputs[7]) pinExpr.set(c.outputs[7].id, ps);
+    } else {
+      const pn = names.make(`in_${label}`, 'in_sig');
+      ports.push({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
+    }
+  }
+
+  // --- internal signals for every block output pin ------------------------
+  const internalComps = comps.filter(
+    (c) => !INPUT_TYPES.includes(c.type) && !OUTPUT_TYPES.includes(c.type) && !PASSIVE_TYPES.includes(c.type)
+  );
+  const compNames = new Map<string, string>();
+  // Short block prefix so pin suffixes (_q0, _cout ...) survive in the signal names
+  for (const c of internalComps) compNames.set(c.id, baseIdentifier(c.label || c.type, c.type.toLowerCase()).slice(0, 24).replace(/_$/, ''));
+
+  // Nets with several drivers share one signal (tri-state bus)
+  const busSignal = new Map<string, string>();
+  for (const c of internalComps) {
+    for (const p of c.outputs) {
+      if (pinExpr.has(p.id)) continue;
+      const drivers = netDrivers(p.id);
+      if (drivers.length > 1) {
+        const key = drivers.slice().sort().join('|');
+        if (!busSignal.has(key)) {
+          const bn = names.make(`bus_${compNames.get(c.id)}_${p.name}`, 'bus');
+          busSignal.set(key, bn);
+          declare(bn);
+          const allTri = drivers.every((d) => pinOwner.get(d)?.type === 'triState');
+          if (!allTri) warnings.push(`${bn}: birden fazla sürücü var (çakışma); simülatör bu durumda 0 okur.`);
+        }
+        pinExpr.set(p.id, busSignal.get(key)!);
+      } else {
+        const sn = names.make(`${compNames.get(c.id)}_${p.name}`, 's');
+        declare(sn);
+        pinExpr.set(p.id, sn);
+      }
+    }
+  }
+
+  // Value seen by an input pin
+  const inputExpr = (pinId: string | undefined, floating: string = L.zero): string => {
+    if (!pinId) return floating;
+    if (portBound.has(pinId)) return portBound.get(pinId)!;
+    const drivers = netDrivers(pinId);
+    if (drivers.length === 0) {
+      // A net driven only by an IC input port bound to another of its pins
+      const bound = (netOfPin.get(pinId) || []).find((id) => portBound.has(id));
+      return bound ? portBound.get(bound)! : floating;
+    }
+    return pinExpr.get(drivers[0]) || floating;
+  };
+
+  const emit = (lhs: string, rhs: string) => {
+    if (lang === 'vhdl' && rhs.includes('__MUX__')) {
+      body.push(`  ${lhs} <= ${vhdlMux(rhs)};`);
+    } else {
+      body.push(L.assign(lhs, rhs));
+    }
+  };
+
+  // --- component behaviour ------------------------------------------------
+  for (const c of internalComps) {
+    const nm = compNames.get(c.id)!;
+    const out = c.outputs.map((p) => pinExpr.get(p.id)!);
+    const inp = (i: number, floating?: string) => inputExpr(c.inputs[i]?.id, floating);
+    const connectedIns = c.inputs.filter((p) => isConnected(p.id) || portBound.has(p.id)).map((p) => inputExpr(p.id));
+    body.push(L.comment(`${c.label || c.type} (${c.type})`));
+
+    switch (c.type) {
       case 'not':
-        logicLines.push(`  assign ${outSignals[0]} = ~${inSignals[0]};`);
+        emit(out[0], L.not(inp(0)));
         break;
       case 'and':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals.join(' & ')};`);
-        break;
       case 'or':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals.join(' | ')};`);
-        break;
       case 'nand':
-        logicLines.push(`  assign ${outSignals[0]} = ~(${inSignals.join(' & ')});`);
-        break;
       case 'nor':
-        logicLines.push(`  assign ${outSignals[0]} = ~(${inSignals.join(' | ')});`);
-        break;
       case 'xor':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals.join(' ^ ')};`);
-        break;
-      case 'xnor':
-        logicLines.push(`  assign ${outSignals[0]} = ~(${inSignals.join(' ^ ')});`);
-        break;
-      case 'halfAdder':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals[0]} ^ ${inSignals[1]}; // Sum`);
-        logicLines.push(`  assign ${outSignals[1]} = ${inSignals[0]} & ${inSignals[1]}; // Carry`);
-        break;
-      case 'fullAdder':
-        logicLines.push(
-          `  assign {${outSignals[1]}, ${outSignals[0]}} = ${inSignals[0]} + ${inSignals[1]} + ${inSignals[2]}; // Cout, Sum`
-        );
-        break;
-      case 'halfSubtractor':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals[0]} ^ ${inSignals[1]}; // Diff`);
-        logicLines.push(`  assign ${outSignals[1]} = ~${inSignals[0]} & ${inSignals[1]}; // Borrow`);
-        break;
-      case 'fullSubtractor':
-        logicLines.push(
-          `  assign {${outSignals[1]}, ${outSignals[0]}} = ${inSignals[0]} - ${inSignals[1]} - ${inSignals[2]}; // Bout, Diff`
-        );
-        break;
-      case 'mux2':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals[2]} ? ${inSignals[1]} : ${inSignals[0]};`);
-        break;
-      case 'mux4':
-        logicLines.push(
-          `  assign ${outSignals[0]} = (${inSignals[5]} ? (${inSignals[4]} ? ${inSignals[3]} : ${inSignals[2]}) : (${inSignals[4]} ? ${inSignals[1]} : ${inSignals[0]}));`
-        );
-        break;
-      case 'decoder2to4':
-        logicLines.push(`  assign ${outSignals[0]} = ${inSignals[0]} & ~${inSignals[2]} & ~${inSignals[1]};`);
-        logicLines.push(`  assign ${outSignals[1]} = ${inSignals[0]} & ~${inSignals[2]} & ${inSignals[1]};`);
-        logicLines.push(`  assign ${outSignals[2]} = ${inSignals[0]} & ${inSignals[2]} & ~${inSignals[1]};`);
-        logicLines.push(`  assign ${outSignals[3]} = ${inSignals[0]} & ${inSignals[2]} & ${inSignals[1]};`);
-        break;
-      case 'decoder3to8':
-        for (let i = 0; i < 8; i++) {
-          const bit0 = i & 1 ? inSignals[1] : `~${inSignals[1]}`;
-          const bit1 = i & 2 ? inSignals[2] : `~${inSignals[2]}`;
-          const bit2 = i & 4 ? inSignals[3] : `~${inSignals[3]}`;
-          logicLines.push(`  assign ${outSignals[i]} = ${inSignals[0]} & (${bit2} & ${bit1} & ${bit0});`);
+      case 'xnor': {
+        if (connectedIns.length === 0) {
+          emit(out[0], L.zero);
+          break;
         }
-        break;
-      case 'dFlipFlop': {
-        const regQ = `r_${sanitizeName(comp.label || 'dff')}_q`;
-        sequentialBlocks.push(`  reg ${regQ} = 1'b0;
-  always @(posedge ${inSignals[1]}) begin
-    ${regQ} <= ${inSignals[0]};
-  end
-  assign ${outSignals[0]} = ${regQ};
-  assign ${outSignals[1]} = ~${regQ};`);
+        const base =
+          c.type === 'and' || c.type === 'nand' ? L.and(connectedIns) : c.type === 'or' || c.type === 'nor' ? L.or(connectedIns) : L.xor(connectedIns);
+        emit(out[0], c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' ? L.not(base) : base);
         break;
       }
-      case 'counter4': {
-        const regCnt = `r_${sanitizeName(comp.label || 'cnt')}_val`;
-        sequentialBlocks.push(`  reg [3:0] ${regCnt} = 4'b0000;
-  always @(posedge ${inSignals[0]} or posedge ${inSignals[1]}) begin
-    if (${inSignals[1]})
-      ${regCnt} <= 4'b0000;
-    else
-      ${regCnt} <= ${regCnt} + 1'b1;
-  end
-  assign ${outSignals[0]} = ${regCnt}[0];
-  assign ${outSignals[1]} = ${regCnt}[1];
-  assign ${outSignals[2]} = ${regCnt}[2];
-  assign ${outSignals[3]} = ${regCnt}[3];`);
+      case 'triState':
+        emit(out[0], L.mux(inp(1), inp(0), L.hiZ));
+        break;
+      case 'splitter4':
+        for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], inp(i));
+        break;
+      case 'halfAdder':
+        emit(out[0], L.xor([inp(0), inp(1)]));
+        emit(out[1], L.and([inp(0), inp(1)]));
+        break;
+      case 'fullAdder': {
+        const [a, b, ci] = [inp(0), inp(1), inp(2)];
+        emit(out[0], L.xor([a, b, ci]));
+        emit(out[1], L.or([L.and([a, b]), L.and([ci, L.xor([a, b])])]));
+        break;
+      }
+      case 'halfSubtractor':
+        emit(out[0], L.xor([inp(0), inp(1)]));
+        emit(out[1], L.and([L.not(inp(0)), inp(1)]));
+        break;
+      case 'fullSubtractor': {
+        const [a, b, bi] = [inp(0), inp(1), inp(2)];
+        emit(out[0], L.xor([a, b, bi]));
+        emit(out[1], L.or([L.and([L.not(a), b]), L.and([L.not(L.xor([a, b])), bi])]));
+        break;
+      }
+      case 'mux2':
+        emit(out[0], L.mux(inp(2), inp(1), inp(0)));
+        break;
+      case 'mux4':
+        emit(out[0], L.mux(inp(5), L.mux(inp(4), inp(3), inp(2)), L.mux(inp(4), inp(1), inp(0))));
+        break;
+      case 'mux8': {
+        const d = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => inp(i));
+        const [s0, s1, s2] = [inp(8), inp(9), inp(10)];
+        const m2 = (i: number) => L.mux(s0, d[i + 1], d[i]);
+        const m4 = (i: number) => L.mux(s1, m2(i + 2), m2(i));
+        const y = names.make(`${nm}_sel`, 'sel');
+        declare(y);
+        emit(y, L.mux(s2, m4(4), m4(0)));
+        if (out[0]) emit(out[0], y);
+        if (out[1]) emit(out[1], L.not(y));
+        break;
+      }
+      case 'demux2':
+        emit(out[0], L.and([inp(0), L.not(inp(1))]));
+        emit(out[1], L.and([inp(0), inp(1)]));
+        break;
+      case 'demux4': {
+        const [dd, s0, s1] = [inp(0), inp(1), inp(2)];
+        for (let i = 0; i < 4; i++) {
+          if (out[i]) emit(out[i], L.and([dd, i & 1 ? s0 : L.not(s0), i & 2 ? s1 : L.not(s1)]));
+        }
+        break;
+      }
+      case 'decoder2to4':
+      case 'decoder3to8': {
+        const bits = c.type === 'decoder2to4' ? 2 : 3;
+        const en = inp(0, L.one); // unconnected enable = enabled
+        for (let i = 0; i < 1 << bits; i++) {
+          const lits = [en];
+          for (let b = 0; b < bits; b++) lits.push(i & (1 << b) ? inp(1 + b) : L.not(inp(1 + b)));
+          if (out[i]) emit(out[i], L.and(lits));
+        }
+        break;
+      }
+      case 'priorityEncoder4to2': {
+        const [d0, d1, d2, d3] = [inp(0), inp(1), inp(2), inp(3)];
+        if (out[0]) emit(out[0], L.or([d3, d2])); // Y1
+        if (out[1]) emit(out[1], L.or([d3, L.and([L.not(d2), d1])])); // Y0
+        if (out[2]) emit(out[2], L.or([d0, d1, d2, d3])); // V
+        break;
+      }
+      case 'bcdTo7Seg':
+      case 'rom16x4': {
+        // Constant lookup tables as sum-of-minterms over the 4 address bits (bit 0 = LSB)
+        const addr = [inp(0), inp(1), inp(2), inp(3)];
+        const table: number[] =
+          c.type === 'bcdTo7Seg'
+            ? Array.from({ length: 16 }, (_, k) => {
+                const m = HEX_7SEG_MAP[k];
+                return (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const).reduce((acc, s, i) => acc | ((m[s] ? 1 : 0) << i), 0);
+              })
+            : Array.isArray(c.state.romData) && c.state.romData.length === 16
+              ? c.state.romData
+              : [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
+        const nOut = c.type === 'bcdTo7Seg' ? 7 : 4;
+        for (let bit = 0; bit < nOut; bit++) {
+          if (!out[bit]) continue;
+          const terms: string[] = [];
+          for (let k = 0; k < 16; k++) {
+            if ((table[k] >> bit) & 1) terms.push(L.and(addr.map((a, i) => ((k >> i) & 1 ? a : L.not(a)))));
+          }
+          emit(out[bit], terms.length === 0 ? L.zero : terms.length === 16 ? L.one : L.or(terms));
+        }
+        break;
+      }
+      case 'comparator4': {
+        const a = [inp(3), inp(2), inp(1), inp(0)];
+        const b = [inp(7), inp(6), inp(5), inp(4)];
+        if (lang === 'verilog') {
+          const av = `{${a.join(', ')}}`;
+          const bv = `{${b.join(', ')}}`;
+          if (out[0]) emit(out[0], `${av} > ${bv}`);
+          if (out[1]) emit(out[1], `${av} == ${bv}`);
+          if (out[2]) emit(out[2], `${av} < ${bv}`);
+        } else {
+          const av = names.make(`${nm}_a`, 'a');
+          const bv = names.make(`${nm}_b`, 'b');
+          declare(av, 4);
+          declare(bv, 4);
+          body.push(`  ${av} <= ${a.join(' & ')};`, `  ${bv} <= ${b.join(' & ')};`);
+          if (out[0]) body.push(`  ${out[0]} <= '1' when unsigned(${av}) > unsigned(${bv}) else '0';`);
+          if (out[1]) body.push(`  ${out[1]} <= '1' when ${av} = ${bv} else '0';`);
+          if (out[2]) body.push(`  ${out[2]} <= '1' when unsigned(${av}) < unsigned(${bv}) else '0';`);
+        }
+        break;
+      }
+      case 'alu4': {
+        const a = [inp(3), inp(2), inp(1), inp(0)];
+        const b = [inp(8), inp(7), inp(6), inp(5)];
+        const cin = inp(4);
+        const [s0, s1] = [inp(9), inp(10)];
+        const r = names.make(`${nm}_result`, 'result');
+        if (lang === 'verilog') {
+          // 5-bit sum/difference: bit 4 is the carry, or NOT borrow for A - B - Cin (Cout = A >= B + Cin)
+          declare(r, 5);
+          const sum = names.make(`${nm}_sum`, 'sum');
+          const diff = names.make(`${nm}_diff`, 'diff');
+          declare(sum, 5);
+          declare(diff, 5);
+          const av = `{1'b0, ${a.join(', ')}}`;
+          const bv = `{1'b0, ${b.join(', ')}}`;
+          body.push(
+            `  assign ${sum} = ${av} + ${bv} + ${cin};`,
+            `  assign ${diff} = ${av} - ${bv} - ${cin};`,
+            `  assign ${r} = ({${s1}, ${s0}} == 2'b00) ? ${sum} :`,
+            `                ({${s1}, ${s0}} == 2'b01) ? {(${av} >= ${bv} + ${cin}), ${diff}[3:0]} :`,
+            `                ({${s1}, ${s0}} == 2'b10) ? (${av} & ${bv}) : (${av} | ${bv});`
+          );
+          for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], `${r}[${i}]`);
+          if (out[4]) emit(out[4], `${r}[4]`);
+          if (out[5]) emit(out[5], `${r}[3:0] == 4'b0000`);
+        } else {
+          declare(r, 5);
+          const av = names.make(`${nm}_a`, 'a');
+          const bv = names.make(`${nm}_b`, 'b');
+          declare(av, 4);
+          declare(bv, 4);
+          body.push(
+            `  ${av} <= ${a.join(' & ')};`,
+            `  ${bv} <= ${b.join(' & ')};`,
+            `  process (${[av, bv, cin, s0, s1].filter(isSignalName).join(', ')})`,
+            `    variable va, vb, vc : unsigned(4 downto 0);`,
+            `  begin`,
+            `    va := unsigned('0' & ${av});`,
+            `    vb := unsigned('0' & ${bv});`,
+            `    if ${cin} = '1' then vc := to_unsigned(1, 5); else vc := to_unsigned(0, 5); end if;`,
+            `    if ${s1} = '0' and ${s0} = '0' then`,
+            `      ${r} <= std_logic_vector(va + vb + vc);`,
+            `    elsif ${s1} = '0' and ${s0} = '1' then`,
+            `      ${r}(3 downto 0) <= std_logic_vector(resize(va - vb - vc, 4));`,
+            `      if va >= vb + vc then ${r}(4) <= '1'; else ${r}(4) <= '0'; end if;`,
+            `    elsif ${s1} = '1' and ${s0} = '0' then`,
+            `      ${r} <= '0' & (${av} and ${bv});`,
+            `    else`,
+            `      ${r} <= '0' & (${av} or ${bv});`,
+            `    end if;`,
+            `  end process;`
+          );
+          for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${r}(${i});`);
+          if (out[4]) body.push(`  ${out[4]} <= ${r}(4);`);
+          if (out[5]) body.push(`  ${out[5]} <= '1' when ${r}(3 downto 0) = "0000" else '0';`);
+        }
+        break;
+      }
+      case 'dFlipFlop':
+      case 'jkFlipFlop':
+      case 'tFlipFlop': {
+        const q = names.make(`${nm}_q_reg`, 'q_reg');
+        declare(q, 1, '0');
+        const clk = inp(1);
+        const rst = c.type === 'tFlipFlop' ? inp(2) : L.zero;
+        const next =
+          c.type === 'dFlipFlop'
+            ? inp(0)
+            : c.type === 'tFlipFlop'
+              ? L.xor([q, inp(0)])
+              : // JK: Q+ = J·Q' + K'·Q
+                L.or([L.and([inp(0), L.not(q)]), L.and([L.not(inp(2)), q])]);
+        body.push(...seqBlock(lang, clk, rst, [[q, next]], [[q, L.zero]], L));
+        if (out[0]) emit(out[0], q);
+        if (out[1]) emit(out[1], L.not(q));
+        break;
+      }
+      case 'srLatch': {
+        const q = names.make(`${nm}_q_reg`, 'q_reg');
+        declare(q, 1, '0');
+        const [s, r] = [inp(0), inp(1)];
+        if (lang === 'verilog') {
+          body.push(
+            `  always @(*) begin`,
+            `    if (${s} && !${r}) ${q} = 1'b1;`,
+            `    else if (!${s} && ${r}) ${q} = 1'b0;`,
+            `  end`
+          );
+        } else {
+          body.push(
+            `  process (${[s, r].filter(isSignalName).join(', ') || 'all'})`,
+            `  begin`,
+            `    if ${s} = '1' and ${r} = '0' then ${q} <= '1';`,
+            `    elsif ${s} = '0' and ${r} = '1' then ${q} <= '0';`,
+            `    end if;`,
+            `  end process;`
+          );
+        }
+        if (out[0]) emit(out[0], q);
+        if (out[1]) emit(out[1], L.not(q));
+        break;
+      }
+      case 'counter4':
+      case 'register4':
+      case 'shiftRegister4': {
+        const r = names.make(`${nm}_q_reg`, 'q_reg');
+        declare(r, 4, '0000');
+        const bit = (i: number) => vecIndex(r, i);
+        let clk: string;
+        let rst: string;
+        let updates: [string, string][];
+        if (c.type === 'counter4') {
+          clk = inp(0);
+          rst = inp(1);
+          updates = [[r, lang === 'verilog' ? `${r} + 4'd1` : `std_logic_vector(unsigned(${r}) + 1)`]];
+        } else if (c.type === 'register4') {
+          clk = inp(4);
+          rst = inp(6);
+          const we = inp(5, L.one); // unconnected write enable = enabled
+          const d = lang === 'verilog' ? `{${inp(3)}, ${inp(2)}, ${inp(1)}, ${inp(0)}}` : `${inp(3)} & ${inp(2)} & ${inp(1)} & ${inp(0)}`;
+          updates = [[r, lang === 'verilog' ? `${wrap(we)} ? ${d} : ${r}` : `__WE__(${we}|${d}|${r})`]];
+        } else {
+          clk = inp(0);
+          rst = inp(1);
+          const [sl, sr, s0, s1] = [inp(2), inp(3), inp(4), inp(5)];
+          // mode 1 (S1S0=01): shift right, SR enters Q3; mode 2 (10): shift left, SL enters Q0; else hold
+          const right = lang === 'verilog' ? `{${sr}, ${bit(3)}, ${bit(2)}, ${bit(1)}}` : `${sr} & ${r}(3 downto 1)`;
+          const left = lang === 'verilog' ? `{${bit(2)}, ${bit(1)}, ${bit(0)}, ${sl}}` : `${r}(2 downto 0) & ${sl}`;
+          updates = [
+            [
+              r,
+              lang === 'verilog'
+                ? `({${s1}, ${s0}} == 2'b01) ? ${right} : ({${s1}, ${s0}} == 2'b10) ? ${left} : ${r}`
+                : `__SHIFT__(${s1}|${s0}|${right}|${left}|${r})`,
+            ],
+          ];
+        }
+        body.push(...seqBlock(lang, clk, rst, updates, [[r, lang === 'verilog' ? "4'b0000" : '"0000"']], L));
+        for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], bit(i));
         break;
       }
       case 'ram16x4': {
-        const ramBlock = `mem_${sanitizeName(comp.label || 'ram')}`;
-        sequentialBlocks.push(`  reg [3:0] ${ramBlock} [0:15];
-  wire [3:0] addr_${sanitizeName(comp.id)} = {${inSignals[3]}, ${inSignals[2]}, ${inSignals[1]}, ${inSignals[0]}};
-  wire [3:0] din_${sanitizeName(comp.id)} = {${inSignals[7]}, ${inSignals[6]}, ${inSignals[5]}, ${inSignals[4]}};
-  always @(posedge ${inSignals[8]}) begin
-    if (${inSignals[9]}) begin
-      ${ramBlock}[addr_${sanitizeName(comp.id)}] <= din_${sanitizeName(comp.id)};
-    end
-  end
-  assign {${outSignals[3]}, ${outSignals[2]}, ${outSignals[1]}, ${outSignals[0]}} = ${ramBlock}[addr_${sanitizeName(comp.id)}];`);
+        const mem = names.make(`${nm}_mem`, 'mem');
+        const init = Array.isArray(c.state.ramData) && c.state.ramData.length === 16 ? c.state.ramData : Array.from({ length: 16 }, (_, i) => i);
+        const [clk, we] = [inp(8), inp(9)];
+        if (lang === 'verilog') {
+          const addr = `{${inp(3)}, ${inp(2)}, ${inp(1)}, ${inp(0)}}`;
+          const din = `{${inp(7)}, ${inp(6)}, ${inp(5)}, ${inp(4)}}`;
+          extraDecls.push(`  reg [3:0] ${mem} [0:15];`, `  initial begin`, ...init.map((v, i) => `    ${mem}[${i}] = 4'd${v & 15};`), `  end`);
+          if (isSignalName(clk)) {
+            body.push(`  always @(posedge ${clk}) begin`, `    if (${we}) ${mem}[${addr}] <= ${din};`, `  end`);
+          }
+          const rd = names.make(`${nm}_rdata`, 'rdata');
+          declare(rd, 4);
+          body.push(`  assign ${rd} = ${mem}[${addr}];`);
+          for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], `${rd}[${i}]`);
+        } else {
+          const typ = names.make(`${nm}_mem_t`, 'mem_t');
+          const addrSig = names.make(`${nm}_addr`, 'addr');
+          declare(addrSig, 4);
+          extraDecls.push(
+            `  type ${typ} is array (0 to 15) of std_logic_vector(3 downto 0);`,
+            `  signal ${mem} : ${typ} := (${init.map((v) => `"${(v & 15).toString(2).padStart(4, '0')}"`).join(', ')});`
+          );
+          body.push(`  ${addrSig} <= ${inp(3)} & ${inp(2)} & ${inp(1)} & ${inp(0)};`);
+          if (isSignalName(clk)) {
+            body.push(
+              `  process (${clk})`,
+              `  begin`,
+              `    if rising_edge(${clk}) then`,
+              `      if ${we} = '1' then ${mem}(to_integer(unsigned(${addrSig}))) <= ${inp(7)} & ${inp(6)} & ${inp(5)} & ${inp(4)}; end if;`,
+              `    end if;`,
+              `  end process;`
+            );
+          }
+          const rd = names.make(`${nm}_rdata`, 'rdata');
+          declare(rd, 4);
+          body.push(`  ${rd} <= ${mem}(to_integer(unsigned(${addrSig})));`);
+          for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${rd}(${i});`);
+        }
         break;
       }
       case 'subcircuit': {
-        const subName = (comp.state.subcircuitCode || comp.state.subcircuitName || 'Custom_IC')
-          .replace(/[^a-zA-Z0-9_]/g, '_');
-        const portMaps = [
-          ...comp.inputs.map((p, idx) => `    .${p.name.replace(/[^a-zA-Z0-9_]/g, '_') || `in_${idx}`}(${inSignals[idx]})`),
-          ...comp.outputs.map((p, idx) => `    .${p.name.replace(/[^a-zA-Z0-9_]/g, '_') || `out_${idx}`}(${outSignals[idx]})`),
-        ];
-        logicLines.push(`  // Modüler Alt Devre Entegresi: ${comp.label || comp.id}\n  ${subName} inst_${comp.id.replace(/[^a-zA-Z0-9_]/g, '_')} (\n${portMaps.join(',\n')}\n  );`);
+        const subId = c.state.subcircuitId as string | undefined;
+        const def = subId ? getSubcircuitDefinition(subId) : undefined;
+        if (!def) {
+          warnings.push(`${c.label || c.id}: alt devre tanımı bulunamadı, çıkışlar 0 kabul edildi.`);
+          out.forEach((o) => o && emit(o, L.zero));
+          break;
+        }
+        if (!subModules.has(def.id)) {
+          subModules.set(def.id, { def, moduleName: moduleNames.make(def.chipCode || def.name, 'custom_ic') });
+        }
+        const sub = subModules.get(def.id)!;
+        const portNames = subPortNames(def.ports);
+        const maps = [
+          ...c.inputs.map((p, i) => [portNames.inputs[i], inputExpr(p.id)] as const),
+          ...c.outputs.map((_p, i) => [portNames.outputs[i], out[i]] as const),
+        ].filter(([pn]) => !!pn);
+        const inst = names.make(`u_${nm}`, 'u_ic');
+        if (lang === 'verilog') {
+          body.push(`  ${sub.moduleName} ${inst} (`, maps.map(([pn, sig]) => `    .${pn}(${sig})`).join(',\n'), `  );`);
+        } else {
+          body.push(`  ${inst} : entity work.${sub.moduleName}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
+        }
         break;
       }
       default:
-        if (outSignals.length > 0 && inSignals.length > 0) {
-          logicLines.push(`  assign ${outSignals[0]} = ${inSignals[0]}; // ${comp.type}`);
-        }
+        warnings.push(`${c.label || c.type}: '${c.type}' bileşeni HDL'e çevrilemiyor, çıkışları 0 bırakıldı.`);
+        out.forEach((o) => o && emit(o, L.zero));
         break;
     }
-  });
+  }
 
-  // Connect primary output ports from their drivers
-  outputComps.forEach((comp) => {
-    if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
-      const driver = getWireDriver(comp.inputs[0]?.id);
-      const portName = pinNameMap.get(comp.inputs[0]?.id);
-      if (portName && portName !== driver) {
-        logicLines.push(`  assign ${portName} = ${driver};`);
-      }
-    } else if (
-      comp.type === 'sevenSegment' ||
-      comp.type === 'hexDisplay' ||
-      comp.type === 'ledBar4' ||
-      comp.type === 'dotMatrix8x8' ||
-      comp.type === 'rgbMatrix16x16'
-    ) {
-      comp.inputs.forEach((pin) => {
-        const driver = getWireDriver(pin.id);
-        const portIndexed = pinNameMap.get(pin.id);
-        if (portIndexed) {
-          logicLines.push(`  assign ${portIndexed} = ${driver};`);
-        }
-      });
-    }
-  });
-
-  const allPorts = [...inputPorts, ...outputPorts];
-
-  return `// =============================================================================
-// Generated by LogicDesign Studio HDL Synthesis Engine
-// Project: Sıfırdan İşlemciye (From Zero to CPU)
-// Module: ${modName}
-// Date: ${timestamp}
-// Standard: IEEE 1364-2001 (Verilog HDL)
-// =============================================================================
-
-\`timescale 1ns / 1ps
-
-module ${modName} (
-${allPorts.length > 0 ? allPorts.map((p) => `  ${p}`).join(',\n') : '  // Devrede harici I/O portu yok'}
-);
-
-${
-  internalWires.size > 0
-    ? `  // Dahili Bağlantı Hatları (Internal Wires)\n` +
-      Array.from(internalWires)
-        .map((w) => `  wire ${w};`)
-        .join('\n') +
-      '\n'
-    : ''
-}
-${
-  logicLines.length > 0
-    ? `  // Kombinasyonel Mantık İfadeleri (Continuous Assignments)\n` +
-      logicLines.join('\n') +
-      '\n'
-    : ''
-}
-${
-  sequentialBlocks.length > 0
-    ? `  // Ardışıl Mantık Blokları (Sequential Registers & Memory)\n` +
-      sequentialBlocks.join('\n\n') +
-      '\n'
-    : ''
-}
-endmodule
-`;
-}
-
-export function generateVHDL(
-  circuitName: string,
-  components: CircuitComponentInstance[],
-  canvasWires: CircuitWire[]
-): string {
-  // Driver lookups need pin-to-pin connections; canvas wires are positional segments
-  const wires = getLogicalConnections(components, canvasWires);
-  const entityName = sanitizeName(circuitName || 'digital_circuit');
-  const timestamp = new Date().toISOString();
-
-  const inputComps = components.filter((c) =>
-    ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4'].includes(c.type)
-  );
-  const outputComps = components.filter((c) =>
-    ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4'].includes(c.type)
-  );
-  const internalComps = components.filter(
-    (c) => !inputComps.includes(c) && !outputComps.includes(c)
-  );
-
-  const pinNameMap = new Map<string, string>();
-  const portDecls: string[] = [];
-
-  inputComps.forEach((c) => {
-    const baseName = sanitizeName(c.label || c.type);
-    if (c.type === 'clock') {
-      const pName = baseName.includes('clk') ? baseName : `clk_${baseName}`;
-      portDecls.push(`${pName} : in std_logic`);
-      pinNameMap.set(c.outputs[0]?.id, pName);
-    } else if (c.type === 'dipSwitch4') {
-      const pName = `in_${baseName}`;
-      portDecls.push(`${pName} : in std_logic_vector(3 downto 0)`);
-      c.outputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}(${idx})`);
-      });
-    } else if (c.type === 'asciiKeyboard') {
-      const pName = `kbd_${baseName}`;
-      portDecls.push(`${pName}_data : in std_logic_vector(6 downto 0)`);
-      portDecls.push(`${pName}_strobe : in std_logic`);
-      c.outputs.slice(0, 7).forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}_data(${idx})`);
-      });
-      if (c.outputs[7]) {
-        pinNameMap.set(c.outputs[7].id, `${pName}_strobe`);
-      }
-    } else if (c.type === 'switch' || c.type === 'pushbutton') {
-      const pName = `in_${baseName}`;
-      portDecls.push(`${pName} : in std_logic`);
-      pinNameMap.set(c.outputs[0]?.id, pName);
-    } else if (c.type === 'vcc') {
-      pinNameMap.set(c.outputs[0]?.id, "'1'");
-    } else if (c.type === 'gnd') {
-      pinNameMap.set(c.outputs[0]?.id, "'0'");
-    }
-  });
-
-  outputComps.forEach((c) => {
-    const baseName = sanitizeName(c.label || c.type);
-    if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
-      const pName = `out_${baseName}`;
-      portDecls.push(`${pName} : out std_logic`);
-      pinNameMap.set(c.inputs[0]?.id, pName);
-    } else if (c.type === 'ledBar4') {
-      const pName = `out_${baseName}`;
-      portDecls.push(`${pName} : out std_logic_vector(3 downto 0)`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}(${idx})`);
-      });
-    } else if (c.type === 'sevenSegment') {
-      const pName = `out_seg_${baseName}`;
-      portDecls.push(`${pName} : out std_logic_vector(6 downto 0)`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}(${idx})`);
-      });
-    } else if (c.type === 'hexDisplay') {
-      const pName = `out_hex_${baseName}`;
-      portDecls.push(`${pName} : out std_logic_vector(3 downto 0)`);
-      c.inputs.forEach((pin, idx) => {
-        pinNameMap.set(pin.id, `${pName}(${idx})`);
-      });
-    } else if (c.type === 'dotMatrix8x8') {
-      const pName = `disp_${baseName}`;
-      portDecls.push(`${pName}_rows : out std_logic_vector(7 downto 0)`);
-      portDecls.push(`${pName}_cols : out std_logic_vector(7 downto 0)`);
-      c.inputs.slice(0, 8).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_rows(${idx})`));
-      c.inputs.slice(8, 16).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_cols(${idx})`));
-    } else if (c.type === 'rgbMatrix16x16') {
-      const pName = `gpu_${baseName}`;
-      portDecls.push(`${pName}_x : out std_logic_vector(3 downto 0)`);
-      portDecls.push(`${pName}_y : out std_logic_vector(3 downto 0)`);
-      portDecls.push(`${pName}_rgb : out std_logic_vector(2 downto 0)`);
-      portDecls.push(`${pName}_we : out std_logic`);
-      c.inputs.slice(0, 4).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_x(${idx})`));
-      c.inputs.slice(4, 8).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_y(${idx})`));
-      c.inputs.slice(8, 11).forEach((pin, idx) => pinNameMap.set(pin.id, `${pName}_rgb(${idx})`));
-      if (c.inputs[11]) pinNameMap.set(c.inputs[11].id, `${pName}_we`);
-    }
-  });
-
-  const getWireDriver = (pinId: string): string => {
-    const w = wires.find((wire) => wire.toPinId === pinId);
-    if (!w) return "'0'";
-    if (pinNameMap.has(w.fromPinId)) return pinNameMap.get(w.fromPinId)!;
-    return getSignalName(w.fromCompId, w.fromPinId, components, pinNameMap);
-  };
-
-  const internalSignals = new Set<string>();
-  const assignments: string[] = [];
-
-  internalComps.forEach((comp) => {
-    const inSignals = comp.inputs.map((p) => getWireDriver(p.id));
-    const outSignals = comp.outputs.map((p) => {
-      const outName = getSignalName(comp.id, p.id, components, pinNameMap);
-      if (!Array.from(portDecls).some((op) => op.includes(outName)) && !outName.startsWith("'")) {
-        internalSignals.add(outName);
-      }
-      return outName;
+  // --- output ports ---------------------------------------------------------
+  if (spec.subPorts) {
+    subOutPorts.forEach((p, i) => {
+      const pn = subNames!.outputs[i];
+      ports.push({ name: pn, dir: 'out', width: 1 });
+      const target = compById.get(p.targetCompId);
+      const expr =
+        target && OUTPUT_TYPES.includes(target.type)
+          ? inputExpr(target.inputs[0]?.id)
+          : pinIsOutput.get(p.targetPinId)
+            ? pinExpr.get(p.targetPinId) || L.zero
+            : inputExpr(p.targetPinId);
+      emit(pn, expr);
     });
-
-    switch (comp.type) {
-      case 'not':
-        assignments.push(`  ${outSignals[0]} <= not ${inSignals[0]};`);
-        break;
-      case 'and':
-        assignments.push(`  ${outSignals[0]} <= ${inSignals.join(' and ')};`);
-        break;
-      case 'or':
-        assignments.push(`  ${outSignals[0]} <= ${inSignals.join(' or ')};`);
-        break;
-      case 'nand':
-        assignments.push(`  ${outSignals[0]} <= not (${inSignals.join(' and ')});`);
-        break;
-      case 'nor':
-        assignments.push(`  ${outSignals[0]} <= not (${inSignals.join(' or ')});`);
-        break;
-      case 'xor':
-        assignments.push(`  ${outSignals[0]} <= ${inSignals.join(' xor ')};`);
-        break;
-      case 'xnor':
-        assignments.push(`  ${outSignals[0]} <= not (${inSignals.join(' xor ')});`);
-        break;
-      case 'halfAdder':
-        assignments.push(`  ${outSignals[0]} <= ${inSignals[0]} xor ${inSignals[1]}; -- Sum`);
-        assignments.push(`  ${outSignals[1]} <= ${inSignals[0]} and ${inSignals[1]}; -- Carry`);
-        break;
-      case 'mux2':
-        assignments.push(`  ${outSignals[0]} <= ${inSignals[1]} when ${inSignals[2]} = '1' else ${inSignals[0]};`);
-        break;
-      case 'subcircuit': {
-        const subName = (comp.state.subcircuitCode || comp.state.subcircuitName || 'Custom_IC')
-          .replace(/[^a-zA-Z0-9_]/g, '_');
-        const portMaps = [
-          ...comp.inputs.map((p, idx) => `    ${p.name.replace(/[^a-zA-Z0-9_]/g, '_') || `in_${idx}`} => ${inSignals[idx]}`),
-          ...comp.outputs.map((p, idx) => `    ${p.name.replace(/[^a-zA-Z0-9_]/g, '_') || `out_${idx}`} => ${outSignals[idx]}`),
-        ];
-        assignments.push(`  -- Modüler Alt Devre Entegresi: ${comp.label || comp.id}\n  inst_${comp.id.replace(/[^a-zA-Z0-9_]/g, '_')}: entity work.${subName}\n    port map (\n${portMaps.join(',\n')}\n    );`);
-        break;
+  } else {
+    for (const c of comps) {
+      if (!OUTPUT_TYPES.includes(c.type)) continue;
+      const label = c.label || c.type;
+      const groups: { suffix: string; pins: typeof c.inputs }[] =
+        c.type === 'dotMatrix8x8'
+          ? [
+              { suffix: 'rows', pins: c.inputs.slice(0, 8) },
+              { suffix: 'cols', pins: c.inputs.slice(8, 16) },
+            ]
+          : c.type === 'rgbMatrix16x16'
+            ? [
+                { suffix: 'x', pins: c.inputs.slice(0, 4) },
+                { suffix: 'y', pins: c.inputs.slice(4, 8) },
+                { suffix: 'rgb', pins: c.inputs.slice(8, 11) },
+                { suffix: 'we', pins: c.inputs.slice(11, 12) },
+              ]
+            : c.type === 'buzzer'
+              ? [
+                  { suffix: 'en', pins: c.inputs.slice(0, 1) },
+                  { suffix: 'note', pins: c.inputs.slice(1, 5) },
+                ]
+              : [{ suffix: '', pins: c.inputs }];
+      for (const g of groups) {
+        if (g.pins.length === 0) continue;
+        const prefix = c.type === 'sevenSegment' ? 'out_seg' : c.type === 'hexDisplay' ? 'out_hex' : 'out';
+        const pn = names.make(`${prefix}_${label}${g.suffix ? `_${g.suffix}` : ''}`, 'out_sig');
+        const width = c.type === 'led' || c.type === 'probe' ? 1 : g.pins.length;
+        ports.push({ name: pn, dir: 'out', width, source: { compId: c.id, type: c.type, group: g.suffix || undefined } });
+        g.pins.slice(0, width).forEach((pin, i) => emit(width === 1 ? pn : vecIndex(pn, i), inputExpr(pin.id)));
       }
-      default:
-        if (outSignals.length > 0 && inSignals.length > 0) {
-          assignments.push(`  ${outSignals[0]} <= ${inSignals[0]}; -- ${comp.type}`);
-        }
-        break;
     }
-  });
+  }
 
-  outputComps.forEach((comp) => {
-    if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
-      const driver = getWireDriver(comp.inputs[0]?.id);
-      const portName = pinNameMap.get(comp.inputs[0]?.id);
-      if (portName && portName !== driver) {
-        assignments.push(`  ${portName} <= ${driver};`);
-      }
-    } else if (
-      comp.type === 'sevenSegment' ||
-      comp.type === 'hexDisplay' ||
-      comp.type === 'ledBar4' ||
-      comp.type === 'dotMatrix8x8' ||
-      comp.type === 'rgbMatrix16x16'
-    ) {
-      comp.inputs.forEach((pin) => {
-        const driver = getWireDriver(pin.id);
-        const portIndexed = pinNameMap.get(pin.id);
-        if (portIndexed) {
-          assignments.push(`  ${portIndexed} <= ${driver};`);
-        }
-      });
+  return { name: spec.name, ports, signals, body, extraDecls, warnings };
+}
+
+// Port names of a custom IC module, shared by the module itself and every instance of it
+function subPortNames(ports: CustomSubcircuit['ports']): { inputs: string[]; outputs: string[] } {
+  const names = new NameTable();
+  const inputs = ports.filter((p) => p.type === 'input').map((p, i) => names.make(p.name, `in_${i}`));
+  const outputs = ports.filter((p) => p.type === 'output').map((p, i) => names.make(p.name, `out_${i}`));
+  return { inputs, outputs };
+}
+
+function isSignalName(e: string): boolean {
+  return /^[a-z][a-z0-9_]*(\[\d+\]|\(\d+\))?$/.test(e);
+}
+
+// Clocked process/always block with asynchronous active-high reset (as the simulator: reset wins)
+function seqBlock(
+  lang: Lang,
+  clk: string,
+  rst: string,
+  updates: [string, string][],
+  resets: [string, string][],
+  L: LangOps
+): string[] {
+  const hasClk = isSignalName(clk);
+  const hasRst = rst !== L.zero && rst !== L.one;
+  const lines: string[] = [];
+  if (rst === L.one) {
+    // Reset tied high: the register is held cleared
+    if (lang === 'verilog') lines.push(...resets.map(([r, v]) => `  always @(*) ${r} = ${v};`));
+    else lines.push(...resets.map(([r, v]) => `  ${r} <= ${v};`));
+    return lines;
+  }
+  if (!hasClk) {
+    lines.push(L.comment(`saat girişi bağlı değil (${clk}); kayıtçı başlangıç değerinde kalır`));
+    return lines;
+  }
+  if (lang === 'verilog') {
+    lines.push(`  always @(posedge ${clk}${hasRst ? ` or posedge ${rst}` : ''}) begin`);
+    if (hasRst) {
+      lines.push(`    if (${rst}) begin`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    end else begin`);
+      lines.push(...updates.map(([r, v]) => `      ${r} <= ${v};`), `    end`);
+    } else {
+      lines.push(...updates.map(([r, v]) => `    ${r} <= ${v};`));
     }
-  });
+    lines.push('  end');
+  } else {
+    const vhdlValue = (v: string) =>
+      v.includes('__WE__') ? vhdlWe(v) : v.includes('__SHIFT__') ? vhdlShift(v) : v.includes('__MUX__') ? vhdlMuxSeq(v) : `@${v};`;
+    lines.push(`  process (${clk}${hasRst && isSignalName(rst) ? `, ${rst}` : ''})`, `  begin`);
+    if (hasRst) {
+      lines.push(`    if ${rst} = '1' then`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    elsif rising_edge(${clk}) then`);
+    } else {
+      lines.push(`    if rising_edge(${clk}) then`);
+    }
+    for (const [r, v] of updates) lines.push(...vhdlValue(v).split('\n').map((l) => `      ${l.replace(/^(\s*)@/, `$1${r} <= `)}`));
+    lines.push('    end if;', '  end process;');
+  }
+  return lines;
+}
 
-  return `-- =============================================================================
--- Generated by LogicDesign Studio HDL Synthesis Engine
--- Project: Sıfırdan İşlemciye (From Zero to CPU)
--- Entity: ${entityName}
--- Date: ${timestamp}
--- Standard: IEEE 1076-2008 (VHDL)
--- =============================================================================
+// ---- VHDL expression helpers (VHDL-93 has no ?: operator) -----------------
+function splitArgs(inner: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of inner) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (ch === '|' && depth === 0) {
+      parts.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  parts.push(cur);
+  return parts;
+}
 
-library IEEE;
-use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.NUMERIC_STD.ALL;
+function extractCall(expr: string, tag: string): { before: string; args: string[]; after: string } | null {
+  const at = expr.indexOf(`${tag}(`);
+  if (at < 0) return null;
+  let depth = 0;
+  for (let i = at + tag.length; i < expr.length; i++) {
+    if (expr[i] === '(') depth++;
+    if (expr[i] === ')') {
+      depth--;
+      if (depth === 0) return { before: expr.slice(0, at), args: splitArgs(expr.slice(at + tag.length + 1, i)), after: expr.slice(i + 1) };
+    }
+  }
+  return null;
+}
 
-entity ${entityName} is
-  port (
-${portDecls.length > 0 ? portDecls.map((p) => `    ${p}`).join(';\n') : '    -- Harici port bulunamadı'}
+// Concurrent "x <= a when sel = '1' else b" chain; nested muxes go into the else branch or are flattened
+function vhdlMux(expr: string): string {
+  const call = extractCall(expr, '__MUX__');
+  if (!call) return expr;
+  const [sel, a, b] = call.args.map((x) => x.trim());
+  if (call.before.trim() || call.after.trim()) {
+    // mux used inside a larger expression: rewrite as and/or form
+    return vhdlMux(`${call.before}((${vhdlMuxInline(sel)} and ${vhdlMuxInline(a)}) or (not ${vhdlMuxInline(sel)} and ${vhdlMuxInline(b)}))${call.after}`);
+  }
+  if (b === "'Z'") return `${vhdlMuxInline(a)} when ${vhdlMuxInline(sel)} = '1' else 'Z'`;
+  return `${vhdlMuxInline(a)} when ${vhdlMuxInline(sel)} = '1' else ${vhdlMux(b)}`;
+}
+
+function vhdlMuxInline(expr: string): string {
+  let e = expr;
+  for (let call = extractCall(e, '__MUX__'); call; call = extractCall(e, '__MUX__')) {
+    const [sel, a, b] = call.args.map((x) => vhdlMuxInline(x.trim()));
+    e = `${call.before}((${wrap(sel)} and ${wrap(a)}) or (not ${wrap(sel)} and ${wrap(b)}))${call.after}`;
+  }
+  return e;
+}
+
+function vhdlMuxSeq(v: string): string {
+  return `@${vhdlMuxInline(v)};`;
+}
+
+function vhdlWe(v: string): string {
+  const call = extractCall(v, '__WE__')!;
+  const [we, d] = call.args.map((x) => x.trim());
+  return `if ${we} = '1' then\n  @${d};\nend if;`;
+}
+
+function vhdlShift(v: string): string {
+  const call = extractCall(v, '__SHIFT__')!;
+  const [s1, s0, right, left] = call.args.map((x) => x.trim());
+  return `if ${s1} = '0' and ${s0} = '1' then\n  @${right};\nelsif ${s1} = '1' and ${s0} = '0' then\n  @${left};\nend if;`;
+}
+
+// ---------------------------------------------------------------------------
+// Emitters
+// ---------------------------------------------------------------------------
+function header(lang: Lang, title: string, standard: string): string {
+  const c = lang === 'verilog' ? '//' : '--';
+  return [
+    `${c} =============================================================================`,
+    `${c} Generated by LogicDesign Studio HDL Synthesis Engine`,
+    `${c} Project: Sıfırdan İşlemciye (From Zero to CPU)`,
+    `${c} ${lang === 'verilog' ? 'Module' : 'Entity'}: ${title}`,
+    `${c} Date: ${new Date().toISOString()}`,
+    `${c} Standard: ${standard}`,
+    `${c} =============================================================================`,
+  ].join('\n');
+}
+
+function renderVerilog(m: BuiltModule): string {
+  const portLines = m.ports.map(
+    (p) => `  ${p.dir === 'in' ? 'input' : 'output'} wire ${p.width > 1 ? `[${p.width - 1}:0] ` : ''}${p.name}`
   );
-end entity ${entityName};
+  const sigLines = m.signals.map((s) => {
+    const reg = s.init !== undefined;
+    const width = s.width > 1 ? `[${s.width - 1}:0] ` : '';
+    const init = reg && s.init !== undefined ? ` = ${s.width}'b${s.init}` : '';
+    return `  ${reg ? 'reg' : 'wire'} ${width}${s.name}${init};`;
+  });
+  return [
+    `module ${m.name} (`,
+    portLines.length > 0 ? portLines.join(',\n') : '  // Devrede harici I/O portu yok',
+    ');',
+    '',
+    ...(m.warnings.length ? [...m.warnings.map((w) => `  // UYARI: ${w}`), ''] : []),
+    ...(sigLines.length ? ['  // Dahili sinyaller', ...sigLines, ''] : []),
+    ...(m.extraDecls.length ? [...m.extraDecls, ''] : []),
+    ...m.body,
+    '',
+    'endmodule',
+  ].join('\n');
+}
 
-architecture Behavioral of ${entityName} is
-${
-  internalSignals.size > 0
-    ? `  -- Dahili Sinyaller (Internal Signals)\n` +
-      Array.from(internalSignals)
-        .map((s) => `  signal ${s} : std_logic;`)
-        .join('\n') +
-      '\n'
-    : ''
+function renderVHDL(m: BuiltModule): string {
+  const portLines = m.ports.map(
+    (p) => `    ${p.name} : ${p.dir} ${p.width > 1 ? `std_logic_vector(${p.width - 1} downto 0)` : 'std_logic'}`
+  );
+  const sigLines = m.signals.map((s) => {
+    const type = s.width > 1 ? `std_logic_vector(${s.width - 1} downto 0)` : 'std_logic';
+    const init = s.init !== undefined ? (s.width > 1 ? ` := "${s.init}"` : ` := '${s.init}'`) : '';
+    return `  signal ${s.name} : ${type}${init};`;
+  });
+  return [
+    'library IEEE;',
+    'use IEEE.STD_LOGIC_1164.ALL;',
+    'use IEEE.NUMERIC_STD.ALL;',
+    '',
+    `entity ${m.name} is`,
+    ...(portLines.length ? ['  port (', portLines.join(';\n'), '  );'] : []),
+    `end entity ${m.name};`,
+    '',
+    `architecture Behavioral of ${m.name} is`,
+    ...m.warnings.map((w) => `  -- UYARI: ${w}`),
+    ...sigLines,
+    ...m.extraDecls,
+    'begin',
+    ...m.body,
+    'end architecture Behavioral;',
+  ].join('\n');
 }
-begin
-${
-  assignments.length > 0
-    ? `  -- Mantıksal Sinyal Atamaları (Concurrent Statements)\n` +
-      assignments.join('\n') +
-      '\n'
-    : ''
+
+function generate(lang: Lang, circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): string {
+  const moduleNames = new NameTable();
+  const topName = moduleNames.make(circuitName || 'digital_circuit', 'digital_circuit');
+  const subModules = new Map<string, { def: CustomSubcircuit; moduleName: string }>();
+  const top = buildModule({ name: topName, components, wires }, lang, subModules, moduleNames);
+
+  // Sub-modules (custom ICs may themselves contain ICs: keep going until no new ones appear)
+  const rendered: BuiltModule[] = [];
+  const done = new Set<string>();
+  for (let progress = true; progress; ) {
+    progress = false;
+    for (const [id, sub] of Array.from(subModules.entries())) {
+      if (done.has(id)) continue;
+      done.add(id);
+      progress = true;
+      rendered.push(
+        buildModule({ name: sub.moduleName, components: sub.def.components, wires: sub.def.wires, subPorts: sub.def.ports }, lang, subModules, moduleNames)
+      );
+    }
+  }
+
+  const render = lang === 'verilog' ? renderVerilog : renderVHDL;
+  const std = lang === 'verilog' ? 'IEEE 1364-2001 (Verilog HDL)' : 'IEEE 1076-2008 (VHDL)';
+  const parts = [header(lang, topName, std), ''];
+  if (lang === 'verilog') parts.push('`timescale 1ns / 1ps', '');
+  for (const m of rendered.reverse()) parts.push(render(m), '');
+  parts.push(render(top), '');
+  return parts.join('\n');
 }
-end architecture Behavioral;
-`;
+
+// Top-level port list exactly as generateVerilog / generateVHDL name it
+export function getTopLevelPorts(circuitName: string, components: CircuitComponentInstance[], canvasWires: CircuitWire[]): PortDecl[] {
+  const moduleNames = new NameTable();
+  const topName = moduleNames.make(circuitName || 'digital_circuit', 'digital_circuit');
+  return buildModule({ name: topName, components, wires: canvasWires }, 'verilog', new Map(), moduleNames).ports;
+}
+
+export function generateVerilog(circuitName: string, components: CircuitComponentInstance[], canvasWires: CircuitWire[]): string {
+  return generate('verilog', circuitName, components, canvasWires);
+}
+
+export function generateVHDL(circuitName: string, components: CircuitComponentInstance[], canvasWires: CircuitWire[]): string {
+  return generate('vhdl', circuitName, components, canvasWires);
 }

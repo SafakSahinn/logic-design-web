@@ -5,54 +5,66 @@ export interface WaveformSample {
   values: Record<string, number>;
 }
 
+// VCD identifier codes use the printable ASCII range '!'..'~' (94 symbols); more signals get longer codes
+function vcdIdentifier(index: number): string {
+  let id = '';
+  let n = index;
+  do {
+    id += String.fromCharCode(33 + (n % 94));
+    n = Math.floor(n / 94);
+  } while (n > 0);
+  return id;
+}
+
 /**
  * Generate IEEE 1364 Standard VCD (Value Change Dump) file content
  * compatible with GTKWave, ModelSim, and WaveDrom.
+ *
+ * Signals are taken from the waveform samples themselves: a key is either a component id
+ * (single-bit parts) or `${componentId}_${suffix}` for multi-bit parts (q0..q3, f0.., z, ...).
  */
 export function generateVCD(
   samples: WaveformSample[],
   components: CircuitComponentInstance[]
 ): string {
   const now = new Date().toISOString();
+  const compById = new Map(components.map((c) => [c.id, c]));
 
-  // Find all components that have signals
-  const monitoredComps = components.filter((c) =>
-    ['switch', 'clock', 'pushbutton', 'dipSwitch4', 'asciiKeyboard', 'led', 'probe', 'buzzer', 'dFlipFlop', 'counter4', 'alu4', 'subcircuit'].includes(c.type)
-  );
-
-  // Map each component or signal to a unique VCD ASCII identifier (!, ", #, $, %, etc.)
-  const signalMap = new Map<string, { id: string; name: string; type: string }>();
-  let charCode = 33; // '!'
-
-  monitoredComps.forEach((c) => {
-    const safeName = (c.label || `${c.type}_${c.id}`).replace(/[^a-zA-Z0-9_]/g, '_');
-    const vcdId = String.fromCharCode(charCode++);
-    signalMap.set(c.id, { id: vcdId, name: safeName, type: 'wire' });
-  });
-
-  // If no monitored signals exist, return minimal valid VCD
-  if (signalMap.size === 0) {
-    return `$date
-  ${now}
-$end
-$version
-  LogicDesign Studio VCD Generator v1.0
-$end
-$timescale
-  1ns
-$end
-$scope module logic_design $end
-$upscope $end
-$enddefinitions $end
-#0
-$dumpvars
-$end
-`;
+  // Every key seen in any sample, in first-seen order
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const s of samples) {
+    for (const k of Object.keys(s.values)) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        keys.push(k);
+      }
+    }
   }
 
-  const lines: string[] = [];
+  // Resolve each key to "<label>[_<suffix>]" and keep the names unique
+  const usedNames = new Map<string, number>();
+  const signals: { key: string; id: string; name: string }[] = [];
+  keys.forEach((key) => {
+    let comp = compById.get(key);
+    let suffix = '';
+    if (!comp) {
+      const cut = key.lastIndexOf('_');
+      if (cut > 0) {
+        comp = compById.get(key.slice(0, cut));
+        suffix = key.slice(cut + 1);
+      }
+    }
+    const base = ((comp?.label || (comp ? comp.type : key)) + (suffix ? `_${suffix}` : ''))
+      .replace(/[^a-zA-Z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '') || 'sig';
+    const n = usedNames.get(base) || 0;
+    usedNames.set(base, n + 1);
+    signals.push({ key, id: vcdIdentifier(signals.length), name: n === 0 ? base : `${base}_${n + 1}` });
+  });
 
-  // VCD Header
+  const lines: string[] = [];
   lines.push('$date');
   lines.push(`  ${now}`);
   lines.push('$end');
@@ -63,51 +75,52 @@ $end
   lines.push('  1ns');
   lines.push('$end');
   lines.push('$scope module logic_design $end');
-
-  // Variable definitions
-  signalMap.forEach((sig) => {
-    lines.push(`  $var wire 1 ${sig.id} ${sig.name} $end`);
-  });
-
+  signals.forEach((sig) => lines.push(`  $var wire 1 ${sig.id} ${sig.name} $end`));
   lines.push('$upscope $end');
   lines.push('$enddefinitions $end');
 
-  // Initial Dumpvars at time 0
+  if (signals.length === 0) {
+    lines.push('#0');
+    lines.push('$dumpvars');
+    lines.push('$end');
+    return lines.join('\n') + '\n';
+  }
+
+  const bit = (v: number | undefined) => (v === 1 ? '1' : v === 0 ? '0' : 'x');
+  const t0 = samples[0].time;
+  // 100 ns per sample tick, measured from the first kept sample so the dump starts at #0
+  const stamp = (t: number) => Math.round((t - t0) * 100);
+
   lines.push('#0');
   lines.push('$dumpvars');
-  const initialValues = samples.length > 0 ? samples[0].values : {};
-  signalMap.forEach((sig, compId) => {
-    const val = initialValues[compId] ?? 0;
-    lines.push(`${val}${sig.id}`);
+  const last: Record<string, string> = {};
+  signals.forEach((sig) => {
+    last[sig.key] = bit(samples[0].values[sig.key]);
+    lines.push(`${last[sig.key]}${sig.id}`);
   });
   lines.push('$end');
 
-  // Timestamped transitions
-  let lastValues: Record<string, number> = { ...initialValues };
-
+  let lastStamp = 0;
   for (let i = 1; i < samples.length; i++) {
-    const sample = samples[i];
-    const timestamp = Math.round(sample.time * 100); // 100ns per sample tick
-    let hasChangeAtThisTime = false;
-
-    signalMap.forEach((sig, compId) => {
-      const currentVal = sample.values[compId] ?? 0;
-      if (currentVal !== lastValues[compId]) {
-        if (!hasChangeAtThisTime) {
-          lines.push(`#${timestamp}`);
-          hasChangeAtThisTime = true;
-        }
-        lines.push(`${currentVal}${sig.id}`);
-        lastValues[compId] = currentVal;
+    // Timestamps must strictly increase
+    const ts = Math.max(stamp(samples[i].time), lastStamp + 1);
+    const changes: string[] = [];
+    signals.forEach((sig) => {
+      const v = bit(samples[i].values[sig.key]);
+      if (v !== last[sig.key]) {
+        changes.push(`${v}${sig.id}`);
+        last[sig.key] = v;
       }
     });
+    if (changes.length > 0) {
+      lines.push(`#${ts}`, ...changes);
+      lastStamp = ts;
+    }
   }
 
-  // Ensure final timestamp
-  if (samples.length > 1) {
-    const finalTime = Math.round(samples[samples.length - 1].time * 100) + 10;
-    lines.push(`#${finalTime}`);
-  }
+  // Close the last sample's interval so viewers draw its value
+  const end = Math.max(stamp(samples[samples.length - 1].time) + 100, lastStamp + 1);
+  lines.push(`#${end}`);
 
-  return lines.join('\n');
+  return lines.join('\n') + '\n';
 }

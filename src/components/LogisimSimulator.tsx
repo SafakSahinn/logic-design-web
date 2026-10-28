@@ -277,6 +277,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Annotations (Çerçeveler & Yapışkan Notlar)
   const [annotations, setAnnotations] = useState<CircuitAnnotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  // Inline editor for a note/frame title or a note's body text (opened by double-click)
+  const [editingAnnotation, setEditingAnnotation] = useState<{ id: string; field: 'title' | 'text'; draft: string } | null>(null);
+  const cancelAnnotationEditRef = useRef(false);
 
   // Command Palette / Spotlight Quick Search (Ctrl+K)
   const [showCommandPalette, setShowCommandPalette] = useState<boolean>(false);
@@ -1749,8 +1752,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   const generatedFpgaData = useMemo(() => {
-    return generateFpgaConstraints(selectedFpgaBoard, components);
-  }, [selectedFpgaBoard, components]);
+    return generateFpgaConstraints(selectedFpgaBoard, components, wires, currentCircuitName);
+  }, [selectedFpgaBoard, components, wires, currentCircuitName]);
 
   const handleCopyFpgaConstraints = () => {
     navigator.clipboard.writeText(generatedFpgaData.content);
@@ -2231,7 +2234,7 @@ ${wireXmls.join('\n')}
       id: newId,
       type,
       title: type === 'frame' ? 'Açıklama Bloğu' : 'Yapışkan Not',
-      text: type === 'note' ? 'Buraya notunuzu ekleyin...' : undefined,
+      text: type === 'note' ? '' : undefined,
       x: Math.max(40, posX),
       y: Math.max(40, posY),
       width: type === 'frame' ? 280 : 180,
@@ -2249,6 +2252,88 @@ ${wireXmls.join('\n')}
     recordHistory();
     setAnnotations((prev) => prev.filter((a) => a.id !== id));
     if (selectedAnnotationId === id) setSelectedAnnotationId(null);
+    if (editingAnnotation?.id === id) setEditingAnnotation(null);
+  };
+
+  // Move (drag the body) or resize (drag the corner handle) a note/frame.
+  // Pan gestures (right/middle button, Space, Alt, hand tool) fall through to the canvas.
+  const handleAnnotationMouseDown = (e: React.MouseEvent, ann: CircuitAnnotation, mode: 'move' | 'resize') => {
+    if (e.button !== 0 || wiringFrom || isSpacePressedRef.current || e.altKey || canvasMode === 'pan') return;
+    e.stopPropagation();
+    setSelectedAnnotationId(ann.id);
+    setSelectedCompIds([]);
+    setSelectedWireIds([]);
+
+    const start = getCanvasCoords(e);
+    const orig = { x: ann.x, y: ann.y, width: ann.width, height: ann.height };
+    const minW = ann.type === 'frame' ? 120 : 100;
+    const minH = ann.type === 'frame' ? 60 : 60;
+    const snap = (v: number) => (snapToGrid ? Math.round(v / 10) * 10 : Math.round(v));
+    let recorded = false;
+
+    const onMove = (ev: MouseEvent) => {
+      const p = getCanvasCoords(ev as unknown as React.MouseEvent);
+      const dx = p.x - start.x;
+      const dy = p.y - start.y;
+      if (!recorded) {
+        // A plain click (or the first click of a double-click) must not create an undo step
+        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        recordHistory();
+        recorded = true;
+      }
+      setAnnotations((prev) =>
+        prev.map((a) => {
+          if (a.id !== ann.id) return a;
+          return mode === 'move'
+            ? { ...a, x: snap(orig.x + dx), y: snap(orig.y + dy) }
+            : { ...a, width: Math.max(minW, snap(orig.width + dx)), height: Math.max(minH, snap(orig.height + dy)) };
+        })
+      );
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const startAnnotationEdit = (e: React.MouseEvent, ann: CircuitAnnotation, field: 'title' | 'text') => {
+    e.stopPropagation();
+    cancelAnnotationEditRef.current = false;
+    setSelectedAnnotationId(ann.id);
+    setEditingAnnotation({ id: ann.id, field, draft: field === 'title' ? ann.title : ann.text || '' });
+  };
+
+  const commitAnnotationEdit = () => {
+    const edit = editingAnnotation;
+    setEditingAnnotation(null);
+    if (!edit || cancelAnnotationEditRef.current) return;
+    const ann = annotations.find((a) => a.id === edit.id);
+    if (!ann) return;
+    // An emptied title keeps the old one; body text may be cleared
+    const value = edit.field === 'title' ? edit.draft.trim() || ann.title : edit.draft;
+    if ((edit.field === 'title' ? ann.title : ann.text || '') === value) return;
+    recordHistory();
+    setAnnotations((prev) => prev.map((a) => (a.id === edit.id ? { ...a, [edit.field]: value } : a)));
+  };
+
+  const handleAnnotationEditKey = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      cancelAnnotationEditRef.current = true;
+      setEditingAnnotation(null);
+    } else if (e.key === 'Enter' && (editingAnnotation?.field === 'title' || e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      commitAnnotationEdit();
+    }
+  };
+
+  const setAnnotationColor = (id: string, color: CircuitAnnotation['color']) => {
+    const ann = annotations.find((a) => a.id === id);
+    if (!ann || ann.color === color) return;
+    recordHistory();
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, color } : a)));
   };
 
   // Turn another project sheet into a modular IC block and place on active canvas
@@ -8365,13 +8450,14 @@ ${wireXmls.join('\n')}
               return (
                 <g
                   key={ann.id}
+                  onMouseDown={(e) => handleAnnotationMouseDown(e, ann, 'move')}
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedAnnotationId(ann.id);
                     setSelectedCompIds([]);
                     setSelectedWireIds([]);
                   }}
-                  className="cursor-pointer group"
+                  className="cursor-move group"
                 >
                   {isFrame ? (
                     <>
@@ -8405,6 +8491,7 @@ ${wireXmls.join('\n')}
                         fontWeight="bold"
                         fontFamily="sans-serif"
                         className="select-none"
+                        onDoubleClick={(e) => startAnnotationEdit(e, ann, 'title')}
                       >
                         {ann.title}
                       </text>
@@ -8439,27 +8526,94 @@ ${wireXmls.join('\n')}
                         fontWeight="bold"
                         fontFamily="sans-serif"
                         className="select-none"
+                        onDoubleClick={(e) => startAnnotationEdit(e, ann, 'title')}
                       >
                         📌 {ann.title}
                       </text>
-                      {ann.text && (
-                        <text
-                          x={ann.x + 10}
-                          y={ann.y + 42}
-                          fill={colors.text}
-                          fontSize={11}
-                          fontFamily="sans-serif"
-                          className="select-none"
+                      {/* Body: wrapped multi-line text; double-click to edit */}
+                      <foreignObject x={ann.x + 8} y={ann.y + 28} width={Math.max(0, ann.width - 16)} height={Math.max(0, ann.height - 34)}>
+                        {editingAnnotation?.id === ann.id && editingAnnotation.field === 'text' ? (
+                          <textarea
+                            autoFocus
+                            value={editingAnnotation.draft}
+                            onChange={(e) => setEditingAnnotation({ ...editingAnnotation, draft: e.target.value })}
+                            onBlur={commitAnnotationEdit}
+                            onKeyDown={handleAnnotationEditKey}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            placeholder="Notunuzu yazın (Ctrl+Enter: kaydet, Esc: vazgeç)"
+                            style={{ width: '100%', height: '100%', resize: 'none', fontSize: 11, fontFamily: 'sans-serif', color: colors.text, background: '#ffffff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: 4, outline: 'none', boxSizing: 'border-box' }}
+                          />
+                        ) : (
+                          <div
+                            onDoubleClick={(e) => startAnnotationEdit(e, ann, 'text')}
+                            className="select-none"
+                            style={{ width: '100%', height: '100%', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 11, lineHeight: 1.35, fontFamily: 'sans-serif', color: ann.text ? colors.text : '#94a3b8', fontStyle: ann.text ? 'normal' : 'italic' }}
+                          >
+                            {ann.text || 'Yazmak için çift tıklayın'}
+                          </div>
+                        )}
+                      </foreignObject>
+                    </>
+                  )}
+
+                  {editingAnnotation?.id === ann.id && editingAnnotation.field === 'title' && (
+                    <foreignObject x={ann.x + 4} y={ann.y + 2} width={Math.max(80, ann.width - 36)} height={22}>
+                      <input
+                        autoFocus
+                        value={editingAnnotation.draft}
+                        onChange={(e) => setEditingAnnotation({ ...editingAnnotation, draft: e.target.value })}
+                        onBlur={commitAnnotationEdit}
+                        onKeyDown={handleAnnotationEditKey}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ width: '100%', height: '100%', fontSize: 11, fontWeight: 'bold', fontFamily: 'sans-serif', color: colors.text, background: '#ffffff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: '0 6px', outline: 'none', boxSizing: 'border-box' }}
+                      />
+                    </foreignObject>
+                  )}
+
+                  {isSelected && (
+                    <>
+                      {/* Resize handle (bottom-right corner) */}
+                      <rect
+                        x={ann.x + ann.width - 10}
+                        y={ann.y + ann.height - 10}
+                        width={12}
+                        height={12}
+                        rx={3}
+                        fill="#ffffff"
+                        stroke={colors.border}
+                        strokeWidth={1.5}
+                        style={{ cursor: 'nwse-resize' }}
+                        onMouseDown={(e) => handleAnnotationMouseDown(e, ann, 'resize')}
+                      />
+                      {/* Colour swatches above the box */}
+                      {(['blue', 'emerald', 'amber', 'purple', 'rose', 'slate'] as const).map((c, i) => (
+                        <circle
+                          key={c}
+                          cx={ann.x + 8 + i * 18}
+                          cy={ann.y - 12}
+                          r={6.5}
+                          fill={{ blue: '#3b82f6', emerald: '#10b981', amber: '#f59e0b', purple: '#a855f7', rose: '#f43f5e', slate: '#64748b' }[c]}
+                          stroke={ann.color === c ? '#0f172a' : '#ffffff'}
+                          strokeWidth={ann.color === c ? 2 : 1.5}
+                          style={{ cursor: 'pointer' }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAnnotationColor(ann.id, c);
+                          }}
                         >
-                          {ann.text.substring(0, 48)}
-                        </text>
-                      )}
+                          <title>Renk</title>
+                        </circle>
+                      ))}
                     </>
                   )}
 
                   {/* Delete Bubble: Always visible for easy one-click removal */}
                   <g
                     transform={`translate(${ann.x + ann.width - 14}, ${ann.y + 13})`}
+                    onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleDeleteAnnotation(ann.id);
@@ -9209,7 +9363,7 @@ ${wireXmls.join('\n')}
           </svg>
 
           {/* Centered Empty Canvas Watermark Overlay */}
-          {components.length === 0 && (
+          {components.length === 0 && wires.length === 0 && annotations.length === 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none select-none text-center p-6 z-10 animate-in fade-in duration-200">
               <div className={`w-16 h-16 rounded-3xl border shadow-md flex items-center justify-center mb-4 backdrop-blur-xs ${
                 cadTheme === 'dark'
