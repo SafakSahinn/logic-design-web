@@ -346,17 +346,19 @@ export function evaluateSubcircuitStateful(
   }));
   const intWires: CircuitWire[] = (sameShape ? previous!.wires : subDef.wires).map((w) => ({ ...w }));
 
-  // Drive inputs
+  // Drive inputs with the outside values as they are, so x and E reach the parts inside like in
+  // Logisim (an open port floats inside too)
   inPorts.forEach((port, idx) => {
-    const val = inputVals[idx] ?? 0;
+    const val = inputVals[idx] ?? 'Z';
     const comp = intComps.find((c) => c.id === port.targetCompId);
     if (!comp) return;
 
     if (comp.type === 'switch' || comp.type === 'pushbutton' || comp.type === 'clock') {
       comp.state.on = val === 1;
+      comp.state.portValue = val;
       if (comp.outputs[0]) comp.outputs[0].value = val;
     } else {
-      // A bare pin as port: writing its value would be undone by net resolution (an undriven net reads 0),
+      // A bare pin as port: writing its value would be undone by net resolution (an undriven net floats),
       // so put a hidden driver on the pin's location for this evaluation
       const pin = [...comp.inputs, ...comp.outputs].find((p) => p.id === port.targetPinId);
       if (!pin) return;
@@ -368,7 +370,7 @@ export function evaluateSubcircuitStateful(
         y: pin.y,
         inputs: [],
         outputs: [{ id: `${PORT_DRIVER_PREFIX}${idx}_out`, name: 'Q', type: 'output', value: val, x: pin.x, y: pin.y }],
-        state: { on: val === 1 },
+        state: { on: val === 1, portValue: val },
       });
     }
   });

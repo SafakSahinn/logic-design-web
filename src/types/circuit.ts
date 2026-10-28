@@ -100,6 +100,8 @@ export interface CircuitComponentInstance {
   outputs: CircuitPin[];
   state: {
     on?: boolean;
+    /** Set on an input source inside an IC: it drives this value from outside (x/E included) instead of `on` */
+    portValue?: SignalValue;
     frequencyHz?: number;
     /** Clock's own rate chosen in its toolbar; unset = follow the global clock speed */
     clockRateHz?: number;

@@ -1166,19 +1166,19 @@ export function simulateCircuitStep(
   // Step 1: Update source components outputs (switch, vcc, gnd, clock)
   newComps.forEach((comp) => {
     if (comp.type === 'switch') {
-      const targetVal: SignalValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
       }
     } else if (comp.type === 'pushbutton') {
-      const targetVal: SignalValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
       }
     } else if (comp.type === 'clock') {
-      const targetVal: SignalValue = comp.state.on ? 1 : 0;
+      const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
@@ -1738,11 +1738,9 @@ export function simulateCircuitStep(
         break;
       }
       case 'hexDisplay': {
-        const d0 = inVals[0] || 0;
-        const d1 = inVals[1] || 0;
-        const d2 = inVals[2] || 0;
-        const d3 = inVals[3] || 0;
-        const hexVal = d0 + d1 * 2 + d2 * 4 + d3 * 8;
+        // Like Logisim's hex digit, any input that is not 0/1 shows a dash (stored as -1)
+        const code = busValue(raw.slice(0, 4));
+        const hexVal = typeof code === 'number' ? code : -1;
         if (comp.state.hexVal !== hexVal) {
           comp.state.hexVal = hexVal;
           hasChanged = true;
@@ -1783,11 +1781,8 @@ export function simulateCircuitStep(
         const gVal = inVals[9] === 1;
         const bVal = inVals[10] === 1;
         const weVal = inVals[11] === 1;
-        const clkVal = inVals[12] === 1 ? 1 : 0;
         const rstVal = inVals[13] === 1;
-        const prevClk = comp.state.lastClk ?? clkVal;
-        const isRising = clkVal === 1 && prevClk === 0;
-        comp.state.lastClk = clkVal;
+        const isRising = risingEdge(comp, raw[12]);
 
         if (!comp.state.rgbPixels || comp.state.rgbPixels.length !== 16) {
           comp.state.rgbPixels = Array.from({ length: 16 }, () => Array(16).fill('#050505'));
@@ -1999,7 +1994,7 @@ export function simulateCircuitStep(
         if (subId) {
           const subDef = getSubcircuitDefinition(subId);
           if (subDef) {
-            const { outputs: outVals, internal } = evaluateSubcircuitStateful(subDef, inVals, comp.state.subcircuitInternal);
+            const { outputs: outVals, internal } = evaluateSubcircuitStateful(subDef, raw, comp.state.subcircuitInternal);
             comp.state.subcircuitInternal = internal;
             outVals.forEach((val, oIdx) => {
               if (comp.outputs[oIdx] && comp.outputs[oIdx].value !== val) {
@@ -2816,6 +2811,9 @@ export const HEX_7SEG_MAP: Record<number, { a: boolean; b: boolean; c: boolean; 
   14: { a: true,  b: false, c: false, d: true,  e: true,  f: true,  g: true  }, // E
   15: { a: true,  b: false, c: false, d: false, e: true,  f: true,  g: true  }, // F
 };
+
+// What Logisim's hex digit shows for an undefined input: a dash
+export const HEX_7SEG_DASH = { a: false, b: false, c: false, d: false, e: false, f: false, g: true };
 
 /**
  * 16-Tone Programmable Chiptune Musical Scale Table (Do-Re-Mi / Hz)

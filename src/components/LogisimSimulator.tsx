@@ -36,6 +36,7 @@ import {
   simulateCircuitStep,
   CIRCUIT_PRESETS,
   HEX_7SEG_MAP,
+  HEX_7SEG_DASH,
   CHIPTUNE_NOTE_FREQS,
   CHIPTUNE_NOTE_NAMES,
   generateTruthTable,
@@ -4863,7 +4864,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       case 'hexDisplay': {
         const val = comp.state.hexVal ?? 0;
-        const segs = HEX_7SEG_MAP[val] || HEX_7SEG_MAP[0];
+        const segs = val < 0 ? HEX_7SEG_DASH : HEX_7SEG_MAP[val] || HEX_7SEG_MAP[0];
         const onColor = '#ef4444';
         const offColor = '#241215';
         const onGlow = 'drop-shadow(0 0 6px #ef4444)';
