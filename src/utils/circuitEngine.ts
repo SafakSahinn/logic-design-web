@@ -1074,6 +1074,14 @@ const gateFold = (pins: CircuitPin[], op: (a: SignalValue, b: SignalValue) => Si
   return pins.slice(1).reduce<SignalValue>((acc, p) => op(acc, p.value), pins[0].value);
 };
 
+// Logisim reads separate select/address pins as one bus: any E bit makes it an error, any other
+// undefined bit (x or floating) makes it unknown
+const busValue = (vals: SignalValue[]): number | 'X' | 'E' => {
+  if (vals.some((v) => v === 'E')) return 'E';
+  if (!vals.every(isLevel)) return 'X';
+  return vals.reduce<number>((acc, v, i) => acc | ((v as number) << i), 0);
+};
+
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
 const POWER_UP_X_TYPES = new Set<string>(['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
@@ -1278,9 +1286,9 @@ export function simulateCircuitStep(
       driverPins.push(pin);
     });
 
-    // Logisim value model: floating drivers don't count, an undriven net floats (Z),
-    // and differing driven values short each other out (E)
-    const drivenVals = new Set(driverPins.map((d) => d.value).filter((v) => v !== 'Z'));
+    // Logisim value model: floating and unknown drivers don't count (x combined with 1 is 1),
+    // an undriven net floats (Z) or stays unknown (X), and differing driven values short each other out (E)
+    const drivenVals = new Set(driverPins.map((d) => d.value).filter((v) => v !== 'Z' && v !== 'X'));
     const hasConflict = drivenVals.size > 1;
 
     // If conflict detected, mark all wires in this net
@@ -1298,6 +1306,8 @@ export function simulateCircuitStep(
       resolvedValue = 'E';
     } else if (drivenVals.size === 1) {
       resolvedValue = drivenVals.values().next().value!;
+    } else if (driverPins.some((d) => d.value === 'X')) {
+      resolvedValue = 'X';
     }
 
     // Assign resolved value to all wires in net
@@ -1335,6 +1345,13 @@ export function simulateCircuitStep(
   // Step 3: Compute gate/block outputs based on their current inputs
   newComps.forEach((comp) => {
     const inVals = comp.inputs.map((p) => (p.value === 1 ? 1 : 0));
+    const raw = comp.inputs.map((p) => p.value);
+    const setOut = (idx: number, val: SignalValue) => {
+      if (comp.outputs[idx] && comp.outputs[idx].value !== val) {
+        comp.outputs[idx].value = val;
+        hasChanged = true;
+      }
+    };
     // In Logisim, multi-input logic gates ignore unconnected (floating) input pins
     const connectedInputs = comp.inputs.filter((p) => isPinConnected(p.id));
 
@@ -1409,27 +1426,17 @@ export function simulateCircuitStep(
         break;
       }
       case 'splitter4': {
-        for (let i = 0; i < 4; i++) {
-          const bitVal: SignalValue = inVals[i] === 1 ? 1 : 0;
-          if (comp.outputs[i] && comp.outputs[i].value !== bitVal) {
-            comp.outputs[i].value = bitVal;
-            hasChanged = true;
-          }
-        }
+        // Like a Logisim splitter, every bit passes through unchanged (x/E included)
+        for (let i = 0; i < 4; i++) setOut(i, raw[i] ?? 'Z');
         break;
       }
-      case 'demux2': {
-        const d = inVals[0] === 1 ? 1 : 0;
-        const s = inVals[1] === 1 ? 1 : 0;
-        const y0: SignalValue = d === 1 && s === 0 ? 1 : 0;
-        const y1: SignalValue = d === 1 && s === 1 ? 1 : 0;
-        if (comp.outputs[0] && comp.outputs[0].value !== y0) {
-          comp.outputs[0].value = y0;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== y1) {
-          comp.outputs[1].value = y1;
-          hasChanged = true;
+      case 'demux2':
+      case 'demux4': {
+        // Logisim demultiplexer: the selected output carries D as is, the others are 0;
+        // an undefined select makes every output x (or E)
+        const sel = busValue(raw.slice(1));
+        for (let i = 0; i < comp.outputs.length; i++) {
+          setOut(i, typeof sel === 'number' ? (i === sel ? raw[0] : 0) : sel);
         }
         break;
       }
@@ -1513,18 +1520,14 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'decoder2to4': {
-        // Logisim: an unconnected enable counts as enabled
-        const en = isPinConnected(comp.inputs[0]?.id ?? '') ? inVals[0] : 1;
-        const a0 = inVals[1] ?? 0;
-        const a1 = inVals[2] ?? 0;
-        const addr = a0 + a1 * 2;
-        for (let i = 0; i < 4; i++) {
-          const val: SignalValue = en === 1 && addr === i ? 1 : 0;
-          if (comp.outputs[i] && comp.outputs[i].value !== val) {
-            comp.outputs[i].value = val;
-            hasChanged = true;
-          }
+      case 'decoder2to4':
+      case 'decoder3to8': {
+        // Logisim decoder: only an enable of 0 disables (all outputs 0 here, active-high like the
+        // 74HC238), an enable of E gives E, and an undefined address gives x (or E) on every output
+        const en = raw[0];
+        const sel = en === 0 ? -1 : en === 'E' && isPinConnected(comp.inputs[0]?.id ?? '') ? 'E' : busValue(raw.slice(1));
+        for (let i = 0; i < comp.outputs.length; i++) {
+          setOut(i, typeof sel === 'number' ? (i === sel ? 1 : 0) : sel);
         }
         break;
       }
@@ -1637,21 +1640,6 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'decoder3to8': {
-        const en = isPinConnected(comp.inputs[0]?.id ?? '') ? inVals[0] : 1;
-        const a0 = inVals[1] ?? 0;
-        const a1 = inVals[2] ?? 0;
-        const a2 = inVals[3] ?? 0;
-        const sel = en === 1 ? a0 + a1 * 2 + a2 * 4 : -1;
-        for (let i = 0; i < 8; i++) {
-          const val: SignalValue = sel === i ? 1 : 0;
-          if (comp.outputs[i] && comp.outputs[i].value !== val) {
-            comp.outputs[i].value = val;
-            hasChanged = true;
-          }
-        }
-        break;
-      }
       case 'bcdTo7Seg': {
         const a = inVals[0] ?? 0;
         const b = inVals[1] ?? 0;
@@ -1676,94 +1664,31 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'mux2': {
-        const d0 = inVals[0];
-        const d1 = inVals[1];
-        const s = inVals[2] || 0;
-        const y: SignalValue = s === 1 ? d1 : d0;
-        if (comp.outputs[0] && comp.outputs[0].value !== y) {
-          comp.outputs[0].value = y;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'mux4': {
-        const d0 = inVals[0] ?? 0;
-        const d1 = inVals[1] ?? 0;
-        const d2 = inVals[2] ?? 0;
-        const d3 = inVals[3] ?? 0;
-        const s0 = inVals[4] ?? 0;
-        const s1 = inVals[5] ?? 0;
-        const sel = s0 + s1 * 2;
-        const chosen = sel === 0 ? d0 : sel === 1 ? d1 : sel === 2 ? d2 : d3;
-        const y: SignalValue = chosen === 1 ? 1 : 0;
-        if (comp.outputs[0] && comp.outputs[0].value !== y) {
-          comp.outputs[0].value = y;
-          hasChanged = true;
-        }
-        break;
-      }
+      case 'mux2':
+      case 'mux4':
       case 'mux8': {
-        const s0 = inVals[8] ?? 0;
-        const s1 = inVals[9] ?? 0;
-        const s2 = inVals[10] ?? 0;
-        const sel = s0 + s1 * 2 + s2 * 4;
-        const chosen = inVals[sel] ?? 0;
-        const y: SignalValue = chosen === 1 ? 1 : 0;
-        const w: SignalValue = y === 1 ? 0 : 1;
-        if (comp.outputs[0] && comp.outputs[0].value !== y) {
-          comp.outputs[0].value = y;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== w) {
-          comp.outputs[1].value = w;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'demux4': {
-        const d = inVals[0] ?? 0;
-        const s0 = inVals[1] ?? 0;
-        const s1 = inVals[2] ?? 0;
-        const sel = s0 + s1 * 2;
-        for (let i = 0; i < 4; i++) {
-          const val: SignalValue = sel === i && d === 1 ? 1 : 0;
-          if (comp.outputs[i] && comp.outputs[i].value !== val) {
-            comp.outputs[i].value = val;
-            hasChanged = true;
-          }
-        }
+        // Logisim multiplexer: the selected input passes as is (x/E included); an undefined
+        // select gives x, an E bit in it gives E
+        const n = comp.type === 'mux2' ? 2 : comp.type === 'mux4' ? 4 : 8;
+        const sel = busValue(raw.slice(n, n + Math.log2(n)));
+        const y: SignalValue = typeof sel === 'number' ? raw[sel] ?? 'Z' : sel;
+        setOut(0, y);
+        // mux8's W is the inverted output (like the 74HC151), so a non-level Y makes it E
+        if (comp.type === 'mux8') setOut(1, sigNot(y));
         break;
       }
       case 'priorityEncoder4to2': {
-        const d0 = inVals[0] ?? 0;
-        const d1 = inVals[1] ?? 0;
-        const d2 = inVals[2] ?? 0;
-        const d3 = inVals[3] ?? 0;
-        let y1: SignalValue = 0;
-        let y0: SignalValue = 0;
-        let v: SignalValue = 0;
-        if (d3 === 1) {
-          y1 = 1; y0 = 1; v = 1;
-        } else if (d2 === 1) {
-          y1 = 1; y0 = 0; v = 1;
-        } else if (d1 === 1) {
-          y1 = 0; y0 = 1; v = 1;
-        } else if (d0 === 1) {
-          y1 = 0; y0 = 0; v = 1;
+        // Logisim priority encoder: only inputs at 1 count; with none the code is x and V is 0
+        let hi = -1;
+        for (let i = 3; i >= 0; i--) {
+          if (raw[i] === 1) {
+            hi = i;
+            break;
+          }
         }
-        if (comp.outputs[0] && comp.outputs[0].value !== y1) {
-          comp.outputs[0].value = y1;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== y0) {
-          comp.outputs[1].value = y0;
-          hasChanged = true;
-        }
-        if (comp.outputs[2] && comp.outputs[2].value !== v) {
-          comp.outputs[2].value = v;
-          hasChanged = true;
-        }
+        setOut(0, hi < 0 ? 'X' : hi >> 1 ? 1 : 0);
+        setOut(1, hi < 0 ? 'X' : hi & 1 ? 1 : 0);
+        setOut(2, hi < 0 ? 0 : 1);
         break;
       }
       case 'shiftRegister4': {
