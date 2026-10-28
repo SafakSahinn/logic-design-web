@@ -904,7 +904,7 @@ export function createComponentInstance(
     type: 'output',
     // Q' starts at 1 like the flip-flop state (q = 0, qBar = 1); a 0 there rose to 1 on the first step and
     // clocked whatever it drives
-    value: type === 'vcc' || pin.id === 'outQBar' ? 1 : 0,
+    value: POWER_UP_X_TYPES.has(type) ? 'X' : type === 'vcc' || pin.id === 'outQBar' ? 1 : 0,
     x: x + pin.relX,
     y: y + pin.relY,
   }));
@@ -1055,6 +1055,29 @@ setComponentBodySizeResolver((comp) => {
 /**
  * Propagate logic values across wires and components
  */
+// Logisim value algebra for gates: a floating or unknown input is not a valid level, so it
+// turns into E unless a controlling value (0 for AND, 1 for OR) decides the output anyway
+const isLevel = (v: SignalValue): v is 0 | 1 => v === 0 || v === 1;
+const sigNot = (a: SignalValue): SignalValue => (isLevel(a) ? (a === 1 ? 0 : 1) : 'E');
+const sigAnd = (a: SignalValue, b: SignalValue): SignalValue =>
+  a === 0 || b === 0 ? 0 : a === 1 && b === 1 ? 1 : 'E';
+const sigOr = (a: SignalValue, b: SignalValue): SignalValue =>
+  a === 1 || b === 1 ? 1 : a === 0 && b === 0 ? 0 : 'E';
+const sigXor = (a: SignalValue, b: SignalValue): SignalValue =>
+  isLevel(a) && isLevel(b) ? ((a ^ b) as 0 | 1) : 'E';
+
+// Unconnected inputs are ignored and a gate with none connected outputs E; a single connected
+// input passes through unchanged (Logisim 2.7.1 gives x for AND(x, unconnected), E for XOR)
+const gateFold = (pins: CircuitPin[], op: (a: SignalValue, b: SignalValue) => SignalValue): SignalValue => {
+  if (pins.length === 0) return 'E';
+  if (op === sigXor && pins.length === 1) return isLevel(pins[0].value) ? pins[0].value : 'E';
+  return pins.slice(1).reduce<SignalValue>((acc, p) => op(acc, p.value), pins[0].value);
+};
+
+// Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
+// once something drives them; combinational logic overwrites the X on the first step
+const POWER_UP_X_TYPES = new Set<string>(['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
+
 export function simulateCircuitStep(
   components: CircuitComponentInstance[],
   wires: CircuitWire[]
@@ -1314,11 +1337,10 @@ export function simulateCircuitStep(
     const inVals = comp.inputs.map((p) => (p.value === 1 ? 1 : 0));
     // In Logisim, multi-input logic gates ignore unconnected (floating) input pins
     const connectedInputs = comp.inputs.filter((p) => isPinConnected(p.id));
-    const hasAnyConnectedInput = connectedInputs.length > 0;
 
     switch (comp.type) {
       case 'not': {
-        const val: SignalValue = inVals[0] === 1 ? 0 : 1;
+        const val: SignalValue = sigNot(comp.inputs[0]?.value ?? 'Z');
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1326,7 +1348,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'and': {
-        const val: SignalValue = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1) ? 1 : 0;
+        const val: SignalValue = gateFold(connectedInputs, sigAnd);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1334,7 +1356,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'or': {
-        const val: SignalValue = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1) ? 1 : 0;
+        const val: SignalValue = gateFold(connectedInputs, sigOr);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1342,8 +1364,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'nand': {
-        const allOnes = hasAnyConnectedInput && connectedInputs.every((p) => p.value === 1);
-        const val: SignalValue = hasAnyConnectedInput ? (allOnes ? 0 : 1) : 0;
+        const val: SignalValue = sigNot(gateFold(connectedInputs, sigAnd));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1351,8 +1372,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'nor': {
-        const anyOnes = hasAnyConnectedInput && connectedInputs.some((p) => p.value === 1);
-        const val: SignalValue = hasAnyConnectedInput ? (anyOnes ? 0 : 1) : 0;
+        const val: SignalValue = sigNot(gateFold(connectedInputs, sigOr));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1360,8 +1380,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'xor': {
-        const onesCount = connectedInputs.filter((p) => p.value === 1).length;
-        const val: SignalValue = hasAnyConnectedInput && onesCount % 2 === 1 ? 1 : 0;
+        const val: SignalValue = gateFold(connectedInputs, sigXor);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1369,8 +1388,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'xnor': {
-        const onesCount = connectedInputs.filter((p) => p.value === 1).length;
-        const val: SignalValue = hasAnyConnectedInput ? (onesCount % 2 === 0 ? 1 : 0) : 0;
+        const val: SignalValue = sigNot(gateFold(connectedInputs, sigXor));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1378,11 +1396,12 @@ export function simulateCircuitStep(
         break;
       }
       case 'triState': {
-        const a = inVals[0] === 1 ? 1 : 0;
-        const en = inVals[1] === 1 ? 1 : 0;
+        // Logisim controlled buffer: enable 1 passes the data, 0 floats, anything else is an error
+        const data = comp.inputs[0]?.value ?? 'Z';
+        const en = comp.inputs[1]?.value ?? 'Z';
         const isHiZ = en === 0;
         comp.state.hiZ = isHiZ;
-        const val: SignalValue = isHiZ ? 'Z' : (a === 1 ? 1 : 0);
+        const val: SignalValue = isHiZ ? 'Z' : en === 1 ? data : 'E';
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -2832,6 +2851,9 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
 
 export const CIRCUIT_PRESETS: CircuitPreset[] = RAW_CIRCUIT_PRESETS.map((preset) => ({
   ...preset,
+  components: preset.components.map((c) =>
+    POWER_UP_X_TYPES.has(c.type) ? { ...c, outputs: c.outputs.map((p) => ({ ...p, value: 'X' as SignalValue })) } : c
+  ),
   wires: repairWires(preset.wires, preset.components),
 }));
 
