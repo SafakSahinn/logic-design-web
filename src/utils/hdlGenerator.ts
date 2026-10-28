@@ -116,6 +116,15 @@ const VHDL: LangOps = {
   comment: (t) => `  -- ${t}`,
 };
 
+// VHDL condition "x = '1'" / "x = '0'". Comparing two literals ('0' = '1') is ambiguous in VHDL
+// (character vs std_logic), so constant inputs (VCC/GND/floating) fold to true/false.
+function is1(x: string): string {
+  return x === "'1'" ? 'true' : x === "'0'" ? 'false' : `${x} = '1'`;
+}
+function is0(x: string): string {
+  return x === "'0'" ? 'true' : x === "'1'" ? 'false' : `${x} = '0'`;
+}
+
 // Parenthesise anything that is not a plain identifier / literal / index
 function wrap(e: string): string {
   return /^[A-Za-z0-9_'\\[\]().]+$/.test(e) && !/\s/.test(e) ? e : `(${e})`;
@@ -509,13 +518,13 @@ function buildModule(
             `  begin`,
             `    va := unsigned('0' & ${av});`,
             `    vb := unsigned('0' & ${bv});`,
-            `    if ${cin} = '1' then vc := to_unsigned(1, 5); else vc := to_unsigned(0, 5); end if;`,
-            `    if ${s1} = '0' and ${s0} = '0' then`,
+            `    if ${is1(cin)} then vc := to_unsigned(1, 5); else vc := to_unsigned(0, 5); end if;`,
+            `    if ${is0(s1)} and ${is0(s0)} then`,
             `      ${r} <= std_logic_vector(va + vb + vc);`,
-            `    elsif ${s1} = '0' and ${s0} = '1' then`,
+            `    elsif ${is0(s1)} and ${is1(s0)} then`,
             `      ${r}(3 downto 0) <= std_logic_vector(resize(va - vb - vc, 4));`,
             `      if va >= vb + vc then ${r}(4) <= '1'; else ${r}(4) <= '0'; end if;`,
-            `    elsif ${s1} = '1' and ${s0} = '0' then`,
+            `    elsif ${is1(s1)} and ${is0(s0)} then`,
             `      ${r} <= '0' & (${av} and ${bv});`,
             `    else`,
             `      ${r} <= '0' & (${av} or ${bv});`,
@@ -558,12 +567,15 @@ function buildModule(
             `    else if (!${s} && ${r}) ${q} = 1'b0;`,
             `  end`
           );
+        } else if (![s, r].some(isSignalName)) {
+          // Both inputs constant: the latch never changes from set / its initial 0 (no empty process, VHDL-93)
+          body.push(`  ${q} <= ${s === L.one && r === L.zero ? "'1'" : "'0'"};`);
         } else {
           body.push(
-            `  process (${[s, r].filter(isSignalName).join(', ') || 'all'})`,
+            `  process (${[s, r].filter(isSignalName).join(', ')})`,
             `  begin`,
-            `    if ${s} = '1' and ${r} = '0' then ${q} <= '1';`,
-            `    elsif ${s} = '0' and ${r} = '1' then ${q} <= '0';`,
+            `    if ${is1(s)} and ${is0(r)} then ${q} <= '1';`,
+            `    elsif ${is0(s)} and ${is1(r)} then ${q} <= '0';`,
             `    end if;`,
             `  end process;`
           );
@@ -640,7 +652,7 @@ function buildModule(
               `  process (${clk})`,
               `  begin`,
               `    if rising_edge(${clk}) then`,
-              `      if ${we} = '1' then ${mem}(to_integer(unsigned(${addrSig}))) <= ${inp(7)} & ${inp(6)} & ${inp(5)} & ${inp(4)}; end if;`,
+              `      if ${is1(we)} then ${mem}(to_integer(unsigned(${addrSig}))) <= ${inp(7)} & ${inp(6)} & ${inp(5)} & ${inp(4)}; end if;`,
               `    end if;`,
               `  end process;`
             );
@@ -783,7 +795,7 @@ function seqBlock(
       v.includes('__WE__') ? vhdlWe(v) : v.includes('__SHIFT__') ? vhdlShift(v) : v.includes('__MUX__') ? vhdlMuxSeq(v) : `@${v};`;
     lines.push(`  process (${clk}${hasRst && isSignalName(rst) ? `, ${rst}` : ''})`, `  begin`);
     if (hasRst) {
-      lines.push(`    if ${rst} = '1' then`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    elsif rising_edge(${clk}) then`);
+      lines.push(`    if ${is1(rst)} then`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    elsif rising_edge(${clk}) then`);
     } else {
       lines.push(`    if rising_edge(${clk}) then`);
     }
@@ -833,8 +845,10 @@ function vhdlMux(expr: string): string {
     // mux used inside a larger expression: rewrite as and/or form
     return vhdlMux(`${call.before}((${vhdlMuxInline(sel)} and ${vhdlMuxInline(a)}) or (not ${vhdlMuxInline(sel)} and ${vhdlMuxInline(b)}))${call.after}`);
   }
-  if (b === "'Z'") return `${vhdlMuxInline(a)} when ${vhdlMuxInline(sel)} = '1' else 'Z'`;
-  return `${vhdlMuxInline(a)} when ${vhdlMuxInline(sel)} = '1' else ${vhdlMux(b)}`;
+  if (sel === "'1'") return vhdlMux(a);
+  if (sel === "'0'") return vhdlMux(b);
+  if (b === "'Z'") return `${vhdlMuxInline(a)} when ${is1(vhdlMuxInline(sel))} else 'Z'`;
+  return `${vhdlMuxInline(a)} when ${is1(vhdlMuxInline(sel))} else ${vhdlMux(b)}`;
 }
 
 function vhdlMuxInline(expr: string): string {
@@ -853,13 +867,13 @@ function vhdlMuxSeq(v: string): string {
 function vhdlWe(v: string): string {
   const call = extractCall(v, '__WE__')!;
   const [we, d] = call.args.map((x) => x.trim());
-  return `if ${we} = '1' then\n  @${d};\nend if;`;
+  return `if ${is1(we)} then\n  @${d};\nend if;`;
 }
 
 function vhdlShift(v: string): string {
   const call = extractCall(v, '__SHIFT__')!;
   const [s1, s0, right, left] = call.args.map((x) => x.trim());
-  return `if ${s1} = '0' and ${s0} = '1' then\n  @${right};\nelsif ${s1} = '1' and ${s0} = '0' then\n  @${left};\nend if;`;
+  return `if ${is0(s1)} and ${is1(s0)} then\n  @${right};\nelsif ${is1(s1)} and ${is0(s0)} then\n  @${left};\nend if;`;
 }
 
 // ---------------------------------------------------------------------------

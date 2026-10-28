@@ -2013,7 +2013,8 @@ export function simulateCircuitStep(
         comp.state.lastClk = clk;
 
         if (isRisingEdge && we === 1) {
-          comp.state.ramData[addr] = dataIn;
+          // Copy on write: the array is shared with the previous step's state and the preset template
+          comp.state.ramData = comp.state.ramData.map((v, i) => (i === addr ? dataIn : v));
           hasChanged = true;
         }
 
