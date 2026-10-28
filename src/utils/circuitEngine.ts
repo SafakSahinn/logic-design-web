@@ -119,6 +119,16 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: "A'", type: 'output', relX: 70, relY: 30 }],
     description: "Girişin tersini alır: 0 ise 1, 1 ise 0 (A')",
   },
+  buffer: {
+    type: 'buffer',
+    name: 'Tampon (Buffer)',
+    category: 'gates',
+    width: 70,
+    height: 60,
+    inputs: [{ id: 'in', name: 'A', type: 'input', relX: 0, relY: 30 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 70, relY: 30 }],
+    description: 'Girişi değiştirmeden çıkışa aktarır (Y = A); tanımsız giriş x olarak geçer',
+  },
   and: {
     type: 'and',
     name: 'AND Kapısı (VE)',
@@ -1125,7 +1135,7 @@ const risingEdge = (comp: CircuitComponentInstance, clk: SignalValue): boolean =
 
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
-const POWER_UP_X_TYPES = new Set<string>(['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
+const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
 
 export function simulateCircuitStep(
   components: CircuitComponentInstance[],
@@ -1399,6 +1409,16 @@ export function simulateCircuitStep(
     switch (comp.type) {
       case 'not': {
         const val: SignalValue = sigNot(comp.inputs[0]?.value ?? 'Z');
+        if (comp.outputs[0] && comp.outputs[0].value !== val) {
+          comp.outputs[0].value = val;
+          hasChanged = true;
+        }
+        break;
+      }
+      case 'buffer': {
+        // Logisim buffer: passes 0/1/E unchanged, an undriven or open input comes out as x
+        const a = comp.inputs[0]?.value ?? 'Z';
+        const val: SignalValue = a === 'Z' ? 'X' : a;
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -3062,6 +3082,9 @@ function booleanExprOf(
   switch (comp.type) {
     case 'not':
       result = inputExprs[0].length === 1 ? `${inputExprs[0]}'` : `(${inputExprs[0]})'`;
+      break;
+    case 'buffer':
+      result = inputExprs[0];
       break;
     case 'and':
       if (inputExprs.length === 0) result = '0';

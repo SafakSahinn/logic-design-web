@@ -14,6 +14,7 @@ export type ComponentType =
   | 'asciiKeyboard'
   // Basic Gates
   | 'not'
+  | 'buffer'
   | 'and'
   | 'or'
   | 'nand'

@@ -367,6 +367,9 @@ function buildModule(
       case 'not':
         emit(out[0], L.not(inp(0)));
         break;
+      case 'buffer':
+        emit(out[0], inp(0));
+        break;
       case 'and':
       case 'or':
       case 'nand':

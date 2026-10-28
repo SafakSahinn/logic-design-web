@@ -190,13 +190,14 @@ const truthEntryTextClass = (v: TruthTableEntry): string =>
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
   not: { label: 'NOT', badge: 'Değil' },
+  buffer: { label: 'Buffer', badge: 'Tampon' },
   and: { label: 'AND', badge: 'VE' },
   or: { label: 'OR', badge: 'VEYA' },
   nand: { label: 'NAND', badge: 'VE DEĞİL' },
   nor: { label: 'NOR', badge: 'VEYA DEĞİL' },
   xor: { label: 'XOR', badge: 'Özel VEYA' },
   xnor: { label: 'XNOR', badge: 'Özel VEYA DEĞİL' },
-  triState: { label: 'Buffer', badge: 'Tri-State' },
+  triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
   dipSwitch4: { label: '4-Bit DIP SW', badge: 'DIP' },
@@ -3400,7 +3401,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         list.push({ key: `${c.id}_d1`, name: `${name} D1`, color: colors[cIdx++ % colors.length], type: 'output' });
         list.push({ key: `${c.id}_d2`, name: `${name} D2`, color: colors[cIdx++ % colors.length], type: 'output' });
         list.push({ key: `${c.id}_d3`, name: `${name} D3`, color: colors[cIdx++ % colors.length], type: 'output' });
-      } else if (['and', 'or', 'not', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
+      } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
         list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
       } else if (c.type === 'asciiKeyboard') {
         list.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, color: '#22c55e', type: 'input' });
@@ -3426,7 +3427,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[c.id] = c.state.on ? 1 : 0;
         } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
           values[c.id] = c.inputs[0]?.value ?? 0;
-        } else if (['and', 'or', 'not', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
+        } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
           values[c.id] = c.outputs[0]?.value ?? 0;
         } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
           values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
@@ -4041,6 +4042,24 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <line x1={65.5} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
             <text x={28} y={33} textAnchor="middle" className={`text-[11px] font-bold ${gateTextClass} select-none`}>
               NOT
+            </text>
+          </g>
+        );
+      }
+
+      case 'buffer': {
+        return (
+          <g filter="url(#gateShadow)">
+            <line x1={0} y1={30} x2={12} y2={30} stroke="#64748b" strokeWidth={2} />
+            <polygon
+              points="12,14 58,30 12,46"
+              fill={fillColor}
+              stroke={strokeColor}
+              strokeWidth={strokeWidth}
+            />
+            <line x1={58} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <text x={29} y={33} textAnchor="middle" className={`text-[10px] font-bold ${gateTextClass} select-none`}>
+              BUF
             </text>
           </g>
         );
@@ -5972,7 +5991,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'gates',
       title: 'Temel Mantık Kapıları',
       icon: '🚪',
-      types: ['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'] as ComponentType[],
+      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'] as ComponentType[],
     },
     {
       id: 'plexers',
@@ -9760,6 +9779,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const isConfigurableGate =
               meta.category === 'gates' &&
               selectedComp.type !== 'not' &&
+              selectedComp.type !== 'buffer' &&
               selectedComp.type !== 'triState';
             const curInputCount = selectedComp.inputs.length;
 

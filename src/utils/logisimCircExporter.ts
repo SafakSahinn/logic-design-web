@@ -25,6 +25,7 @@ type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
 type Prim =
   | { kind: 'gate'; type: GateKind; ins: string[]; out: string }
   | { kind: 'not'; in: string; out: string }
+  | { kind: 'buf'; in: string; out: string }
   | { kind: 'tri'; in: string; en: string; out: string }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: 0 | 1; out: string }
@@ -215,6 +216,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         }
         case 'not':
           not(pin(0), out(0));
+          break;
+        case 'buffer':
+          P.push({ kind: 'buf', in: pin(0), out: out(0) });
           break;
         case 'triState':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
@@ -551,6 +555,11 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'not':
           xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate"/>`);
           tunnel(x - 30, y, p.in, true);
+          tunnel(x, y, p.out, false);
+          break;
+        case 'buf':
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer"/>`);
+          tunnel(x - 20, y, p.in, true);
           tunnel(x, y, p.out, false);
           break;
         case 'tri':

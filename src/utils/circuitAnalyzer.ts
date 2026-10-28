@@ -4,7 +4,7 @@ import { getSubcircuitDefinition } from './subcircuitManager';
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
-const GATE_TYPES = ['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'];
+const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES = ['dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit', 'ram16x4'];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
@@ -34,6 +34,7 @@ export interface CircuitAnalysisReport {
 
 const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   not: 2,
+  buffer: 4,
   nand: 4,
   nor: 4,
   and: 6,
@@ -133,6 +134,8 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
   switch (c.type) {
     case 'not':
       return 2;
+    case 'buffer':
+      return 4; // two inverters
     case 'nand':
     case 'nor':
       return 2 * n; // n series + n parallel transistors
@@ -193,7 +196,7 @@ export function analyzeCircuit(
     const name =
       c.type === 'subcircuit'
         ? `IC: ${c.state.subcircuitName || c.label || 'Alt devre'}`
-        : GATE_TYPES.includes(c.type) && c.type !== 'not' && c.type !== 'triState'
+        : GATE_TYPES.includes(c.type) && c.type !== 'not' && c.type !== 'buffer' && c.type !== 'triState'
           ? `${c.type.toUpperCase()} (${c.inputs.length} giriş)`
           : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };

@@ -25,8 +25,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'xor gate') return 'xor';
   if (n === 'xnor gate') return 'xnor';
   if (n === 'controlled buffer') return 'triState';
-  // A plain buffer is a one-input AND for us (a gate with one connected input passes it through)
-  if (n === 'buffer') return 'and';
+  if (n === 'buffer') return 'buffer';
 
   if (n === 'pin') {
     return isOutputPin ? 'probe' : 'switch';
@@ -281,12 +280,11 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, where } = part;
+      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, where } = part;
       const anchor = scaled(loc);
-      const isBuffer = compName.trim().toLowerCase() === 'buffer';
-      const isGate = GATE_TYPES.includes(nativeType) && !isBuffer;
+      const isGate = GATE_TYPES.includes(nativeType);
 
-      if (isGate || isBuffer || nativeType === 'not' || nativeType === 'triState') {
+      if (isGate || nativeType === 'not' || nativeType === 'buffer' || nativeType === 'triState') {
         let inputPoints: Pt[];
         if (isGate) {
           const isXor = nativeType === 'xor' || nativeType === 'xnor';
@@ -301,6 +299,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
           }
         } else if (nativeType === 'triState') {
           inputPoints = [local(loc, { x: -20, y: 0 }, rot), local(loc, { x: -10, y: 10 }, rot)];
+        } else if (nativeType === 'buffer') {
+          inputPoints = [local(loc, { x: -20, y: 0 }, rot)]; // Logisim buffer is 20 long, no size attribute
         } else {
           inputPoints = [local(loc, { x: -(size || 30), y: 0 }, rot)];
         }
