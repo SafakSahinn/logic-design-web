@@ -1240,6 +1240,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // Pan trigger: Right Click (e.button === 2), Middle Click (e.button === 1), Hand Tool (canvasMode === 'pan'), Spacebar, or Alt
     if (e.button === 2 || e.button === 1 || isSpacePressedRef.current || e.altKey || (canvasMode === 'pan' && e.button === 0)) {
+      if (isSpacePressedRef.current) spaceUsedForPanRef.current = true;
       e.preventDefault();
       setIsPanning(true);
       panStartRef.current = {
@@ -1619,6 +1620,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     setZoom(1);
     setPanOffset({ x: 0, y: 0 });
   };
+
+  // Latest versions of plain handlers the keyboard shortcuts call; the key listener effect
+  // is not re-created on every render, so it reads them from here instead of a stale closure
+  const shortcutActionsRef = useRef({ step: () => {}, resetView: () => {} });
+  shortcutActionsRef.current = { step: handleSingleStep, resetView: handleResetView };
+  // Space: a short press starts / pauses the simulation, holding it while dragging pans the canvas
+  const spaceUsedForPanRef = useRef(false);
 
   // Export Circuit Project to JSON File (Multi-Sheet supported)
   // Custom IC definitions used by these parts, including ICs nested inside other ICs
@@ -3483,9 +3491,40 @@ ${wireXmls.join('\n')}
         return;
       }
 
-      // Space key (Pan mode)
-      if (e.code === 'Space' && !isSpacePressedRef.current) {
-        isSpacePressedRef.current = true;
+      // Space key: hold for pan mode, a short press toggles the simulation on key up
+      if (e.code === 'Space') {
+        e.preventDefault(); // no page scroll / button activation
+        if (!isSpacePressedRef.current) {
+          isSpacePressedRef.current = true;
+          spaceUsedForPanRef.current = false;
+        }
+        return;
+      }
+
+      // F10: one simulation step
+      if (e.key === 'F10') {
+        e.preventDefault();
+        shortcutActionsRef.current.step();
+        return;
+      }
+
+      // + / - zoom, 0 resets the view (with Ctrl these stay the browser's own zoom)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '+' || e.key === '=') {
+          e.preventDefault();
+          setZoom((z) => Math.min(2.5, Number((z + 0.1).toFixed(2))));
+          return;
+        }
+        if (e.key === '-' || e.key === '_') {
+          e.preventDefault();
+          setZoom((z) => Math.max(0.4, Number((z - 0.1).toFixed(2))));
+          return;
+        }
+        if (e.key === '0') {
+          e.preventDefault();
+          shortcutActionsRef.current.resetView();
+          return;
+        }
       }
 
       // Delete or Backspace
@@ -3515,8 +3554,12 @@ ${wireXmls.join('\n')}
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
+        const wasPressed = isSpacePressedRef.current;
         isSpacePressedRef.current = false;
         setIsPanning(false);
+        const activeEl = document.activeElement;
+        const typing = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+        if (wasPressed && !spaceUsedForPanRef.current && !typing) setIsRunning((r) => !r);
       }
     };
 
@@ -10931,7 +10974,7 @@ ${wireXmls.join('\n')}
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {[
-                  { key: 'Boşluk (Space)', desc: 'Simülasyonu Başlat / Duraklat' },
+                  { key: 'Boşluk (kısa bas)', desc: 'Simülasyonu Başlat / Duraklat' },
                   { key: 'F10 / Adım', desc: 'Sinyali 1 Adım İlerlet (Step)' },
                   { key: 'Delete / Backspace', desc: 'Seçili Bileşeni veya Kabloyu Sil' },
                   { key: 'Ctrl + Z', desc: 'Son İşlemi Geri Al (Undo)' },
@@ -10942,7 +10985,7 @@ ${wireXmls.join('\n')}
                   { key: 'Shift + Tık', desc: 'Çoklu Bileşen / Kablo Seç' },
                   { key: 'Sol Tık + Sürükle', desc: 'Dikdörtgen Çoklu Seçim (Marquee)' },
                   { key: 'Sağ Tık veya ✋ El Aracı', desc: 'Tuvali Serbest Kaydır (Pan)' },
-                  { key: 'Boşluk / Alt + Sürükle', desc: 'Tuvali Kaydırma Kısayolu' },
+                  { key: 'Boşluk (basılı) / Alt + Sürükle', desc: 'Tuvali Kaydırma Kısayolu' },
                   { key: '+ / -', desc: 'Tuval Yakınlaştır / Uzaklaştır' },
                   { key: '0', desc: 'Görünümü Varsayılan Boyuta Sıfırla' },
                   { key: 'Esc', desc: 'Tüm Seçimleri Temizle / Modalları Kapat' },
