@@ -1114,6 +1114,14 @@ const logisimDiff = (a: SignalValue[], b: SignalValue[], bin: SignalValue): { di
   return { diff: sum, borrow: sigNot(carry) };
 };
 
+// Logisim clocks memory only on a clean 0 -> 1 step, so x or E on the clock never makes an edge
+// (the first evaluation never does either: there is no previous level yet)
+const risingEdge = (comp: CircuitComponentInstance, clk: SignalValue): boolean => {
+  const prevClk = comp.state.lastClk ?? clk;
+  comp.state.lastClk = clk;
+  return prevClk === 0 && clk === 1;
+};
+
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
 const POWER_UP_X_TYPES = new Set<string>(['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
@@ -1484,7 +1492,7 @@ export function simulateCircuitStep(
           for (let i = 0; i < comp.outputs.length; i++) setOut(i, bad);
           break;
         }
-        const a =(inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
+        const a = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
         const cin = inVals[4] || 0;
         const b = (inVals[5] || 0) + (inVals[6] || 0) * 2 + (inVals[7] || 0) * 4 + (inVals[8] || 0) * 8;
         const s0 = inVals[9] || 0;
@@ -1530,14 +1538,12 @@ export function simulateCircuitStep(
         break;
       }
       case 'register4': {
-        const d = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
-        const clk: SignalValue = inVals[4] === 1 ? 1 : 0;
-        // Logisim: an unconnected enable counts as enabled
-        const we: SignalValue = !isPinConnected(comp.inputs[5]?.id ?? '') || inVals[5] === 1 ? 1 : 0;
-        const rst: SignalValue = inVals[6] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = clk === 1 && prevClk === 0;
-        comp.state.lastClk = clk;
+        // Logisim register: only an enable of 0 blocks loading (open, x and E enable it), only a
+        // clear at 1 clears, and a D that is not fully defined is not loaded
+        const dBits = busValue(raw.slice(0, 4));
+        const isRisingEdge = risingEdge(comp, raw[4]);
+        const we = raw[5] !== 0;
+        const rst = raw[6];
 
         let curVal = comp.state.regVal ?? 0;
         if (rst === 1) {
@@ -1546,7 +1552,8 @@ export function simulateCircuitStep(
             comp.state.regVal = 0;
             hasChanged = true;
           }
-        } else if (isRisingEdge && we === 1) {
+        } else if (isRisingEdge && we && typeof dBits === 'number') {
+          const d = dBits;
           curVal = d;
           if (comp.state.regVal !== d) {
             comp.state.regVal = d;
@@ -1598,11 +1605,8 @@ export function simulateCircuitStep(
         break;
       }
       case 'counter4': {
-        const clk: SignalValue = inVals[0] === 1 ? 1 : 0;
-        const rst: SignalValue = inVals[1] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = clk === 1 && prevClk === 0;
-        comp.state.lastClk = clk;
+        const isRisingEdge = risingEdge(comp, raw[0]);
+        const rst = raw[1];
 
         let curCount = comp.state.count ?? 0;
         if (rst === 1) {
@@ -1648,7 +1652,7 @@ export function simulateCircuitStep(
           for (let i = 0; i < 7; i++) setOut(i, code);
           break;
         }
-        const a =inVals[0] ?? 0;
+        const a = inVals[0] ?? 0;
         const b = inVals[1] ?? 0;
         const c = inVals[2] ?? 0;
         const d = inVals[3] ?? 0;
@@ -1699,12 +1703,13 @@ export function simulateCircuitStep(
         break;
       }
       case 'shiftRegister4': {
-        const clk = inVals[0] ?? 0;
-        const rst = inVals[1] ?? 0;
-        const sl = inVals[2] ?? 0;
-        const sr = inVals[3] ?? 0;
-        const s0 = inVals[4] ?? 0;
-        const s1 = inVals[5] ?? 0;
+        const isRisingEdge = risingEdge(comp, raw[0]);
+        const rst = raw[1];
+        // Like Logisim's shift register the serial bit is stored as is, so an x shifted in shows up
+        // on the outputs (a floating one is kept as x); an undefined mode select does not shift
+        const sl: SignalValue = raw[2] === 'Z' ? 'X' : raw[2];
+        const sr: SignalValue = raw[3] === 'Z' ? 'X' : raw[3];
+        const mode = busValue([raw[4], raw[5]]);
 
         if (!Array.isArray(comp.state.regBits)) {
           comp.state.regBits = [0, 0, 0, 0];
@@ -1713,9 +1718,7 @@ export function simulateCircuitStep(
         if (rst === 1) {
           comp.state.regBits = [0, 0, 0, 0];
         } else {
-          const prevClk = comp.state.lastClk ?? clk;
-          if (prevClk === 0 && clk === 1) {
-            const mode = s0 + s1 * 2;
+          if (isRisingEdge) {
             const cur = [...comp.state.regBits];
             // Same directions as the 74HC194 this part models
             if (mode === 1) {
@@ -1727,15 +1730,7 @@ export function simulateCircuitStep(
             }
           }
         }
-        comp.state.lastClk = clk;
-
-        for (let b = 0; b < 4; b++) {
-          const bitVal: SignalValue = comp.state.regBits[b] === 1 ? 1 : 0;
-          if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
-            comp.outputs[b].value = bitVal;
-            hasChanged = true;
-          }
-        }
+        for (let b = 0; b < 4; b++) setOut(b, comp.state.regBits[b] ?? 0);
         break;
       }
       case 'sevenSegment': {
@@ -1838,13 +1833,9 @@ export function simulateCircuitStep(
         break;
       }
       case 'dFlipFlop': {
-        const d: SignalValue = inVals[0] === 1 ? 1 : 0;
-        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = clk === 1 && prevClk === 0;
-        comp.state.lastClk = clk;
-
-        if (isRisingEdge) {
+        // Logisim: a D that is x or E at the edge leaves the stored value unchanged
+        const d = raw[0];
+        if (risingEdge(comp, raw[1]) && isLevel(d)) {
           const nextQ = d;
           const nextQBar: SignalValue = d === 1 ? 0 : 1;
           if (comp.state.q !== nextQ) {
@@ -1866,14 +1857,10 @@ export function simulateCircuitStep(
         break;
       }
       case 'jkFlipFlop': {
-        const j: SignalValue = inVals[0] === 1 ? 1 : 0;
-        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
-        const k: SignalValue = inVals[2] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = clk === 1 && prevClk === 0;
-        comp.state.lastClk = clk;
-
-        if (isRisingEdge) {
+        // Logisim: unless both J and K are 0/1 the edge leaves the stored value unchanged
+        const j = raw[0];
+        const k = raw[2];
+        if (risingEdge(comp, raw[1]) && isLevel(j) && isLevel(k)) {
           let nextQ = comp.state.q ?? 0;
           if (j === 0 && k === 1) nextQ = 0;
           else if (j === 1 && k === 0) nextQ = 1;
@@ -1899,8 +1886,9 @@ export function simulateCircuitStep(
         break;
       }
       case 'srLatch': {
-        const s: SignalValue = inVals[0] === 1 ? 1 : 0;
-        const r: SignalValue = inVals[1] === 1 ? 1 : 0;
+        // Like Logisim's S-R flip-flop: an x or E on S or R holds the state (as S = R = 1 does)
+        const s = raw[0];
+        const r = raw[1];
         if (s === 1 && r === 0) {
           if (comp.state.q !== 1) {
             comp.state.q = 1;
@@ -1927,12 +1915,10 @@ export function simulateCircuitStep(
         break;
       }
       case 'tFlipFlop': {
-        const t: SignalValue = inVals[0] === 1 ? 1 : 0;
-        const clk: SignalValue = inVals[1] === 1 ? 1 : 0;
-        const rst: SignalValue = inVals[2] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = clk === 1 && prevClk === 0;
-        comp.state.lastClk = clk;
+        // Logisim: only T = 1 toggles, and only a reset at 1 clears (open or x does nothing)
+        const t = raw[0];
+        const isRisingEdge = risingEdge(comp, raw[1]);
+        const rst = raw[2];
 
         let curQ = comp.state.q ?? 0;
         if (rst === 1) {
@@ -1966,16 +1952,15 @@ export function simulateCircuitStep(
         if (!Array.isArray(comp.state.ramData) || comp.state.ramData.length !== 16) {
           comp.state.ramData = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         }
-        const addr = (inVals[0] ?? 0) + (inVals[1] ?? 0) * 2 + (inVals[2] ?? 0) * 4 + (inVals[3] ?? 0) * 8;
-        const dataIn = (inVals[4] ?? 0) + (inVals[5] ?? 0) * 2 + (inVals[6] ?? 0) * 4 + (inVals[7] ?? 0) * 8;
-        const clk = inVals[8] ?? 0;
-        const we = inVals[9] ?? 0;
+        // Logisim RAM: an undefined address keeps the output as it was and writes nothing, and only
+        // a write enable of 0 blocks writing (open or x writes). Unlike Logisim, which stores an
+        // undefined data word as all ones, such a word is not written.
+        const addr = busValue(raw.slice(0, 4));
+        const dataIn = busValue(raw.slice(4, 8));
+        const isRisingEdge = risingEdge(comp, raw[8]);
+        if (typeof addr !== 'number') break;
 
-        const prevClk = comp.state.lastClk ?? clk;
-        const isRisingEdge = prevClk === 0 && clk === 1;
-        comp.state.lastClk = clk;
-
-        if (isRisingEdge && we === 1) {
+        if (isRisingEdge && raw[9] !== 0 && typeof dataIn === 'number') {
           // Copy on write: the array is shared with the previous step's state and the preset template
           comp.state.ramData = comp.state.ramData.map((v, i) => (i === addr ? dataIn : v));
           hasChanged = true;
@@ -1996,7 +1981,9 @@ export function simulateCircuitStep(
         if (!Array.isArray(comp.state.romData) || comp.state.romData.length !== 16) {
           comp.state.romData = [...DEFAULT_ROM];
         }
-        const addr = (inVals[0] ?? 0) + (inVals[1] ?? 0) * 2 + (inVals[2] ?? 0) * 4 + (inVals[3] ?? 0) * 8;
+        // Logisim ROM: an undefined address keeps the output as it was
+        const addr = busValue(raw.slice(0, 4));
+        if (typeof addr !== 'number') break;
         const storedVal = comp.state.romData[addr] ?? 0;
         for (let b = 0; b < 4; b++) {
           const bitVal: SignalValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;

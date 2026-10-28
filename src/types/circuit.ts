@@ -111,7 +111,7 @@ export interface CircuitComponentInstance {
     hexVal?: number;
     count?: number;
     regVal?: number;
-    regBits?: number[];
+    regBits?: SignalValue[];
     ramData?: number[];
     romData?: number[];
     aluResult?: number;
