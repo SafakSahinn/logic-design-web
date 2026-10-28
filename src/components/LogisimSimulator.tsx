@@ -27,6 +27,7 @@ import type {
   CircuitPin,
   ComponentCategory,
   CircuitAnnotation,
+  TruthTableEntry,
 } from '../types/circuit';
 import {
   COMPONENT_CATALOG,
@@ -45,6 +46,7 @@ import {
   getMultiInputGatePinRelY,
   getInputSignalNames,
   minimizeBooleanExpression,
+  truthTableColumnTerms,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -148,6 +150,24 @@ export interface CircuitSheet {
 // Pin dot colour per signal value (Logisim: blue = floating/unknown, red = error)
 const pinDotFill = (v: SignalValue): string =>
   v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
+
+// Truth-table / K-map cell: hover text and colour of the non-binary entries
+const truthEntryTitle = (v: TruthTableEntry): string | undefined =>
+  v === 'E'
+    ? 'E: devrede çakışan çıkış değerleri var (sadeleştirmede önemsiz sayılır)'
+    : v === '@'
+    ? '@: devre bu girişlerde salınıyor (sadeleştirmede önemsiz sayılır)'
+    : v === '-'
+    ? '-: çıkış tanımsız (x) ya da boşta (Z); sadeleştirmede önemsiz sayılır'
+    : undefined;
+const truthEntryTextClass = (v: TruthTableEntry): string =>
+  v === 1
+    ? 'text-emerald-700 font-extrabold'
+    : v === 'E' || v === '@'
+    ? 'text-red-600 font-extrabold'
+    : v === '-'
+    ? 'text-indigo-500 font-bold'
+    : 'text-slate-400';
 
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
@@ -10443,10 +10463,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                               </td>
                             ))}
                             {row.outputValues.map((v, cIdx) => (
-                              <td key={cIdx} className="py-2 px-3 border-r border-slate-100 last:border-r-0">
-                                <span className={v === 1 ? 'text-emerald-700 font-extrabold' : 'text-slate-400'}>
-                                  {v}
-                                </span>
+                              <td
+                                key={cIdx}
+                                title={truthEntryTitle(v)}
+                                className={`py-2 px-3 border-r border-slate-100 last:border-r-0 ${
+                                  v === 'E' || v === '@' ? 'bg-red-100' : ''
+                                }`}
+                              >
+                                <span className={truthEntryTextClass(v)}>{v}</span>
                               </td>
                             ))}
                             <td className="py-2 px-3">
@@ -10547,12 +10571,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     colDefs = GRAY_2;
                   }
 
-                  const minterms: number[] = [];
-                  truthTableData.rows.forEach((row, rIdx) => {
-                    if (row.outputValues[kmapSelectedOutputIdx] === 1) {
-                      minterms.push(rIdx);
-                    }
-                  });
+                  const { minterms, dontCares } = truthTableColumnTerms(truthTableData.rows, kmapSelectedOutputIdx);
 
                   return (
                     <div className="space-y-5">
@@ -10603,7 +10622,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                                     const matchingRow = truthTableData.rows.find((r) =>
                                       r.inputValues.slice(0, inputsCount).every((v, i) => v === combinedInputs[i])
                                     );
-                                    const val = matchingRow ? matchingRow.outputValues[kmapSelectedOutputIdx] : 0;
+                                    const val: TruthTableEntry = matchingRow ? matchingRow.outputValues[kmapSelectedOutputIdx] : 0;
+                                    const isErrorCell = val === 'E' || val === '@';
                                     const isLiveActive = matchingRow ? matchingRow.isCurrentState : false;
                                     const mIndex = combinedInputs.reduce((acc, bit, idx) => acc + (bit ? Math.pow(2, inputsCount - 1 - idx) : 0), 0);
 
@@ -10611,16 +10631,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                                       <td
                                         key={cIdx}
                                         onClick={() => handleApplyInputsFromKMap(combinedInputs)}
-                                        title={`Tıkla: Tuvaldeki anahtarları bu lojik kombinasyona ayarla (m${mIndex}: ${rowVarName}=${row.label}, ${colVarName}=${col.label})`}
+                                        title={`${truthEntryTitle(val) ? `${truthEntryTitle(val)}\n` : ''}Tıkla: Tuvaldeki anahtarları bu lojik kombinasyona ayarla (m${mIndex}: ${rowVarName}=${row.label}, ${colVarName}=${col.label})`}
                                         className={`relative px-7 py-5 border-b border-r border-slate-200 last:border-r-0 transition-all cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:z-10 ${
                                           isLiveActive
-                                            ? 'ring-2 ring-blue-500 ring-inset bg-blue-50/70'
+                                            ? `ring-2 ring-blue-500 ring-inset ${isErrorCell ? 'bg-red-100' : 'bg-blue-50/70'}`
+                                            : isErrorCell
+                                            ? 'bg-red-100 hover:bg-red-200'
                                             : val === 1
                                             ? 'bg-emerald-50/80 hover:bg-emerald-100 font-black'
                                             : 'bg-white hover:bg-slate-50'
                                         }`}
                                       >
-                                        <span className={`text-base font-black ${val === 1 ? 'text-emerald-600 font-black' : 'text-slate-300'}`}>
+                                        <span className={`text-base font-black ${val === 1 ? 'text-emerald-600' : truthEntryTextClass(val)}`}>
                                           {val}
                                         </span>
                                         <span className="absolute bottom-1 right-1.5 text-[9px] font-sans text-slate-400 select-none">
@@ -10645,6 +10667,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           <span className="font-bold text-indigo-950">Kanonik Çarpımlar Toplamı (Minterm SOP):</span>
                           <span className="font-mono font-bold text-indigo-700 bg-white px-2.5 py-1 rounded-lg border border-indigo-200 shadow-2xs">
                             {activeOut.name} = Σm({minterms.length > 0 ? minterms.join(', ') : '∅'})
+                            {dontCares.length > 0 && ` + d(${dontCares.join(', ')})`}
                           </span>
                         </div>
 
@@ -10669,11 +10692,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                                         // "Cin", which the parser would read as C·i·n), then give the
                                         // switches their real names back
                                         const outIdx = truthTableData.outputs.findIndex((o) => o.name === activeOut.name);
-                                        const minterms = truthTableData.rows
-                                          .map((r, rIdx) => (r.outputValues[outIdx] === 1 ? rIdx : -1))
-                                          .filter((m) => m >= 0);
+                                        const terms = truthTableColumnTerms(truthTableData.rows, outIdx);
                                         const letters = truthTableData.inputs.map((_, k) => String.fromCharCode(65 + k));
-                                        const expr = minimizeBooleanExpression(letters, minterms).expression;
+                                        const expr = minimizeBooleanExpression(letters, terms.minterms, terms.dontCares).expression;
                                         const synthesized = synthesizeCircuitFromBooleanExpression(expr);
                                         const renamed = synthesized.components.map((c) => {
                                           const m = c.type === 'switch' ? /^Giriş ([A-Z])$/.exec(c.label || '') : null;

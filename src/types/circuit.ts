@@ -204,6 +204,10 @@ export interface CircuitPreset {
   wires: CircuitWire[];
 }
 
+// Truth-table output cell as in Logisim-evolution: '-' = don't care (output X or Z),
+// 'E' = conflicting drivers, '@' = the circuit oscillates for this row
+export type TruthTableEntry = 0 | 1 | '-' | 'E' | '@';
+
 export interface TruthTableData {
   inputs: { id: string; name: string }[];
   outputs: { id: string; name: string }[];
@@ -217,7 +221,7 @@ export interface TruthTableData {
   };
   rows: {
     inputValues: SignalValue[];
-    outputValues: SignalValue[];
+    outputValues: TruthTableEntry[];
     isCurrentState?: boolean;
   }[];
   // Caveats shown above the table (inputs left out, stateful parts)

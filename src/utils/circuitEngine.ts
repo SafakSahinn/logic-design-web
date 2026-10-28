@@ -6,6 +6,7 @@ import type {
   CircuitPin,
   CircuitPreset,
   TruthTableData,
+  TruthTableEntry,
 } from '../types/circuit';
 import type { SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
@@ -3234,17 +3235,18 @@ export function generateTruthTable(
 
     const sim = simulateCircuit(testComps, wires);
 
-    // Read outputs
-    const outputVals: SignalValue[] = outputList.map((out) => {
+    // Read outputs like Logisim-evolution's Analyze.computeTable: an oscillating row is '@' in
+    // every column, E is a conflict, X / Z are don't cares
+    const outputVals: TruthTableEntry[] = outputList.map((out) => {
+      if (sim.oscillating) return '@';
       const found = sim.components.find((c) => c.id === out.compId);
-      if (!found) return 0;
-      if (found.type === 'led' || found.type === 'probe' || found.type === 'buzzer') {
-        return (found.inputs[0]?.value === 1 ? 1 : 0) as SignalValue;
+      let v: SignalValue | undefined;
+      if (found && (found.type === 'led' || found.type === 'probe' || found.type === 'buzzer')) {
+        v = found.inputs[0]?.value;
+      } else if (found && out.pinIndex !== undefined) {
+        v = found.outputs[out.pinIndex]?.value;
       }
-      if (out.pinIndex !== undefined && found.outputs[out.pinIndex]) {
-        return (found.outputs[out.pinIndex].value === 1 ? 1 : 0) as SignalValue;
-      }
-      return 0;
+      return v === 1 ? 1 : v === 0 ? 0 : v === 'E' ? 'E' : '-';
     });
 
     const isCurrent = inputVals.every((v, idx) => v === currentInputs[idx]);
@@ -3271,13 +3273,8 @@ export function generateTruthTable(
   const inputNames = getInputSignalNames(components);
   const varNames = activeSwitches.map((s) => inputNames.get(s.id) || 'Giriş');
   outputList.forEach((out, outIdx) => {
-    const mintermIndices: number[] = [];
-    rows.forEach((r, rIdx) => {
-      if (r.outputValues[outIdx] === 1) {
-        mintermIndices.push(rIdx);
-      }
-    });
-    minimalExpressions[out.name] = minimizeBooleanExpression(varNames, mintermIndices);
+    const { minterms, dontCares } = truthTableColumnTerms(rows, outIdx);
+    minimalExpressions[out.name] = minimizeBooleanExpression(varNames, minterms, dontCares);
   });
 
   const notes: string[] = [];
@@ -3309,6 +3306,24 @@ export function generateTruthTable(
 }
 
 /**
+ * Minterms and don't cares of one truth-table output column. Like Logisim-evolution's
+ * Implicant.computeMinimal, every cell that is not 0 or 1 ('-', 'E', '@') is a don't care.
+ */
+export function truthTableColumnTerms(
+  rows: TruthTableData['rows'],
+  outIdx: number
+): { minterms: number[]; dontCares: number[] } {
+  const minterms: number[] = [];
+  const dontCares: number[] = [];
+  rows.forEach((r, rIdx) => {
+    const v = r.outputValues[outIdx];
+    if (v === 1) minterms.push(rIdx);
+    else if (v !== 0) dontCares.push(rIdx);
+  });
+  return { minterms, dontCares };
+}
+
+/**
  * Quine-McCluskey algorithmic minimization for up to 6 variables
  * Computes Prime Implicants, Essential Prime Implicants, and minimal Sum of Products (SOP).
  */
@@ -3324,11 +3339,10 @@ export function minimizeBooleanExpression(
   const n = varNames.length;
   if (n === 0) return { expression: '0', primeImplicants: [], essentialImplicants: [] };
   if (minterms.length === 0) return { expression: '0', primeImplicants: [], essentialImplicants: [] };
-  if (minterms.length === Math.pow(2, n)) {
+  const allTerms = Array.from(new Set([...minterms, ...dontCares]));
+  if (allTerms.length === Math.pow(2, n)) {
     return { expression: '1', primeImplicants: ['1'], essentialImplicants: ['1'] };
   }
-
-  const allTerms = Array.from(new Set([...minterms, ...dontCares]));
 
   let terms = allTerms.map((m) => ({
     mask: m.toString(2).padStart(n, '0'),
@@ -3521,7 +3535,10 @@ export function minimizeBooleanExpression(
 
   return {
     expression: finalExpr,
-    primeImplicants: primeImplicants.map((pi) => maskToExpression(pi.mask)),
+    // A prime made only of don't cares covers no required 1, so it is not listed
+    primeImplicants: primeImplicants
+      .filter((pi) => targetMinterms.some((m) => covers(pi.mask, m)))
+      .map((pi) => maskToExpression(pi.mask)),
     essentialImplicants: essentialPIs.map((pi) => maskToExpression(pi.mask)),
   };
 }
