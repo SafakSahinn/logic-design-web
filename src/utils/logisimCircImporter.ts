@@ -228,6 +228,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       xorMode?: string;
       leftHanded: boolean;
       pull?: string;
+      outMode?: '01' | '0Z' | 'Z1';
       where: string;
     };
     const parts: RawPart[] = [];
@@ -253,6 +254,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       let xorMode: string | undefined;
       let leftHanded = false;
       let pull: string | undefined;
+      let outMode: '01' | '0Z' | 'Z1' | undefined;
       const negated: number[] = [];
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
@@ -267,6 +269,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         if (aName === 'xor') xorMode = aVal;
         if (aName === 'control') leftHanded = aVal === 'left';
         if (aName === 'pull') pull = aVal;
+        if (aName === 'out' && (aVal === '0Z' || aVal === 'Z1')) outMode = aVal;
         const neg = aName?.match(/^negate(\d+)$/);
         if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
       }
@@ -283,7 +286,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, where });
+      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, outMode, where });
 
       occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
       const ff = FF_POINTS[nativeType];
@@ -297,7 +300,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, where } = part;
+      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, outMode, where } = part;
       const anchor = scaled(loc);
       const isGate = GATE_TYPES.includes(nativeType);
 
@@ -362,6 +365,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
           inst.state = { ...inst.state, gateInputsCount: n };
         }
         inst.rotation = rot as 0 | 90 | 180 | 270;
+        // Output Value applies to the gate that drives the net (the last one of a split wide gate)
+        if (outMode) inst.state = { ...inst.state, outputMode: outMode };
         inst = updatePinPositions(inst);
         // Put our output pin exactly on the (scaled) Logisim anchor
         const out = inst.outputs[0];

@@ -47,6 +47,7 @@ import {
   getInputSignalNames,
   minimizeBooleanExpression,
   truthTableColumnTerms,
+  OUTPUT_MODE_TYPES,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -9611,6 +9612,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   {/* Component Shape Body with Rotation */}
                   <g transform={comp.rotation ? `rotate(${comp.rotation}, ${compW / 2}, ${compH / 2})` : undefined}>
                     {renderGateBody(comp)}
+                    {/* Open collector / emitter output (Logisim draws no mark; shown here so the mode is not hidden) */}
+                    {OUTPUT_MODE_TYPES.includes(comp.type) && comp.state.outputMode && comp.state.outputMode !== '01' && (
+                      <text
+                        x={compW - 2}
+                        y={compH / 2 - 7}
+                        textAnchor="end"
+                        className="text-[8px] font-mono font-black fill-amber-600 select-none pointer-events-none"
+                      >
+                        {comp.state.outputMode === '0Z' ? '0/Z' : 'Z/1'}
+                      </text>
+                    )}
                   </g>
 
                   {/* Component Label Text with Alignment (Top, Bottom, Center, Hidden) */}
@@ -9866,6 +9878,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         title={`${cnt} Girişli Yap`}
                       >
                         {cnt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Gate output value (Logisim "Output Value") */}
+                {OUTPUT_MODE_TYPES.includes(selectedComp.type) && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Çıkış:</span>
+                    {(['01', '0Z', 'Z1'] as const).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => {
+                          recordHistory();
+                          setComponents((prev) =>
+                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, outputMode: m } } : c))
+                          );
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
+                          (selectedComp.state.outputMode ?? '01') === m ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                        title={m === '01' ? 'Normal çıkış (0 ve 1 sürer)' : m === '0Z' ? 'Açık kollektör: 0 sürer, 1 yerine hattı boş bırakır' : 'Açık emitör: 1 sürer, 0 yerine hattı boş bırakır'}
+                      >
+                        {m === '01' ? '0/1' : m === '0Z' ? '0/Z' : 'Z/1'}
                       </button>
                     ))}
                   </div>

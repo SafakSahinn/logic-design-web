@@ -1,6 +1,6 @@
 import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP } from './circuitEngine';
+import { HEX_7SEG_MAP, OUTPUT_MODE_TYPES } from './circuitEngine';
 import { getSubcircuitDefinition } from './subcircuitManager';
 
 /*
@@ -142,6 +142,9 @@ const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4'
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
+// Parts that can leave their output net floating: tri-state parts and open collector / emitter gates
+const canFloat = (c?: CircuitComponentInstance) =>
+  !!c && (TRI_TYPES.includes(c.type) || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01'));
 
 export interface PortDecl {
   name: string;
@@ -307,8 +310,8 @@ function buildModule(
           const bn = names.make(`bus_${compNames.get(c.id)}_${p.name}`, 'bus');
           busSignal.set(key, bn);
           declare(bn);
-          const allTri = drivers.every((d) => TRI_TYPES.includes(pinOwner.get(d)?.type ?? ''));
-          if (!allTri) warnings.push(`${bn}: birden fazla sürücü var (çakışma); simülatör bu durumda 0 okur.`);
+          const allTri = drivers.every((d) => canFloat(pinOwner.get(d)));
+          if (!allTri) warnings.push(`${bn}: birden fazla sürücü var (çakışma); simülatörde bu hat E (çakışma) olur.`);
         }
         pinExpr.set(p.id, busSignal.get(key)!);
       } else {
@@ -349,7 +352,7 @@ function buildModule(
     if (c.type !== 'pullResistor' || !c.inputs[0]) continue;
     const drivers = netDrivers(c.inputs[0].id);
     const level = pullOf(c.inputs[0].id);
-    if (drivers.length === 0 || !drivers.every((d) => TRI_TYPES.includes(pinOwner.get(d)?.type ?? ''))) continue;
+    if (drivers.length === 0 || !drivers.every((d) => canFloat(pinOwner.get(d)))) continue;
     const sig = pinExpr.get(drivers[0]);
     if (!sig || pulledSigs.has(sig)) continue;
     pulledSigs.add(sig);
@@ -399,6 +402,12 @@ function buildModule(
       if (pin && floating === undefined && isFloating(pin.id)) openIns.add(pin.name);
       return inputExpr(pin?.id, floating);
     };
+    // Gate output value: open collector drives only 0 (a 1 floats), open emitter only 1
+    // (VHDL tests the select as "sel = '1'", so a compound one needs its own parentheses)
+    const emitGate = (f: string) => {
+      const sel = lang === 'vhdl' ? wrap(f) : f;
+      emit(out[0], c.state.outputMode === '0Z' ? L.mux(sel, L.hiZ, L.zero) : c.state.outputMode === 'Z1' ? L.mux(sel, L.one, L.hiZ) : f);
+    };
     const connectedIns = c.inputs.filter((p) => isConnected(p.id) || portBound.has(p.id)).map((p) => inputExpr(p.id));
     // Open pins of a 4-bit data / address group: the simulator never stores an undefined word and
     // a RAM / ROM ignores an undefined address
@@ -409,10 +418,10 @@ function buildModule(
 
     switch (c.type) {
       case 'not':
-        emit(out[0], L.not(inp(0)));
+        emitGate(L.not(inp(0)));
         break;
       case 'buffer':
-        emit(out[0], inp(0));
+        emitGate(inp(0));
         break;
       case 'and':
       case 'or':
@@ -428,7 +437,7 @@ function buildModule(
         }
         const base =
           c.type === 'and' || c.type === 'nand' ? L.and(connectedIns) : c.type === 'or' || c.type === 'nor' ? L.or(connectedIns) : L.xor(connectedIns);
-        emit(out[0], c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' ? L.not(base) : base);
+        emitGate(c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' ? L.not(base) : base);
         break;
       }
       case 'triState':

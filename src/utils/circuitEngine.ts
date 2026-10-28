@@ -1158,6 +1158,12 @@ const risingEdge = (comp: CircuitComponentInstance, clk: SignalValue): boolean =
 
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
+// Parts with Logisim's "Output Value" attribute
+export const OUTPUT_MODE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+// 0/floating leaves the net on a 1, floating/1 on a 0; x and E pass unchanged (Logisim pullOutput)
+const gateOutput = (comp: CircuitComponentInstance, v: SignalValue): SignalValue =>
+  (comp.state.outputMode === '0Z' && v === 1) || (comp.state.outputMode === 'Z1' && v === 0) ? 'Z' : v;
+
 const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter']);
 
 export function simulateCircuitStep(
@@ -1441,7 +1447,7 @@ export function simulateCircuitStep(
 
     switch (comp.type) {
       case 'not': {
-        const val: SignalValue = sigNot(comp.inputs[0]?.value ?? 'Z');
+        const val: SignalValue = gateOutput(comp, sigNot(comp.inputs[0]?.value ?? 'Z'));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1451,7 +1457,7 @@ export function simulateCircuitStep(
       case 'buffer': {
         // Logisim buffer: passes 0/1/E unchanged, an undriven or open input comes out as x
         const a = comp.inputs[0]?.value ?? 'Z';
-        const val: SignalValue = a === 'Z' ? 'X' : a;
+        const val: SignalValue = gateOutput(comp, a === 'Z' ? 'X' : a);
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1459,7 +1465,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'and': {
-        const val: SignalValue = gateFold(connectedInputs, sigAnd);
+        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigAnd));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1467,7 +1473,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'or': {
-        const val: SignalValue = gateFold(connectedInputs, sigOr);
+        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigOr));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1475,7 +1481,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'nand': {
-        const val: SignalValue = sigNot(gateFold(connectedInputs, sigAnd));
+        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigAnd)));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1483,7 +1489,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'nor': {
-        const val: SignalValue = sigNot(gateFold(connectedInputs, sigOr));
+        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigOr)));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1491,7 +1497,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'xor': {
-        const val: SignalValue = gateFold(connectedInputs, sigXor);
+        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigXor));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;
@@ -1499,7 +1505,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'xnor': {
-        const val: SignalValue = sigNot(gateFold(connectedInputs, sigXor));
+        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigXor)));
         if (comp.outputs[0] && comp.outputs[0].value !== val) {
           comp.outputs[0].value = val;
           hasChanged = true;

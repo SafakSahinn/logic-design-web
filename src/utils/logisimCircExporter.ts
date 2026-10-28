@@ -22,10 +22,11 @@ import type { LogicValue } from '../types/logic';
  */
 
 type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
+type OutMode = '01' | '0Z' | 'Z1';
 type Prim =
-  | { kind: 'gate'; type: GateKind; ins: string[]; out: string }
-  | { kind: 'not'; in: string; out: string }
-  | { kind: 'buf'; in: string; out: string }
+  | { kind: 'gate'; type: GateKind; ins: string[]; out: string; mode?: OutMode }
+  | { kind: 'not'; in: string; out: string; mode?: OutMode }
+  | { kind: 'buf'; in: string; out: string; mode?: OutMode }
   | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: 0 | 1; out: string }
@@ -212,14 +213,14 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // gives E, a single one passes through); a Logisim gate has at least 2 inputs
           const gIns = c.inputs.map((_, i) => pin(i));
           while (gIns.length < 2) gIns.push(OPEN);
-          P.push({ kind: 'gate', type: c.type.toUpperCase() as GateKind, ins: gIns, out: out(0) });
+          P.push({ kind: 'gate', type: c.type.toUpperCase() as GateKind, ins: gIns, out: out(0), mode: c.state.outputMode });
           break;
         }
         case 'not':
-          not(pin(0), out(0));
+          P.push({ kind: 'not', in: pin(0), out: out(0), mode: c.state.outputMode });
           break;
         case 'buffer':
-          P.push({ kind: 'buf', in: pin(0), out: out(0) });
+          P.push({ kind: 'buf', in: pin(0), out: out(0), mode: c.state.outputMode });
           break;
         case 'triState':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
@@ -529,6 +530,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   const tunnel = (x: number, y: number, net: string, sink: boolean) =>
     net !== OPEN &&
     xml.push(`    <comp lib="0" loc="(${x},${y})" name="Tunnel"><a name="facing" val="${sink ? 'east' : 'west'}"/><a name="label" val="${xmlEsc(nameOf(net))}"/></comp>`);
+  // Logisim gate "Output Value" ('out'); the default 0/1 is left out like Logisim does
+  const outAttr = (m?: OutMode) => (m && m !== '01' ? `<a name="out" val="${m}"/>` : '');
   const CELL_W = 220;
   const CELL_H = 110;
   const PER_ROW = 8;
@@ -553,19 +556,19 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           const xorBonus = p.type === 'XOR' || p.type === 'XNOR' ? 10 : 0;
           const dx = 50 + neg + xorBonus;
           xml.push(
-            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate"><a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? '<a name="xor" val="odd"/>' : ''}</comp>`
+            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate"><a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? '<a name="xor" val="odd"/>' : ''}${outAttr(p.mode)}</comp>`
           );
           gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx, y + dy, p.ins[i], true));
           tunnel(x, y, p.out, false);
           break;
         }
         case 'not':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate"/>`);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${outAttr(p.mode)}</comp>`);
           tunnel(x - 30, y, p.in, true);
           tunnel(x, y, p.out, false);
           break;
         case 'buf':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer"/>`);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${outAttr(p.mode)}</comp>`);
           tunnel(x - 20, y, p.in, true);
           tunnel(x, y, p.out, false);
           break;

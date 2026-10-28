@@ -112,6 +112,8 @@ export interface CircuitComponentInstance {
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
     /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
     pullValue?: 0 | 1 | 'X';
+    /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */
+    outputMode?: '01' | '0Z' | 'Z1';
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
