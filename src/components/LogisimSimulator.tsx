@@ -119,6 +119,7 @@ import type { CustomSubcircuit } from '../types/circuit';
 import type { LogicValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
+import { buildExportSvg } from '../utils/canvasExport';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
 import {
   runCircuitTestbench,
@@ -1107,7 +1108,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
             if (clockComp) {
               // Sequencer mode: release at 82% of note beat for crisp retro articulation
-              const noteDuration = Math.max(0.06, (1 / clockHz) * 0.82);
+              const noteDuration = Math.max(0.06, (1 / (clockComp.state.clockRateHz ?? clockHz)) * 0.82);
               gainNode.gain.setValueAtTime(0.035, now + noteDuration);
               gainNode.gain.linearRampToValueAtTime(0.0001, now + noteDuration + 0.012);
             }
@@ -2044,45 +2045,64 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // Export Circuit to High-Res PNG Image
+  // Standalone picture of the whole circuit (not just the visible part of the canvas)
+  const buildCircuitPicture = () => {
+    if (!svgRef.current) return null;
+    const pic = buildExportSvg(svgRef.current, { panX: panOffset.x, panY: panOffset.y, zoom }, cadTheme === 'dark' ? '#0b1120' : '#ffffff');
+    if (!pic) showToast('Dışa aktarılacak bir devre yok.');
+    return pic;
+  };
+
+  const downloadUrl = (url: string, name: string) => {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    a.click();
+  };
+  const exportBaseName = () =>
+    (currentCircuitName || 'devre')
+      .toLocaleLowerCase('tr')
+      .replace(/[çğıöşü]/g, (ch) => ({ ç: 'c', ğ: 'g', ı: 'i', ö: 'o', ş: 's', ü: 'u' })[ch] || '_')
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_|_$/g, '') || 'devre';
+
   const handleExportPNG = () => {
-    if (!svgRef.current) return;
-    const svgElement = svgRef.current;
-    const svgString = new XMLSerializer().serializeToString(svgElement);
-    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const pic = buildCircuitPicture();
+    if (!pic) return;
+    const svgBlob = new Blob([pic.markup], { type: 'image/svg+xml;charset=utf-8' });
     const blobURL = URL.createObjectURL(svgBlob);
     const image = new Image();
     image.onload = () => {
       const canvas = document.createElement('canvas');
-      const scale = 2; // High-DPI 2x
-      canvas.width = (svgElement.clientWidth || 1000) * scale;
-      canvas.height = (svgElement.clientHeight || 600) * scale;
+      // 2x for sharp text, capped so very large circuits stay within canvas limits
+      const scale = Math.min(2, 8000 / Math.max(pic.width, pic.height));
+      canvas.width = Math.round(pic.width * scale);
+      canvas.height = Math.round(pic.height * scale);
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const pngURL = canvas.toDataURL('image/png');
-        const a = document.createElement('a');
-        a.href = pngURL;
-        a.download = `devre_semasi_${Date.now()}.png`;
-        a.click();
+        try {
+          downloadUrl(canvas.toDataURL('image/png'), `${exportBaseName()}.png`);
+        } catch {
+          showToast('PNG oluşturulamadı; SVG olarak dışa aktarmayı deneyin.');
+        }
       }
       URL.revokeObjectURL(blobURL);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(blobURL);
+      showToast('PNG oluşturulamadı; SVG olarak dışa aktarmayı deneyin.');
     };
     image.src = blobURL;
   };
 
   // Export Circuit to High-Res Vector SVG
   const handleExportSVG = () => {
-    if (!svgRef.current) return;
-    const svgElement = svgRef.current;
-    const svgString = new XMLSerializer().serializeToString(svgElement);
-    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const pic = buildCircuitPicture();
+    if (!pic) return;
+    const blob = new Blob([`<?xml version="1.0" encoding="UTF-8"?>\n${pic.markup}`], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `devre_semasi_${Date.now()}.svg`;
-    a.click();
+    downloadUrl(url, `${exportBaseName()}.svg`);
     URL.revokeObjectURL(url);
   };
 
@@ -2771,16 +2791,55 @@ ${wireXmls.join('\n')}
   }, [selectedCompIds, recordHistory, components, wires]);
 
   // Duplicate selected components and any interconnecting wires
+  // In-app clipboard (Ctrl+C / Ctrl+X): parts plus their internal wiring, usable on any sheet
+  const clipboardRef = useRef<{ comps: CircuitComponentInstance[]; wires: CircuitWire[] } | null>(null);
+
+  // The selected parts together with ALL their internal wiring (every wire cluster that only touches
+  // selected parts, whatever its number of segments)
+  const getSelectionWithWiring = () => {
+    const canonical = repairWires(wires, components);
+    return {
+      canonical,
+      comps: components.filter((c) => selectedCompIds.includes(c.id)),
+      internalWires: getInternalWires(canonical, components, selectedCompIds),
+    };
+  };
+
   const handleDuplicateSelected = useCallback(() => {
     if (selectedCompIds.length === 0) return;
     recordHistory();
+    const { canonical, comps, internalWires } = getSelectionWithWiring();
+    placeCopy(comps, internalWires, canonical, { labelSuffix: ' (Kopya)', allowSamePlace: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompIds, components, wires, recordHistory]);
 
-    // Copy the selected parts together with ALL their internal wiring (every wire cluster that only touches
-    // selected parts, whatever its number of segments) and drop the copy on free space, so its pins and
-    // wires can't land on the original and short it.
-    const canonical = repairWires(wires, components);
-    const internalWires = getInternalWires(canonical, components, selectedCompIds);
-    const selComps = components.filter((c) => selectedCompIds.includes(c.id));
+  const handleCopySelected = useCallback(() => {
+    if (selectedCompIds.length === 0) return false;
+    const { comps, internalWires } = getSelectionWithWiring();
+    clipboardRef.current = JSON.parse(JSON.stringify({ comps, wires: internalWires }));
+    showToast(`${comps.length} bileşen kopyalandı.`);
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompIds, components, wires, showToast]);
+
+  const handlePasteClipboard = useCallback(() => {
+    const clip = clipboardRef.current;
+    if (!clip || clip.comps.length === 0) return false;
+    recordHistory();
+    // Pasting on another (or emptied) sheet keeps the original position when it is free
+    placeCopy(clip.comps, clip.wires, repairWires(wires, components), { labelSuffix: '', allowSamePlace: true });
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [components, wires, recordHistory]);
+
+  // Drop a copy of these parts + internal wires on free space (never on the original, so pins and
+  // wires cannot short), with fresh ids, and select it
+  const placeCopy = (
+    selComps: CircuitComponentInstance[],
+    internalWires: CircuitWire[],
+    canonical: CircuitWire[],
+    opts: { labelSuffix: string; allowSamePlace: boolean }
+  ) => {
 
     type Box = { x0: number; y0: number; x1: number; y1: number };
     const compBox = (c: CircuitComponentInstance): Box => {
@@ -2818,7 +2877,7 @@ ${wireXmls.join('\n')}
     const stepX = snapTo10(sel.x1 - sel.x0 + 40);
     const stepY = snapTo10(sel.y1 - sel.y0 + 40);
     let offset = { dx: 0, dy: stepY };
-    search: for (let k = 1; k <= 12; k++) {
+    search: for (let k = opts.allowSamePlace ? 0 : 1; k <= 12; k++) {
       for (const cand of [
         { dx: 0, dy: k * stepY },
         { dx: k * stepX, dy: 0 },
@@ -2843,7 +2902,7 @@ ${wireXmls.join('\n')}
       return updatePinPositions({
         ...c,
         id: newId,
-        label: c.label ? `${c.label} (Kopya)` : c.label,
+        label: c.label ? `${c.label}${opts.labelSuffix}` : c.label,
         state: { ...c.state },
         x: c.x + offset.dx,
         y: c.y + offset.dy,
@@ -2871,7 +2930,7 @@ ${wireXmls.join('\n')}
     setSelectedCompIds(newComps.map((c) => c.id));
     const newWireIds = new Set(newWires.map((w) => w.id));
     setSelectedWireIds(sim.wires.filter((w) => newWireIds.has(w.id)).map((w) => w.id));
-  }, [selectedCompIds, components, wires, recordHistory]);
+  };
 
   // Open Rename Modal
   const handleOpenRename = useCallback(() => {
@@ -3028,7 +3087,8 @@ ${wireXmls.join('\n')}
       subcircuitName,
       subcircuitDesc,
       targetComps,
-      repairWires(wires, components)
+      repairWires(wires, components),
+      components
     );
 
     setCustomSubcircuits(getAllSubcircuits());
@@ -3225,7 +3285,7 @@ ${wireXmls.join('\n')}
         list.push({ key: c.id, name: `${name} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output' });
       } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
         list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
-      } else if (c.type === 'counter4' || c.type === 'register4') {
+      } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
         list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_q2`, name: `${name} Q2`, color: colors[cIdx++ % colors.length], type: 'state' });
@@ -3276,7 +3336,7 @@ ${wireXmls.join('\n')}
           values[c.id] = c.outputs[0]?.value === 1 ? 1 : 0;
         } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
           values[`${c.id}_q`] = c.outputs[0]?.value === 1 ? 1 : 0;
-        } else if (c.type === 'counter4' || c.type === 'register4') {
+        } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
           values[`${c.id}_q0`] = c.outputs[0]?.value === 1 ? 1 : 0;
           values[`${c.id}_q1`] = c.outputs[1]?.value === 1 ? 1 : 0;
           values[`${c.id}_q2`] = c.outputs[2]?.value === 1 ? 1 : 0;
@@ -3380,6 +3440,23 @@ ${wireXmls.join('\n')}
         return;
       }
 
+      // Ctrl + C / Ctrl + X / Ctrl + V (in-app clipboard)
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+        if (handleCopySelected()) e.preventDefault();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'x' || e.key === 'X')) {
+        if (handleCopySelected()) {
+          e.preventDefault();
+          handleDeleteSelected();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'v' || e.key === 'V')) {
+        if (handlePasteClipboard()) e.preventDefault();
+        return;
+      }
+
       // Ctrl + D (Duplicate)
       if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
         if (selectedCompIds.length > 0) {
@@ -3458,6 +3535,8 @@ ${wireXmls.join('\n')}
     handleRedo,
     handleDeleteSelected,
     handleDuplicateSelected,
+    handleCopySelected,
+    handlePasteClipboard,
     handleRotateSelected,
   ]);
 
@@ -8645,7 +8724,7 @@ ${wireXmls.join('\n')}
                   )}
 
                   {isSelected && (
-                    <>
+                    <g data-export-skip="">
                       {/* Resize handle (bottom-right corner) */}
                       <rect
                         x={ann.x + ann.width - 10}
@@ -8679,11 +8758,12 @@ ${wireXmls.join('\n')}
                           <title>Renk</title>
                         </circle>
                       ))}
-                    </>
+                    </g>
                   )}
 
                   {/* Delete Bubble: Always visible for easy one-click removal */}
                   <g
+                    data-export-skip=""
                     transform={`translate(${ann.x + ann.width - 14}, ${ann.y + 13})`}
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
@@ -9419,6 +9499,7 @@ ${wireXmls.join('\n')}
             {/* Box Selection Marquee */}
             {selectionBox && (
               <rect
+                data-export-skip=""
                 x={Math.min(selectionBox.startX, selectionBox.currentX)}
                 y={Math.min(selectionBox.startY, selectionBox.currentY)}
                 width={Math.abs(selectionBox.currentX - selectionBox.startX)}
@@ -10857,7 +10938,7 @@ ${wireXmls.join('\n')}
                   { key: 'Ctrl + Y', desc: 'İleri Al (Redo)' },
                   { key: 'Ctrl + D', desc: 'Seçili Bileşenleri Çoğalt (Duplicate)' },
                   { key: 'R', desc: 'Seçili Bileşeni 90° Döndür' },
-                  { key: 'Ctrl + C / V', desc: 'Kopyala / Yapıştır' },
+                  { key: 'Ctrl + C / X / V', desc: 'Kopyala / Kes / Yapıştır (sayfalar arasında da)' },
                   { key: 'Shift + Tık', desc: 'Çoklu Bileşen / Kablo Seç' },
                   { key: 'Sol Tık + Sürükle', desc: 'Dikdörtgen Çoklu Seçim (Marquee)' },
                   { key: 'Sağ Tık veya ✋ El Aracı', desc: 'Tuvali Serbest Kaydır (Pan)' },

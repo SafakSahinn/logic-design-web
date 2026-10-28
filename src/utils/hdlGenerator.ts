@@ -607,9 +607,10 @@ function buildModule(
           clk = inp(0);
           rst = inp(1);
           const [sl, sr, s0, s1] = [inp(2), inp(3), inp(4), inp(5)];
-          // mode 1 (S1S0=01): shift right, SR enters Q3; mode 2 (10): shift left, SL enters Q0; else hold
-          const right = lang === 'verilog' ? `{${sr}, ${bit(3)}, ${bit(2)}, ${bit(1)}}` : `${sr} & ${r}(3 downto 1)`;
-          const left = lang === 'verilog' ? `{${bit(2)}, ${bit(1)}, ${bit(0)}, ${sl}}` : `${r}(2 downto 0) & ${sl}`;
+          // 74HC194: mode 1 (S1S0=01) shifts right, SR enters Q0 and data moves toward Q3;
+          // mode 2 (10) shifts left, SL enters Q3 and data moves toward Q0; else hold
+          const right = lang === 'verilog' ? `{${bit(2)}, ${bit(1)}, ${bit(0)}, ${sr}}` : `${r}(2 downto 0) & ${sr}`;
+          const left = lang === 'verilog' ? `{${sl}, ${bit(3)}, ${bit(2)}, ${bit(1)}}` : `${sl} & ${r}(3 downto 1)`;
           updates = [
             [
               r,

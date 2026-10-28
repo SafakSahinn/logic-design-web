@@ -320,6 +320,8 @@ export function evaluateSubcircuit(
  * Same as evaluateSubcircuit, but continues from the instance's previous internal state (when it
  * still matches the definition) and returns the new internal state alongside the outputs.
  */
+const PORT_DRIVER_PREFIX = '__port_driver_';
+
 export function evaluateSubcircuitStateful(
   subDef: CustomSubcircuit,
   inputVals: LogicValue[],
@@ -350,15 +352,24 @@ export function evaluateSubcircuitStateful(
     const comp = intComps.find((c) => c.id === port.targetCompId);
     if (!comp) return;
 
-    if (comp.type === 'switch' || comp.type === 'pushbutton') {
+    if (comp.type === 'switch' || comp.type === 'pushbutton' || comp.type === 'clock') {
       comp.state.on = val === 1;
       if (comp.outputs[0]) comp.outputs[0].value = val;
     } else {
-      // Find matching pin
-      const pIn = comp.inputs.find((p) => p.id === port.targetPinId);
-      if (pIn) pIn.value = val;
-      const pOut = comp.outputs.find((p) => p.id === port.targetPinId);
-      if (pOut) pOut.value = val;
+      // A bare pin as port: writing its value would be undone by net resolution (an undriven net reads 0),
+      // so put a hidden driver on the pin's location for this evaluation
+      const pin = [...comp.inputs, ...comp.outputs].find((p) => p.id === port.targetPinId);
+      if (!pin) return;
+      intComps.push({
+        id: `${PORT_DRIVER_PREFIX}${idx}`,
+        type: 'switch',
+        label: '',
+        x: pin.x,
+        y: pin.y,
+        inputs: [],
+        outputs: [{ id: `${PORT_DRIVER_PREFIX}${idx}_out`, name: 'Q', type: 'output', value: val, x: pin.x, y: pin.y }],
+        state: { on: val === 1 },
+      });
     }
   });
 
@@ -385,7 +396,8 @@ export function evaluateSubcircuitStateful(
     if (pIn) return pIn.value;
     return 0 as LogicValue;
   });
-  return { outputs, internal: { components: curComps, wires: curWires } };
+  // The hidden port drivers are rebuilt every evaluation; keep only the IC's own parts as its state
+  return { outputs, internal: { components: curComps.filter((c) => !c.id.startsWith(PORT_DRIVER_PREFIX)), wires: curWires } };
 }
 
 /**
@@ -396,13 +408,15 @@ export function packageSelectionIntoSubcircuit(
   chipCode: string,
   description: string,
   selectedComponents: CircuitComponentInstance[],
-  allWires: CircuitWire[]
+  allWires: CircuitWire[],
+  allComponents: CircuitComponentInstance[] = selectedComponents
 ): CustomSubcircuit {
   // Internal wiring: every wire cluster that only touches pins of the selection, however many segments it
-  // has (canvas wires are straight segments whose ends are mostly corners, not pins)
+  // has (canvas wires are straight segments whose ends are mostly corners, not pins). The other parts must
+  // be known too, or a wire to an unselected part would look internal and its pins never become ports.
   const internalWires = getInternalWires(
     allWires,
-    selectedComponents,
+    allComponents,
     selectedComponents.map((c) => c.id)
   );
   const internalWireEnds = new Set<string>();
@@ -463,20 +477,32 @@ export function packageSelectionIntoSubcircuit(
   }
 
   if (outPorts.length === 0) {
-    selectedComponents.forEach((c) => {
-      c.outputs.forEach((p) => {
-        // If this output is not used internally or is a primary output
-        outPorts.push({
-          id: `port_out_${outPortCount++}`,
-          name: p.name || `OUT${outPortCount}`,
-          type: 'output',
-          targetCompId: c.id,
-          targetPinId: p.id,
-        });
+    // Outputs that feed nothing inside the selection; if every output is used internally, offer them all
+    const unused = selectedComponents.flatMap((c) =>
+      c.outputs.filter((p) => !internalWireEnds.has(`${snapTo10(p.x)},${snapTo10(p.y)}`)).map((p) => ({ c, p }))
+    );
+    const candidates = unused.length > 0 ? unused : selectedComponents.flatMap((c) => c.outputs.map((p) => ({ c, p })));
+    candidates.forEach(({ c, p }) => {
+      outPorts.push({
+        id: `port_out_${outPortCount++}`,
+        name: p.name || `OUT${outPortCount}`,
+        type: 'output',
+        targetCompId: c.id,
+        targetPinId: p.id,
       });
     });
   }
 
+  // IC pins follow the layout on the canvas (top to bottom, then left to right), like Logisim
+  const pinPos = (port: SubcircuitPortDefinition) => {
+    const comp = selectedComponents.find((c) => c.id === port.targetCompId);
+    const pin = comp && [...comp.inputs, ...comp.outputs].find((q) => q.id === port.targetPinId);
+    return pin || comp || { x: 0, y: 0 };
+  };
+  const byPosition = (a: SubcircuitPortDefinition, b: SubcircuitPortDefinition) =>
+    pinPos(a).y - pinPos(b).y || pinPos(a).x - pinPos(b).x;
+  inPorts.sort(byPosition);
+  outPorts.sort(byPosition);
   const ports = [...inPorts, ...outPorts];
   const width = 130;
   const height = Math.max(76, (Math.max(inPorts.length, outPorts.length) + 1) * 22);

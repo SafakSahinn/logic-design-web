@@ -1760,12 +1760,13 @@ export function simulateCircuitStep(
           if (prevClk === 0 && clk === 1) {
             const mode = s0 + s1 * 2;
             const cur = [...comp.state.regBits];
+            // Same directions as the 74HC194 this part models
             if (mode === 1) {
-              // Shift Right: SR into Q3, Q3 into Q2, Q2 into Q1, Q1 into Q0
-              comp.state.regBits = [cur[1], cur[2], cur[3], sr];
+              // Shift Right: SR (DSR) into Q0, Q0 into Q1, Q1 into Q2, Q2 into Q3
+              comp.state.regBits = [sr, cur[0], cur[1], cur[2]];
             } else if (mode === 2) {
-              // Shift Left: SL into Q0, Q0 into Q1, Q1 into Q2, Q2 into Q3
-              comp.state.regBits = [sl, cur[0], cur[1], cur[2]];
+              // Shift Left: SL (DSL) into Q3, Q3 into Q2, Q2 into Q1, Q1 into Q0
+              comp.state.regBits = [cur[1], cur[2], cur[3], sl];
             }
           }
         }
