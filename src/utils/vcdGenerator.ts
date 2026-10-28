@@ -1,8 +1,9 @@
 import type { CircuitComponentInstance } from '../types/circuit';
+import type { SignalValue } from '../types/logic';
 
 export interface WaveformSample {
   time: number;
-  values: Record<string, number>;
+  values: Record<string, SignalValue>;
 }
 
 // VCD identifier codes use the printable ASCII range '!'..'~' (94 symbols); more signals get longer codes
@@ -86,7 +87,8 @@ export function generateVCD(
     return lines.join('\n') + '\n';
   }
 
-  const bit = (v: number | undefined) => (v === 1 ? '1' : v === 0 ? '0' : 'x');
+  // Floating is z; unknown, conflicting (E) and missing samples are x
+  const bit = (v: SignalValue | undefined) => (v === 1 ? '1' : v === 0 ? '0' : v === 'Z' ? 'z' : 'x');
   const t0 = samples[0].time;
   // 100 ns per sample tick, measured from the first kept sample so the dump starts at #0
   const stamp = (t: number) => Math.round((t - t0) * 100);

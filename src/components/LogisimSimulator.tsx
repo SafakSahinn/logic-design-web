@@ -151,6 +151,24 @@ export interface CircuitSheet {
 const pinDotFill = (v: SignalValue): string =>
   v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
 
+// Number on a part body from its pins (bit 0 first); null when a bit is not 0 or 1
+const pinsNumber = (pins: (CircuitPin | undefined)[]): number | null => {
+  let n = 0;
+  for (let i = 0; i < pins.length; i++) {
+    const v = pins[i]?.value;
+    if (v !== 0 && v !== 1) return null;
+    n |= v << i;
+  }
+  return n;
+};
+const numText = (n: number | null): string => (n === null ? '?' : String(n));
+
+// Waveform segment colours for non-binary values, as in Logisim-evolution's chronogram
+// (x / z: orange box, E: red box)
+const WAVE_UNKNOWN_FILL = '#eaaa6c';
+const WAVE_ERROR_FILL = '#f97676';
+const waveSymbol = (v: SignalValue): string => (v === 'E' ? 'E' : v === 'Z' ? 'z' : v === 'X' ? 'x' : String(v));
+
 // Truth-table / K-map cell: hover text and colour of the non-binary entries
 const truthEntryTitle = (v: TruthTableEntry): string | undefined =>
   v === 'E'
@@ -441,7 +459,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Waveform / Timing Scope State (Zamanlama Diyagramı)
   const [showWaveform, setShowWaveform] = useState<boolean>(false);
-  const [waveformSamples, setWaveformSamples] = useState<{ time: number; values: Record<string, number> }[]>([]);
+  const [waveformSamples, setWaveformSamples] = useState<{ time: number; values: Record<string, SignalValue> }[]>([]);
   const [isWaveformPaused, setIsWaveformPaused] = useState<boolean>(false);
   const sampleTimeRef = useRef<number>(0);
 
@@ -3402,27 +3420,27 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const sampleRateMs = Math.max(100, Math.min(400, Math.floor(1000 / (clockHz * 2))));
 
     const takeSample = () => {
-      const values: Record<string, number> = {};
+      const values: Record<string, SignalValue> = {};
       components.forEach((c) => {
         if (c.type === 'clock' || c.type === 'switch' || c.type === 'pushbutton') {
           values[c.id] = c.state.on ? 1 : 0;
         } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
-          values[c.id] = c.inputs[0]?.value === 1 ? 1 : 0;
+          values[c.id] = c.inputs[0]?.value ?? 0;
         } else if (['and', 'or', 'not', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
-          values[c.id] = c.outputs[0]?.value === 1 ? 1 : 0;
+          values[c.id] = c.outputs[0]?.value ?? 0;
         } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
-          values[`${c.id}_q`] = c.outputs[0]?.value === 1 ? 1 : 0;
+          values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
         } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
-          values[`${c.id}_q0`] = c.outputs[0]?.value === 1 ? 1 : 0;
-          values[`${c.id}_q1`] = c.outputs[1]?.value === 1 ? 1 : 0;
-          values[`${c.id}_q2`] = c.outputs[2]?.value === 1 ? 1 : 0;
-          values[`${c.id}_q3`] = c.outputs[3]?.value === 1 ? 1 : 0;
+          values[`${c.id}_q0`] = c.outputs[0]?.value ?? 0;
+          values[`${c.id}_q1`] = c.outputs[1]?.value ?? 0;
+          values[`${c.id}_q2`] = c.outputs[2]?.value ?? 0;
+          values[`${c.id}_q3`] = c.outputs[3]?.value ?? 0;
         } else if (c.type === 'alu4') {
-          values[`${c.id}_f0`] = c.outputs[0]?.value === 1 ? 1 : 0;
-          values[`${c.id}_f1`] = c.outputs[1]?.value === 1 ? 1 : 0;
-          values[`${c.id}_f2`] = c.outputs[2]?.value === 1 ? 1 : 0;
-          values[`${c.id}_f3`] = c.outputs[3]?.value === 1 ? 1 : 0;
-          values[`${c.id}_z`] = c.outputs[5]?.value === 1 ? 1 : 0;
+          values[`${c.id}_f0`] = c.outputs[0]?.value ?? 0;
+          values[`${c.id}_f1`] = c.outputs[1]?.value ?? 0;
+          values[`${c.id}_f2`] = c.outputs[2]?.value ?? 0;
+          values[`${c.id}_f3`] = c.outputs[3]?.value ?? 0;
+          values[`${c.id}_z`] = c.outputs[5]?.value ?? 0;
         } else if (c.type === 'dipSwitch4') {
           const switches = c.state.dipSwitches || [false, false, false, false];
           values[`${c.id}_q0`] = switches[0] ? 1 : 0;
@@ -3430,15 +3448,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[`${c.id}_q2`] = switches[2] ? 1 : 0;
           values[`${c.id}_q3`] = switches[3] ? 1 : 0;
         } else if (c.type === 'ledBar4') {
-          values[`${c.id}_d0`] = c.inputs[0]?.value === 1 ? 1 : 0;
-          values[`${c.id}_d1`] = c.inputs[1]?.value === 1 ? 1 : 0;
-          values[`${c.id}_d2`] = c.inputs[2]?.value === 1 ? 1 : 0;
-          values[`${c.id}_d3`] = c.inputs[3]?.value === 1 ? 1 : 0;
+          values[`${c.id}_d0`] = c.inputs[0]?.value ?? 0;
+          values[`${c.id}_d1`] = c.inputs[1]?.value ?? 0;
+          values[`${c.id}_d2`] = c.inputs[2]?.value ?? 0;
+          values[`${c.id}_d3`] = c.inputs[3]?.value ?? 0;
         } else if (c.type === 'asciiKeyboard') {
-          values[`${c.id}_st`] = c.outputs[7]?.value === 1 ? 1 : 0;
-          values[`${c.id}_d0`] = c.outputs[0]?.value === 1 ? 1 : 0;
+          values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
+          values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
         } else if (c.type === 'rgbMatrix16x16') {
-          values[`${c.id}_we`] = c.inputs[11]?.value === 1 ? 1 : 0;
+          values[`${c.id}_we`] = c.inputs[11]?.value ?? 0;
         }
       });
 
@@ -4440,8 +4458,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       case 'rgbMatrix16x16': {
         const pixels = comp.state.rgbPixels || Array.from({ length: 16 }, () => Array(16).fill('#050505'));
-        const curX = (comp.inputs[0]?.value === 1 ? 1 : 0) | ((comp.inputs[1]?.value === 1 ? 2 : 0)) | ((comp.inputs[2]?.value === 1 ? 4 : 0)) | ((comp.inputs[3]?.value === 1 ? 8 : 0));
-        const curY = (comp.inputs[4]?.value === 1 ? 1 : 0) | ((comp.inputs[5]?.value === 1 ? 2 : 0)) | ((comp.inputs[6]?.value === 1 ? 4 : 0)) | ((comp.inputs[7]?.value === 1 ? 8 : 0));
+        const curX = pinsNumber(comp.inputs.slice(0, 4));
+        const curY = pinsNumber(comp.inputs.slice(4, 8));
         const isWe = comp.inputs[11]?.value === 1;
 
         return (
@@ -4456,7 +4474,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               16x16 RGB VRAM
             </text>
             <text x={158} y={10} textAnchor="end" className="text-[6.5px] font-mono font-bold fill-amber-300 select-none">
-              [{curX},{curY}]{isWe ? '•WE' : ''}
+              [{numText(curX)},{numText(curY)}]{isWe ? '•WE' : ''}
             </text>
 
             {/* 256 RGB Pixels (16x16) */}
@@ -5524,16 +5542,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'comparator4': {
-        const aVal =
-          (comp.inputs[0]?.value === 1 ? 1 : 0) +
-          (comp.inputs[1]?.value === 1 ? 2 : 0) +
-          (comp.inputs[2]?.value === 1 ? 4 : 0) +
-          (comp.inputs[3]?.value === 1 ? 8 : 0);
-        const bVal =
-          (comp.inputs[4]?.value === 1 ? 1 : 0) +
-          (comp.inputs[5]?.value === 1 ? 2 : 0) +
-          (comp.inputs[6]?.value === 1 ? 4 : 0) +
-          (comp.inputs[7]?.value === 1 ? 8 : 0);
+        // Highlights follow the output pins, so x / E inputs light nothing
+        const gt = comp.outputs[0]?.value === 1;
+        const eq = comp.outputs[1]?.value === 1;
+        const lt = comp.outputs[2]?.value === 1;
+        const aVal = pinsNumber(comp.inputs.slice(0, 4));
+        const bVal = pinsNumber(comp.inputs.slice(4, 8));
 
         return (
           <g filter="url(#gateShadow)">
@@ -5549,9 +5563,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={12} y={20} className="text-[8px] font-mono font-bold fill-slate-400 select-none">A[3:0]</text>
             <text x={48} y={82} textAnchor="middle" className="text-[8px] font-mono font-bold fill-slate-400 select-none">B[3:0]</text>
 
-            <text x={84} y={25} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${aVal > bVal ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &gt; B</text>
-            <text x={84} y={48} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${aVal === bVal ? 'fill-emerald-400' : 'fill-slate-500'}`}>A = B</text>
-            <text x={84} y={71} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${aVal < bVal ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &lt; B</text>
+            <text x={84} y={25} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${gt ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &gt; B</text>
+            <text x={84} y={48} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${eq ? 'fill-emerald-400' : 'fill-slate-500'}`}>A = B</text>
+            <text x={84} y={71} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${lt ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &lt; B</text>
 
             <text x={44} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
               ~74HC85
@@ -5560,7 +5574,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               4-BIT CMP
             </text>
             <text x={44} y={60} textAnchor="middle" className="text-[8px] font-mono font-bold fill-amber-300 select-none">
-              {aVal} vs {bVal}
+              {numText(aVal)} vs {numText(bVal)}
             </text>
           </g>
         );
@@ -5615,22 +5629,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'alu4': {
-        const aVal =
-          (comp.inputs[0]?.value === 1 ? 1 : 0) +
-          (comp.inputs[1]?.value === 1 ? 2 : 0) +
-          (comp.inputs[2]?.value === 1 ? 4 : 0) +
-          (comp.inputs[3]?.value === 1 ? 8 : 0);
-        const cinVal = comp.inputs[4]?.value === 1 ? 1 : 0;
-        const bVal =
-          (comp.inputs[5]?.value === 1 ? 1 : 0) +
-          (comp.inputs[6]?.value === 1 ? 2 : 0) +
-          (comp.inputs[7]?.value === 1 ? 4 : 0) +
-          (comp.inputs[8]?.value === 1 ? 8 : 0);
-        const s0 = comp.inputs[9]?.value === 1 ? 1 : 0;
-        const s1 = comp.inputs[10]?.value === 1 ? 1 : 0;
-        const mode = s0 + s1 * 2;
+        // Numbers come from the pins: an undefined bit shows '?' (aluResult is not updated then)
+        const aVal = pinsNumber(comp.inputs.slice(0, 4));
+        const cinVal = pinsNumber([comp.inputs[4]]);
+        const bVal = pinsNumber(comp.inputs.slice(5, 9));
+        const mode = pinsNumber([comp.inputs[9], comp.inputs[10]]);
         const modeLabels = ['ADD (A+B)', 'SUB (A-B)', 'AND (A&B)', 'OR (A|B)'];
-        const resVal = comp.state.aluResult ?? 0;
+        const resVal = pinsNumber(comp.outputs.slice(0, 4));
 
         return (
           <g filter="url(#gateShadow)">
@@ -5653,16 +5658,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={94} y={80} textAnchor="end" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">Cout</text>
             <text x={94} y={92} textAnchor="end" className="text-[7.5px] font-mono font-bold fill-purple-300 select-none">Z</text>
 
-            <text x={52} y={26} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">A={aVal} B={bVal} (Ci={cinVal})</text>
+            <text x={52} y={26} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">A={numText(aVal)} B={numText(bVal)} (Ci={numText(cinVal)})</text>
             <text x={52} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
               ALU-4
             </text>
             <text x={52} y={49} textAnchor="middle" className="text-[7.5px] font-mono font-extrabold fill-yellow-300 select-none">
-              {modeLabels[mode]}
+              {mode === null ? 'S1 S0 = ?' : modeLabels[mode]}
             </text>
             <rect x={32} y={56} width={40} height={18} rx={3} fill="#020617" stroke="#334155" strokeWidth={1} />
             <text x={52} y={69} textAnchor="middle" className="text-xs font-mono font-black fill-emerald-400 select-none">
-              F={resVal.toString(16).toUpperCase()} ({resVal})
+              {resVal === null ? 'F=?' : `F=${resVal.toString(16).toUpperCase()} (${resVal})`}
             </text>
           </g>
         );
@@ -10126,15 +10131,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   <span className="text-slate-400">Çıkış yok</span>
                 ) : (
                   canvasSummary.outputs.map((out) => {
-                    const isHigh = out.inputs[0]?.value === 1;
+                    const v: SignalValue = out.inputs[0]?.value ?? 0;
                     return (
                       <span
                         key={out.id}
                         className={`px-2 py-0.5 rounded-md font-bold text-xs ${
-                          isHigh ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                          v === 1
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : v === 'E'
+                            ? 'bg-red-100 text-red-700'
+                            : v === 'X' || v === 'Z'
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : 'bg-slate-200 text-slate-700'
                         }`}
                       >
-                        {out.label || out.id}: {isHigh ? '1' : '0'}
+                        {out.label || out.id}: {waveSymbol(v)}
                       </span>
                     );
                   })
@@ -10231,33 +10242,29 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 const yHigh = 6;
                 const yLow = 28;
 
-                // Build step path
+                // Runs of equal samples; 0/1 runs form the step line, x / z / E runs are full-height
+                // boxes (Logisim-evolution chronogram)
+                const segs: { v: SignalValue; x0: number; x1: number }[] = [];
+                waveformSamples.forEach((smp, i) => {
+                  const v = smp.values[channel.key] ?? 0;
+                  const x1 = 10 + (i + 1) * slotWidth;
+                  const last = segs[segs.length - 1];
+                  if (last && last.v === v) last.x1 = x1;
+                  else segs.push({ v, x0: 10 + i * slotWidth, x1 });
+                });
                 let pathD = '';
-                let areaD = '';
-                if (sampleCount > 0) {
-                  const firstVal = waveformSamples[0].values[channel.key] ?? 0;
-                  const firstY = firstVal === 1 ? yHigh : yLow;
-                  pathD = `M 10,${firstY} H ${10 + slotWidth}`;
-                  areaD = `M 10,${yLow} L 10,${firstY} H ${10 + slotWidth}`;
-
-                  for (let i = 1; i < sampleCount; i++) {
-                    const prevVal = waveformSamples[i - 1].values[channel.key] ?? 0;
-                    const curVal = waveformSamples[i].values[channel.key] ?? 0;
-                    const curY = curVal === 1 ? yHigh : yLow;
-                    const x2 = 10 + (i + 1) * slotWidth;
-
-                    if (curVal !== prevVal) {
-                      pathD += ` V ${curY}`;
-                      areaD += ` V ${curY}`;
-                    }
-                    pathD += ` H ${x2}`;
-                    areaD += ` H ${x2}`;
+                let prevBinary = false;
+                segs.forEach((sg) => {
+                  if (sg.v !== 0 && sg.v !== 1) {
+                    prevBinary = false;
+                    return;
                   }
-                  const lastX = 10 + sampleCount * slotWidth;
-                  areaD += ` L ${lastX},${yLow} Z`;
-                }
+                  const y = sg.v === 1 ? yHigh : yLow;
+                  pathD += prevBinary ? ` V ${y} H ${sg.x1}` : ` M ${sg.x0},${y} H ${sg.x1}`;
+                  prevBinary = true;
+                });
 
-                const lastSampleVal =
+                const lastSampleVal: SignalValue =
                   sampleCount > 0 ? waveformSamples[sampleCount - 1].values[channel.key] ?? 0 : 0;
 
                 return (
@@ -10277,10 +10284,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-extrabold shrink-0 ${
                           lastSampleVal === 1
                             ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                            : lastSampleVal === 'E'
+                            ? 'bg-red-950 text-red-400 border border-red-800'
+                            : lastSampleVal === 'X' || lastSampleVal === 'Z'
+                            ? 'bg-orange-950 text-orange-300 border border-orange-800'
                             : 'bg-slate-900 text-slate-500 border border-slate-800'
                         }`}
                       >
-                        {lastSampleVal === 1 ? '1' : '0'}
+                        {waveSymbol(lastSampleVal)}
                       </span>
                     </div>
 
@@ -10304,8 +10315,40 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         {/* Baseline */}
                         <line x1={10} y1={yLow} x2={svgWidth - 10} y2={yLow} stroke="#334155" strokeWidth={1} />
 
-                        {/* Waveform Fill Area */}
-                        {areaD && <path d={areaD} fill={channel.color} opacity={0.15} />}
+                        {/* Waveform Fill Area under the 1 runs */}
+                        {segs
+                          .filter((sg) => sg.v === 1)
+                          .map((sg, k) => (
+                            <rect key={`a${k}`} x={sg.x0} y={yHigh} width={sg.x1 - sg.x0} height={yLow - yHigh} fill={channel.color} opacity={0.15} />
+                          ))}
+
+                        {/* x / z / E runs */}
+                        {segs
+                          .filter((sg) => sg.v !== 0 && sg.v !== 1)
+                          .map((sg, k) => (
+                            <g key={`u${k}`}>
+                              <rect
+                                x={sg.x0}
+                                y={yHigh}
+                                width={sg.x1 - sg.x0}
+                                height={yLow - yHigh}
+                                fill={sg.v === 'E' ? WAVE_ERROR_FILL : WAVE_UNKNOWN_FILL}
+                                fillOpacity={0.55}
+                                stroke={sg.v === 'E' ? WAVE_ERROR_FILL : WAVE_UNKNOWN_FILL}
+                                strokeWidth={1.5}
+                              />
+                              {sg.x1 - sg.x0 >= 14 && (
+                                <text
+                                  x={(sg.x0 + sg.x1) / 2}
+                                  y={(yHigh + yLow) / 2 + 3.5}
+                                  textAnchor="middle"
+                                  className="text-[10px] font-mono font-extrabold fill-slate-950 select-none"
+                                >
+                                  {waveSymbol(sg.v)}
+                                </text>
+                              )}
+                            </g>
+                          ))}
 
                         {/* Waveform Stroke Line */}
                         {pathD && (
