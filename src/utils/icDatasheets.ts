@@ -16,6 +16,8 @@ export interface ICDatasheet {
   packageType: string;
   pinCount: number;
   simulatorCompType?: ComponentType;
+  // How the part placed on the canvas differs from the real chip
+  simulatorNote?: string;
   pins: ICPin[];
   truthTableHeaders: string[];
   truthTableRows: string[][];
@@ -34,6 +36,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'fullAdder',
+    simulatorNote:
+      'Tuvale tek bitlik bir tam toplayıcı (A, B, Cin → S, Cout) eklenir. 4 bitlik toplayıcı için dört tanesini elde zinciriyle (Cout → Cin) bağlayın.',
     pins: [
       { pin: 1, label: 'Σ1', desc: 'Toplam Bit 1 Çıkışı', type: 'out' },
       { pin: 2, label: 'B1', desc: 'B Sayısı Bit 1 Girişi', type: 'in' },
@@ -80,6 +84,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '24-Pin DIP',
     pinCount: 24,
     simulatorCompType: 'alu4',
+    simulatorNote:
+      'Simülatörün 4-bit ALU\'su yalnızca dört işlem yapar (S1-S0: 00 toplama, 01 çıkarma, 10 VE, 11 VEYA) ve sıfır bayrağı (Z) verir. M, P, G ve A=B bacakları yoktur, 74HC181\'in 32 fonksiyonunu modellemez.',
     pins: [
       { pin: 1, label: 'B0', desc: 'B Verisi Bit 0', type: 'in' },
       { pin: 2, label: 'A0', desc: 'A Verisi Bit 0', type: 'in' },
@@ -136,6 +142,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'comparator4',
+    simulatorNote:
+      'Kaskat girişleri (I(A>B), I(A=B), I(A<B)) yoktur; tek başına kullanılan bir 74HC85 gibi davranır.',
     pins: [
       { pin: 1, label: 'B3', desc: 'B Sayısı Bit 3 (MSB)', type: 'in' },
       { pin: 2, label: 'I(A<B)', desc: 'Kaskat Girişi: A < B', type: 'in' },
@@ -180,6 +188,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'mux8',
+    simulatorNote:
+      'Aktif-düşük E\' yetki girişi yoktur (seçici her zaman etkindir). Y ve W çıkışları gerçek çipteki gibidir.',
     pins: [
       { pin: 1, label: 'D3', desc: 'Veri Girişi 3', type: 'in' },
       { pin: 2, label: 'D2', desc: 'Veri Girişi 2', type: 'in' },
@@ -228,6 +238,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'demux4',
+    simulatorNote:
+      'Tuvale tek bir 1:4 DEMUX eklenir: D girişi seçilen çıkışa aktarılır, çıkışlar aktif-yüksektir. 74HC139\'da çıkışlar aktif-düşüktür ve bir pakette iki çözücü vardır.',
     pins: [
       { pin: 1, label: '1E\'', desc: 'Bölüm 1 Yetkilendirme (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: '1A0', desc: 'Bölüm 1 Adres Bit 0', type: 'in' },
@@ -272,6 +284,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'priorityEncoder4to2',
+    simulatorNote:
+      'Tuvale 4:2 ve aktif-yüksek bir öncelikli kodlayıcı eklenir (D3 > D2 > D1 > D0, V = en az bir giriş aktif). Aktif-düşük mantık, EI ve EO yoktur.',
     pins: [
       { pin: 1, label: 'I4\'', desc: 'Giriş 4', type: 'in' },
       { pin: 2, label: 'I5\'', desc: 'Giriş 5', type: 'in' },
@@ -316,6 +330,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'counter4',
+    simulatorNote:
+      'Simülatör sayacında yalnızca CLK ve RST (asenkron, aktif-yüksek) vardır. Paralel yükleme, CEP/CET ve TC bacakları yoktur.',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Sıfırlama (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'CLK', desc: 'Saat Darbe Girişi (Yükselen Kenar)', type: 'ctrl' },
@@ -359,6 +375,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'shiftRegister4',
+    simulatorNote:
+      'Paralel yükleme yoktur: S1-S0=11 durumu tutar. CLR asenkron ve aktif-yüksektir (74HC194\'te MR\' aktif-düşük). Kaydırma yönleri gerçek çipteki gibidir.',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Master Reset (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'DSR', desc: 'Seri Veri Girişi Sağa (Shift-Right)', type: 'in' },
@@ -398,10 +416,12 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     name: '64-Bit (16x4) Yüksek Hızlı Statik RAM',
     category: 'Bellek / RAM',
     description:
-      '4-bitlik 16 adresi adresleyebilen (16 kelime x 4 bit) ultra hızlı SRAM entegresidir. A0..A3 adres girişleri, D0..D3 veri girişleri ve Q0..Q3 çıkışları bulunur. CS\' (Chip Select) ve WE\' (Write Enable) ile kontrol edilir.',
+      '4-bitlik 16 adresi adresleyebilen (16 kelime x 4 bit) ultra hızlı SRAM entegresidir. A0..A3 adres girişleri, D0..D3 veri girişleri ve ters Q0\'..Q3\' çıkışları bulunur. CS\' (Chip Select) ve WE\' (Write Enable) ile kontrol edilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'ram16x4',
+    simulatorNote:
+      'Simülatör RAM\'i saatli yazar (WE=1 iken CLK yükselen kenarında). Çıkışları ters değildir ve CS\' yoktur. Başlangıçta her adreste kendi numarası saklıdır.',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'CS\'', desc: 'Yonga Seçimi / Chip Select (Aktif 0)', type: 'ctrl' },
@@ -422,8 +442,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     ],
     truthTableHeaders: ['CS\' (Chip Select)', 'WE\' (Write Enable)', 'İşlem', 'Çıkış Q0..Q3'],
     truthTableRows: [
-      ['0 (L)', '0 (L)', 'Yazma (Write D into RAM[Addr])', 'Yüksek Empedans / Yazılan Veri'],
-      ['0 (L)', '1 (H)', 'Okuma (Read RAM[Addr])', 'Bellekteki Veri'],
+      ['0 (L)', '0 (L)', 'Yazma (Write D into RAM[Addr])', 'Yüksek Empedans (Hi-Z)'],
+      ['0 (L)', '1 (H)', 'Okuma (Read RAM[Addr])', 'Bellekteki Verinin Tersi'],
       ['1 (H)', 'X', 'Devre Dışı (Standby / Tri-State)', 'Yüksek Empedans (Hi-Z)'],
     ],
     features: [
@@ -432,7 +452,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Mikroişlemci register dosya (Register File) tasarımlarında ideal',
     ],
     applicationNotes:
-      'Yazma işlemi esnasında WE\' pini 0 yapılır ve veri hücreye kilitlenir. WE\' 1 iken seçili adresteki veri sürekli çıkışta hazır tutulur.',
+      'Yazma saatsizdir: CS\' ve WE\' 0 olduğu sürece D girişleri seçili adrese yazılır, bu yüzden adres WE\' 0 olmadan önce oturmalıdır. WE\' 1 iken seçili adresteki verinin tersi Q\' çıkışlarında hazır tutulur; düz veri için çıkışlara evirici eklenir.',
   },
   {
     id: '74hc74',
@@ -444,6 +464,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '14-Pin DIP',
     pinCount: 14,
     simulatorCompType: 'dFlipFlop',
+    simulatorNote:
+      'Tuvale tek bir D flip-flop eklenir; PRE\' ve CLR\' girişleri yoktur.',
     pins: [
       { pin: 1, label: '1CLR\'', desc: 'Flip-Flop 1 Asenkron Sıfırlama', type: 'ctrl' },
       { pin: 2, label: '1D', desc: 'Flip-Flop 1 Veri Girişi', type: 'in' },
@@ -487,6 +509,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'jkFlipFlop',
+    simulatorNote:
+      'Tuvale tek bir JK flip-flop eklenir. PRE\'/CLR\' yoktur ve yükselen kenarda tetiklenir (74HC76 düşen kenarda tetiklenir).',
     pins: [
       { pin: 1, label: '1CLK', desc: 'Flip-Flop 1 Saat Girişi', type: 'ctrl' },
       { pin: 2, label: '1PRE\'', desc: 'Flip-Flop 1 Asenkron Kur', type: 'ctrl' },
@@ -507,15 +531,15 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     ],
     truthTableHeaders: ['CLK', 'J', 'K', 'Qn+1 (Sonraki Durum)', 'Açıklama'],
     truthTableRows: [
-      ['↓ / ↑', '0', '0', 'Qn', 'Tut (No change)'],
-      ['↓ / ↑', '0', '1', '0', 'Sıfırla (Reset)'],
-      ['↓ / ↑', '1', '0', '1', 'Kur (Set)'],
-      ['↓ / ↑', '1', '1', 'Qn\'', 'Tersle / Toggle (Durum Değiştir)'],
+      ['↓', '0', '0', 'Qn', 'Tut (No change)'],
+      ['↓', '0', '1', '0', 'Sıfırla (Reset)'],
+      ['↓', '1', '0', '1', 'Kur (Set)'],
+      ['↓', '1', '1', 'Qn\'', 'Tersle / Toggle (Durum Değiştir)'],
     ],
     features: [
       'J=1, K=1 iken kusursuz Toggle modu (Asenkron ikili sayıcıların temeli)',
       'Bağımsız PRE ve CLR girişleri',
-      'Yarışma (Race condition) durumlarına karşı içten korumalı yapı',
+      'Düşen kenar tetiklemeli (saat 1\'den 0\'a inerken)',
     ],
     applicationNotes:
       'J ve K pinleri lojik 1 çekildiğinde T (Toggle) flip-flop davranışı sergiler ve peş peşe bağlanarak ikili asenkron sayıcılar üretilir.',
@@ -530,6 +554,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '14-Pin DIP',
     pinCount: 14,
     simulatorCompType: 'and',
+    simulatorNote:
+      'Tuvale paketteki dört kapıdan yalnızca biri (2 girişli VE) eklenir.',
     pins: [
       { pin: 1, label: '1A', desc: 'Kapı 1 Giriş A', type: 'in' },
       { pin: 2, label: '1B', desc: 'Kapı 1 Giriş B', type: 'in' },
@@ -566,6 +592,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '14-Pin DIP',
     pinCount: 14,
     simulatorCompType: 'xor',
+    simulatorNote:
+      'Tuvale paketteki dört kapıdan yalnızca biri (2 girişli XOR) eklenir.',
     pins: [
       { pin: 1, label: '1A', desc: 'Kapı 1 Giriş A', type: 'in' },
       { pin: 2, label: '1B', desc: 'Kapı 1 Giriş B', type: 'in' },
@@ -607,6 +635,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'decoder3to8',
+    simulatorNote:
+      'Simülatördeki 3:8 kod çözücünün tek bir aktif-yüksek EN girişi vardır ve çıkışları aktif-yüksektir (74HC238 gibi). 74HC138\'de çıkışlar aktif-düşüktür ve üç yetki girişi vardır.',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'A1', desc: 'Adres Girişi Bit 1', type: 'in' },
@@ -655,6 +685,8 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'bcdTo7Seg',
+    simulatorNote:
+      'Simülatördeki çözücü aktif-yüksek çıkış verir (ortak katot ekran içindir), 10-15 için A-F harflerini gösterir ve 6 ile 9\'u kuyruklu çizer. LT\', RBI\' ve BI\'/RBO\' bacakları yoktur.',
     pins: [
       { pin: 1, label: 'B', desc: 'BCD Veri Girişi Bit 1', type: 'in' },
       { pin: 2, label: 'C', desc: 'BCD Veri Girişi Bit 2', type: 'in' },
@@ -681,10 +713,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       ['0 0 1 1 (3)', '0', '0', '0', '0', '1', '1', '0', '"3"'],
       ['0 1 0 0 (4)', '1', '0', '0', '1', '1', '0', '0', '"4"'],
       ['0 1 0 1 (5)', '0', '1', '0', '0', '1', '0', '0', '"5"'],
-      ['0 1 1 0 (6)', '0', '1', '0', '0', '0', '0', '0', '"6"'],
+      ['0 1 1 0 (6)', '1', '1', '0', '0', '0', '0', '0', '"6" (kuyruksuz)'],
       ['0 1 1 1 (7)', '0', '0', '0', '1', '1', '1', '1', '"7"'],
       ['1 0 0 0 (8)', '0', '0', '0', '0', '0', '0', '0', '"8"'],
-      ['1 0 0 1 (9)', '0', '0', '0', '0', '1', '0', '0', '"9"'],
+      ['1 0 0 1 (9)', '0', '0', '0', '1', '1', '0', '0', '"9" (kuyruksuz)'],
     ],
     features: [
       'Açık kollektörlü 15V / 24mA yüksek akım sürücü çıkışları',
@@ -692,6 +724,6 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Lamba test pini ile ekran sağlamlık kontrolü',
     ],
     applicationNotes:
-      'LT\' pini 0 yapıldığında tüm 7 segment aynı anda yanarak ekran test edilir. Normal çalışmada LT\' ve RBI\' pinleri lojik 1 (VCC) seviyesine çekilmelidir.',
+      'Çıkışlar aktif-düşüktür: 0 olan segment yanar, bu yüzden ortak anotlu ekranla kullanılır. 6 ve 9 kuyruksuz gösterilir (6\'da a, 9\'da d sönük). LT\' pini 0 yapıldığında tüm 7 segment aynı anda yanarak ekran test edilir. Normal çalışmada LT\' ve RBI\' pinleri lojik 1 (VCC) seviyesine çekilmelidir.',
   },
 ];

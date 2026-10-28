@@ -178,23 +178,23 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   fullSubtractor: { label: 'Tam Çıkarıcı', badge: 'FS' },
   mux2: { label: '2:1 MUX' },
   mux4: { label: '4:1 MUX' },
-  mux8: { label: '8:1 MUX', badge: '74HC151' },
+  mux8: { label: '8:1 MUX', badge: '~74HC151' },
   demux2: { label: '1:2 DEMUX' },
   demux4: { label: '1:4 DEMUX' },
   decoder2to4: { label: '2:4 Decoder' },
-  decoder3to8: { label: '3:8 Decoder', badge: '74HC138' },
-  bcdTo7Seg: { label: 'BCD to 7-Seg', badge: '74LS47' },
-  priorityEncoder4to2: { label: '4:2 Kodlayıcı', badge: '74HC148' },
+  decoder3to8: { label: '3:8 Decoder', badge: '~74HC238' },
+  bcdTo7Seg: { label: 'BCD/Hex → 7-Seg', badge: 'Hex' },
+  priorityEncoder4to2: { label: '4:2 Kodlayıcı', badge: '~74HC148' },
   comparator4: { label: 'Karşılaştırıcı', badge: '4-Bit' },
-  alu4: { label: '4-Bit ALU', badge: '74HC181' },
+  alu4: { label: '4-Bit ALU', badge: '4 İşlem' },
   splitter4: { label: 'Bus Ayırıcı', badge: 'Splitter' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
   tFlipFlop: { label: 'T Flip-Flop', badge: 'T-FF' },
-  register4: { label: '4-Bit Yazmaç', badge: '74HC173' },
-  counter4: { label: '4-Bit Sayaç', badge: '74HC161' },
-  shiftRegister4: { label: 'Kaydırmalı Yazmaç', badge: '74HC194' },
+  register4: { label: '4-Bit Yazmaç', badge: 'D-REG' },
+  counter4: { label: '4-Bit Sayaç', badge: '0-15' },
+  shiftRegister4: { label: 'Kaydırmalı Yazmaç', badge: '~74HC194' },
   ram16x4: { label: '16x4 RAM', badge: 'Bellek' },
   rom16x4: { label: '16x4 ROM', badge: 'Bellek' },
 };
@@ -4528,33 +4528,34 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const isRAM = comp.type === 'ram16x4';
         const isROM = comp.type === 'rom16x4';
 
+        // Generic parts carry no real chip code; '~' marks a close but simplified match
         const icPartCode = isFA
-          ? 'SN74HC283N'
+          ? 'FA-1'
           : isFS
-          ? 'SN74HC385N'
+          ? 'FS-1'
           : isHS
-          ? 'SN74HC86HS'
+          ? 'HS-1'
           : isHA
-          ? 'SN74HC280N'
+          ? 'HA-1'
           : isMUX8
-          ? 'SN74HC151N'
+          ? '~74HC151'
           : isMUX4
-          ? 'SN74HC153N'
+          ? 'MUX-4'
           : isMUX2
-          ? 'SN74HC157N'
+          ? 'MUX-2'
           : isDEMUX4
-          ? 'SN74HC139N'
+          ? 'DMX-4'
           : isDEMUX2
-          ? 'SN74HC138N'
+          ? 'DMX-2'
           : isPRI
-          ? 'SN74HC148N'
+          ? '~74HC148'
           : isSHIFT
-          ? 'SN74HC194N'
+          ? '~74HC194'
           : isRAM
-          ? 'SN74HC189N'
+          ? 'RAM-64'
           : isROM
-          ? 'ROM-2716'
-          : 'SN74HC00N';
+          ? 'ROM-64'
+          : 'IC';
 
         const icTitle = isFA
           ? 'FULL ADDER'
@@ -5017,7 +5018,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               D-FF
             </text>
             <text x={42} y={52} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              74HC74
+              ↑ kenar
             </text>
           </g>
         );
@@ -5125,7 +5126,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               JK-FF
             </text>
             <text x={44} y={64} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              74HC73
+              ↑ kenar
             </text>
           </g>
         );
@@ -5214,7 +5215,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             ))}
 
             <text x={44} y={40} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-indigo-300 select-none">
-              74HC139
+              DEC 2:4
             </text>
             <text x={44} y={50} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
               2:4 DECODER
@@ -5261,7 +5262,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             ))}
 
             <text x={48} y={54} textAnchor="middle" className="text-[9.5px] font-mono font-extrabold fill-indigo-300 select-none">
-              74HC138
+              ~74HC238
             </text>
             <text x={48} y={66} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">
               3:8 DEC
@@ -5311,7 +5312,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             })}
 
             <text x={48} y={48} textAnchor="middle" className="text-[9.5px] font-mono font-extrabold fill-indigo-300 select-none">
-              74LS47
+              HEX→7SEG
             </text>
             <text x={48} y={60} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">
               BCD={num % 16}
@@ -5526,7 +5527,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={84} y={71} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${aVal < bVal ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &lt; B</text>
 
             <text x={44} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              74HC85
+              ~74HC85
             </text>
             <text x={44} y={48} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
               4-BIT CMP
@@ -5573,7 +5574,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             })}
 
             <text x={42} y={36} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              74HC161
+              CNT-4
             </text>
             <text x={42} y={48} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
               4-BIT CTR
@@ -5627,7 +5628,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
             <text x={52} y={26} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">A={aVal} B={bVal} (Ci={cinVal})</text>
             <text x={52} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              74HC181
+              ALU-4
             </text>
             <text x={52} y={49} textAnchor="middle" className="text-[7.5px] font-mono font-extrabold fill-yellow-300 select-none">
               {modeLabels[mode]}
@@ -5664,7 +5665,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={82} y={18} textAnchor="end" className="text-[8px] font-mono font-bold fill-emerald-400 select-none">Q[3:0]</text>
 
             <text x={46} y={35} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              74HC173
+              REG-4
             </text>
             <text x={46} y={46} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
               4-BIT REGISTER
@@ -11268,10 +11269,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer flex items-center gap-2 transition-colors shrink-0"
                         >
                           <Plus className="w-4 h-4" />
-                          <span>Bu Entegreyi Tuvale Ekle</span>
+                          <span>{activeDS.simulatorNote ? 'Basitleştirilmiş Modeli Tuvale Ekle' : 'Bu Entegreyi Tuvale Ekle'}</span>
                         </button>
                       )}
                     </div>
+
+                    {activeDS.simulatorNote && (
+                      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                        <strong>Simülatördeki parça gerçek çipten farklı:</strong> {activeDS.simulatorNote}
+                      </div>
+                    )}
 
                     {/* Description */}
                     <div>

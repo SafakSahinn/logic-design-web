@@ -504,7 +504,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   mux8: {
     type: 'mux8',
-    name: '8:1 Çoklayıcı (74HC151)',
+    name: '8:1 Çoklayıcı (74HC151 benzeri)',
     category: 'combinational',
     width: 96,
     height: 160,
@@ -525,7 +525,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outY', name: 'Y', type: 'output', relX: 96, relY: 60 },
       { id: 'outW', name: "W (Y')", type: 'output', relX: 96, relY: 100 },
     ],
-    description: '3-Bit seçme girişi (S2-S0) ile 8 girişten birini seçip Y ve W (ters) çıkışlarına iletir',
+    description: '3-Bit seçme girişi (S2-S0) ile 8 girişten birini seçip Y ve W (ters) çıkışlarına iletir; gerçek 74HC151\'deki aktif-düşük E\' yetki girişi yoktur',
   },
   demux2: {
     type: 'demux2',
@@ -583,7 +583,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   decoder3to8: {
     type: 'decoder3to8',
-    name: '3:8 Kod Çözücü (74HC138)',
+    name: '3:8 Kod Çözücü (74HC238 benzeri, aktif-yüksek)',
     category: 'combinational',
     width: 96,
     height: 116,
@@ -603,11 +603,11 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outY6', name: 'Y6', type: 'output', relX: 96, relY: 80 },
       { id: 'outY7', name: 'Y7', type: 'output', relX: 96, relY: 90 },
     ],
-    description: '3-bit ikili adresi çözerek 8 minterm çıkışından birini aktif (1) yapar',
+    description: '3-bit ikili adresi çözerek 8 minterm çıkışından birini aktif (1) yapar; çıkışlar aktif-yüksektir (74HC238 gibi, 74HC138\'de aktif-düşük)',
   },
   bcdTo7Seg: {
     type: 'bcdTo7Seg',
-    name: 'BCD to 7-Segment Kod Çözücü (74LS47)',
+    name: 'BCD/Hex → 7-Segment Kod Çözücü (aktif-yüksek)',
     category: 'combinational',
     width: 96,
     height: 104,
@@ -626,11 +626,11 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outF', name: 'f', type: 'output', relX: 96, relY: 70 },
       { id: 'outG', name: 'g', type: 'output', relX: 96, relY: 80 },
     ],
-    description: '4-bit ikili BCD sayıyı (A-D) doğrudan 7-segment LED göstergesi bacaklarına (a-g) dönüştürür',
+    description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir. Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
   },
   priorityEncoder4to2: {
     type: 'priorityEncoder4to2',
-    name: '4:2 Öncelikli Kodlayıcı (74HC148)',
+    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
     category: 'combinational',
     width: 90,
     height: 92,
@@ -645,7 +645,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outY0', name: 'Y0', type: 'output', relX: 90, relY: 50 },
       { id: 'outV', name: 'V', type: 'output', relX: 90, relY: 70 },
     ],
-    description: 'En yüksek öncelikli aktif girişi (D3 > D2 > D1 > D0) 2-bit ikili koda çevirir; V aktiflik göstergesidir',
+    description: 'En yüksek öncelikli aktif girişi (D3 > D2 > D1 > D0) 2-bit ikili koda çevirir; V aktiflik göstergesidir. Girişler ve çıkışlar aktif-yüksektir (gerçek 74HC148 8:3 ve aktif-düşüktür)',
   },
   comparator4: {
     type: 'comparator4',
@@ -672,7 +672,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   alu4: {
     type: 'alu4',
-    name: '4-Bit Mantık Birimi (ALU / 74HC181)',
+    name: '4-Bit Aritmetik Mantık Birimi (4 İşlem ALU)',
     category: 'combinational',
     width: 104,
     height: 98,
@@ -762,7 +762,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   shiftRegister4: {
     type: 'shiftRegister4',
-    name: '4-Bit Evrensel Kaydırmalı Yazmaç (74HC194)',
+    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
     category: 'sequential',
     width: 104,
     height: 110,
@@ -780,7 +780,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outQ2', name: 'Q2', type: 'output', relX: 104, relY: 60 },
       { id: 'outQ3', name: 'Q3', type: 'output', relX: 104, relY: 80 },
     ],
-    description: '4-Bit Sağa/Sola kaydıran veya tutan evrensel saklayıcı (S1-S0: 00=Tut, 01=Sağa Kaydır, 10=Sola Kaydır)',
+    description: '4-Bit Sağa/Sola kaydıran veya tutan saklayıcı (S1-S0: 00=Tut, 01=Sağa Kaydır, 10=Sola Kaydır, 11=Tut). CLR aktif-yüksektir; gerçek 74HC194\'teki paralel yükleme (11) yoktur',
   },
   tFlipFlop: {
     type: 'tFlipFlop',
@@ -801,7 +801,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   ram16x4: {
     type: 'ram16x4',
-    name: '16x4-Bit RAM (74HC189)',
+    name: '16x4-Bit RAM (Saatli Yazma)',
     category: 'sequential',
     width: 108,
     height: 124,
@@ -2163,7 +2163,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 50, 80, 'Giriş A'), id: 'sw_fa_a', state: { on: true } },
       { ...createComponentInstance('switch', 50, 180, 'Giriş B'), id: 'sw_fa_b', state: { on: true } },
       { ...createComponentInstance('switch', 50, 280, 'Elde Girişi (Cin)'), id: 'sw_fa_cin', state: { on: false } },
-      { ...createComponentInstance('fullAdder', 260, 150, '74HC283 Tam Toplayıcı'), id: 'fa_1' },
+      { ...createComponentInstance('fullAdder', 260, 150, '1-Bit Tam Toplayıcı'), id: 'fa_1' },
       { ...createComponentInstance('led', 480, 110, 'Toplam (S)'), id: 'led_fa_s' },
       { ...createComponentInstance('led', 480, 230, 'Elde Çıkışı (Cout)'), id: 'led_fa_cout' },
     ].map(updatePinPositions),
@@ -2387,7 +2387,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
     id: 'counter_hex_demo',
     name: '4-Bit Senkron Sayaç ve 7-Segment Hex Gösterge (0-F)',
     category: 'sequential',
-    description: 'Saat darbesi (CLK) ve Sıfırlama (RST) butonu ile kontrol edilen 4-bit sayaç (74HC161), çıkışındaki 4 ikili biti Hexadecimal 7-Segment ekranda 0\'dan F\'ye canlı olarak saydırır.',
+    description: 'Saat darbesi (CLK) ve Sıfırlama (RST) butonu ile kontrol edilen 4-bit sayaç, çıkışındaki 4 ikili biti Hexadecimal 7-Segment ekranda 0\'dan F\'ye canlı olarak saydırır.',
     components: [
       { ...createComponentInstance('clock', 60, 100, 'Saat Darbesi (CLK)'), id: 'cnt_clk' },
       { ...createComponentInstance('pushbutton', 60, 160, 'Sıfırla (RST)'), id: 'cnt_rst' },
@@ -2413,7 +2413,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'magnitude_comparator',
-    name: '4-Bit Büyüklük Karşılaştırıcı (74HC85 CMP)',
+    name: '4-Bit Büyüklük Karşılaştırıcı (74HC85 benzeri)',
     category: 'arithmetic',
     description: 'İki adet 4-bitlik ikili sayıyı (A3..A0 ile B3..B0) karşılaştırarak A>B, A=B veya A<B durumlarını anında tespit eden aritmetik mantık devresi.',
     components: [
@@ -2425,7 +2425,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 210, 240, 'B1'), id: 'sw_b1' },
       { ...createComponentInstance('switch', 260, 240, 'B2'), id: 'sw_b2' },
       { ...createComponentInstance('switch', 310, 240, 'B3 (MSB)'), id: 'sw_b3' },
-      { ...createComponentInstance('comparator4', 210, 90, '4-Bit CMP (74HC85)'), id: 'cmp_core' },
+      { ...createComponentInstance('comparator4', 210, 90, '4-Bit CMP'), id: 'cmp_core' },
       { ...createComponentInstance('led', 390, 80, 'A > B (Yeşil)'), id: 'led_gt' },
       { ...createComponentInstance('led', 390, 130, 'A = B (Mavi)'), id: 'led_eq' },
       { ...createComponentInstance('led', 390, 180, 'A < B (Kırmızı)'), id: 'led_lt' },
@@ -2446,15 +2446,15 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'priority_encoder_demo',
-    name: '4:2 Öncelikli Kodlayıcı (74HC148 Priority Encoder)',
+    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
     category: 'basic',
-    description: '4 aktif girişten (D3..D0) önceliği en yüksek olanı 2-bit ikili koda (Y1, Y0) çevirir; V pini aktiflik göstergesidir.',
+    description: '4 aktif-yüksek girişten (D3..D0) önceliği en yüksek olanı 2-bit ikili koda (Y1, Y0) çevirir; V pini en az bir girişin aktif olduğunu gösterir. Gerçek 74HC148 ise 8:3 ve aktif-düşük çalışır.',
     components: [
       { ...createComponentInstance('switch', 60, 50, 'D0 (En Düşük Öncelik)'), id: 'pri_sw0' },
       { ...createComponentInstance('switch', 60, 100, 'D1'), id: 'pri_sw1' },
       { ...createComponentInstance('switch', 60, 150, 'D2'), id: 'pri_sw2' },
       { ...createComponentInstance('switch', 60, 200, 'D3 (En Yüksek Öncelik)'), id: 'pri_sw3' },
-      { ...createComponentInstance('priorityEncoder4to2', 200, 90, '74HC148 Priority Encoder'), id: 'pri_core' },
+      { ...createComponentInstance('priorityEncoder4to2', 200, 90, '4:2 Öncelikli Kodlayıcı'), id: 'pri_core' },
       { ...createComponentInstance('led', 360, 80, 'Y1 (MSB)'), id: 'pri_led_y1' },
       { ...createComponentInstance('led', 360, 130, 'Y0 (LSB)'), id: 'pri_led_y0' },
       { ...createComponentInstance('led', 360, 180, 'V (Geçerli / Valid)'), id: 'pri_led_v' },
@@ -2471,7 +2471,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'universal_shift_register_demo',
-    name: '4-Bit Evrensel Kaydırmalı Yazmaç (74HC194)',
+    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
     category: 'sequential',
     description: 'Saat darbesi (CLK) ve mod anahtarlarıyla çalışan 4-bit kaydırmalı saklayıcı: S1-S0=01 iken sağa, 10 iken sola kaydırır.',
     components: [
@@ -2481,7 +2481,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 60, 210, 'SL (Sol Giriş)'), id: 'sh_sl' },
       { ...createComponentInstance('switch', 160, 260, 'S0 (Mod 0)'), id: 'sh_s0' },
       { ...createComponentInstance('switch', 220, 260, 'S1 (Mod 1)'), id: 'sh_s1' },
-      { ...createComponentInstance('shiftRegister4', 200, 90, '74HC194 Shift Reg'), id: 'sh_core' },
+      { ...createComponentInstance('shiftRegister4', 200, 90, '4-Bit Shift Reg'), id: 'sh_core' },
       { ...createComponentInstance('led', 380, 60, 'Q0 (LSB)'), id: 'sh_q0' },
       { ...createComponentInstance('led', 380, 110, 'Q1'), id: 'sh_q1' },
       { ...createComponentInstance('led', 380, 160, 'Q2'), id: 'sh_q2' },
@@ -2502,7 +2502,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'ram_memory_demo',
-    name: '16x4-Bit RAM Bellek ve Hex Gösterge (74HC189)',
+    name: '16x4-Bit RAM Bellek ve Hex Gösterge',
     category: 'sequential',
     description: '16 Adresli 4-Bit RAM: A3-A0 adresini seçin, D3-D0 verisini ayarlayın ve WE=1 iken CLK saat darbesiyle belleğe yazın. Adresteki veri doğrudan Hex ekranda okunur.',
     components: [
@@ -2516,7 +2516,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 60, 400, 'D3 (Veri 3)'), id: 'ram_sw_d3' },
       { ...createComponentInstance('clock', 170, 290, 'CLK (Yazma Saati)'), id: 'ram_clk' },
       { ...createComponentInstance('switch', 240, 290, 'WE (Yazma İzni)'), id: 'ram_sw_we' },
-      { ...createComponentInstance('ram16x4', 210, 80, '16x4 RAM (74HC189)'), id: 'ram_chip' },
+      { ...createComponentInstance('ram16x4', 210, 80, '16x4 RAM'), id: 'ram_chip' },
       { ...createComponentInstance('hexDisplay', 380, 80, 'Okunan Hex Ekran'), id: 'ram_disp' },
     ].map(updatePinPositions),
     wires: [
@@ -2559,15 +2559,15 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'bcd_to_7seg_display_demo',
-    name: 'BCD to 7-Segment Kod Çözücü ve LED Ekran (74LS47)',
+    name: 'BCD/Hex → 7-Segment Kod Çözücü ve LED Ekran',
     category: 'basic',
-    description: '4-Bit ikili BCD kodunu 7-segment LED göstergesi formatına (a-g) dönüştürerek 0-9 rakamlarını görüntüleyen donanım devresi.',
+    description: '4-Bit ikili kodu 7-segment LED göstergesi formatına (a-g) dönüştürerek 0-9 rakamlarını (10-15 için A-F harflerini) görüntüler. Çözücü aktif-yüksek çıkış verir (ortak katot ekran); gerçek 74LS47 aktif-düşüktür.',
     components: [
       { ...createComponentInstance('switch', 60, 50, 'A (Bit 0 LSB)'), id: 'bcd_sw_a' },
       { ...createComponentInstance('switch', 60, 100, 'B (Bit 1)'), id: 'bcd_sw_b' },
       { ...createComponentInstance('switch', 60, 150, 'C (Bit 2)'), id: 'bcd_sw_c' },
       { ...createComponentInstance('switch', 60, 200, 'D (Bit 3 MSB)'), id: 'bcd_sw_d' },
-      { ...createComponentInstance('bcdTo7Seg', 210, 80, 'BCD to 7-Seg (74LS47)'), id: 'bcd_chip' },
+      { ...createComponentInstance('bcdTo7Seg', 210, 80, 'BCD/Hex → 7-Seg'), id: 'bcd_chip' },
       { ...createComponentInstance('sevenSegment', 380, 90, '7-Segment Ekran'), id: 'bcd_disp' },
     ].map(updatePinPositions),
     wires: [
@@ -2586,7 +2586,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'decoder_3to8_minterm_demo',
-    name: '3:8 Kod Çözücü ile Minterm Seçimi (74HC138)',
+    name: '3:8 Kod Çözücü ile Minterm Seçimi (74HC238 benzeri)',
     category: 'basic',
     description: '3-Bit ikili adres (A0, A1, A2) ve Enable yetkilendirmesiyle 8 çıkış hattından (m0-m7) birini seçen kod çözücü mimarisi.',
     components: [
@@ -2594,7 +2594,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 60, 100, 'A0 (Adres Bit 0)'), id: 'dec_sw_a0' },
       { ...createComponentInstance('switch', 60, 160, 'A1 (Adres Bit 1)'), id: 'dec_sw_a1' },
       { ...createComponentInstance('switch', 60, 220, 'A2 (Adres Bit 2)'), id: 'dec_sw_a2' },
-      { ...createComponentInstance('decoder3to8', 210, 70, '3:8 Decoder (74HC138)'), id: 'dec_chip' },
+      { ...createComponentInstance('decoder3to8', 210, 70, '3:8 Decoder'), id: 'dec_chip' },
       { ...createComponentInstance('led', 370, 40, 'm0 (000)'), id: 'dec_led_0' },
       { ...createComponentInstance('led', 370, 80, 'm1 (001)'), id: 'dec_led_1' },
       { ...createComponentInstance('led', 370, 120, 'm2 (010)'), id: 'dec_led_2' },
@@ -2735,13 +2735,13 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'dot_matrix_demo',
-    name: '8x8 LED Grafik Matrisi & Piksel Çizim Kiti (GPU)',
+    name: '8x8 LED Nokta Matris: Satır × Sütun Kesişimi',
     category: 'music_graphics',
-    description: 'Satır ve sütun mantık sinyalleriyle 64 piksellik LED matrisinde retro piksel sanatı, göz kırpma animasyonu ve grafik çizimi gerçekleştiren ekran gösterge devresi.',
+    description: 'Bir piksel, satırı ve sütunu aynı anda 1 olduğunda yanar. VCC satır 1-2 ile sütun 3-4\'ü sürekli sürer; iki anahtar satır 5-6\'yı ve sütun 2 ile 5\'i açıp kapatarak yanan bloğun nasıl büyüyüp küçüldüğünü gösterir.',
     components: [
       { ...createComponentInstance('vcc', 50, 40, 'VCC (+5V)'), id: 'vcc_mat' },
-      { ...createComponentInstance('switch', 50, 110, 'Göz Kırpma / Animasyon'), id: 'sw_eye', state: { on: true } },
-      { ...createComponentInstance('switch', 50, 180, 'Gülümseme (Ağız)'), id: 'sw_smile', state: { on: true } },
+      { ...createComponentInstance('switch', 50, 110, 'Sütun 2 ve 5'), id: 'sw_eye', state: { on: true } },
+      { ...createComponentInstance('switch', 50, 180, 'Satır 5 ve 6'), id: 'sw_smile', state: { on: true } },
       { ...createComponentInstance('dotMatrix8x8', 260, 60, '8x8 GPU Ekran'), id: 'disp_mat' },
     ].map(updatePinPositions),
     wires: [
@@ -2757,13 +2757,13 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
   },
   {
     id: 'ascii_keyboard_terminal',
-    name: 'ASCII Klavye & 7-Bit Kod Çözücü Terminal Kiti',
+    name: 'ASCII Klavye ve Veri Hazır (ST) Sinyali',
     category: 'music_graphics',
-    description: 'ASCII klavye giriş matrisi, tuşa basıldığında üretilen 7-bit ikili ASCII kodu, veri hazır strobe (ST) sinyali ve LED göstergeleriyle tam donanımlı mikrobilgisayar giriş terminali.',
+    description: 'Klavye basılan tuşun 7-bit ASCII kodunu (D0-D6) ve veri hazır (ST) sinyalini üretir. Bu şablonda yalnızca alt 4 bit (D0-D3) bağlıdır: hex ekran ve LED çubuğu kodun son hex hanesini gösterir (ör. \'A\' = 41h → 1). ST LED\'i tuşa basılınca yanar, düğmeyle temizlenir.',
     components: [
       { ...createComponentInstance('asciiKeyboard', 60, 80, 'ASCII Giriş Terminali'), id: 'kbd_unit', state: { asciiChar: 'A', asciiCode: 65, strobe: true } },
       { ...createComponentInstance('pushbutton', 60, 210, 'ST Temizle (ACK/CLR)'), id: 'btn_ack' },
-      { ...createComponentInstance('hexDisplay', 260, 60, 'ASCII Hex (0-F)'), id: 'hex_ascii' },
+      { ...createComponentInstance('hexDisplay', 260, 60, 'ASCII Alt Hane (D0-D3)'), id: 'hex_ascii' },
       { ...createComponentInstance('led', 260, 180, 'Veri Hazır (ST / IRQ)'), id: 'led_strobe' },
       { ...createComponentInstance('ledBar4', 400, 70, 'ASCII D0-D3 Veri Yolu'), id: 'bar_ascii' },
     ].map(updatePinPositions),
