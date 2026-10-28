@@ -1620,6 +1620,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // Export Circuit Project to JSON File (Multi-Sheet supported)
+  // Custom IC definitions used by these parts, including ICs nested inside other ICs
+  const collectUsedSubcircuits = (comps: CircuitComponentInstance[]): CustomSubcircuit[] => {
+    const found = new Map<string, CustomSubcircuit>();
+    const walk = (list: CircuitComponentInstance[]) => {
+      for (const c of list) {
+        const id = c.type === 'subcircuit' ? c.state.subcircuitId : undefined;
+        if (!id || found.has(id)) continue;
+        const def = getSubcircuitDefinition(id);
+        if (!def) continue;
+        found.set(id, def);
+        walk(def.components);
+      }
+    };
+    walk(comps);
+    return Array.from(found.values());
+  };
+
   const handleExportJSON = () => {
     const updatedSheets = sheets.map((s) =>
       s.id === activeSheetId ? { ...s, components, wires, annotations } : s
@@ -1633,6 +1650,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       components,
       wires,
       annotations,
+      // The definitions live in this browser's storage only; ship them so the file opens anywhere
+      subcircuits: collectUsedSubcircuits(updatedSheets.flatMap((s) => s.components)),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1805,7 +1824,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     setHexTargetCompId(target.id);
     const rawData = target.type === 'ram16x4' ? target.state.ramData : target.state.romData;
-    const initial = Array.isArray(rawData) && rawData.length === 16 ? [...rawData] : Array(16).fill(0);
+    // Same contents the simulator uses for a part whose memory was never set
+    const fallback = target.type === 'ram16x4' ? Array.from({ length: 16 }, (_, i) => i) : [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
+    const initial = Array.isArray(rawData) && rawData.length === 16 ? [...rawData] : fallback;
     setHexDataBuffer(initial);
     setShowHexModal(true);
   };
@@ -1814,19 +1835,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const handleSaveHexEditor = () => {
     if (!hexTargetCompId) return;
     recordHistory();
-    setComponents((prev) =>
-      prev.map((c) => {
-        if (c.id === hexTargetCompId) {
-          if (c.type === 'ram16x4') {
-            return { ...c, state: { ...c.state, ramData: [...hexDataBuffer] } };
-          }
-          if (c.type === 'rom16x4') {
-            return { ...c, state: { ...c.state, romData: [...hexDataBuffer] } };
-          }
+    const updated = components.map((c) => {
+      if (c.id === hexTargetCompId) {
+        if (c.type === 'ram16x4') {
+          return { ...c, state: { ...c.state, ramData: [...hexDataBuffer] } };
         }
-        return c;
-      })
-    );
+        if (c.type === 'rom16x4') {
+          return { ...c, state: { ...c.state, romData: [...hexDataBuffer] } };
+        }
+      }
+      return c;
+    });
+    // Re-simulate so the memory outputs show the new contents right away
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
     setShowHexModal(false);
     showToast('Bellek verileri başarıyla güncellendi!');
   };
@@ -1949,11 +1972,34 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // Standard JSON circuit parsing
       try {
         const json = JSON.parse(text);
+        // Custom ICs shipped with the file: add the ones this browser does not have yet
+        let addedIcs = 0;
+        if (Array.isArray(json.subcircuits)) {
+          for (const def of json.subcircuits as CustomSubcircuit[]) {
+            if (def && def.id && Array.isArray(def.components) && !getSubcircuitDefinition(def.id)) {
+              saveCustomSubcircuit(def);
+              addedIcs++;
+            }
+          }
+          if (addedIcs > 0) setCustomSubcircuits(getAllSubcircuits());
+        }
+        // Parts of an unknown type (newer version, hand-edited file) would crash the renderer
+        let droppedParts = 0;
+        const knownParts = (list: CircuitComponentInstance[] = []) =>
+          list.filter((c) => {
+            const ok = !!c && (c.type === 'subcircuit' || !!COMPONENT_CATALOG[c.type]) && Array.isArray(c.inputs) && Array.isArray(c.outputs);
+            if (!ok) droppedParts++;
+            return ok;
+          });
+        const loadNote = () =>
+          [addedIcs > 0 ? `${addedIcs} özel entegre kütüphaneye eklendi` : '', droppedParts > 0 ? `${droppedParts} tanınmayan bileşen atlandı` : '']
+            .filter(Boolean)
+            .join(', ');
         if (Array.isArray(json.sheets) && json.sheets.length > 0) {
           recordHistory();
           const loadedSheets: CircuitSheet[] = json.sheets.map((s: CircuitSheet) => ({
             ...s,
-            components: (s.components || []).map(updatePinPositions),
+            components: knownParts(s.components).map(updatePinPositions),
             wires: s.wires || [],
           }));
           setSheets(loadedSheets);
@@ -1966,10 +2012,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           setSelectedCompId(null);
           setSelectedWireId(null);
           handleResetView();
-          showToast('Proje başarıyla yüklendi.');
+          showToast(loadNote() ? `Proje yüklendi (${loadNote()}).` : 'Proje başarıyla yüklendi.', loadNote() ? 6000 : 3000);
         } else if (Array.isArray(json.components) && Array.isArray(json.wires)) {
           recordHistory();
-          const refreshedComps = json.components.map(updatePinPositions);
+          const refreshedComps = knownParts(json.components).map(updatePinPositions);
           const sim = simulateCircuit(refreshedComps, json.wires);
           const defaultSheet: CircuitSheet = {
             id: 'sheet_1',
@@ -1985,7 +2031,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           setSelectedCompId(null);
           setSelectedWireId(null);
           handleResetView();
-          showToast('Devre başarıyla yüklendi.');
+          showToast(loadNote() ? `Devre yüklendi (${loadNote()}).` : 'Devre başarıyla yüklendi.', loadNote() ? 6000 : 3000);
         } else {
           alert('Hata: Dosyada geçerli devre bileşenleri bulunamadı.');
         }
@@ -11748,11 +11794,13 @@ ${wireXmls.join('\n')}
                           <td className="p-2 text-center">
                             <input
                               type="text"
-                              maxLength={1}
                               value={hexChar}
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) => {
-                                const parsed = parseInt(e.target.value, 16);
-                                const nextVal = isNaN(parsed) ? 0 : Math.max(0, Math.min(15, parsed));
+                                // The newest typed hex digit replaces the cell; anything else is ignored
+                                const typed = e.target.value.replace(/[^0-9a-fA-F]/g, '');
+                                if (!typed) return;
+                                const nextVal = parseInt(typed.slice(-1), 16);
                                 setHexDataBuffer((prev) => {
                                   const n = [...prev];
                                   n[addr] = nextVal;
