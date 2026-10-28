@@ -8,7 +8,7 @@ import type {
   TruthTableData,
 } from '../types/circuit';
 import type { LogicValue } from '../types/logic';
-import { evaluateSubcircuit, getSubcircuitDefinition } from './subcircuitManager';
+import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
@@ -1076,9 +1076,16 @@ export function simulateCircuitStep(
 
   // Helper map to quickly lookup pins
   const pinMap = new Map<string, CircuitPin>();
+  const pinOwner = new Map<string, CircuitComponentInstance>();
   newComps.forEach((c) => {
-    c.inputs.forEach((p) => pinMap.set(p.id, p));
-    c.outputs.forEach((p) => pinMap.set(p.id, p));
+    c.inputs.forEach((p) => {
+      pinMap.set(p.id, p);
+      pinOwner.set(p.id, c);
+    });
+    c.outputs.forEach((p) => {
+      pinMap.set(p.id, p);
+      pinOwner.set(p.id, c);
+    });
   });
 
   // Step 1: Update source components outputs (switch, vcc, gnd, clock)
@@ -1232,7 +1239,7 @@ export function simulateCircuitStep(
       if (!pin || pin.type !== 'output') return;
 
       // Find owner component
-      const ownerComp = newComps.find((c) => c.outputs.some((p) => p.id === pinId));
+      const ownerComp = pinOwner.get(pinId);
       if (ownerComp?.type === 'triState' && ownerComp.state.hiZ) {
         // High impedance tri-state buffer is not actively driving the bus net
         return;
@@ -1276,9 +1283,7 @@ export function simulateCircuitStep(
     pinsInNet.forEach((pinId) => {
       const pin = pinMap.get(pinId);
       if (!pin) return;
-      const ownerComp = newComps.find(
-        (c) => c.inputs.some((p) => p.id === pinId) || c.outputs.some((p) => p.id === pinId)
-      );
+      const ownerComp = pinOwner.get(pinId);
       if (pin.type === 'input' || ownerComp?.type === 'tunnel') {
         if (pin.value !== resolvedValue) {
           pin.value = resolvedValue;
@@ -2049,7 +2054,8 @@ export function simulateCircuitStep(
         if (subId) {
           const subDef = getSubcircuitDefinition(subId);
           if (subDef) {
-            const outVals = evaluateSubcircuit(subDef, inVals);
+            const { outputs: outVals, internal } = evaluateSubcircuitStateful(subDef, inVals, comp.state.subcircuitInternal);
+            comp.state.subcircuitInternal = internal;
             outVals.forEach((val, oIdx) => {
               if (comp.outputs[oIdx] && comp.outputs[oIdx].value !== val) {
                 comp.outputs[oIdx].value = val;
@@ -2080,8 +2086,12 @@ export function simulateCircuitStep(
 export function simulateCircuit(
   components: CircuitComponentInstance[],
   wires: CircuitWire[],
-  maxIterations = 10
+  maxIterations?: number
 ): { components: CircuitComponentInstance[]; wires: CircuitWire[] } {
+  // Each step moves signals through one level of logic, and an acyclic path cannot be longer than
+  // the number of parts, so that many steps always settle it. Only feedback that keeps
+  // oscillating (e.g. a NOT gate driving itself) runs into the limit.
+  if (maxIterations === undefined) maxIterations = components.length + 10;
   let curComps = components;
   let curWires = wires;
 

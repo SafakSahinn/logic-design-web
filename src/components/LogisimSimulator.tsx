@@ -462,9 +462,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Floating Toast Notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const showToast = useCallback((msg: string) => {
+  // A newer toast restarts the timer, so an older one cannot hide it early
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string, durationMs = 3000) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), durationMs);
   }, []);
 
   // Keyboard Shortcuts Modal state
@@ -1894,12 +1897,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const importedCircuits = importCircXmlProject(text);
           if (importedCircuits.length > 0) {
             recordHistory();
+            // Anything the importer could not convert exactly is listed in a note on that sheet
             const newSheets: CircuitSheet[] = importedCircuits.map((c, idx) => ({
               id: `sheet_circ_${Date.now()}_${idx}`,
               name: c.name || `Devre ${idx + 1}`,
               components: c.components.map(updatePinPositions),
               wires: c.wires,
+              annotations:
+                c.warnings.length > 0
+                  ? [
+                      {
+                        id: `ann_import_${Date.now()}_${idx}`,
+                        type: 'note' as const,
+                        title: 'İçe aktarma uyarıları',
+                        text: c.warnings.join('\n'),
+                        x: 40,
+                        y: 40,
+                        width: 360,
+                        height: Math.min(400, 60 + c.warnings.length * 30),
+                        color: 'rose' as const,
+                      },
+                    ]
+                  : [],
             }));
+            const warningCount = importedCircuits.reduce((n, c) => n + c.warnings.length, 0);
             // Imported connections are pin-to-pin: route every sheet once so they are stored as real wires
             for (const sh of newSheets) sh.wires = repairWires(sh.wires, sh.components);
             setSheets(newSheets);
@@ -1907,11 +1928,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const sim = simulateCircuit(newSheets[0].components, newSheets[0].wires);
             setComponents(sim.components);
             setWires(sim.wires);
-            setAnnotations([]);
+            setAnnotations(newSheets[0].annotations || []);
             setSelectedCompId(null);
             setSelectedWireId(null);
             handleResetView();
-            showToast(`CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!`);
+            showToast(
+              warningCount > 0
+                ? `${file.name} içe aktarıldı, ${warningCount} uyarı var (sayfalardaki kırmızı notlara bakın).`
+                : `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!`,
+              warningCount > 0 ? 6000 : 3000
+            );
             return;
           }
         } catch (err: unknown) {

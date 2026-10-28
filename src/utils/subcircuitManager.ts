@@ -310,19 +310,39 @@ export function createSubcircuitInstance(
  */
 export function evaluateSubcircuit(
   subDef: CustomSubcircuit,
-  inputVals: LogicValue[]
+  inputVals: LogicValue[],
+  previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
 ): LogicValue[] {
+  return evaluateSubcircuitStateful(subDef, inputVals, previous).outputs;
+}
+
+/**
+ * Same as evaluateSubcircuit, but continues from the instance's previous internal state (when it
+ * still matches the definition) and returns the new internal state alongside the outputs.
+ */
+export function evaluateSubcircuitStateful(
+  subDef: CustomSubcircuit,
+  inputVals: LogicValue[],
+  previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
+): { outputs: LogicValue[]; internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] } } {
   const inPorts = subDef.ports.filter((p) => p.type === 'input');
   const outPorts = subDef.ports.filter((p) => p.type === 'output');
 
-  // Deep clone components and wires to avoid mutating the template
-  const intComps: CircuitComponentInstance[] = subDef.components.map((c) => ({
+  // Continue from the stored state if it was made from this definition, else start from the template
+  const sameShape =
+    !!previous &&
+    previous.components.length === subDef.components.length &&
+    previous.components.every((c, i) => c.id === subDef.components[i].id && c.type === subDef.components[i].type);
+  const source = sameShape ? previous!.components : subDef.components;
+
+  // Deep clone components and wires to avoid mutating the template / previous state
+  const intComps: CircuitComponentInstance[] = source.map((c) => ({
     ...c,
     inputs: c.inputs.map((p) => ({ ...p })),
     outputs: c.outputs.map((p) => ({ ...p })),
     state: { ...c.state },
   }));
-  const intWires: CircuitWire[] = subDef.wires.map((w) => ({ ...w }));
+  const intWires: CircuitWire[] = (sameShape ? previous!.wires : subDef.wires).map((w) => ({ ...w }));
 
   // Drive inputs
   inPorts.forEach((port, idx) => {
@@ -342,10 +362,10 @@ export function evaluateSubcircuit(
     }
   });
 
-  // Step simulation up to 6 iterations for signal stabilization
+  // Settle the internal circuit (see simulateCircuit for the step bound)
   let curComps = intComps;
   let curWires = intWires;
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < curComps.length + 10; i++) {
     const step = simulateCircuitStep(curComps, curWires);
     curComps = step.components;
     curWires = step.wires;
@@ -353,7 +373,7 @@ export function evaluateSubcircuit(
   }
 
   // Read outputs
-  return outPorts.map((port) => {
+  const outputs = outPorts.map((port) => {
     const comp = curComps.find((c) => c.id === port.targetCompId);
     if (!comp) return 0 as LogicValue;
     if (comp.type === 'led' || comp.type === 'probe') {
@@ -365,6 +385,7 @@ export function evaluateSubcircuit(
     if (pIn) return pIn.value;
     return 0 as LogicValue;
   });
+  return { outputs, internal: { components: curComps, wires: curWires } };
 }
 
 /**

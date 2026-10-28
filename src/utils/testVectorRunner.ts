@@ -146,7 +146,7 @@ export function runCircuitTestbench(
     });
 
     // 2. Simulate circuit
-    const sim = simulateCircuit(testComps, wires, 6);
+    const sim = simulateCircuit(testComps, wires);
 
     // 3. Read actual outputs
     const actualOutputs: Record<string, LogicValue> = {};

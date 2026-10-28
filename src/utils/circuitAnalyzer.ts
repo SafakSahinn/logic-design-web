@@ -1,5 +1,16 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
+import { getSubcircuitDefinition } from './subcircuitManager';
+
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'];
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
+const GATE_TYPES = ['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'];
+// State-holding parts: timing paths start at their outputs and end at their inputs
+const SEQUENTIAL_TYPES = ['dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit', 'ram16x4'];
+// Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
+const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4');
+// Parts that are only wiring / display and add no logic level
+const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'splitter4', 'busSplitter'];
 
 export interface CMOSGateStats {
   gateType: string;
@@ -72,61 +83,74 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
 };
 
 /**
- * Calculates topological critical path depth (logic levels) from primary inputs to outputs
+ * Critical path in logic levels: the largest number of logic parts a signal passes through between
+ * primary inputs / register outputs and primary outputs / register inputs. Inputs, outputs, tunnels and
+ * splitters add no level; a feedback loop (e.g. cross-coupled gates) is cut where it closes.
  */
 function calculateCriticalPath(components: CircuitComponentInstance[], wires: CircuitWire[]): number {
-  if (components.length === 0 || wires.length === 0) return 0;
-
-  // Build component dependency graph: compId -> Array of downstream compIds
-  const adj = new Map<string, string[]>();
-  const inDegree = new Map<string, number>();
-
-  components.forEach((c) => {
-    adj.set(c.id, []);
-    inDegree.set(c.id, 0);
-  });
-
-  wires.forEach((w) => {
-    if (w.fromCompId && w.toCompId && w.fromCompId !== w.toCompId) {
-      adj.get(w.fromCompId)?.push(w.toCompId);
-      inDegree.set(w.toCompId, (inDegree.get(w.toCompId) || 0) + 1);
-    }
-  });
-
-  // Longest path via topological order (Dynamic Programming)
-  const depth = new Map<string, number>();
-  const queue: string[] = [];
-
-  components.forEach((c) => {
-    // Primary inputs or nodes with in-degree 0
-    if ((inDegree.get(c.id) || 0) === 0) {
-      depth.set(c.id, 1);
-      queue.push(c.id);
-    }
-  });
-
-  let maxDepth = 0;
-
-  while (queue.length > 0) {
-    const u = queue.shift()!;
-    const uDepth = depth.get(u) || 1;
-    if (uDepth > maxDepth) maxDepth = uDepth;
-
-    const neighbors = adj.get(u) || [];
-    neighbors.forEach((v) => {
-      const curVDepth = depth.get(v) || 0;
-      if (uDepth + 1 > curVDepth) {
-        depth.set(v, uDepth + 1);
-      }
-      const newInDeg = (inDegree.get(v) || 1) - 1;
-      inDegree.set(v, newInDeg);
-      if (newInDeg === 0) {
-        queue.push(v);
-      }
-    });
+  const byId = new Map(components.map((c) => [c.id, c]));
+  const preds = new Map<string, Set<string>>();
+  components.forEach((c) => preds.set(c.id, new Set()));
+  for (const w of wires) {
+    if (w.fromCompId && w.toCompId && w.fromCompId !== w.toCompId) preds.get(w.toCompId)?.add(w.fromCompId);
   }
 
-  return Math.max(maxDepth, components.length > 0 ? 1 : 0);
+  const weight = (c: CircuitComponentInstance) => (NO_DELAY_TYPES.includes(c.type) || PATH_BREAK_TYPES.includes(c.type) ? 0 : 1);
+  // Arrival = logic levels up to and including this part's output
+  const arrival = new Map<string, number>();
+  const onStack = new Set<string>();
+  const visit = (id: string): number => {
+    if (arrival.has(id)) return arrival.get(id)!;
+    const c = byId.get(id);
+    if (!c) return 0;
+    // A register's output is the start of a new path
+    if (PATH_BREAK_TYPES.includes(c.type)) {
+      arrival.set(id, 0);
+      return 0;
+    }
+    if (onStack.has(id)) return 0; // feedback loop: cut here
+    onStack.add(id);
+    let best = 0;
+    for (const p of preds.get(id) || []) best = Math.max(best, visit(p));
+    onStack.delete(id);
+    const a = best + weight(c);
+    arrival.set(id, a);
+    return a;
+  };
+
+  let maxDepth = 0;
+  for (const c of components) {
+    // Path ends: every part's inputs (registers included) see the arrival of their drivers
+    for (const p of preds.get(c.id) || []) maxDepth = Math.max(maxDepth, visit(p));
+    maxDepth = Math.max(maxDepth, visit(c.id));
+  }
+  return maxDepth;
+}
+
+// Transistor count of one part: n-input gates scale with n, custom ICs count their contents
+function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set()): number {
+  const n = Math.max(1, c.inputs.length);
+  switch (c.type) {
+    case 'not':
+      return 2;
+    case 'nand':
+    case 'nor':
+      return 2 * n; // n series + n parallel transistors
+    case 'and':
+    case 'or':
+      return 2 * n + 2; // NAND/NOR + inverter
+    case 'xor':
+    case 'xnor':
+      return 8 * Math.max(1, n - 1); // chain of 2-input stages
+    case 'subcircuit': {
+      const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
+      if (!def || seen.has(def.id)) return 0;
+      const inner = new Set(seen).add(def.id);
+      return def.components.reduce((sum, ic) => sum + transistorsOf(ic, inner), 0);
+    }
+    default:
+      return CMOS_TRANSISTOR_TABLE[c.type] || 0;
+  }
 }
 
 /**
@@ -136,7 +160,6 @@ export function analyzeCircuit(
   components: CircuitComponentInstance[],
   wires: CircuitWire[]
 ): CircuitAnalysisReport {
-  const compCounts = new Map<string, number>();
   let inputCount = 0;
   let outputCount = 0;
   let gateCount = 0;
@@ -144,30 +167,16 @@ export function analyzeCircuit(
   let combinationalCount = 0;
 
   components.forEach((c) => {
-    compCounts.set(c.type, (compCounts.get(c.type) || 0) + 1);
 
-    if (['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'].includes(c.type)) {
+    if (INPUT_TYPES.includes(c.type)) {
       inputCount++;
-    } else if (['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'].includes(c.type)) {
+    } else if (OUTPUT_TYPES.includes(c.type)) {
       outputCount++;
-    } else if (['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState'].includes(c.type)) {
+    } else if (GATE_TYPES.includes(c.type)) {
       gateCount++;
-    } else if ([
-      'dFlipFlop',
-      'jkFlipFlop',
-      'tFlipFlop',
-      'srLatch',
-      'register4',
-      'register4bit',
-      'counter4',
-      'counter4bit',
-      'shiftRegister4',
-      'shiftRegister4bit',
-      'ram16x4',
-      'rom16x4',
-    ].includes(c.type)) {
+    } else if (SEQUENTIAL_TYPES.includes(c.type)) {
       sequentialCount++;
-    } else {
+    } else if (!['tunnel', 'textLabel'].includes(c.type)) {
       combinationalCount++;
     }
   });
@@ -175,20 +184,24 @@ export function analyzeCircuit(
   const breakdown: CMOSGateStats[] = [];
   let totalCMOSTransistors = 0;
 
-  compCounts.forEach((count, type) => {
-    const transistorsPerUnit = CMOS_TRANSISTOR_TABLE[type] || 0;
-    const total = count * transistorsPerUnit;
-    totalCMOSTransistors += total;
-
-    if (transistorsPerUnit > 0) {
-      breakdown.push({
-        gateType: type.toUpperCase(),
-        count,
-        transistorsPerUnit,
-        totalTransistors: total,
-      });
-    }
-  });
+  // Group by what the transistor count depends on: gate type + input count, IC definition, or type
+  const groups = new Map<string, CMOSGateStats>();
+  for (const c of components) {
+    const t = transistorsOf(c);
+    if (t <= 0) continue;
+    totalCMOSTransistors += t;
+    const name =
+      c.type === 'subcircuit'
+        ? `IC: ${c.state.subcircuitName || c.label || 'Alt devre'}`
+        : GATE_TYPES.includes(c.type) && c.type !== 'not' && c.type !== 'triState'
+          ? `${c.type.toUpperCase()} (${c.inputs.length} giriş)`
+          : c.type.toUpperCase();
+    const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
+    g.count++;
+    g.totalTransistors += t;
+    groups.set(name, g);
+  }
+  breakdown.push(...groups.values());
 
   breakdown.sort((a, b) => b.totalTransistors - a.totalTransistors);
 

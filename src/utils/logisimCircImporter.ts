@@ -5,6 +5,8 @@ export interface ImportedCircuitSheet {
   name: string;
   components: CircuitComponentInstance[];
   wires: CircuitWire[];
+  // What could not be imported exactly (skipped parts, multi-bit pins, negated inputs ...)
+  warnings: string[];
 }
 
 export type ImportedLogisimCircuit = ImportedCircuitSheet;
@@ -28,6 +30,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
     return isOutputPin ? 'probe' : 'switch';
   }
   if (n === 'clock') return 'clock';
+  if (n === 'tunnel') return 'tunnel';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -112,6 +115,9 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
   }
 
   const results: ImportedCircuitSheet[] = [];
+  const circuitNames = new Set(Array.from(circuits).map((c) => c.getAttribute('name') || ''));
+  // Logisim parts that carry no logic
+  const DECORATIVE = new Set(['text', 'probe text']);
 
   for (let cIdx = 0; cIdx < circuits.length; cIdx++) {
     const circuitElem = circuits[cIdx];
@@ -169,6 +175,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // 2. Parts: create ours and remember which Logisim pin location belongs to which of our pins
     const components: CircuitComponentInstance[] = [];
+    const skipped = new Map<string, number>();
+    const warnings: string[] = [];
     const attach: Array<{ at: Pt; compId: string; pinId: string; isOutput: boolean }> = [];
     // Our parts are bigger than Logisim's (an AND gate is 80px instead of 50px), spread the layout out
     const SCALE = 1.6;
@@ -186,6 +194,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       let label: string | undefined = undefined;
       let facing = 'east';
       let size = 0;
+      let width = 1;
+      const negated: number[] = [];
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
         const aVal = attrs[a].getAttribute('val') || attrs[a].textContent || '';
@@ -194,10 +204,22 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         if (aName === 'label' && aVal) label = aVal;
         if (aName === 'facing') facing = aVal;
         if (aName === 'size') size = parseInt(aVal, 10) || 0;
+        if (aName === 'width') width = parseInt(aVal, 10) || 1;
+        const neg = aName?.match(/^negate(\d+)$/);
+        if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
       }
 
       const nativeType = mapCircCompType(compName, isOutput, constVal);
-      if (!nativeType) continue;
+      if (!nativeType) {
+        if (!DECORATIVE.has(compName.trim().toLowerCase())) {
+          const why = circuitNames.has(compName) ? `${compName} (alt devre örneği)` : compName || '(adsız)';
+          skipped.set(why, (skipped.get(why) || 0) + 1);
+        }
+        continue;
+      }
+      const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
+      if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
+      if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       const isGate = GATE_TYPES.includes(nativeType);
       const isInverterLike = nativeType === 'not' || nativeType === 'triState';
@@ -250,6 +272,14 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
       let inst = updatePinPositions(createComponentInstance(nativeType, 0, 0));
       const pins = [...inst.inputs, ...inst.outputs];
+      if (nativeType === 'tunnel') {
+        // Logisim tunnel: one connection point at loc; ours joins every tunnel with the same label
+        const pin = inst.inputs[0];
+        inst = updatePinPositions({ ...inst, x: anchor.x - pin.x, y: anchor.y - pin.y, label: label || 'Tünel' });
+        components.push(inst);
+        attach.push({ at: loc, compId: inst.id, pinId: inst.inputs[0].id, isOutput: false });
+        continue;
+      }
       if (pins.length === 1) {
         // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
         inst = updatePinPositions({ ...inst, x: anchor.x - pins[0].x, y: anchor.y - pins[0].y });
@@ -316,10 +346,13 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       }
     }
 
+    skipped.forEach((count, what) => warnings.unshift(`Desteklenmeyen bileşen atlandı: ${what}${count > 1 ? ` ×${count}` : ''}`));
+
     results.push({
       name: circuitName,
       components,
       wires,
+      warnings,
     });
   }
 

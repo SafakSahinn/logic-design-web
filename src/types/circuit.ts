@@ -121,6 +121,8 @@ export interface CircuitComponentInstance {
     subcircuitId?: string;
     subcircuitName?: string;
     subcircuitCode?: string;
+    // Internal parts of this IC instance as of the last evaluation, so latches/flip-flops inside keep their state
+    subcircuitInternal?: { components: CircuitComponentInstance[]; wires: CircuitWire[] };
     matrixGrid?: boolean[][];
     rgbPixels?: string[][];
     asciiChar?: string;
