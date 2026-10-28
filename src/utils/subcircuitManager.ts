@@ -7,7 +7,7 @@ import type {
 import type { SignalValue } from '../types/logic';
 import {
   createComponentInstance,
-  simulateCircuitStep,
+  simulateCircuit,
   updatePinPositions,
 } from './circuitEngine';
 import { getInternalWires, snapTo10 } from './wiringEngine';
@@ -326,7 +326,11 @@ export function evaluateSubcircuitStateful(
   subDef: CustomSubcircuit,
   inputVals: SignalValue[],
   previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
-): { outputs: SignalValue[]; internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] } } {
+): {
+  outputs: SignalValue[];
+  internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] };
+  oscillating: boolean;
+} {
   const inPorts = subDef.ports.filter((p) => p.type === 'input');
   const outPorts = subDef.ports.filter((p) => p.type === 'output');
 
@@ -375,15 +379,11 @@ export function evaluateSubcircuitStateful(
     }
   });
 
-  // Settle the internal circuit (see simulateCircuit for the step bound)
-  let curComps = intComps;
-  let curWires = intWires;
-  for (let i = 0; i < curComps.length + 10; i++) {
-    const step = simulateCircuitStep(curComps, curWires);
-    curComps = step.components;
-    curWires = step.wires;
-    if (!step.hasChanged) break;
-  }
+  // Settle the internal circuit; Logisim propagates the whole hierarchy at once, so an oscillation
+  // inside is the outer circuit's oscillation too
+  const settled = simulateCircuit(intComps, intWires);
+  const curComps = settled.components;
+  const curWires = settled.wires;
 
   // Read outputs
   const outputs = outPorts.map((port) => {
@@ -399,7 +399,11 @@ export function evaluateSubcircuitStateful(
     return 0 as SignalValue;
   });
   // The hidden port drivers are rebuilt every evaluation; keep only the IC's own parts as its state
-  return { outputs, internal: { components: curComps.filter((c) => !c.id.startsWith(PORT_DRIVER_PREFIX)), wires: curWires } };
+  return {
+    outputs,
+    internal: { components: curComps.filter((c) => !c.id.startsWith(PORT_DRIVER_PREFIX)), wires: curWires },
+    oscillating: !!settled.oscillating,
+  };
 }
 
 /**

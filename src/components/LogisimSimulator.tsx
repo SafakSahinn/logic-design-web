@@ -5833,6 +5833,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Check if any wire is experiencing a contention conflict (0 and 1 driving same net)
   const hasConflictError = useMemo(() => wires.some((w) => w.hasConflict), [wires]);
 
+  // The last simulation did not settle (feedback that keeps flipping, or inside an IC)
+  const hasOscillation = useMemo(
+    () => wires.some((w) => w.oscillating) || components.some((c) => c.state.oscillating),
+    [wires, components]
+  );
+  // Like Logisim, an oscillation stops the clocks; Run again only resumes once the circuit settles
+  useEffect(() => {
+    if (hasOscillation && isRunning) {
+      setIsRunning(false);
+      showToast('Salınım tespit edildi: devre oturmuyor, simülasyon durduruldu.');
+    }
+  }, [hasOscillation, isRunning, showToast]);
+
   // Active truth table summary of current canvas
   const canvasSummary = useMemo(() => {
     const inputs = components.filter((c) => c.type === 'switch' || c.type === 'clock');
@@ -7998,6 +8011,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <span>⚠ Kısa Devre!</span>
               </div>
             )}
+
+            {/* Oscillation Alert */}
+            {hasOscillation && (
+              <div
+                className="px-2.5 py-1 bg-rose-500/10 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 animate-pulse shadow-2xs"
+                title="Geri beslemeli bir döngü sürekli değişiyor (Logisim: Oscillation apparent). Salınan teller ve IC'ler kırmızı halkayla gösteriliyor."
+              >
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                <span>⚠ Salınım Tespit Edildi</span>
+              </div>
+            )}
           </div>
 
           {/* Center/Right: Canvas Display, Routing & Step 5 Theme Toggle */}
@@ -9025,6 +9049,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     strokeLinecap="round"
                     pointerEvents="stroke"
                   />
+                  {/* Oscillating wire: wide red halo, as Logisim circles its oscillation points */}
+                  {wire.oscillating && (
+                    <path
+                      d={pathD}
+                      fill="none"
+                      stroke="#ef4444"
+                      strokeWidth={wire.isBus ? 16 : 14}
+                      opacity={0.35}
+                      strokeLinecap="round"
+                      pointerEvents="none"
+                    />
+                  )}
                   {/* Outer wire / glow if HIGH or SELECTED or CONFLICT */}
                   {isError ? (
                     <path
@@ -9451,6 +9487,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       stroke="#3b82f6"
                       strokeWidth={1.5}
                       strokeDasharray="4,4"
+                      transform={comp.rotation ? `rotate(${comp.rotation}, ${compW / 2}, ${compH / 2})` : undefined}
+                      className="pointer-events-none"
+                    />
+                  )}
+
+                  {/* IC that oscillates inside: red frame, as in Logisim */}
+                  {comp.state.oscillating && (
+                    <rect
+                      x={-4}
+                      y={-4}
+                      width={compW + 8}
+                      height={compH + 8}
+                      rx={10}
+                      fill="none"
+                      stroke="#ef4444"
+                      strokeWidth={2.5}
                       transform={comp.rotation ? `rotate(${comp.rotation}, ${compW / 2}, ${compH / 2})` : undefined}
                       className="pointer-events-none"
                     />

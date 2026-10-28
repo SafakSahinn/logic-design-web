@@ -125,6 +125,8 @@ export interface CircuitComponentInstance {
     subcircuitCode?: string;
     // Internal parts of this IC instance as of the last evaluation, so latches/flip-flops inside keep their state
     subcircuitInternal?: { components: CircuitComponentInstance[]; wires: CircuitWire[] };
+    // The IC's internal circuit did not settle in its last evaluation
+    oscillating?: boolean;
     matrixGrid?: boolean[][];
     rgbPixels?: string[][];
     asciiChar?: string;
@@ -178,6 +180,8 @@ export interface CircuitWire {
   toPinId: string;
   value: SignalValue;
   hasConflict?: boolean;
+  // Still changing when the simulation gave up settling (Logisim's oscillation points)
+  oscillating?: boolean;
   branchPoint?: { x: number; y: number };
   isBus?: boolean;
   bitWidth?: number;

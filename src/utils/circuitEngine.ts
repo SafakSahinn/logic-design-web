@@ -1994,8 +1994,14 @@ export function simulateCircuitStep(
         if (subId) {
           const subDef = getSubcircuitDefinition(subId);
           if (subDef) {
-            const { outputs: outVals, internal } = evaluateSubcircuitStateful(subDef, raw, comp.state.subcircuitInternal);
+            const { outputs: outVals, internal, oscillating } = evaluateSubcircuitStateful(
+              subDef,
+              raw,
+              comp.state.subcircuitInternal
+            );
             comp.state.subcircuitInternal = internal;
+            if (oscillating) comp.state.oscillating = true;
+            else delete comp.state.oscillating;
             outVals.forEach((val, oIdx) => {
               if (comp.outputs[oIdx] && comp.outputs[oIdx].value !== val) {
                 comp.outputs[oIdx].value = val;
@@ -2027,22 +2033,72 @@ export function simulateCircuit(
   components: CircuitComponentInstance[],
   wires: CircuitWire[],
   maxIterations?: number
-): { components: CircuitComponentInstance[]; wires: CircuitWire[] } {
+): {
+  components: CircuitComponentInstance[];
+  wires: CircuitWire[];
+  oscillating?: boolean;
+  oscillatingWireIds?: string[];
+  oscillatingCompIds?: string[];
+} {
   // Each step moves signals through one level of logic, and an acyclic path cannot be longer than
   // the number of parts, so that many steps always settle it. Only feedback that keeps
-  // oscillating (e.g. a NOT gate driving itself) runs into the limit.
+  // oscillating (e.g. NAND(clock, q) after a clock edge) runs into the limit.
   if (maxIterations === undefined) maxIterations = components.length + 10;
   let curComps = components;
   let curWires = wires;
+  // Like Logisim's Propagator: what still changes in the last quarter of the steps is reported as oscillating
+  const logFrom = Math.floor((3 * maxIterations) / 4);
+  const oscWires = new Set<string>();
+  const oscComps = new Set<string>();
+  let settled = false;
 
   for (let i = 0; i < maxIterations; i++) {
     const step = simulateCircuitStep(curComps, curWires);
+    if (!step.hasChanged) {
+      curComps = step.components;
+      curWires = step.wires;
+      settled = true;
+      break;
+    }
+    if (i >= logFrom) {
+      step.wires.forEach((w, k) => {
+        const old = curWires[k];
+        if (old && (old.value !== w.value || old.busValue !== w.busValue)) oscWires.add(w.id);
+      });
+      // A subcircuit that keeps changing inside is drawn with a frame, as in Logisim
+      step.components.forEach((c) => {
+        if (c.state.oscillating) oscComps.add(c.id);
+      });
+    }
     curComps = step.components;
     curWires = step.wires;
-    if (!step.hasChanged) break;
   }
 
-  return { components: curComps, wires: curWires };
+  if (settled) {
+    // The outer circuit can settle while an IC keeps oscillating inside with steady outputs
+    oscWires.clear();
+    oscComps.clear();
+    curComps.forEach((c) => {
+      if (c.state.oscillating) oscComps.add(c.id);
+    });
+  }
+  // Mark the wires that kept changing for the canvas; clear the marks of an earlier oscillation
+  if (oscWires.size > 0 || curWires.some((w) => w.oscillating)) {
+    curWires = curWires.map((w) => {
+      const osc = oscWires.has(w.id);
+      if (!!w.oscillating === osc) return w;
+      const { oscillating: _old, ...rest } = w;
+      return osc ? { ...rest, oscillating: true } : rest;
+    });
+  }
+  if ((settled || maxIterations === 0) && oscComps.size === 0) return { components: curComps, wires: curWires };
+  return {
+    components: curComps,
+    wires: curWires,
+    oscillating: true,
+    oscillatingWireIds: [...oscWires],
+    oscillatingCompIds: [...oscComps],
+  };
 }
 
 /**
