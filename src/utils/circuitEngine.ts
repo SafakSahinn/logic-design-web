@@ -1082,6 +1082,38 @@ const busValue = (vals: SignalValue[]): number | 'X' | 'E' => {
   return vals.reduce<number>((acc, v, i) => acc | ((v as number) << i), 0);
 };
 
+// Logisim's adder (Adder.computeSum): a carry-in that is x or floating counts as 0; an E or
+// undefined bit makes that sum bit E or x, and the carry spreads it to every higher bit
+const logisimSum = (a: SignalValue[], b: SignalValue[], cin: SignalValue): { sum: SignalValue[]; carry: SignalValue } => {
+  let carry: SignalValue = cin === 'X' || cin === 'Z' ? 0 : cin;
+  const sum: SignalValue[] = [];
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i];
+    const bi = b[i];
+    if (carry === 'E' || carry === 'X') {
+      sum.push(carry);
+    } else if (ai === 'E' || bi === 'E') {
+      sum.push('E');
+      carry = 'E';
+    } else if (!isLevel(ai) || !isLevel(bi) || !isLevel(carry)) {
+      sum.push('X');
+      carry = 'X';
+    } else {
+      const s: number = ai + bi + carry;
+      sum.push((s & 1) as 0 | 1);
+      carry = s >= 2 ? 1 : 0;
+    }
+  }
+  return { sum, carry };
+};
+
+// Logisim's subtractor: A + NOT B + NOT Bin, borrow = NOT carry (NOT of a non-level is E,
+// so an undefined B gives E); a borrow-in that is x or floating counts as 0
+const logisimDiff = (a: SignalValue[], b: SignalValue[], bin: SignalValue): { diff: SignalValue[]; borrow: SignalValue } => {
+  const { sum, carry } = logisimSum(a, b.map(sigNot), sigNot(bin === 'X' || bin === 'Z' ? 0 : bin));
+  return { diff: sum, borrow: sigNot(carry) };
+};
+
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
 const POWER_UP_X_TYPES = new Set<string>(['not', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState']);
@@ -1441,7 +1473,18 @@ export function simulateCircuitStep(
         break;
       }
       case 'alu4': {
-        const a = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
+        // No Logisim counterpart: an undefined operation select, or an E / undefined operand bit
+        // (carry-in too for add/sub; open or x counts as 0 like Logisim's adder), makes every output E or x
+        const op = busValue([raw[9], raw[10]]);
+        const used = [...raw.slice(0, 4), ...raw.slice(5, 9)];
+        if (typeof op === 'number' && op < 2 && raw[4] !== 'X' && raw[4] !== 'Z') used.push(raw[4]);
+        const bad: SignalValue | null =
+          typeof op !== 'number' ? op : used.some((v) => v === 'E') ? 'E' : used.every(isLevel) ? null : 'X';
+        if (bad !== null) {
+          for (let i = 0; i < comp.outputs.length; i++) setOut(i, bad);
+          break;
+        }
+        const a =(inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
         const cin = inVals[4] || 0;
         const b = (inVals[5] || 0) + (inVals[6] || 0) * 2 + (inVals[7] || 0) * 4 + (inVals[8] || 0) * 8;
         const s0 = inVals[9] || 0;
@@ -1532,23 +1575,26 @@ export function simulateCircuitStep(
         break;
       }
       case 'comparator4': {
-        const a = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
-        const b = (inVals[4] || 0) + (inVals[5] || 0) * 2 + (inVals[6] || 0) * 4 + (inVals[7] || 0) * 8;
-        const gt: SignalValue = a > b ? 1 : 0;
-        const eq: SignalValue = a === b ? 1 : 0;
-        const lt: SignalValue = a < b ? 1 : 0;
-        if (comp.outputs[0] && comp.outputs[0].value !== gt) {
-          comp.outputs[0].value = gt;
-          hasChanged = true;
+        // Logisim unsigned comparator: walks from the MSB and stops at the first bit pair that
+        // differs; an E or undefined bit met before that makes all three outputs E or x
+        let res: SignalValue[] = [0, 1, 0];
+        for (let i = 3; i >= 0; i--) {
+          const a = raw[i];
+          const b = raw[4 + i];
+          if (a === 'E' || b === 'E') {
+            res = ['E', 'E', 'E'];
+            break;
+          }
+          if (!isLevel(a) || !isLevel(b)) {
+            res = ['X', 'X', 'X'];
+            break;
+          }
+          if (a !== b) {
+            res = a === 1 ? [1, 0, 0] : [0, 0, 1];
+            break;
+          }
         }
-        if (comp.outputs[1] && comp.outputs[1].value !== eq) {
-          comp.outputs[1].value = eq;
-          hasChanged = true;
-        }
-        if (comp.outputs[2] && comp.outputs[2].value !== lt) {
-          comp.outputs[2].value = lt;
-          hasChanged = true;
-        }
+        res.forEach((v, i) => setOut(i, v));
         break;
       }
       case 'counter4': {
@@ -1580,68 +1626,29 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'halfAdder': {
-        const s: SignalValue = inVals[0] !== inVals[1] ? 1 : 0;
-        const c: SignalValue = inVals[0] === 1 && inVals[1] === 1 ? 1 : 0;
-        if (comp.outputs[0] && comp.outputs[0].value !== s) {
-          comp.outputs[0].value = s;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== c) {
-          comp.outputs[1].value = c;
-          hasChanged = true;
-        }
-        break;
-      }
+      case 'halfAdder':
       case 'fullAdder': {
-        const a = inVals[0];
-        const b = inVals[1];
-        const cin = inVals[2] || 0;
-        const s: SignalValue = ((a ^ b ^ cin) === 1 ? 1 : 0);
-        const cout: SignalValue = (((a & b) | (cin & (a ^ b))) === 1 ? 1 : 0);
-        if (comp.outputs[0] && comp.outputs[0].value !== s) {
-          comp.outputs[0].value = s;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== cout) {
-          comp.outputs[1].value = cout;
-          hasChanged = true;
-        }
+        // Logisim 1-bit adder; the half adder is one with its carry-in left open
+        const { sum, carry } = logisimSum([raw[0]], [raw[1]], raw[2] ?? 'Z');
+        setOut(0, sum[0]);
+        setOut(1, carry);
         break;
       }
-      case 'halfSubtractor': {
-        const a = inVals[0] ?? 0;
-        const b = inVals[1] ?? 0;
-        const diff: SignalValue = ((a ^ b) === 1 ? 1 : 0);
-        const borrow: SignalValue = (a === 0 && b === 1 ? 1 : 0);
-        if (comp.outputs[0] && comp.outputs[0].value !== diff) {
-          comp.outputs[0].value = diff;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== borrow) {
-          comp.outputs[1].value = borrow;
-          hasChanged = true;
-        }
-        break;
-      }
+      case 'halfSubtractor':
       case 'fullSubtractor': {
-        const a = inVals[0] ?? 0;
-        const b = inVals[1] ?? 0;
-        const bin = inVals[2] ?? 0;
-        const diff: SignalValue = (((a ^ b ^ bin) & 1) === 1 ? 1 : 0);
-        const bout: SignalValue = ((a === 0 && b === 1) || ((a ^ b) === 0 && bin === 1) ? 1 : 0);
-        if (comp.outputs[0] && comp.outputs[0].value !== diff) {
-          comp.outputs[0].value = diff;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== bout) {
-          comp.outputs[1].value = bout;
-          hasChanged = true;
-        }
+        const { diff, borrow } = logisimDiff([raw[0]], [raw[1]], raw[2] ?? 'Z');
+        setOut(0, diff[0]);
+        setOut(1, borrow);
         break;
       }
       case 'bcdTo7Seg': {
-        const a = inVals[0] ?? 0;
+        // No Logisim counterpart: an E input makes every segment output E, any other undefined one x
+        const code = busValue(raw.slice(0, 4));
+        if (typeof code !== 'number') {
+          for (let i = 0; i < 7; i++) setOut(i, code);
+          break;
+        }
+        const a =inVals[0] ?? 0;
         const b = inVals[1] ?? 0;
         const c = inVals[2] ?? 0;
         const d = inVals[3] ?? 0;
@@ -2327,6 +2334,15 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w9', fromCompId: 'bus_split', fromPinId: 'bus_split_out1', toCompId: 'alu_hex', toPinId: 'alu_hex_inD1', value: 0 },
       { id: 'w10', fromCompId: 'bus_split', fromPinId: 'bus_split_out2', toCompId: 'alu_hex', toPinId: 'alu_hex_inD2', value: 0 },
       { id: 'w11', fromCompId: 'bus_split', fromPinId: 'bus_split_out3', toCompId: 'alu_hex', toPinId: 'alu_hex_inD3', value: 0 },
+      // Open ALU inputs read as unknown, so the remaining bits and the operation select are tied low
+      ...['inA2', 'inA3', 'inCin', 'inB1', 'inB2', 'inB3', 'inS0', 'inS1'].map((pin, i) => ({
+        id: `w${12 + i}`,
+        fromCompId: 'gnd_1',
+        fromPinId: 'gnd_1_out',
+        toCompId: 'alu_core',
+        toPinId: `alu_core_${pin}`,
+        value: 0 as const,
+      })),
     ],
   },
   {
@@ -2584,6 +2600,7 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 500, 10, 'A-Yazmaç İzni (WE=1)'), id: 'cpu_reg_we', state: { on: true } },
       { ...createComponentInstance('hexDisplay', 670, 70, 'Çıkış Portu (Display)'), id: 'cpu_disp' },
       { ...createComponentInstance('alu4', 500, 240, '4-Bit ALU'), id: 'cpu_alu' },
+      { ...createComponentInstance('gnd', 400, 330, 'ALU B=0 (ADD)'), id: 'cpu_alu_gnd' },
     ].map(updatePinPositions),
     wires: [
       { id: 'w1', fromCompId: 'cpu_clk', fromPinId: 'cpu_clk_out', toCompId: 'cpu_pc', toPinId: 'cpu_pc_inClk', value: 0 },
@@ -2608,6 +2625,15 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w20', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ1', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA1', value: 0 },
       { id: 'w21', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ2', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA2', value: 0 },
       { id: 'w22', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ3', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA3', value: 0 },
+      // Open ALU inputs read as unknown, so B, the carry-in and the operation select are tied low
+      ...['inB0', 'inB1', 'inB2', 'inB3', 'inCin', 'inS0', 'inS1'].map((pin, i) => ({
+        id: `w${23 + i}`,
+        fromCompId: 'cpu_alu_gnd',
+        fromPinId: 'cpu_alu_gnd_out',
+        toCompId: 'cpu_alu',
+        toPinId: `cpu_alu_${pin}`,
+        value: 0 as const,
+      })),
     ],
   },
   {
