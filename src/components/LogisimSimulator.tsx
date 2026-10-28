@@ -120,6 +120,7 @@ import type { LogicValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
+import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
 import {
   runCircuitTestbench,
@@ -2114,80 +2115,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     URL.revokeObjectURL(url);
   };
 
-  // Export Circuit to Standard CAD (.circ) XML Format
+  // Export Circuit to Logisim (.circ): exact behaviour, connections through net-named tunnels
   const handleExportCirc = () => {
-    const compXmls: string[] = [];
-    components.forEach((c) => {
-      let standardCompName = '';
-      let lib = '1';
-      switch (c.type) {
-        case 'and': standardCompName = 'AND Gate'; break;
-        case 'or': standardCompName = 'OR Gate'; break;
-        case 'not': standardCompName = 'NOT Gate'; break;
-        case 'nand': standardCompName = 'NAND Gate'; break;
-        case 'nor': standardCompName = 'NOR Gate'; break;
-        case 'xor': standardCompName = 'XOR Gate'; break;
-        case 'xnor': standardCompName = 'XNOR Gate'; break;
-        case 'switch': standardCompName = 'Pin'; lib = '0'; break;
-        case 'pushbutton': standardCompName = 'Pin'; lib = '0'; break;
-        case 'clock': standardCompName = 'Clock'; lib = '0'; break;
-        case 'vcc': standardCompName = 'Constant'; lib = '0'; break;
-        case 'gnd': standardCompName = 'Constant'; lib = '0'; break;
-        case 'led': standardCompName = 'LED'; lib = '5'; break;
-        case 'probe': standardCompName = 'Probe'; lib = '0'; break;
-        case 'sevenSegment': standardCompName = '7-Segment Display'; lib = '5'; break;
-        case 'hexDisplay': standardCompName = 'Hex Digit Display'; lib = '5'; break;
-        case 'fullAdder': standardCompName = 'Adder'; lib = '3'; break;
-        case 'fullSubtractor': standardCompName = 'Subtractor'; lib = '3'; break;
-        case 'mux2': standardCompName = 'Multiplexer'; lib = '2'; break;
-        case 'demux2': standardCompName = 'Demultiplexer'; lib = '2'; break;
-        case 'dFlipFlop': standardCompName = 'D Flip-Flop'; lib = '4'; break;
-        case 'jkFlipFlop': standardCompName = 'J-K Flip-Flop'; lib = '4'; break;
-        case 'tFlipFlop': standardCompName = 'T Flip-Flop'; lib = '4'; break;
-        case 'register4': standardCompName = 'Register'; lib = '4'; break;
-        case 'counter4': standardCompName = 'Counter'; lib = '4'; break;
-        case 'ram16x4': standardCompName = 'RAM'; lib = '4'; break;
-        case 'rom16x4': standardCompName = 'ROM'; lib = '4'; break;
-        default: break;
-      }
-      if (standardCompName) {
-        compXmls.push(`    <comp lib="${lib}" loc="(${Math.round(c.x)},${Math.round(c.y)})" name="${standardCompName}"/>`);
-      }
-    });
-
-    const wireXmls: string[] = [];
-    wires.forEach((w) => {
-      const fromPin = findPinById(w.fromPinId);
-      const toPin = findPinById(w.toPinId);
-      if (fromPin && toPin) {
-        wireXmls.push(`    <wire from="(${Math.round(fromPin.x)},${Math.round(fromPin.y)})" to="(${Math.round(toPin.x)},${Math.round(toPin.y)})"/>`);
-      }
-    });
-
-    const circXml = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<project source="3.8.0" version="1.0">
-  This file was exported by LogicDesign Studio.
-  <lib desc="#Wiring" name="0"/>
-  <lib desc="#Gates" name="1"/>
-  <lib desc="#Plexers" name="2"/>
-  <lib desc="#Arithmetic" name="3"/>
-  <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>
-  <main name="main"/>
-  <circuit name="main">
-${compXmls.join('\n')}
-${wireXmls.join('\n')}
-  </circuit>
-</project>`;
-
-    const blob = new Blob([circXml], { type: 'application/xml;charset=utf-8;' });
+    const { xml, warnings } = exportLogisimCirc(currentCircuitName, components, wires);
+    const blob = new Blob([xml], { type: 'application/xml;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `devre_${Date.now()}.circ`;
-    a.click();
+    downloadUrl(url, `${exportBaseName()}.circ`);
     URL.revokeObjectURL(url);
-    showToast('Standart CAD (.circ) devre dosyası başarıyla dışa aktarıldı!');
+    showToast(
+      warnings.length > 0
+        ? `Logisim (.circ) dosyası indirildi; ${warnings.length} uyarı: ${warnings.slice(0, 2).join(' ')}`
+        : 'Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).',
+      warnings.length > 0 ? 7000 : 3000
+    );
   };
 
   // Switch Active Circuit Sheet

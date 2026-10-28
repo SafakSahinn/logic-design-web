@@ -24,7 +24,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'nor gate') return 'nor';
   if (n === 'xor gate') return 'xor';
   if (n === 'xnor gate') return 'xnor';
-  if (n === 'controlled buffer' || n === 'buffer') return 'triState';
+  if (n === 'controlled buffer') return 'triState';
+  // A plain buffer is a one-input AND for us (a gate with one connected input passes it through)
+  if (n === 'buffer') return 'and';
 
   if (n === 'pin') {
     return isOutputPin ? 'probe' : 'switch';
@@ -95,7 +97,27 @@ const rotateOffset = (p: Pt, rot: number): Pt => {
   if (rot === 270) return { x: p.y, y: -p.x };
   return p;
 };
-const unrotateOffset = (p: Pt, rot: number): Pt => rotateOffset(p, (360 - rot) % 360);
+
+// Logisim 2.7 gate input spacing (AbstractGate), checked in Logisim for size 50 and 2..5 inputs
+const gateInputOffsets = (inputs: number, size: number): number[] => {
+  let ss: number, sd: number, sl: number;
+  if (inputs <= 3) {
+    if (size < 40) [ss, sd, sl] = [-5, 10, 10];
+    else if (size < 60 || inputs <= 2) [ss, sd, sl] = [-10, 20, 20];
+    else [ss, sd, sl] = [-15, 30, 30];
+  } else if (inputs === 4 && size >= 60) [ss, sd, sl] = [-5, 20, 0];
+  else [ss, sd, sl] = [-5, 10, 10];
+  return Array.from({ length: inputs }, (_, i) =>
+    inputs % 2 ? ss * (inputs - 1) + sd * i : ss * inputs + sd * i + (i >= inputs / 2 ? sl : 0)
+  );
+};
+// Flip-flop connection points relative to loc (Q at loc), measured in Logisim 2.7.1
+const FF_POINTS: Record<string, { inputs: Pt[]; outputs: Pt[] }> = {
+  dFlipFlop: { inputs: [{ x: -40, y: 20 }, { x: -40, y: 0 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // D, CLK
+  tFlipFlop: { inputs: [{ x: -40, y: 20 }, { x: -40, y: 0 }, { x: -10, y: 30 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // T, CLK, reset
+  jkFlipFlop: { inputs: [{ x: -40, y: 0 }, { x: -40, y: 10 }, { x: -40, y: 20 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // J, CLK, K
+  srLatch: { inputs: [{ x: -40, y: 0 }, { x: -40, y: 20 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // S, R (clock dropped)
+};
 
 /**
  * Parses Standard CAD XML (.circ) file and converts to native project sheets.
@@ -182,6 +204,25 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
     const SCALE = 1.6;
     const scaled = (p: Pt): Pt => ({ x: Math.round((p.x * SCALE) / 10) * 10, y: Math.round((p.y * SCALE) / 10) * 10 });
 
+    // Pass 1: read every part, and collect the connection points of the non-gate ones so a gate input
+    // counts as used when a wire, a tunnel or another part's pin touches it
+    type RawPart = {
+      compName: string;
+      loc: Pt;
+      nativeType: ComponentType;
+      label?: string;
+      rot: number;
+      size: number;
+      inputsAttr: number;
+      xorMode?: string;
+      where: string;
+    };
+    const parts: RawPart[] = [];
+    const occupied = new Set<string>();
+    const local = (loc: Pt, off: Pt, rot: number): Pt => {
+      const r = rotateOffset(off, rot);
+      return { x: loc.x + r.x, y: loc.y + r.y };
+    };
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -195,16 +236,20 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       let facing = 'east';
       let size = 0;
       let width = 1;
+      let inputsAttr = 0;
+      let xorMode: string | undefined;
       const negated: number[] = [];
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
         const aVal = attrs[a].getAttribute('val') || attrs[a].textContent || '';
         if (aName === 'output' && aVal === 'true') isOutput = true;
-        if (aName === 'val') constVal = aVal;
+        if (aName === 'val' || aName === 'value') constVal = aVal;
         if (aName === 'label' && aVal) label = aVal;
         if (aName === 'facing') facing = aVal;
         if (aName === 'size') size = parseInt(aVal, 10) || 0;
         if (aName === 'width') width = parseInt(aVal, 10) || 1;
+        if (aName === 'inputs') inputsAttr = parseInt(aVal, 10) || 0;
+        if (aName === 'xor') xorMode = aVal;
         const neg = aName?.match(/^negate(\d+)$/);
         if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
       }
@@ -221,26 +266,73 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      const isGate = GATE_TYPES.includes(nativeType);
-      const isInverterLike = nativeType === 'not' || nativeType === 'triState';
-      const anchor = scaled(loc);
+      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, where });
 
-      if (isGate || isInverterLike) {
-        // Logisim gate: output at loc, inputs on the back edge (size+bubble/XOR curve behind it)
-        const back = isGate ? (size || 50) : size || 30;
-        const halfSpan = isGate ? (size || 50) / 2 + 5 : 15;
-        const found: Array<{ p: Pt; lateral: number }> = [];
-        for (const p of endpoints.values()) {
-          const local = unrotateOffset({ x: p.x - loc.x, y: p.y - loc.y }, rot);
-          if (local.x <= -back + 15 && local.x >= -back - 25 && Math.abs(local.y) <= halfSpan) {
-            found.push({ p, lateral: local.y });
+      occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
+      const ff = FF_POINTS[nativeType];
+      if (ff) for (const off of [...ff.inputs, ...ff.outputs]) occupied.add(key(local(loc, off, rot)));
+      if (nativeType === 'triState') {
+        occupied.add(key(local(loc, { x: -20, y: 0 }, rot)));
+        occupied.add(key(local(loc, { x: -10, y: 10 }, rot)));
+      }
+    }
+    const used = (p: Pt) => netAt(p) !== null || occupied.has(key(p));
+    let privatePoints = 0; // fake coordinates that only join the parts of one split gate
+
+    // Pass 2: our parts, pinned to the exact Logisim connection points
+    for (const part of parts) {
+      const { compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, where } = part;
+      const anchor = scaled(loc);
+      const isBuffer = compName.trim().toLowerCase() === 'buffer';
+      const isGate = GATE_TYPES.includes(nativeType) && !isBuffer;
+
+      if (isGate || isBuffer || nativeType === 'not' || nativeType === 'triState') {
+        let inputPoints: Pt[];
+        if (isGate) {
+          const isXor = nativeType === 'xor' || nativeType === 'xnor';
+          const bubble = nativeType === 'nand' || nativeType === 'nor' || nativeType === 'xnor' ? 10 : 0;
+          const gsize = size || 50;
+          // No 'inputs' attribute: Logisim 2.7 defaults to 5; every smaller count uses a subset of those points
+          const n = inputsAttr || 5;
+          const axis = gsize + (isXor ? 10 : 0) + bubble;
+          inputPoints = gateInputOffsets(n, gsize).map((dy) => local(loc, { x: -axis, y: dy }, rot)).filter(used);
+          if (isXor && inputPoints.length > 2 && xorMode !== 'odd') {
+            warnings.push(`${where}: Logisim bu XOR'u "yalnızca bir giriş 1" olarak hesaplar; burada tek sayıda 1 (parite) kuralı kullanılır.`);
           }
+        } else if (nativeType === 'triState') {
+          inputPoints = [local(loc, { x: -20, y: 0 }, rot), local(loc, { x: -10, y: 10 }, rot)];
+        } else {
+          inputPoints = [local(loc, { x: -(size || 30), y: 0 }, rot)];
         }
-        found.sort((u, v) => u.lateral - v.lateral);
+
+        // Our gates take at most 5 inputs: wider Logisim gates become groups of the base operation
+        // feeding the original gate (inversion stays on the last one), joined by private connection points
+        if (isGate && inputPoints.length > 5) {
+          const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType;
+          const feeds: Pt[] = [];
+          for (let gi = 0; gi * 5 < inputPoints.length; gi++) {
+            const group = inputPoints.slice(gi * 5, gi * 5 + 5);
+            if (group.length === 1) {
+              feeds.push(group[0]);
+              continue;
+            }
+            let sub = createComponentInstance(base, 0, 0);
+            sub.inputs = group.map((_, k) => ({ id: `${sub.id}_in${k}`, name: String.fromCharCode(65 + k), type: 'input' as const, value: 0 as const, x: 0, y: 0 }));
+            sub.state = { ...sub.state, gateInputsCount: group.length };
+            sub = updatePinPositions(sub);
+            sub = updatePinPositions({ ...sub, x: anchor.x - 200 - sub.outputs[0].x, y: anchor.y + gi * 120 - sub.outputs[0].y });
+            components.push(sub);
+            group.forEach((pt, k) => attach.push({ at: pt, compId: sub.id, pinId: sub.inputs[k].id, isOutput: false }));
+            const link = { x: -1e6 - privatePoints++, y: -1e6 };
+            attach.push({ at: link, compId: sub.id, pinId: sub.outputs[0].id, isOutput: true });
+            feeds.push(link);
+          }
+          inputPoints = feeds;
+        }
 
         let inst = createComponentInstance(nativeType, 0, 0);
-        if (isGate && found.length > 2) {
-          const n = Math.min(5, found.length);
+        if (isGate && inputPoints.length > 2) {
+          const n = Math.min(5, inputPoints.length);
           inst.inputs = Array.from({ length: n }).map((_, k) => ({
             id: `${inst.id}_in${k}`,
             name: String.fromCharCode(65 + k),
@@ -251,7 +343,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
           }));
           inst.state = { ...inst.state, gateInputsCount: n };
         }
-        inst.rotation = rot;
+        inst.rotation = rot as 0 | 90 | 180 | 270;
         inst = updatePinPositions(inst);
         // Put our output pin exactly on the (scaled) Logisim anchor
         const out = inst.outputs[0];
@@ -260,12 +352,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         components.push(inst);
 
         attach.push({ at: loc, compId: inst.id, pinId: inst.outputs[0].id, isOutput: true });
-        const n = inst.inputs.length;
-        found.forEach((f, k) => {
-          if (k >= 5) return;
-          // first -> first input, last -> last input, the rest spread evenly (like our gate input remap)
-          const idx = found.length === 1 ? 0 : Math.round((k / (found.length - 1)) * (n - 1));
-          attach.push({ at: f.p, compId: inst.id, pinId: inst.inputs[idx].id, isOutput: false });
+        inputPoints.slice(0, inst.inputs.length).forEach((pt, k) => {
+          attach.push({ at: pt, compId: inst.id, pinId: inst.inputs[k].id, isOutput: false });
         });
         continue;
       }
@@ -290,10 +378,25 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         continue;
       }
 
-      // Larger chips: geometry differs too much; connect wire endpoints near each of our pins
+      const ff = FF_POINTS[nativeType];
+      if (ff) {
+        // Flip-flops: exact Logisim points (Q at loc)
+        inst = updatePinPositions({ ...inst, x: anchor.x - inst.outputs[0].x, y: anchor.y - inst.outputs[0].y });
+        if (label) inst.label = label;
+        components.push(inst);
+        ff.inputs.forEach((off, k) => inst.inputs[k] && attach.push({ at: local(loc, off, rot), compId: inst.id, pinId: inst.inputs[k].id, isOutput: false }));
+        ff.outputs.forEach((off, k) => inst.outputs[k] && attach.push({ at: local(loc, off, rot), compId: inst.id, pinId: inst.outputs[k].id, isOutput: true }));
+        if (nativeType === 'srLatch') warnings.push(`${where}: Logisim'deki saatli S-R flip-flop, saatsiz SR mandal olarak alındı.`);
+        const extra = nativeType === 'tFlipFlop' ? [{ x: -30, y: 30 }] : [{ x: -10, y: 30 }, { x: -30, y: 30 }];
+        if (extra.some((off) => netAt(local(loc, off, rot)) !== null)) warnings.push(`${where}: preset / reset girişleri alınmadı.`);
+        continue;
+      }
+
+      // Other chips: their Logisim geometry is not modelled; connect wire endpoints near each of our pins
       inst = updatePinPositions({ ...inst, x: anchor.x, y: anchor.y });
       if (label) inst.label = label;
       components.push(inst);
+      warnings.push(`${where}: bağlantıları yaklaşık olarak kuruldu, kontrol edin.`);
       for (const pin of [...inst.inputs, ...inst.outputs]) {
         let best: Pt | null = null;
         let bestD = 30;
@@ -333,6 +436,22 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
           value: 0,
         });
       }
+    }
+
+    // 3b. Our parts are larger than Logisim's and some have extra pins (a tunnel's second pin), so a pin
+    // can land on another part's pin; the simulator joins pins sharing a grid point, which would short
+    // nets. Connections are explicit wires here, so nudge such parts down until their pins are clear.
+    const pinPoint = (p: Pt) => `${Math.round(p.x / 10) * 10},${Math.round(p.y / 10) * 10}`;
+    const taken = new Map<string, string>();
+    for (let k = 0; k < components.length; k++) {
+      let comp = components[k];
+      for (let tries = 0; tries < 40; tries++) {
+        const pts = [...comp.inputs, ...comp.outputs].map(pinPoint);
+        if (!pts.some((pt) => taken.has(pt) && taken.get(pt) !== comp.id)) break;
+        comp = updatePinPositions({ ...comp, y: comp.y + 10 });
+      }
+      components[k] = comp;
+      for (const p of [...comp.inputs, ...comp.outputs]) taken.set(pinPoint(p), comp.id);
     }
 
     // 4. Keep everything on the positive canvas with a margin
