@@ -578,6 +578,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   interface HistorySnapshot {
     components: CircuitComponentInstance[];
     wires: CircuitWire[];
+    // Notes/frames are added and deleted through the same history, so undo must restore them too
+    annotations?: CircuitAnnotation[];
   }
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
@@ -600,11 +602,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         {
           components: JSON.parse(JSON.stringify(compsToSave)),
           wires: JSON.parse(JSON.stringify(wiresToSave)),
+          annotations: JSON.parse(JSON.stringify(annotations)),
         },
       ]);
       setRedoStack([]);
     },
-    [components, wires]
+    [components, wires, annotations]
   );
 
   // Put a circuit on the canvas the way every edit does: Logisim WireRepair + simulation.
@@ -650,6 +653,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         {
           components: JSON.parse(JSON.stringify(components)),
           wires: JSON.parse(JSON.stringify(wires)),
+          annotations: JSON.parse(JSON.stringify(annotations)),
         },
       ]);
 
@@ -657,13 +661,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const sim = simulateCircuit(refreshedComps, previous.wires);
       setComponents(sim.components);
       setWires(sim.wires);
+      if (previous.annotations) setAnnotations(previous.annotations);
+      setSelectedAnnotationId(null);
       setSelectedCompId(null);
       setSelectedWireId(null);
       setWiringFrom(null);
 
       return newHistory;
     });
-  }, [components, wires]);
+  }, [components, wires, annotations]);
 
   // Redo Handler
   const handleRedo = useCallback(() => {
@@ -677,6 +683,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         {
           components: JSON.parse(JSON.stringify(components)),
           wires: JSON.parse(JSON.stringify(wires)),
+          annotations: JSON.parse(JSON.stringify(annotations)),
         },
       ]);
 
@@ -684,24 +691,57 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const sim = simulateCircuit(refreshedComps, next.wires);
       setComponents(sim.components);
       setWires(sim.wires);
+      if (next.annotations) setAnnotations(next.annotations);
+      setSelectedAnnotationId(null);
       setSelectedCompId(null);
       setSelectedWireId(null);
       setWiringFrom(null);
 
       return newRedo;
     });
-  }, [components, wires]);
+  }, [components, wires, annotations]);
 
-  // Continuous Clock Generator Loop (Toggle interval = half period T/2 = 500 / clockHz ms)
+  // Continuous Clock Generator Loop. A clock with its own clockRateHz (set from its toolbar)
+  // runs at that rate, the others follow the global clockHz. Each clock toggles every
+  // half period (500 / hz ms); the timer ticks at the half period of the fastest clock.
+  const clockRatesKey = components
+    .filter((c) => c.type === 'clock')
+    .map((c) => `${c.id}=${c.state?.clockRateHz ?? clockHz}`)
+    .join(',');
+  // Time accumulated toward each clock's next edge; kept across effect re-runs because the
+  // effect restarts on every tick (wires change), which would otherwise stall slower clocks
+  const clockPhaseRef = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!isRunning) return;
 
-    const intervalMs = Math.max(30, Math.round(500 / clockHz));
+    const clocks = clockRatesKey
+      ? clockRatesKey.split(',').map((entry) => {
+          const at = entry.lastIndexOf('=');
+          return { id: entry.slice(0, at), hz: Number(entry.slice(at + 1)) };
+        })
+      : [];
+    const intervalMs = Math.max(30, Math.round(500 / Math.max(clockHz, ...clocks.map((c) => c.hz))));
     const timer = setInterval(() => {
+      // Decide the edges here, outside the state updater, so the updater stays pure
+      // (React may call it twice)
+      const phases = clockPhaseRef.current;
+      const toggling = new Set<string>();
+      for (const { id, hz } of clocks) {
+        const halfPeriod = Math.max(30, 500 / hz);
+        const elapsed = (phases[id] ?? 0) + intervalMs;
+        if (elapsed + 1 < halfPeriod) {
+          phases[id] = elapsed;
+        } else {
+          phases[id] = elapsed - halfPeriod;
+          toggling.add(id);
+        }
+      }
+      if (toggling.size === 0) return;
+
       setComponents((prev) => {
         let clockChanged = false;
         const updated = prev.map((comp) => {
-          if (comp.type === 'clock') {
+          if (comp.type === 'clock' && toggling.has(comp.id)) {
             clockChanged = true;
             return {
               ...comp,
@@ -721,7 +761,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [isRunning, clockHz, wires]);
+  }, [isRunning, clockHz, clockRatesKey, wires]);
 
   // Initial simulation run & auto-load saved workspace from localStorage or URL preset on mount
   useEffect(() => {
@@ -9261,17 +9301,36 @@ ${wireXmls.join('\n')}
                 {selectedComp.type === 'clock' && (
                   <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
                     <span className="text-slate-400 font-semibold text-[11px]">Hız:</span>
+                    <button
+                      title="Genel saat hızını kullan"
+                      onClick={() => {
+                        recordHistory();
+                        setComponents((prev) =>
+                          prev.map((c) => {
+                            if (c.id !== selectedComp.id) return c;
+                            const { clockRateHz: _drop, ...rest } = c.state;
+                            void _drop;
+                            return { ...c, state: rest };
+                          })
+                        );
+                      }}
+                      className={`px-1.5 py-0.5 rounded font-bold text-[10px] cursor-pointer transition-colors outline-none focus:outline-none focus:ring-0 focus-visible:outline-none select-none ${
+                        selectedComp.state.clockRateHz == null ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Genel ({clockHz}Hz)
+                    </button>
                     {[0.5, 1, 2, 4, 6, 8].map((hz) => (
                       <button
                         key={hz}
                         onClick={() => {
                           recordHistory();
                           setComponents((prev) =>
-                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, frequencyHz: hz } } : c))
+                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, clockRateHz: hz } } : c))
                           );
                         }}
                         className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] cursor-pointer transition-colors outline-none focus:outline-none focus:ring-0 focus-visible:outline-none select-none ${
-                          (selectedComp.state.frequencyHz || 1) === hz ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
+                          selectedComp.state.clockRateHz === hz ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
                         {hz}Hz

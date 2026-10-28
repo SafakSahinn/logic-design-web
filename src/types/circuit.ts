@@ -101,6 +101,8 @@ export interface CircuitComponentInstance {
   state: {
     on?: boolean;
     frequencyHz?: number;
+    /** Clock's own rate chosen in its toolbar; unset = follow the global clock speed */
+    clockRateHz?: number;
     lastClockTick?: number;
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
     q?: LogicValue;
