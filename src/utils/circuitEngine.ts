@@ -902,7 +902,9 @@ export function createComponentInstance(
     id: `${compId}_${pin.id}`,
     name: pin.name,
     type: 'output',
-    value: type === 'vcc' ? 1 : 0,
+    // Q' starts at 1 like the flip-flop state (q = 0, qBar = 1); a 0 there rose to 1 on the first step and
+    // clocked whatever it drives
+    value: type === 'vcc' || pin.id === 'outQBar' ? 1 : 0,
     x: x + pin.relX,
     y: y + pin.relY,
   }));
@@ -920,7 +922,9 @@ export function createComponentInstance(
       frequencyHz: 1,
       q: 0,
       qBar: 1,
-      lastClk: 0,
+      // No previous clock yet: the first evaluation never counts as an edge (like Logisim, whose signals
+      // power up unknown), so a flip-flop clocked by a high signal does not toggle when the circuit starts
+      lastClk: undefined,
       hexVal: 0,
       regVal: 0,
       aluResult: 0,
@@ -1460,7 +1464,7 @@ export function simulateCircuitStep(
         // Logisim: an unconnected enable counts as enabled
         const we: LogicValue = !isPinConnected(comp.inputs[5]?.id ?? '') || inVals[5] === 1 ? 1 : 0;
         const rst: LogicValue = inVals[6] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
@@ -1526,7 +1530,7 @@ export function simulateCircuitStep(
       case 'counter4': {
         const clk: LogicValue = inVals[0] === 1 ? 1 : 0;
         const rst: LogicValue = inVals[1] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
@@ -1756,7 +1760,7 @@ export function simulateCircuitStep(
         if (rst === 1) {
           comp.state.regBits = [0, 0, 0, 0];
         } else {
-          const prevClk = comp.state.lastClk ?? 0;
+          const prevClk = comp.state.lastClk ?? clk;
           if (prevClk === 0 && clk === 1) {
             const mode = s0 + s1 * 2;
             const cur = [...comp.state.regBits];
@@ -1833,7 +1837,7 @@ export function simulateCircuitStep(
         const weVal = inVals[11] === 1;
         const clkVal = inVals[12] === 1 ? 1 : 0;
         const rstVal = inVals[13] === 1;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clkVal;
         const isRising = clkVal === 1 && prevClk === 0;
         comp.state.lastClk = clkVal;
 
@@ -1883,7 +1887,7 @@ export function simulateCircuitStep(
       case 'dFlipFlop': {
         const d: LogicValue = inVals[0] === 1 ? 1 : 0;
         const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
@@ -1912,7 +1916,7 @@ export function simulateCircuitStep(
         const j: LogicValue = inVals[0] === 1 ? 1 : 0;
         const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
         const k: LogicValue = inVals[2] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
@@ -1973,7 +1977,7 @@ export function simulateCircuitStep(
         const t: LogicValue = inVals[0] === 1 ? 1 : 0;
         const clk: LogicValue = inVals[1] === 1 ? 1 : 0;
         const rst: LogicValue = inVals[2] === 1 ? 1 : 0;
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = clk === 1 && prevClk === 0;
         comp.state.lastClk = clk;
 
@@ -2014,7 +2018,7 @@ export function simulateCircuitStep(
         const clk = inVals[8] ?? 0;
         const we = inVals[9] ?? 0;
 
-        const prevClk = comp.state.lastClk ?? 0;
+        const prevClk = comp.state.lastClk ?? clk;
         const isRisingEdge = prevClk === 0 && clk === 1;
         comp.state.lastClk = clk;
 
@@ -2260,7 +2264,8 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w1', fromCompId: 'vcc_tff', fromPinId: 'vcc_tff_out', toCompId: 'tff_0', toPinId: 'tff_0_inT', value: 1 },
       { id: 'w2', fromCompId: 'clk_tff', fromPinId: 'clk_tff_out', toCompId: 'tff_0', toPinId: 'tff_0_inClk', value: 0 },
       { id: 'w3', fromCompId: 'vcc_tff', fromPinId: 'vcc_tff_out', toCompId: 'tff_1', toPinId: 'tff_1_inT', value: 1 },
-      { id: 'w4', fromCompId: 'tff_0', fromPinId: 'tff_0_outQ', toCompId: 'tff_1', toPinId: 'tff_1_inClk', value: 0 },
+      // Rising-edge flip-flops: Q0' clocks bit 1 (Q0 there would make it count down 00, 11, 10, 01)
+      { id: 'w4', fromCompId: 'tff_0', fromPinId: 'tff_0_outQBar', toCompId: 'tff_1', toPinId: 'tff_1_inClk', value: 1 },
       { id: 'w5', fromCompId: 'tff_0', fromPinId: 'tff_0_outQ', toCompId: 'led_tff_q0', toPinId: 'led_tff_q0_in', value: 0 },
       { id: 'w6', fromCompId: 'tff_1', fromPinId: 'tff_1_outQ', toCompId: 'led_tff_q1', toPinId: 'led_tff_q1_in', value: 0 },
     ],
@@ -2507,6 +2512,8 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { ...createComponentInstance('switch', 60, 200, 'A3 (Adres 3)'), id: 'ram_sw_a3' },
       { ...createComponentInstance('switch', 60, 250, 'D0 (Veri 0)'), id: 'ram_sw_d0' },
       { ...createComponentInstance('switch', 60, 300, 'D1 (Veri 1)'), id: 'ram_sw_d1' },
+      { ...createComponentInstance('switch', 60, 350, 'D2 (Veri 2)'), id: 'ram_sw_d2' },
+      { ...createComponentInstance('switch', 60, 400, 'D3 (Veri 3)'), id: 'ram_sw_d3' },
       { ...createComponentInstance('clock', 170, 290, 'CLK (Yazma Saati)'), id: 'ram_clk' },
       { ...createComponentInstance('switch', 240, 290, 'WE (Yazma İzni)'), id: 'ram_sw_we' },
       { ...createComponentInstance('ram16x4', 210, 80, '16x4 RAM (74HC189)'), id: 'ram_chip' },
@@ -2519,6 +2526,8 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w4', fromCompId: 'ram_sw_a3', fromPinId: 'ram_sw_a3_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inA3', value: 0 },
       { id: 'w5', fromCompId: 'ram_sw_d0', fromPinId: 'ram_sw_d0_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD0', value: 0 },
       { id: 'w6', fromCompId: 'ram_sw_d1', fromPinId: 'ram_sw_d1_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD1', value: 0 },
+      { id: 'w6b', fromCompId: 'ram_sw_d2', fromPinId: 'ram_sw_d2_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD2', value: 0 },
+      { id: 'w6c', fromCompId: 'ram_sw_d3', fromPinId: 'ram_sw_d3_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD3', value: 0 },
       { id: 'w7', fromCompId: 'ram_clk', fromPinId: 'ram_clk_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inClk', value: 0 },
       { id: 'w8', fromCompId: 'ram_sw_we', fromPinId: 'ram_sw_we_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inWE', value: 0 },
       { id: 'w9', fromCompId: 'ram_chip', fromPinId: 'ram_chip_outQ0', toCompId: 'ram_disp', toPinId: 'ram_disp_inD0', value: 0 },
@@ -3402,38 +3411,93 @@ export function minimizeBooleanExpression(
   }
 
   const remainingMinterms = targetMinterms.filter((m) => !coveredMinterms.has(m));
-  let chosenPIs = [...essentialPIs];
+  const chosenPIs = [...essentialPIs];
 
+  // Exact cover of what the essentials leave: branch on the uncovered minterm with the fewest candidate PIs,
+  // prune by the best term count so far (ties: fewer literals). A greedy "covers most" pick is not minimal
+  // (about 2% of random 4-variable functions got an extra term or literals).
   if (remainingMinterms.length > 0) {
     const nonEssentialPIs = primeImplicants.filter(
-      (pi) => !essentialPIs.some((e) => e.mask === pi.mask)
+      (pi) => !essentialPIs.some((e) => e.mask === pi.mask) && remainingMinterms.some((m) => covers(pi.mask, m))
     );
-    let uncovered = [...remainingMinterms];
-    while (uncovered.length > 0 && nonEssentialPIs.length > 0) {
-      nonEssentialPIs.sort((a, b) => {
-        const countA = uncovered.filter((m) => covers(a.mask, m)).length;
-        const countB = uncovered.filter((m) => covers(b.mask, m)).length;
-        return countB - countA;
-      });
-      const best = nonEssentialPIs.shift();
-      if (!best) break;
-      chosenPIs.push(best);
-      uncovered = uncovered.filter((m) => !covers(best.mask, m));
+    const literals = (pi: { mask: string }) => pi.mask.split('').filter((ch) => ch !== '-').length;
+    const coverOf = new Map(nonEssentialPIs.map((pi) => [pi, new Set(remainingMinterms.filter((m) => covers(pi.mask, m)))]));
+    const pisOf = new Map(remainingMinterms.map((m) => [m, nonEssentialPIs.filter((pi) => coverOf.get(pi)!.has(m))]));
+    // Start from the greedy cover, so the search only has to beat it
+    let best: typeof primeImplicants = [];
+    {
+      let left = [...remainingMinterms];
+      while (left.length > 0) {
+        let top = nonEssentialPIs[0];
+        let topN = -1;
+        for (const pi of nonEssentialPIs) {
+          const k = left.filter((m) => coverOf.get(pi)!.has(m)).length;
+          if (k > topN || (k === topN && literals(pi) < literals(top))) {
+            top = pi;
+            topN = k;
+          }
+        }
+        best.push(top);
+        left = left.filter((m) => !coverOf.get(top)!.has(m));
+      }
     }
+    let bestLits = best.reduce((sum, pi) => sum + literals(pi), 0);
+    // Lower bound: minterms no single PI covers two of, each needs its own term
+    const lowerBound = (uncovered: number[]) => {
+      const chosen: number[] = [];
+      for (const m of uncovered) {
+        if (chosen.every((c) => !pisOf.get(m)!.some((pi) => coverOf.get(pi)!.has(c)))) chosen.push(m);
+      }
+      return chosen.length;
+    };
+    const pick: typeof primeImplicants = [];
+    const search = (uncovered: number[], lits: number) => {
+      if (uncovered.length === 0) {
+        if (pick.length < best.length || (pick.length === best.length && lits < bestLits)) {
+          best = [...pick];
+          bestLits = lits;
+        }
+        return;
+      }
+      if (pick.length + lowerBound(uncovered) > best.length) return;
+      let options = pisOf.get(uncovered[0])!;
+      for (const m of uncovered) {
+        const o = pisOf.get(m)!;
+        if (o.length < options.length) options = o;
+      }
+      options = [...options].sort((x, y) => {
+        const cx = uncovered.filter((m) => coverOf.get(x)!.has(m)).length;
+        const cy = uncovered.filter((m) => coverOf.get(y)!.has(m)).length;
+        return cy - cx || literals(x) - literals(y);
+      });
+      for (const pi of options) {
+        pick.push(pi);
+        search(
+          uncovered.filter((m) => !coverOf.get(pi)!.has(m)),
+          lits + literals(pi)
+        );
+        pick.pop();
+      }
+    };
+    search(remainingMinterms, 0);
+    chosenPIs.push(...best);
   }
 
+  // Single letters are written side by side (AB'C); with longer input names ("Cin", "A0 (LSB)") that would be
+  // unreadable, so the literals are joined with a dot
+  const joiner = varNames.some((v) => v.length > 1) ? '·' : '';
   function maskToExpression(mask: string) {
-    let term = '';
+    const lits: string[] = [];
     for (let i = 0; i < n; i++) {
       const bit = mask[i];
       const v = varNames[i] || `X${i}`;
       if (bit === '1') {
-        term += v;
+        lits.push(v);
       } else if (bit === '0') {
-        term += `${v}'`;
+        lits.push(`${v}'`);
       }
     }
-    return term === '' ? '1' : term;
+    return lits.length === 0 ? '1' : lits.join(joiner);
   }
 
   const termsExpr = chosenPIs.map((pi) => maskToExpression(pi.mask));

@@ -653,65 +653,44 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     );
   }, [components, wires, annotations, activeSheetId]);
 
+  // Undo / Redo: move one snapshot between the two stacks and put it on the canvas. Done outside the state
+  // updaters (side effects inside an updater run twice under StrictMode and doubled the other stack)
+  const restoreSnapshot = (snap: HistorySnapshot) => {
+    const refreshedComps = snap.components.map(updatePinPositions);
+    const sim = simulateCircuit(refreshedComps, snap.wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    if (snap.annotations) setAnnotations(snap.annotations);
+    setSelectedAnnotationId(null);
+    setSelectedCompId(null);
+    setSelectedWireId(null);
+    setWiringFrom(null);
+  };
+  const currentSnapshot = (): HistorySnapshot => ({
+    components: JSON.parse(JSON.stringify(components)),
+    wires: JSON.parse(JSON.stringify(wires)),
+    annotations: JSON.parse(JSON.stringify(annotations)),
+  });
+
   // Undo Handler
   const handleUndo = useCallback(() => {
-    setHistoryStack((prevHistory) => {
-      if (prevHistory.length === 0) return prevHistory;
-      const previous = prevHistory[prevHistory.length - 1];
-      const newHistory = prevHistory.slice(0, -1);
-
-      setRedoStack((prevRedo) => [
-        ...prevRedo,
-        {
-          components: JSON.parse(JSON.stringify(components)),
-          wires: JSON.parse(JSON.stringify(wires)),
-          annotations: JSON.parse(JSON.stringify(annotations)),
-        },
-      ]);
-
-      const refreshedComps = previous.components.map(updatePinPositions);
-      const sim = simulateCircuit(refreshedComps, previous.wires);
-      setComponents(sim.components);
-      setWires(sim.wires);
-      if (previous.annotations) setAnnotations(previous.annotations);
-      setSelectedAnnotationId(null);
-      setSelectedCompId(null);
-      setSelectedWireId(null);
-      setWiringFrom(null);
-
-      return newHistory;
-    });
-  }, [components, wires, annotations]);
+    if (historyStack.length === 0) return;
+    const previous = historyStack[historyStack.length - 1];
+    setHistoryStack(historyStack.slice(0, -1));
+    setRedoStack((prevRedo) => [...prevRedo, currentSnapshot()]);
+    restoreSnapshot(previous);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyStack, components, wires, annotations]);
 
   // Redo Handler
   const handleRedo = useCallback(() => {
-    setRedoStack((prevRedo) => {
-      if (prevRedo.length === 0) return prevRedo;
-      const next = prevRedo[prevRedo.length - 1];
-      const newRedo = prevRedo.slice(0, -1);
-
-      setHistoryStack((prevHistory) => [
-        ...prevHistory,
-        {
-          components: JSON.parse(JSON.stringify(components)),
-          wires: JSON.parse(JSON.stringify(wires)),
-          annotations: JSON.parse(JSON.stringify(annotations)),
-        },
-      ]);
-
-      const refreshedComps = next.components.map(updatePinPositions);
-      const sim = simulateCircuit(refreshedComps, next.wires);
-      setComponents(sim.components);
-      setWires(sim.wires);
-      if (next.annotations) setAnnotations(next.annotations);
-      setSelectedAnnotationId(null);
-      setSelectedCompId(null);
-      setSelectedWireId(null);
-      setWiringFrom(null);
-
-      return newRedo;
-    });
-  }, [components, wires, annotations]);
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack(redoStack.slice(0, -1));
+    setHistoryStack((prevHistory) => [...prevHistory, currentSnapshot()]);
+    restoreSnapshot(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [redoStack, components, wires, annotations]);
 
   // Continuous Clock Generator Loop. A clock with its own clockRateHz (set from its toolbar)
   // runs at that rate, the others follow the global clockHz. Each clock toggles every
@@ -10448,6 +10427,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       <div className="p-8 text-center text-slate-600 text-sm space-y-2">
                         <p className="font-bold text-slate-800">Karnaugh Haritası Limiti</p>
                         <p>Karnaugh Haritası görsel indirgeme için en fazla 4 giriş (16 hücre) desteklenir. Devrenizde {inputsCount} giriş bulunmaktadır; tüm durumları 'Doğruluk Tablosu' sekmesinden görebilirsiniz.</p>
+                        {/* Quine-McCluskey still minimises up to 6 inputs, only the map itself is left out */}
+                        {truthTableData.minimalExpressions && Object.keys(truthTableData.minimalExpressions).length > 0 && (
+                          <div className="mt-4 text-left bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-2">
+                            <span className="font-extrabold text-indigo-950 text-xs block">
+                              Quine-McCluskey Minimal Fonksiyonlar:
+                            </span>
+                            {truthTableData.outputs.map((out) => {
+                              const m = truthTableData.minimalExpressions?.[out.name];
+                              if (!m) return null;
+                              return (
+                                <div key={out.id} className="font-mono text-xs text-indigo-900 bg-white px-2.5 py-1 rounded-lg border border-indigo-200 break-words">
+                                  <strong>{out.name}</strong> = {m.expression}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   }
