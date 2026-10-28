@@ -214,4 +214,6 @@ export interface TruthTableData {
     outputValues: LogicValue[];
     isCurrentState?: boolean;
   }[];
+  // Caveats shown above the table (inputs left out, stateful parts)
+  notes?: string[];
 }

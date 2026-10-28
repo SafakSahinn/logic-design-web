@@ -48,7 +48,7 @@ export const FSM_PRESETS: FSMPreset[] = [
   {
     id: 'traffic_light',
     name: '3-Aşamalı Trafik Lambası',
-    description: 'Kırmızı -> Sarı -> Yeşil durumları arasında adım adım ilerleyen Moore FSM.',
+    description: 'X=1 geldikçe Kırmızı -> Sarı -> Yeşil -> Kırmızı ilerleyen Moore FSM; Z yalnızca Yeşil durumunda 1.',
     states: [
       { id: 's0', name: 'S0 (Kırmızı)', code: '00' },
       { id: 's1', name: 'S1 (Sarı)', code: '01' },
@@ -57,7 +57,7 @@ export const FSM_PRESETS: FSMPreset[] = [
     transitions: [
       { id: 't1', fromStateId: 's0', toStateId: 's1', inputX: 1, outputZ: 0 },
       { id: 't2', fromStateId: 's0', toStateId: 's0', inputX: 0, outputZ: 0 },
-      { id: 't3', fromStateId: 's1', toStateId: 's2', inputX: 1, outputZ: 1 },
+      { id: 't3', fromStateId: 's1', toStateId: 's2', inputX: 1, outputZ: 0 },
       { id: 't4', fromStateId: 's1', toStateId: 's1', inputX: 0, outputZ: 0 },
       { id: 't5', fromStateId: 's2', toStateId: 's0', inputX: 1, outputZ: 1 },
       { id: 't6', fromStateId: 's2', toStateId: 's2', inputX: 0, outputZ: 1 },
@@ -82,7 +82,28 @@ export interface FSMSynthesisResult {
 }
 
 /**
- * Solve excitation equations and synthesize digital circuit for a 2-bit FSM
+ * Check a state table before synthesis: 1-4 states with distinct 2-bit codes, and transitions that point
+ * at existing states. Returns the first problem in Turkish, or null.
+ */
+export function validateFSM(states: FSMState[], transitions: FSMTransition[]): string | null {
+  if (states.length === 0) return 'En az bir durum tanımlayın.';
+  if (states.length > 4) return '2 flip-flop ile en fazla 4 durum kodlanabilir.';
+  const codes = new Set<string>();
+  for (const s of states) {
+    if (!/^[01]{2}$/.test(s.code)) return `"${s.name}" durumunun kodu 2 bit olmalı (00, 01, 10, 11).`;
+    if (codes.has(s.code)) return `${s.code} kodu birden fazla duruma verilmiş.`;
+    codes.add(s.code);
+  }
+  const ids = new Set(states.map((s) => s.id));
+  for (const t of transitions) {
+    if (ids.has(t.fromStateId) && !ids.has(t.toStateId)) return 'Bir geçiş silinmiş bir duruma gidiyor.';
+  }
+  return null;
+}
+
+/**
+ * Solve excitation equations and synthesize digital circuit for a 2-bit FSM. The flip-flops power up at
+ * Q1Q0 = 00; codes no state uses (and missing transitions) go to the first state on the next clock edge.
  */
 export function synthesizeFSM(
   states: FSMState[],
@@ -90,6 +111,10 @@ export function synthesizeFSM(
   startX = 80,
   startY = 80
 ): FSMSynthesisResult {
+  const problem = validateFSM(states, transitions);
+  if (problem) throw new Error(problem);
+  const resetCode = states[0].code;
+
   // Build excitation transition table for 3 input variables: Q1, Q0, X (8 rows)
   const d1MintermValues: Record<number, LogicValue> = {};
   const d0MintermValues: Record<number, LogicValue> = {};
@@ -113,8 +138,8 @@ export function synthesizeFSM(
           ? transitions.find((t) => t.fromStateId === curState.id && t.inputX === x)
           : undefined;
 
-        let nextQ1 = 0;
-        let nextQ0 = 0;
+        let nextQ1 = parseInt(resetCode[0], 10);
+        let nextQ0 = parseInt(resetCode[1], 10);
         let z = 0;
 
         if (trans) {

@@ -2926,146 +2926,184 @@ export function getInputSignalNames(components: CircuitComponentInstance[]): Map
   return names;
 }
 
-export function generateBooleanExpression(
+// Longest expression kept inline; deeper cones (e.g. a ripple carry built from gates, whose text doubles
+// per stage) fall back to the driving part's name instead of growing without bound
+const MAX_EXPR_LENGTH = 240;
+
+interface BooleanExprContext {
+  driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;
+  byId: Map<string, CircuitComponentInstance>;
+  inputNames: Map<string, string>;
+  memo: Map<string, string>;
+}
+
+// Net map built once per circuit: every pin's driving output (tunnels excluded, like the old per-call search)
+function createBooleanExprContext(components: CircuitComponentInstance[], wires: CircuitWire[]): BooleanExprContext {
+  const parent = new Map<string, string>();
+  const findR = (k: string): string => {
+    if (!parent.has(k)) parent.set(k, k);
+    let c = k;
+    while (c !== parent.get(c)) {
+      const p = parent.get(c)!;
+      parent.set(c, parent.get(p)!);
+      c = p;
+    }
+    return c;
+  };
+  const unite = (a: string, b: string) => {
+    const ra = findR(a);
+    const rb = findR(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  components.forEach((c) => {
+    [...c.inputs, ...c.outputs].forEach((p) => {
+      unite(p.id, `loc_${Math.round(p.x / 10) * 10}_${Math.round(p.y / 10) * 10}`);
+    });
+  });
+  wires.forEach((w) => {
+    if (w.fromPinId && w.toPinId) unite(w.fromPinId, w.toPinId);
+    if (w.startPoint && w.endPoint) {
+      const ks = `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`;
+      const ke = `loc_${Math.round(w.endPoint.x / 10) * 10}_${Math.round(w.endPoint.y / 10) * 10}`;
+      unite(ks, ke);
+      if (w.fromPinId) unite(w.fromPinId, ks);
+      if (w.toPinId) unite(w.toPinId, ke);
+    }
+  });
+  const driverByRoot = new Map<string, { comp: CircuitComponentInstance; outIdx: number }>();
+  for (const c of components) {
+    if (c.type === 'tunnel') continue;
+    c.outputs.forEach((o, idx) => {
+      const r = findR(o.id);
+      if (!driverByRoot.has(r)) driverByRoot.set(r, { comp: c, outIdx: idx });
+    });
+  }
+  return {
+    driverOf: (pinId) => driverByRoot.get(findR(pinId)) || null,
+    byId: new Map(components.map((c) => [c.id, c])),
+    inputNames: getInputSignalNames(components),
+    memo: new Map(),
+  };
+}
+
+function booleanExprOf(
   compId: string,
   pinIndex: number | undefined,
-  components: CircuitComponentInstance[],
-  wires: CircuitWire[],
-  visited = new Set<string>()
+  ctx: BooleanExprContext,
+  visited: Set<string>
 ): string {
-  const comp = components.find((c) => c.id === compId);
+  const comp = ctx.byId.get(compId);
   if (!comp) return '?';
 
   if (comp.type === 'switch' || comp.type === 'pushbutton') {
-    return getInputSignalNames(components).get(comp.id) || (comp.type === 'switch' ? 'SW' : 'BTN');
+    return ctx.inputNames.get(comp.id) || (comp.type === 'switch' ? 'SW' : 'BTN');
   }
   if (comp.type === 'vcc') return '1';
   if (comp.type === 'gnd') return '0';
   if (comp.type === 'clock') return 'CLK';
 
-  const findDriverForPin = (targetPinId: string): { comp: CircuitComponentInstance; outIdx: number } | null => {
-    const parent = new Map<string, string>();
-    const findR = (k: string): string => {
-      if (!parent.has(k)) parent.set(k, k);
-      let c = k;
-      while (c !== parent.get(c)) {
-        const p = parent.get(c)!;
-        parent.set(c, parent.get(p)!);
-        c = p;
-      }
-      return c;
-    };
-    const unite = (a: string, b: string) => {
-      const ra = findR(a);
-      const rb = findR(b);
-      if (ra !== rb) parent.set(ra, rb);
-    };
-    components.forEach((c) => {
-      [...c.inputs, ...c.outputs].forEach((p) => {
-        unite(p.id, `loc_${Math.round(p.x / 10) * 10}_${Math.round(p.y / 10) * 10}`);
-      });
-    });
-    wires.forEach((w) => {
-      if (w.fromPinId && w.toPinId) unite(w.fromPinId, w.toPinId);
-      if (w.startPoint && w.endPoint) {
-        const ks = `loc_${Math.round(w.startPoint.x / 10) * 10}_${Math.round(w.startPoint.y / 10) * 10}`;
-        const ke = `loc_${Math.round(w.endPoint.x / 10) * 10}_${Math.round(w.endPoint.y / 10) * 10}`;
-        unite(ks, ke);
-        if (w.fromPinId) unite(w.fromPinId, ks);
-        if (w.toPinId) unite(w.toPinId, ke);
-      }
-    });
-    const targetRoot = findR(targetPinId);
-    for (const c of components) {
-      if (c.type === 'tunnel') continue;
-      for (let idx = 0; idx < c.outputs.length; idx++) {
-        if (findR(c.outputs[idx].id) === targetRoot) {
-          return { comp: c, outIdx: idx };
-        }
-      }
-    }
-    return null;
-  };
-
   if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
     const inPin = comp.inputs[0];
     if (!inPin) return '?';
-    const driver = findDriverForPin(inPin.id);
+    const driver = ctx.driverOf(inPin.id);
     if (!driver) return '0';
     if (visited.has(comp.id)) return '...';
     const nextVisited = new Set(visited);
     nextVisited.add(comp.id);
-    return generateBooleanExpression(driver.comp.id, driver.outIdx, components, wires, nextVisited);
+    return booleanExprOf(driver.comp.id, driver.outIdx, ctx, nextVisited);
   }
 
   if (visited.has(comp.id)) return '...';
+  // A cone without feedback has the same text whichever path reached it, so it is computed once
+  const memoKey = `${comp.id}#${pinIndex ?? ''}`;
+  const cached = ctx.memo.get(memoKey);
+  if (cached !== undefined) return cached;
   const newVisited = new Set(visited);
   newVisited.add(comp.id);
 
+  let hitLoop = false;
   const traceInput = (inputPinId: string): string => {
-    const driver = findDriverForPin(inputPinId);
+    const driver = ctx.driverOf(inputPinId);
     if (!driver) return '0';
-    return generateBooleanExpression(driver.comp.id, driver.outIdx, components, wires, newVisited);
+    const e = booleanExprOf(driver.comp.id, driver.outIdx, ctx, newVisited);
+    if (e.includes('...')) hitLoop = true;
+    return e;
   };
 
   const inputExprs = comp.inputs.map((p) => traceInput(p.id));
 
+  let result: string;
   switch (comp.type) {
     case 'not':
-      return inputExprs[0].length === 1 ? `${inputExprs[0]}'` : `(${inputExprs[0]})'`;
+      result = inputExprs[0].length === 1 ? `${inputExprs[0]}'` : `(${inputExprs[0]})'`;
+      break;
     case 'and':
-      if (inputExprs.length === 0) return '0';
-      if (inputExprs.length === 1) return inputExprs[0];
-      return inputExprs
-        .map((e) => (e.includes('+') || e.includes('⊕') ? `(${e})` : e))
-        .join(' · ');
+      if (inputExprs.length === 0) result = '0';
+      else if (inputExprs.length === 1) result = inputExprs[0];
+      else result = inputExprs.map((e) => (e.includes('+') || e.includes('⊕') ? `(${e})` : e)).join(' · ');
+      break;
     case 'or':
-      return inputExprs.join(' + ');
+      result = inputExprs.join(' + ');
+      break;
     case 'nand':
-      return `(${inputExprs.map((e) => (e.includes('+') || e.includes('⊕') ? `(${e})` : e)).join(' · ')})'`;
+      result = `(${inputExprs.map((e) => (e.includes('+') || e.includes('⊕') ? `(${e})` : e)).join(' · ')})'`;
+      break;
     case 'nor':
-      return `(${inputExprs.join(' + ')})'`;
+      result = `(${inputExprs.join(' + ')})'`;
+      break;
     case 'xor':
-      return inputExprs.join(' ⊕ ');
+      result = inputExprs.map((e) => (e.includes('+') ? `(${e})` : e)).join(' ⊕ ');
+      break;
     case 'xnor':
-      return `(${inputExprs.join(' ⊕ ')})'`;
+      result = `(${inputExprs.map((e) => (e.includes('+') ? `(${e})` : e)).join(' ⊕ ')})'`;
+      break;
     case 'halfAdder':
-      return pinIndex === 1 ? `(${inputExprs[0]} · ${inputExprs[1]})` : `(${inputExprs[0]} ⊕ ${inputExprs[1]})`;
+      result = pinIndex === 1 ? `(${inputExprs[0]} · ${inputExprs[1]})` : `(${inputExprs[0]} ⊕ ${inputExprs[1]})`;
+      break;
     case 'fullAdder':
-      return pinIndex === 1
-        ? `(${inputExprs[0]}·${inputExprs[1]} + ${inputExprs[2]}·(${inputExprs[0]}⊕${inputExprs[1]}))`
-        : `(${inputExprs[0]} ⊕ ${inputExprs[1]} ⊕ ${inputExprs[2]})`;
+      result =
+        pinIndex === 1
+          ? `(${inputExprs[0]}·${inputExprs[1]} + ${inputExprs[2]}·(${inputExprs[0]}⊕${inputExprs[1]}))`
+          : `(${inputExprs[0]} ⊕ ${inputExprs[1]} ⊕ ${inputExprs[2]})`;
+      break;
     case 'halfSubtractor':
-      return pinIndex === 1 ? `(${inputExprs[0]}' · ${inputExprs[1]})` : `(${inputExprs[0]} ⊕ ${inputExprs[1]})`;
+      result = pinIndex === 1 ? `(${inputExprs[0]}' · ${inputExprs[1]})` : `(${inputExprs[0]} ⊕ ${inputExprs[1]})`;
+      break;
     case 'fullSubtractor':
-      return pinIndex === 1
-        ? `(${inputExprs[0]}'·${inputExprs[1]} + (${inputExprs[0]}⊕${inputExprs[1]})'·${inputExprs[2]})`
-        : `(${inputExprs[0]} ⊕ ${inputExprs[1]} ⊕ ${inputExprs[2]})`;
+      result =
+        pinIndex === 1
+          ? `(${inputExprs[0]}'·${inputExprs[1]} + (${inputExprs[0]}⊕${inputExprs[1]})'·${inputExprs[2]})`
+          : `(${inputExprs[0]} ⊕ ${inputExprs[1]} ⊕ ${inputExprs[2]})`;
+      break;
     case 'mux2':
-      return `(${inputExprs[2]}'·${inputExprs[0]} + ${inputExprs[2]}·${inputExprs[1]})`;
+      result = `(${inputExprs[2]}'·${inputExprs[0]} + ${inputExprs[2]}·${inputExprs[1]})`;
+      break;
     case 'demux2':
-      return pinIndex === 1 ? `(${inputExprs[0]} · ${inputExprs[1]})` : `(${inputExprs[0]} · ${inputExprs[1]}')`;
+      result = pinIndex === 1 ? `(${inputExprs[0]} · ${inputExprs[1]})` : `(${inputExprs[0]} · ${inputExprs[1]}')`;
+      break;
     case 'triState':
-      return `(${inputExprs[1]} ? ${inputExprs[0]} : Z)`;
+      result = `(${inputExprs[1]} ? ${inputExprs[0]} : Z)`;
+      break;
     default:
       return `${comp.label || comp.type}`;
   }
+  if (result.length > MAX_EXPR_LENGTH) result = `${comp.label || comp.type}`;
+  // Text that cut a feedback loop depends on where the loop was entered, so it is not reused
+  if (!hitLoop) ctx.memo.set(memoKey, result);
+  return result;
 }
 
-/**
- * Automatically compute Truth Table (2^N combinations) for canvas circuit
- */
-export function generateTruthTable(
+export function generateBooleanExpression(
+  compId: string,
+  pinIndex: number | undefined,
   components: CircuitComponentInstance[],
   wires: CircuitWire[]
-): TruthTableData | null {
-  // 1. Identify input switches & buttons
-  const switchComps = components.filter((c) => c.type === 'switch' || c.type === 'pushbutton');
-  if (switchComps.length === 0) return null;
-  // Limit to max 6 switches (max 64 rows)
-  const activeSwitches = switchComps.slice(0, 6);
+): string {
+  return booleanExprOf(compId, pinIndex, createBooleanExprContext(components, wires), new Set());
+}
 
-  // 2. Identify observable outputs (LEDs, Probes, Buzzer, or output pins of gates/blocks)
+// Observable outputs of a circuit: LEDs, probes, buzzers and every output pin of the logic parts
+function getObservableOutputs(components: CircuitComponentInstance[]) {
   const outputList: { id: string; name: string; compId: string; pinIndex?: number }[] = [];
   components.forEach((c) => {
     if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
@@ -3097,6 +3135,50 @@ export function generateTruthTable(
       });
     }
   });
+  // Names key the expression maps and label the table columns, so two LEDs both called "LED" get "LED (2)"
+  const seen = new Map<string, number>();
+  outputList.forEach((o) => {
+    const k = (seen.get(o.name) || 0) + 1;
+    seen.set(o.name, k);
+    if (k > 1) o.name = `${o.name} (${k})`;
+  });
+  return outputList;
+}
+
+/**
+ * Boolean expression of every observable output, keyed by output name. Needs no simulation, so the
+ * canvas formula HUD can use it without building the whole truth table.
+ */
+export function generateBooleanExpressions(
+  components: CircuitComponentInstance[],
+  wires: CircuitWire[]
+): { [outputName: string]: string } {
+  const ctx = createBooleanExprContext(components, wires);
+  const booleanExpressions: { [outputName: string]: string } = {};
+  getObservableOutputs(components).forEach((out) => {
+    const expr = booleanExprOf(out.compId, out.pinIndex, ctx, new Set());
+    if (expr && expr !== '?' && expr !== '0') {
+      booleanExpressions[out.name] = expr;
+    }
+  });
+  return booleanExpressions;
+}
+
+/**
+ * Automatically compute Truth Table (2^N combinations) for canvas circuit
+ */
+export function generateTruthTable(
+  components: CircuitComponentInstance[],
+  wires: CircuitWire[]
+): TruthTableData | null {
+  // 1. Identify input switches & buttons
+  const switchComps = components.filter((c) => c.type === 'switch' || c.type === 'pushbutton');
+  if (switchComps.length === 0) return null;
+  // Limit to max 6 switches (max 64 rows)
+  const activeSwitches = switchComps.slice(0, 6);
+
+  // 2. Identify observable outputs (LEDs, Probes, Buzzer, or output pins of gates/blocks)
+  const outputList = getObservableOutputs(components);
 
   if (outputList.length === 0) return null;
 
@@ -3150,13 +3232,7 @@ export function generateTruthTable(
   }
 
   // Extract Boolean algebraic expression for each output
-  const booleanExpressions: { [outputName: string]: string } = {};
-  outputList.forEach((out) => {
-    const expr = generateBooleanExpression(out.compId, out.pinIndex, components, wires);
-    if (expr && expr !== '?' && expr !== '0') {
-      booleanExpressions[out.name] = expr;
-    }
-  });
+  const booleanExpressions = generateBooleanExpressions(components, wires);
 
   // Extract minimal SOP expressions via Quine-McCluskey
   const minimalExpressions: {
@@ -3179,12 +3255,31 @@ export function generateTruthTable(
     minimalExpressions[out.name] = minimizeBooleanExpression(varNames, mintermIndices);
   });
 
+  const notes: string[] = [];
+  if (switchComps.length > activeSwitches.length) {
+    const rest = switchComps.slice(activeSwitches.length).map((s) => inputNames.get(s.id) || s.label);
+    notes.push(
+      `Tabloya ilk ${activeSwitches.length} giriş alındı; ${rest.join(', ')} şu anki değerinde sabit tutuldu.`
+    );
+  }
+  const stateful = components.filter(
+    (c) => COMPONENT_CATALOG[c.type]?.category === 'sequential' && c.type !== 'rom16x4'
+  );
+  if (stateful.length > 0) {
+    notes.push(
+      `Devrede bellek elemanı var (${stateful.map((c) => c.label || c.type).slice(0, 3).join(', ')}${
+        stateful.length > 3 ? '…' : ''
+      }): çıkışlar, elemanların şu anki iç durumu için hesaplandı.`
+    );
+  }
+
   return {
     inputs: activeSwitches.map((s) => ({ id: s.id, name: inputNames.get(s.id) || 'Giriş' })),
     outputs: outputList.map((o) => ({ id: o.id, name: o.name })),
     booleanExpressions,
     minimalExpressions,
     rows,
+    notes,
   };
 }
 

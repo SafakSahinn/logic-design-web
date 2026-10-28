@@ -39,6 +39,7 @@ import {
   CHIPTUNE_NOTE_FREQS,
   CHIPTUNE_NOTE_NAMES,
   generateTruthTable,
+  generateBooleanExpressions,
   synthesizeCircuitFromBooleanExpression,
   getMultiInputGatePinRelY,
   getInputSignalNames,
@@ -130,6 +131,7 @@ import {
 import {
   FSM_PRESETS,
   synthesizeFSM,
+  validateFSM,
   type FSMState,
   type FSMTransition,
 } from '../utils/fsmSynthesizer';
@@ -514,6 +516,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [fsmTransitions, setFsmTransitions] = useState<FSMTransition[]>(FSM_PRESETS[0].transitions);
   const [fsmSelectedPreset, setFsmSelectedPreset] = useState<string>('seq_101');
   // Live excitation / output equations for the FSM dialog (K-map variables A, B, C are Q1, Q0, X)
+  const fsmProblem = useMemo(() => validateFSM(fsmStates, fsmTransitions), [fsmStates, fsmTransitions]);
   const fsmEquations = useMemo(() => {
     try {
       const res = synthesizeFSM(fsmStates, fsmTransitions);
@@ -1881,6 +1884,58 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     setTestbenchText(generated);
     setTestbenchResult(null);
     showToast('Tüm girişler için test vektörleri üretildi!');
+  };
+
+  // FSM table editing: any change turns the loaded preset into a custom machine
+  const handleFsmAddState = () => {
+    const code = ['00', '01', '10', '11'].find((c) => !fsmStates.some((s) => s.code === c));
+    if (!code) return;
+    let n = fsmStates.length;
+    while (fsmStates.some((s) => s.id === `s${n}`)) n++;
+    const id = `s${n}`;
+    setFsmStates([...fsmStates, { id, name: `S${n}`, code }]);
+    // A new state waits in place until told otherwise
+    setFsmTransitions([
+      ...fsmTransitions,
+      { id: `${id}_x0`, fromStateId: id, toStateId: id, inputX: 0, outputZ: 0 },
+      { id: `${id}_x1`, fromStateId: id, toStateId: id, inputX: 1, outputZ: 0 },
+    ]);
+    setFsmSelectedPreset('custom');
+  };
+
+  const handleFsmRemoveState = (stateId: string) => {
+    if (fsmStates.length <= 1) return;
+    const rest = fsmStates.filter((s) => s.id !== stateId);
+    setFsmStates(rest);
+    // Transitions into the removed state now go to the first remaining one
+    setFsmTransitions(
+      fsmTransitions
+        .filter((t) => t.fromStateId !== stateId)
+        .map((t) => (t.toStateId === stateId ? { ...t, toStateId: rest[0].id } : t))
+    );
+    setFsmSelectedPreset('custom');
+  };
+
+  const handleFsmEditState = (stateId: string, patch: Partial<Pick<FSMState, 'name' | 'code'>>) => {
+    setFsmStates(fsmStates.map((s) => (s.id === stateId ? { ...s, ...patch } : s)));
+    setFsmSelectedPreset('custom');
+  };
+
+  const handleFsmEditTransition = (
+    fromStateId: string,
+    inputX: 0 | 1,
+    patch: Partial<Pick<FSMTransition, 'toStateId' | 'outputZ'>>
+  ) => {
+    const existing = fsmTransitions.find((t) => t.fromStateId === fromStateId && t.inputX === inputX);
+    if (existing) {
+      setFsmTransitions(fsmTransitions.map((t) => (t === existing ? { ...t, ...patch } : t)));
+    } else {
+      setFsmTransitions([
+        ...fsmTransitions,
+        { id: `${fromStateId}_x${inputX}`, fromStateId, toStateId: fsmStates[0].id, inputX, outputZ: 0, ...patch },
+      ]);
+    }
+    setFsmSelectedPreset('custom');
   };
 
   // Synthesize FSM onto canvas
@@ -5686,9 +5741,33 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Wire jumper bridges removed - Logisim standard flat crossings with solder junction dots
 
-  // Generated Truth Table for active circuit
+  // Generated Truth Table for active circuit: 2^N full simulations, so only while its window is open
   const truthTableData = useMemo(() => {
-    return generateTruthTable(components, wires);
+    return showTruthTable ? generateTruthTable(components, wires) : null;
+  }, [showTruthTable, components, wires]);
+
+  // Canvas formula HUD: expressions depend only on the circuit's structure, not on signal values, so a
+  // running clock (new component objects every tick) reuses the last result
+  const hudExpressionsCacheRef = useRef<{ key: string; value: { [outputName: string]: string } }>({ key: '', value: {} });
+  const hudExpressions = useMemo(() => {
+    const pinKey = (p: { id: string; x: number; y: number }) => `${p.id}@${Math.round(p.x)},${Math.round(p.y)}`;
+    const key = [
+      ...components.map((c) => `${c.id}|${c.type}|${c.label}|${c.inputs.map(pinKey).join(',')}|${c.outputs.map(pinKey).join(',')}`),
+      ...wires.map(
+        (w) =>
+          `${w.fromPinId}>${w.toPinId}|${w.startPoint ? `${Math.round(w.startPoint.x)},${Math.round(w.startPoint.y)}` : ''}|${
+            w.endPoint ? `${Math.round(w.endPoint.x)},${Math.round(w.endPoint.y)}` : ''
+          }`
+      ),
+    ].join(';');
+    const cache = hudExpressionsCacheRef.current;
+    if (cache.key !== key) {
+      cache.key = key;
+      cache.value = components.some((c) => c.type === 'switch' || c.type === 'pushbutton')
+        ? generateBooleanExpressions(components, wires)
+        : {};
+    }
+    return cache.value;
   }, [components, wires]);
 
   // Check if any wire is experiencing a contention conflict (0 and 1 driving same net)
@@ -9725,7 +9804,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           </button>
 
           {/* Floating Live Boolean Algebraic Expression HUD (Non-Jumping) */}
-          {truthTableData?.booleanExpressions && Object.keys(truthTableData.booleanExpressions).length > 0 && (
+          {Object.keys(hudExpressions).length > 0 && (
             <div className={`absolute bottom-16 right-4 z-20 px-3.5 py-2 rounded-2xl shadow-xl backdrop-blur-md border flex items-center gap-2.5 text-xs animate-in fade-in select-none ${
               cadTheme === 'dark'
                 ? 'bg-slate-900/95 border-slate-700 text-slate-200'
@@ -9736,7 +9815,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <span className="hidden sm:inline">Formül:</span>
               </div>
               <div className="flex items-center gap-2 overflow-x-auto max-w-[360px]">
-                {Object.entries(truthTableData.booleanExpressions).map(([name, expr]) => (
+                {Object.entries(hudExpressions).map(([name, expr]) => (
                   <div
                     key={name}
                     className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border font-mono text-[11px] ${
@@ -10170,6 +10249,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </div>
               ) : truthModalTab === 'table' ? (
                 <div className="space-y-4">
+                  {truthTableData.notes && truthTableData.notes.length > 0 && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 space-y-1">
+                      {truthTableData.notes.map((n) => (
+                        <p key={n}>⚠ {n}</p>
+                      ))}
+                    </div>
+                  )}
                   {/* Derived Boolean Expressions */}
                   {truthTableData.booleanExpressions && Object.keys(truthTableData.booleanExpressions).length > 0 && (
                     <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-2">
@@ -10454,8 +10540,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                                         setSelectedWireIds([]);
                                         setShowTruthTable(false);
                                         playSwitchSound(true);
-                                      } catch (err: any) {
+                                        showToast(`${activeOut.name} = ${expr} kapılarla tuvale çizildi (Ctrl+Z ile eski devreye dönebilirsiniz).`);
+                                      } catch (err: unknown) {
                                         console.error('Synthesis error:', err);
+                                        showToast(err instanceof Error ? err.message : 'Devre sentezlenemedi.');
                                       }
                                     }}
                                     className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
@@ -12141,8 +12229,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       key={p.id}
                       onClick={() => {
                         setFsmSelectedPreset(p.id);
-                        setFsmStates(p.states);
-                        setFsmTransitions(p.transitions);
+                        setFsmStates(p.states.map((st) => ({ ...st })));
+                        setFsmTransitions(p.transitions.map((t) => ({ ...t })));
                         showToast(`"${p.name}" şablonu yüklendi.`);
                       }}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
@@ -12157,41 +12245,88 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </div>
               </div>
 
+              {fsmSelectedPreset !== 'custom' && (
+                <p className="text-[11px] text-slate-500 -mt-2">
+                  {FSM_PRESETS.find((p) => p.id === fsmSelectedPreset)?.description}
+                </p>
+              )}
+
               {/* States and Transitions Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* States Table */}
                 <div className="space-y-1.5">
-                  <span className="text-xs font-bold text-slate-700 block">FSM Durumları (States):</span>
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner max-h-40 overflow-y-auto">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700">FSM Durumları (States):</span>
+                    <button
+                      onClick={handleFsmAddState}
+                      disabled={fsmStates.length >= 4}
+                      className="px-2 py-0.5 rounded-lg text-[11px] font-bold border border-pink-300 text-pink-700 bg-pink-50 hover:bg-pink-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title={fsmStates.length >= 4 ? '2 flip-flop ile en fazla 4 durum kodlanabilir' : 'Yeni durum ekle'}
+                    >
+                      + Durum
+                    </button>
+                  </div>
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner max-h-48 overflow-y-auto">
                     <table className="w-full text-xs font-mono">
                       <thead className="bg-slate-100 text-slate-600 text-[10.5px]">
                         <tr>
                           <th className="p-2 text-left">Durum</th>
                           <th className="p-2 text-center">Kod (Q1 Q0)</th>
+                          <th className="p-2" />
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {fsmStates.map((s) => (
                           <tr key={s.id} className="hover:bg-pink-50/30">
-                            <td className="p-2 font-bold text-slate-800">{s.name}</td>
-                            <td className="p-2 text-center">
-                              <span className="px-2 py-0.5 bg-pink-100 text-pink-800 rounded font-black">
-                                {s.code}
-                              </span>
+                            <td className="p-1.5">
+                              <input
+                                value={s.name}
+                                onChange={(e) => handleFsmEditState(s.id, { name: e.target.value })}
+                                className="w-full px-1.5 py-0.5 rounded border border-slate-200 font-bold text-slate-800 bg-white focus:outline-none focus:border-pink-400"
+                              />
+                            </td>
+                            <td className="p-1.5 text-center">
+                              <select
+                                value={s.code}
+                                onChange={(e) => handleFsmEditState(s.id, { code: e.target.value })}
+                                className="px-1 py-0.5 bg-pink-100 text-pink-800 rounded font-black border border-pink-200 cursor-pointer"
+                              >
+                                {['00', '01', '10', '11']
+                                  .filter((c) => c === s.code || !fsmStates.some((o) => o.code === c))
+                                  .map((c) => (
+                                    <option key={c} value={c}>
+                                      {c}
+                                    </option>
+                                  ))}
+                              </select>
+                            </td>
+                            <td className="p-1.5 text-center">
+                              <button
+                                onClick={() => handleFsmRemoveState(s.id)}
+                                disabled={fsmStates.length <= 1}
+                                className="p-0.5 text-slate-400 hover:text-rose-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                title="Durumu sil"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+                  <p className="text-[10.5px] text-slate-500 leading-snug">
+                    Flip-floplar açılışta 00 durumundadır. Kullanılmayan kodlar bir sonraki saat darbesinde ilk duruma
+                    ({fsmStates[0]?.name}) geçer.
+                  </p>
                 </div>
 
-                {/* Transitions Table */}
+                {/* Transitions Table: one row per state and input value */}
                 <div className="space-y-1.5">
                   <span className="text-xs font-bold text-slate-700 block">
-                    Geçişler (From → To | X → Z):
+                    Geçişler (Mevcut, X → Sonraki | Z):
                   </span>
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner max-h-40 overflow-y-auto">
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner max-h-48 overflow-y-auto">
                     <table className="w-full text-xs font-mono">
                       <thead className="bg-slate-100 text-slate-600 text-[10.5px]">
                         <tr>
@@ -12202,18 +12337,44 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {fsmTransitions.map((t) => {
-                          const from = fsmStates.find((s) => s.id === t.fromStateId)?.code || t.fromStateId;
-                          const to = fsmStates.find((s) => s.id === t.toStateId)?.code || t.toStateId;
-                          return (
-                            <tr key={t.id} className="hover:bg-pink-50/30">
-                              <td className="p-1.5 text-center font-bold text-slate-700">{from}</td>
-                              <td className="p-1.5 text-center text-pink-700 font-bold">{t.inputX}</td>
-                              <td className="p-1.5 text-center font-bold text-slate-800">{to}</td>
-                              <td className="p-1.5 text-center text-emerald-600 font-bold">{t.outputZ}</td>
-                            </tr>
-                          );
-                        })}
+                        {fsmStates.flatMap((s) =>
+                          ([0, 1] as const).map((x) => {
+                            const t = fsmTransitions.find((tr) => tr.fromStateId === s.id && tr.inputX === x);
+                            const toId = t && fsmStates.some((o) => o.id === t.toStateId) ? t.toStateId : fsmStates[0].id;
+                            return (
+                              <tr key={`${s.id}_${x}`} className="hover:bg-pink-50/30">
+                                <td className="p-1.5 text-center font-bold text-slate-700">{s.code}</td>
+                                <td className="p-1.5 text-center text-pink-700 font-bold">{x}</td>
+                                <td className="p-1.5 text-center">
+                                  <select
+                                    value={toId}
+                                    onChange={(e) => handleFsmEditTransition(s.id, x, { toStateId: e.target.value })}
+                                    className="px-1 py-0.5 rounded border border-slate-200 font-bold text-slate-800 bg-white cursor-pointer max-w-[7.5rem]"
+                                  >
+                                    {fsmStates.map((o) => (
+                                      <option key={o.id} value={o.id}>
+                                        {o.code} {o.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  <button
+                                    onClick={() => handleFsmEditTransition(s.id, x, { outputZ: t?.outputZ === 1 ? 0 : 1 })}
+                                    className={`w-7 py-0.5 rounded font-bold border cursor-pointer ${
+                                      t?.outputZ === 1
+                                        ? 'bg-emerald-100 text-emerald-700 border-emerald-300'
+                                        : 'bg-white text-slate-400 border-slate-200'
+                                    }`}
+                                    title="Z çıkışını değiştir"
+                                  >
+                                    {t?.outputZ === 1 ? 1 : 0}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -12236,6 +12397,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     <strong className="text-emerald-700">Z =</strong> {fsmEquations ? fsmEquations.z : '—'}
                   </div>
                 </div>
+                {fsmProblem && <p className="text-[11px] font-bold text-rose-600">⚠ {fsmProblem}</p>}
               </div>
             </div>
 
@@ -12253,7 +12415,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </button>
                 <button
                   onClick={handleSynthesizeFSM}
-                  className="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-2xs flex items-center gap-1.5"
+                  disabled={!!fsmProblem}
+                  className="px-5 py-2 disabled:opacity-50 disabled:cursor-not-allowed bg-pink-600 hover:bg-pink-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-2xs flex items-center gap-1.5"
                 >
                   <Workflow className="w-3.5 h-3.5" />
                   <span>FSM Devresini Tuvale Çiz</span>
