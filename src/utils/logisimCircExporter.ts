@@ -15,6 +15,10 @@ import type { LogicValue } from '../types/logic';
  * net, so no wire can accidentally touch another part's pin. Pin offsets were measured in Logisim
  * 2.7.1 (gates: output at loc, inputs at -(size+bubble+xor) with the AbstractGate spacing; flip-flops:
  * Q (0,0), Q' (0,20), D/T (-40,20), clock (-40,0) or (-40,10) for J-K, reset (-10,30), preset (-30,30)).
+ * Open inputs follow the simulator's Logisim rules: on primitives they stay unconnected, on gate
+ * networks they become x (or the fixed level the simulator reads for them). Checked in Logisim 2.7.1:
+ * primitives, presets and ICs match exactly; a gate network cannot always reproduce a block's x
+ * (AND(0, x) = 0, a per-bit register still loads the defined bits of a partly open word).
  */
 
 type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
@@ -69,6 +73,18 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     else usesC0 = true;
     return v ? C1 : C0;
   };
+  // A Logisim part's own input that is open on the canvas stays unconnected in the file too (no
+  // tunnel), so Logisim reads it exactly like the simulator does (gates ignore it, NOT gives E ...)
+  const OPEN = '';
+  // An open input of a block built from gates gets its own undriven net (an 'OPEN' tunnel, x in
+  // Logisim) so the undefined value stays undefined; inputs the simulator reads as a fixed level
+  // when open (carry-in, reset, enable ...) are tied to that constant instead
+  const openNets: string[] = [];
+  const openNet = () => {
+    const n = newNet();
+    openNets.push(n);
+    return n;
+  };
 
   // Builds the netlist of one circuit level; `scope` keeps nets of inlined ICs apart and `alias`
   // binds an IC's port pins to the nets of the level above
@@ -89,11 +105,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       connected.add(pinId);
       union(outer, n);
     }
-    // Output pins always get a net; an unconnected input reads `floating`
+    // Output pins always get a net; an unconnected input reads `floating` (undefined: x)
     const outNet = (pinId?: string) => (pinId ? netOfPin.get(pinId) || `${scope}${pinId}` : newNet());
-    const inNet = (pinId: string | undefined, floating: 0 | 1 = 0) =>
-      pinId && connected.has(pinId) ? netOfPin.get(pinId)! : constNet(floating);
+    const inNet = (pinId: string | undefined, floating?: 0 | 1) =>
+      pinId && connected.has(pinId) ? netOfPin.get(pinId)! : floating === undefined ? openNet() : constNet(floating);
     const isConn = (pinId?: string) => !!pinId && connected.has(pinId);
+    const pinNet = (pinId?: string) => (isConn(pinId) ? netOfPin.get(pinId!)! : OPEN);
 
     for (const c of comps) {
       const P: Prim[] = [];
@@ -120,7 +137,13 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         P.push({ kind: 'not', in: a, out });
         return out;
       };
-      const ins = (i: number, floating: 0 | 1 = 0) => inNet(c.inputs[i]?.id, floating);
+      let openInputs = 0;
+      const ins = (i: number, floating?: 0 | 1) => {
+        if (floating === undefined && !isConn(c.inputs[i]?.id)) openInputs++;
+        return inNet(c.inputs[i]?.id, floating);
+      };
+      // Input of a part that is a Logisim primitive itself: open stays open
+      const pin = (i: number) => pinNet(c.inputs[i]?.id);
       const out = (i: number) => outNet(c.outputs[i]?.id);
       const label = (c.label || c.type).trim();
       const inScope = scope !== '';
@@ -170,7 +193,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           if (inScope) break; // an IC's outputs reach the outside through its ports
           c.inputs.forEach((p, i) => {
             const l = c.inputs.length === 1 ? label : `${label}_${p.name}`;
-            P.push({ kind: 'outpin', label: l, in: ins(i) });
+            P.push({ kind: 'outpin', label: l, in: pin(i) });
             outputs.push({ label: l, compId: c.id, pinId: p.id });
           });
           break;
@@ -183,43 +206,47 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'nor':
         case 'xor':
         case 'xnor': {
-          // Like the simulator: unconnected inputs are ignored, no connected input gives 0
-          const used = c.inputs.filter((p) => isConn(p.id)).map((p) => netOfPin.get(p.id)!);
-          const type = c.type.toUpperCase() as GateKind;
-          if (used.length === 0) union(constNet(0), out(0));
-          else if (used.length === 1) {
-            // Logisim gates need 2 inputs: pad with the identity element (1 for AND/NAND, else 0)
-            P.push({ kind: 'gate', type, ins: [used[0], constNet(type === 'AND' || type === 'NAND' ? 1 : 0)], out: out(0) });
-          } else P.push({ kind: 'gate', type, ins: used, out: out(0) });
+          // Open inputs stay unconnected: Logisim ignores them like the simulator (none connected
+          // gives E, a single one passes through); a Logisim gate has at least 2 inputs
+          const gIns = c.inputs.map((_, i) => pin(i));
+          while (gIns.length < 2) gIns.push(OPEN);
+          P.push({ kind: 'gate', type: c.type.toUpperCase() as GateKind, ins: gIns, out: out(0) });
           break;
         }
         case 'not':
-          not(ins(0), out(0));
+          not(pin(0), out(0));
           break;
         case 'triState':
-          P.push({ kind: 'tri', in: ins(0), en: ins(1), out: out(0) });
+          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
           break;
         case 'splitter4':
-          for (let i = 0; i < 4; i++) if (c.outputs[i]) union(ins(i), out(i));
+          // An open bit leaves its output undriven: x in Logisim, as in the simulator
+          for (let i = 0; i < 4; i++) if (c.outputs[i] && isConn(c.inputs[i]?.id)) union(pin(i), out(i));
           break;
-        case 'halfAdder':
-          g('XOR', [ins(0), ins(1)], out(0));
-          g('AND', [ins(0), ins(1)], out(1));
-          break;
-        case 'fullAdder': {
-          const x = g('XOR', [ins(0), ins(1)]);
-          g('XOR', [x, ins(2)], out(0));
-          g('OR', [g('AND', [ins(0), ins(1)]), g('AND', [ins(2), x])], out(1));
+        case 'halfAdder': {
+          const [a, b] = [ins(0), ins(1)];
+          g('XOR', [a, b], out(0));
+          g('AND', [a, b], out(1));
           break;
         }
-        case 'halfSubtractor':
-          g('XOR', [ins(0), ins(1)], out(0));
-          g('AND', [not(ins(0)), ins(1)], out(1));
+        case 'fullAdder': {
+          const [a, b, cin] = [ins(0), ins(1), ins(2, 0)]; // open carry-in = 0, like Logisim's adder
+          const x = g('XOR', [a, b]);
+          g('XOR', [x, cin], out(0));
+          g('OR', [g('AND', [a, b]), g('AND', [cin, x])], out(1));
           break;
+        }
+        case 'halfSubtractor': {
+          const [a, b] = [ins(0), ins(1)];
+          g('XOR', [a, b], out(0));
+          g('AND', [not(a), b], out(1));
+          break;
+        }
         case 'fullSubtractor': {
-          const x = g('XOR', [ins(0), ins(1)]);
-          g('XOR', [x, ins(2)], out(0));
-          g('OR', [g('AND', [not(ins(0)), ins(1)]), g('AND', [not(x), ins(2)])], out(1));
+          const [a, b, bin] = [ins(0), ins(1), ins(2, 0)]; // open borrow-in = 0
+          const x = g('XOR', [a, b]);
+          g('XOR', [x, bin], out(0));
+          g('OR', [g('AND', [not(a), b]), g('AND', [not(x), bin])], out(1));
           break;
         }
         case 'mux2': {
@@ -242,14 +269,16 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           }
           break;
         }
-        case 'demux2':
-          g('AND', [ins(0), not(ins(1))], out(0));
-          g('AND', [ins(0), ins(1)], out(1));
+        case 'demux2': {
+          const [d, s] = [ins(0), ins(1)];
+          g('AND', [d, not(s)], out(0));
+          g('AND', [d, s], out(1));
           break;
+        }
         case 'demux4': {
-          const [s0, s1] = [ins(1), ins(2)];
+          const [d, s0, s1] = [ins(0), ins(1), ins(2)];
           const [n0, n1] = [not(s0), not(s1)];
-          for (let k = 0; k < 4; k++) if (c.outputs[k]) g('AND', [ins(0), k & 1 ? s0 : n0, k & 2 ? s1 : n1], out(k));
+          for (let k = 0; k < 4; k++) if (c.outputs[k]) g('AND', [d, k & 1 ? s0 : n0, k & 2 ? s1 : n1], out(k));
           break;
         }
         case 'decoder2to4':
@@ -262,7 +291,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         case 'priorityEncoder4to2': {
-          const [d0, d1, d2, d3] = [ins(0), ins(1), ins(2), ins(3)];
+          // Only inputs at 1 count, so an open one is a 0
+          const [d0, d1, d2, d3] = [ins(0, 0), ins(1, 0), ins(2, 0), ins(3, 0)];
           if (c.outputs[0]) g('OR', [d3, d2], out(0));
           if (c.outputs[1]) g('OR', [d3, g('AND', [not(d2), d1])], out(1));
           if (c.outputs[2]) g('OR', [d0, d1, d2, d3], out(2));
@@ -319,7 +349,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'alu4': {
           const a = [ins(0), ins(1), ins(2), ins(3)];
           const b = [ins(5), ins(6), ins(7), ins(8)];
-          const cin = ins(4);
+          const cin = ins(4, 0); // open carry-in = 0, like Logisim's adder
           const [s0, s1] = [ins(9), ins(10)];
           const adder = (x: string[], y: string[], c0: string) => {
             let carry = c0;
@@ -348,33 +378,33 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         case 'dFlipFlop':
-          P.push({ kind: 'ff', type: 'D', a: ins(0), clk: ins(1), q: out(0), qn: out(1) });
+          P.push({ kind: 'ff', type: 'D', a: pin(0), clk: pin(1), q: out(0), qn: out(1) });
           break;
         case 'jkFlipFlop':
-          P.push({ kind: 'ff', type: 'JK', a: ins(0), b: ins(2), clk: ins(1), q: out(0), qn: out(1) });
+          P.push({ kind: 'ff', type: 'JK', a: pin(0), b: pin(2), clk: pin(1), q: out(0), qn: out(1) });
           break;
         case 'tFlipFlop':
-          P.push({ kind: 'ff', type: 'T', a: ins(0), clk: ins(1), reset: ins(2), q: out(0), qn: out(1) });
+          P.push({ kind: 'ff', type: 'T', a: pin(0), clk: pin(1), reset: pin(2), q: out(0), qn: out(1) });
           break;
         case 'srLatch': {
           // Level-sensitive latch = flip-flop driven only by its asynchronous set / reset;
           // S=R=1 holds like the simulator, so each only acts while the other is low
-          const [s, r] = [ins(0), ins(1)];
+          const [s, r] = [ins(0, 0), ins(1, 0)]; // open S / R holds, as 0 does
           P.push({ kind: 'ff', type: 'D', preset: g('AND', [s, not(r)]), reset: g('AND', [r, not(s)]), q: out(0), qn: out(1) });
           break;
         }
         case 'counter4': {
-          const clk = ins(0);
-          const rst = ins(1);
+          const clk = ins(0, 0);
+          const rst = ins(1, 0);
           const q = [0, 1, 2, 3].map((i) => out(i));
           const t = [constNet(1), q[0], g('AND', [q[0], q[1]]), g('AND', [q[0], q[1], q[2]])];
           q.forEach((qi, i) => P.push({ kind: 'ff', type: 'T', a: t[i], clk, reset: rst, q: qi }));
           break;
         }
         case 'register4': {
-          const clk = ins(4);
+          const clk = ins(4, 0);
           const we = ins(5, 1); // unconnected write enable = enabled
-          const rst = ins(6);
+          const rst = ins(6, 0);
           const nwe = not(we);
           for (let i = 0; i < 4; i++) {
             const q = out(i);
@@ -385,7 +415,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         }
         case 'shiftRegister4': {
           // 74HC194: 01 shifts right (SR into Q0), 10 shifts left (SL into Q3), else hold
-          const [clk, rst, sl, sr, s0, s1] = [0, 1, 2, 3, 4, 5].map((i) => ins(i));
+          const [clk, rst, sl, sr, s0, s1] = [ins(0, 0), ins(1, 0), ins(2), ins(3), ins(4), ins(5)];
           const q = [0, 1, 2, 3].map((i) => out(i));
           const right = g('AND', [not(s1), s0]);
           const left = g('AND', [s1, not(s0)]);
@@ -401,8 +431,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'ram16x4': {
           const addr = [ins(0), ins(1), ins(2), ins(3)];
           const din = [ins(4), ins(5), ins(6), ins(7)];
-          const clk = ins(8);
-          const we = ins(9);
+          const clk = ins(8, 0);
+          const we = ins(9, 1); // unconnected write enable = enabled (only 0 blocks writing)
           const na = addr.map((x) => not(x));
           // Logisim flip-flops power up as 0, so a bit whose initial content is 1 is stored inverted:
           // written as NOT data and read back through a NOT, which keeps the contents exact
@@ -437,7 +467,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           const inner = new Map<string, string>();
           const inPorts = def.ports.filter((p) => p.type === 'input');
           const outPorts = def.ports.filter((p) => p.type === 'output');
-          inPorts.forEach((p, i) => inner.set(p.targetPinId, ins(i)));
+          // An open IC input is an undriven net inside (x in Logisim, as the simulator's floating port)
+          inPorts.forEach((p, i) => inner.set(p.targetPinId, isConn(c.inputs[i]?.id) ? netOfPin.get(c.inputs[i].id)! : newNet()));
           outPorts.forEach((p, i) => {
             const target = def.components.find((x) => x.id === p.targetCompId);
             const pinId = target && ['led', 'probe'].includes(target.type) ? target.inputs[0]?.id : p.targetPinId;
@@ -449,6 +480,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         default:
           warnings.push(`${label}: '${c.type}' Logisim'e aktarılamadı.`);
       }
+      if (openInputs)
+        warnings.push(`${label}: boştaki giriş(ler)i Logisim'e x (sürücüsüz OPEN tüneli) olarak aktarıldı; kapılarla kurulan karşılığı bazı çıkışlarda simülatörden farklı sonuç verebilir.`);
       if (P.length) blocks.push({ prims: P });
     }
   };
@@ -473,15 +506,17 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       if (p.kind === 'inpin' || p.kind === 'clock') netName.set(find(p.out), netName.get(find(p.out)) || claim(p.label));
     }
   let counter = 0;
+  const openRoots = new Set(openNets.map(find));
   const nameOf = (net: string) => {
     const r = find(net);
-    if (!netName.has(r)) netName.set(r, claim(r === find(C0) ? 'GND' : r === find(C1) ? 'VCC' : `n${counter++}`));
+    if (!netName.has(r)) netName.set(r, claim(r === find(C0) ? 'GND' : r === find(C1) ? 'VCC' : openRoots.has(r) ? 'OPEN' : `n${counter++}`));
     return netName.get(r)!;
   };
 
   // --- layout -------------------------------------------------------------------------------
   const xml: string[] = [];
   const tunnel = (x: number, y: number, net: string, sink: boolean) =>
+    net !== OPEN &&
     xml.push(`    <comp lib="0" loc="(${x},${y})" name="Tunnel"><a name="facing" val="${sink ? 'east' : 'west'}"/><a name="label" val="${xmlEsc(nameOf(net))}"/></comp>`);
   const CELL_W = 220;
   const CELL_H = 110;
