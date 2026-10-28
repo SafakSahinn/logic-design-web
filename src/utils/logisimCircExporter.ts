@@ -31,7 +31,8 @@ type Prim =
   | { kind: 'const'; value: 0 | 1; out: string }
   | { kind: 'inpin'; label: string; out: string }
   | { kind: 'clock'; label: string; out: string }
-  | { kind: 'outpin'; label: string; in: string };
+  | { kind: 'outpin'; label: string; in: string }
+  | { kind: 'pull'; value: 0 | 1 | 'X'; at: string };
 
 export interface CircExportResult {
   xml: string;
@@ -222,6 +223,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         case 'triState':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
+          break;
+        case 'pullResistor':
+          if (isConn(c.inputs[0]?.id)) P.push({ kind: 'pull', value: c.state.pullValue ?? 0, at: pin(0) });
           break;
         case 'controlledInverter':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), inv: true });
@@ -606,6 +610,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             `    <comp lib="0" loc="(${x},${y})" name="Pin"><a name="facing" val="west"/><a name="output" val="true"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`
           );
           tunnel(x, y, p.in, true);
+          break;
+        case 'pull':
+          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pull Resistor"><a name="pull" val="${p.value}"/></comp>`);
+          tunnel(x, y, p.at, true);
           break;
       }
     }

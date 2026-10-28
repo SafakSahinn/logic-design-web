@@ -140,7 +140,8 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
-const PASSIVE_TYPES = ['tunnel', 'textLabel'];
+const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
+const TRI_TYPES = ['triState', 'controlledInverter'];
 
 export interface PortDecl {
   name: string;
@@ -306,7 +307,7 @@ function buildModule(
           const bn = names.make(`bus_${compNames.get(c.id)}_${p.name}`, 'bus');
           busSignal.set(key, bn);
           declare(bn);
-          const allTri = drivers.every((d) => ['triState', 'controlledInverter'].includes(pinOwner.get(d)?.type ?? ''));
+          const allTri = drivers.every((d) => TRI_TYPES.includes(pinOwner.get(d)?.type ?? ''));
           if (!allTri) warnings.push(`${bn}: birden fazla sürücü var (çakışma); simülatör bu durumda 0 okur.`);
         }
         pinExpr.set(p.id, busSignal.get(key)!);
@@ -319,8 +320,50 @@ function buildModule(
   }
 
   // An input pin no part drives (and no IC port feeds)
+  // Pull resistors on a net: the level the simulator pulls it to when nothing drives it
+  // (differing pulls or an X pull give E there)
+  const pullOf = (pinId: string): 0 | 1 | 'E' | undefined => {
+    const levels = new Set<0 | 1 | 'E'>();
+    for (const id of netOfPin.get(pinId) || []) {
+      const owner = pinOwner.get(id);
+      if (owner?.type === 'pullResistor') levels.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
+    }
+    return levels.size === 0 ? undefined : levels.size === 1 ? levels.values().next().value : 'E';
+  };
+  const pulledLevel = (pinId: string) => {
+    const p = pullOf(pinId);
+    return p === 0 ? L.zero : p === 1 ? L.one : undefined;
+  };
   const isFloating = (pinId: string) =>
-    !portBound.has(pinId) && netDrivers(pinId).length === 0 && !(netOfPin.get(pinId) || []).some((id) => portBound.has(id));
+    !portBound.has(pinId) &&
+    netDrivers(pinId).length === 0 &&
+    !(netOfPin.get(pinId) || []).some((id) => portBound.has(id)) &&
+    pulledLevel(pinId) === undefined;
+
+  // A tri-state signal with a pull resistor: Verilog pullup / pulldown primitive (Yosys does not read
+  // tri0 / tri1 nets), VHDL weak 'L' / 'H' driver read
+  // through to_X01 (a plain "= '1'" test would miss 'H')
+  const readAs = new Map<string, string>();
+  const pulledSigs = new Set<string>();
+  for (const c of comps) {
+    if (c.type !== 'pullResistor' || !c.inputs[0]) continue;
+    const drivers = netDrivers(c.inputs[0].id);
+    const level = pullOf(c.inputs[0].id);
+    if (drivers.length === 0 || !drivers.every((d) => TRI_TYPES.includes(pinOwner.get(d)?.type ?? ''))) continue;
+    const sig = pinExpr.get(drivers[0]);
+    if (!sig || pulledSigs.has(sig)) continue;
+    pulledSigs.add(sig);
+    if (level === 'E') {
+      body.push(L.comment(`${sig}: çakışan pull dirençleri, simülatörde sürülmeyince E; burada pull yok`));
+      continue;
+    }
+    body.push(L.comment(`${sig}: pull direnci, sürülmeyince ${level} okunur (FPGA içinde pull yoktur, sentez aracı desteklemeyebilir)`));
+    if (lang === 'verilog') body.push(`  ${level === 1 ? 'pullup' : 'pulldown'} ${names.make(`pull_${sig}`, 'pull')} (${sig});`);
+    else {
+      body.push(`  ${sig} <= ${level === 1 ? "'H'" : "'L'"};`);
+      readAs.set(sig, `to_X01(${sig})`);
+    }
+  }
   const floatingParts: string[] = [];
 
   // Value seen by an input pin
@@ -331,9 +374,10 @@ function buildModule(
     if (drivers.length === 0) {
       // A net driven only by an IC input port bound to another of its pins
       const bound = (netOfPin.get(pinId) || []).find((id) => portBound.has(id));
-      return bound ? portBound.get(bound)! : floating;
+      return bound ? portBound.get(bound)! : pulledLevel(pinId) ?? floating;
     }
-    return pinExpr.get(drivers[0]) || floating;
+    const sig = pinExpr.get(drivers[0]);
+    return sig ? readAs.get(sig) ?? sig : floating;
   };
 
   const emit = (lhs: string, rhs: string) => {

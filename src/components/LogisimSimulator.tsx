@@ -198,6 +198,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   xor: { label: 'XOR', badge: 'Özel VEYA' },
   xnor: { label: 'XNOR', badge: 'Özel VEYA DEĞİL' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
+  pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
@@ -3997,6 +3998,35 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'pullResistor': {
+        const pv = comp.state.pullValue ?? 0;
+        const net = comp.inputs[0]?.value;
+        const stroke = isSelected ? '#2563eb' : '#64748b';
+        return (
+          <g>
+            <line x1={15} y1={0} x2={15} y2={8} stroke="#64748b" strokeWidth={2} />
+            <polyline
+              points="15,8 22,12 8,18 22,24 8,30 22,36 15,40"
+              fill="none"
+              stroke={stroke}
+              strokeWidth={isSelected ? 2.5 : 2}
+              strokeLinejoin="round"
+            />
+            <line x1={15} y1={40} x2={15} y2={44} stroke="#64748b" strokeWidth={2} />
+            <text
+              x={15}
+              y={54}
+              textAnchor="middle"
+              className={`text-[11px] font-mono font-black select-none ${
+                net === 1 ? 'fill-emerald-600' : net === 'E' ? 'fill-red-600' : 'fill-slate-700'
+              }`}
+            >
+              {pv}
+            </text>
+          </g>
+        );
+      }
+
       case 'tunnel': {
         const lbl = comp.label || 'Tünel';
         const isHigh = comp.inputs[0]?.value === 1 || comp.outputs[0]?.value === 1;
@@ -6011,7 +6041,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'probe', 'splitter4', 'tunnel'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'probe', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -9836,6 +9866,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         title={`${cnt} Girişli Yap`}
                       >
                         {cnt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Pull resistor level */}
+                {selectedComp.type === 'pullResistor' && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Çekilen değer:</span>
+                    {([0, 1, 'X'] as const).map((pv) => (
+                      <button
+                        key={pv}
+                        onClick={() => {
+                          recordHistory();
+                          setComponents((prev) =>
+                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, pullValue: pv } } : c))
+                          );
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
+                          (selectedComp.state.pullValue ?? 0) === pv ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                        title={pv === 0 ? 'Pull-down (0)' : pv === 1 ? 'Pull-up (1)' : 'Hata (E)'}
+                      >
+                        {pv}
                       </button>
                     ))}
                   </div>

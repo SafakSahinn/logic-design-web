@@ -33,6 +33,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   }
   if (n === 'clock') return 'clock';
   if (n === 'tunnel') return 'tunnel';
+  if (n === 'pull resistor') return 'pullResistor';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -226,6 +227,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       inputsAttr: number;
       xorMode?: string;
       leftHanded: boolean;
+      pull?: string;
       where: string;
     };
     const parts: RawPart[] = [];
@@ -250,6 +252,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       let inputsAttr = 0;
       let xorMode: string | undefined;
       let leftHanded = false;
+      let pull: string | undefined;
       const negated: number[] = [];
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
@@ -263,6 +266,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         if (aName === 'inputs') inputsAttr = parseInt(aVal, 10) || 0;
         if (aName === 'xor') xorMode = aVal;
         if (aName === 'control') leftHanded = aVal === 'left';
+        if (aName === 'pull') pull = aVal;
         const neg = aName?.match(/^negate(\d+)$/);
         if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
       }
@@ -279,7 +283,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, where });
+      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, where });
 
       occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
       const ff = FF_POINTS[nativeType];
@@ -293,7 +297,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, where } = part;
+      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, where } = part;
       const anchor = scaled(loc);
       const isGate = GATE_TYPES.includes(nativeType);
 
@@ -386,6 +390,8 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
         inst = updatePinPositions({ ...inst, x: anchor.x - pins[0].x, y: anchor.y - pins[0].y });
         if (label) inst.label = label;
+        // Logisim's pull attribute: 0 (default), 1 or X
+        if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
         components.push(inst);
         const pin = [...inst.inputs, ...inst.outputs][0];
         attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });

@@ -73,6 +73,16 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: 'T', type: 'output', relX: 64, relY: 20 }],
     description: 'Aynı ada sahip diğer tünellerle havadan elektriksel bağlantı kurar (Kablo kalabalığını önler)',
   },
+  pullResistor: {
+    type: 'pullResistor',
+    name: 'Pull Direnci (Pull Resistor)',
+    category: 'inputs',
+    width: 30,
+    height: 56,
+    inputs: [{ id: 'in', name: 'P', type: 'input', relX: 15, relY: 0 }],
+    outputs: [],
+    description: 'Bağlı olduğu hat hiçbir parça tarafından sürülmüyorsa (Hi-Z / x) hattı 0 (pull-down) ya da 1 (pull-up) seviyesine çeker',
+  },
   dipSwitch4: {
     type: 'dipSwitch4',
     name: '4-Bit DIP Anahtar (DIP Switch)',
@@ -1372,6 +1382,16 @@ export function simulateCircuitStep(
       resolvedValue = drivenVals.values().next().value!;
     } else if (driverPins.some((d) => d.value === 'X')) {
       resolvedValue = 'X';
+    }
+    // Logisim pull resistors only act on a net nothing drives to a defined value: one level pulls
+    // it there, differing pulls (or an X pull) make it E
+    if (resolvedValue === 'Z' || resolvedValue === 'X') {
+      const pulls = new Set<SignalValue>();
+      pinsInNet.forEach((pinId) => {
+        const owner = pinOwner.get(pinId);
+        if (owner?.type === 'pullResistor') pulls.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
+      });
+      if (pulls.size > 0) resolvedValue = pulls.size === 1 ? pulls.values().next().value! : 'E';
     }
 
     // Assign resolved value to all wires in net

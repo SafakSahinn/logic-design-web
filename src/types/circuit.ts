@@ -10,6 +10,7 @@ export type ComponentType =
   | 'vcc'
   | 'gnd'
   | 'tunnel'
+  | 'pullResistor'
   | 'dipSwitch4'
   | 'asciiKeyboard'
   // Basic Gates
@@ -109,6 +110,8 @@ export interface CircuitComponentInstance {
     clockRateHz?: number;
     lastClockTick?: number;
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
+    /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
+    pullValue?: 0 | 1 | 'X';
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
