@@ -174,6 +174,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'gnd':
           P.push({ kind: 'const', value: c.type === 'vcc' ? 1 : 0, out: out(0) });
           break;
+        case 'constant':
+          P.push({ kind: 'const', value: (c.state.constValue ?? 1) % 2 === 1 ? 1 : 0, out: out(0) });
+          break;
         case 'dipSwitch4':
         case 'asciiKeyboard':
           c.outputs.forEach((p, i) => {

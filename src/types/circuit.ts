@@ -1,4 +1,4 @@
-import type { SignalValue } from './logic';
+import type { Radix, SignalValue } from './logic';
 
 export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'sequential' | 'custom';
 
@@ -9,6 +9,7 @@ export type ComponentType =
   | 'clock'
   | 'vcc'
   | 'gnd'
+  | 'constant'
   | 'tunnel'
   | 'pullResistor'
   | 'dipSwitch4'
@@ -109,6 +110,12 @@ export interface CircuitComponentInstance {
   outputs: CircuitPin[];
   state: {
     on?: boolean;
+    /** Switch wider than 1 bit: its value as an unsigned number (bit i = input bit i) */
+    inputValue?: number;
+    /** Constant: its value as an unsigned number (Logisim 'value'); unset = 1 */
+    constValue?: number;
+    /** Probe: display base (Logisim 'radix'); unset = binary */
+    radix?: Radix;
     /** Set on an input source inside an IC: it drives this value from outside (x/E included) instead of `on` */
     portValue?: SignalValue;
     frequencyHz?: number;

@@ -138,7 +138,7 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Netlist
 // ---------------------------------------------------------------------------
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'dipSwitch4', 'asciiKeyboard'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
@@ -258,6 +258,11 @@ function buildModule(
     }
     if (c.type === 'gnd') {
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, L.zero);
+      continue;
+    }
+    if (c.type === 'constant') {
+      // 1-bit constant; wider ones become vectors with the rest of Aşama 2's HDL work
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, (c.state.constValue ?? 1) % 2 === 1 ? L.one : L.zero);
       continue;
     }
     if (spec.subPorts && (c.type === 'switch' || c.type === 'pushbutton')) {

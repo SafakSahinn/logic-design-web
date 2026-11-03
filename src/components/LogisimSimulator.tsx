@@ -48,6 +48,9 @@ import {
   minimizeBooleanExpression,
   truthTableColumnTerms,
   OUTPUT_MODE_TYPES,
+  getBitWidth,
+  getComponentSize,
+  setBitWidth,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -121,7 +124,7 @@ import {
   getSubcircuitDefinition,
 } from '../utils/subcircuitManager';
 import type { CustomSubcircuit } from '../types/circuit';
-import type { LogicValue, SignalValue } from '../types/logic';
+import { MAX_BIT_WIDTH, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
@@ -188,6 +191,16 @@ const truthEntryTextClass = (v: TruthTableEntry): string =>
     ? 'text-indigo-500 font-bold'
     : 'text-slate-400';
 
+// Probe display bases (Logisim RadixOption)
+const RADIX_LABEL: Record<Radix, string> = { '2': 'BIN', '8': 'OCT', '10u': 'DEC', '10s': '±DEC', '16': 'HEX' };
+const RADIX_TITLE: Record<Radix, string> = {
+  '2': 'İkili (taban 2)',
+  '8': 'Sekizli (taban 8)',
+  '10u': 'Onluk, işaretsiz',
+  '10s': 'Onluk, işaretli (ikiye tümleyen)',
+  '16': 'Onaltılı (taban 16)',
+};
+
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
   not: { label: 'NOT', badge: 'Değil' },
@@ -207,6 +220,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   clock: { label: 'Saat Sinyali', badge: 'CLK' },
   vcc: { label: 'Sabit 1 (High)', badge: 'VCC' },
   gnd: { label: 'Sabit 0 (Low)', badge: 'GND' },
+  constant: { label: 'Sabit', badge: 'Const' },
   tunnel: { label: 'Kablosuz Tünel', badge: 'Net' },
   led: { label: 'LED Lamba' },
   ledBar4: { label: '4-Bit LED Bar', badge: 'Bar' },
@@ -683,8 +697,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const getCircuitRightEdge = () => {
     let right = 0;
     for (const c of components) {
-      const meta = COMPONENT_CATALOG[c.type];
-      right = Math.max(right, c.x + (meta?.width || 120), ...[...c.inputs, ...c.outputs].map((p) => p.x));
+      right = Math.max(right, c.x + getComponentSize(c).width, ...[...c.inputs, ...c.outputs].map((p) => p.x));
     }
     for (const w of wires) {
       if (w.startPoint) right = Math.max(right, w.startPoint.x);
@@ -976,6 +989,57 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // Toggle interactive switch directly on canvas (First click selects and opens HUD menu, second click toggles)
+  // Click on one bit of a wide switch (Logisim Pin): flips that bit
+  const handleToggleSwitchBit = (e: React.MouseEvent, compId: string, bit: number) => {
+    e.stopPropagation();
+    if (!selectedCompIds.includes(compId)) {
+      setSelectedCompIds([compId]);
+      setSelectedWireIds([]);
+      return;
+    }
+    setComponents((prev) => {
+      let toggledTo = false;
+      const updated = prev.map((c) => {
+        if (c.id !== compId) return c;
+        const cur = c.state.inputValue ?? 0;
+        const isSet = Math.floor(cur / 2 ** bit) % 2 === 1;
+        toggledTo = !isSet;
+        return { ...c, state: { ...c.state, inputValue: isSet ? cur - 2 ** bit : cur + 2 ** bit } };
+      });
+      playSwitchSound(toggledTo);
+      const sim = simulateCircuit(updated, wires);
+      setWires(sim.wires);
+      return sim.components;
+    });
+  };
+
+  // New bit width for a switch/LED/constant: the body resizes, wires on its pin follow the pin
+  const handleSetBitWidth = (compId: string, width: number) => {
+    const old = components.find((c) => c.id === compId);
+    if (!old || getBitWidth(old) === width) return;
+    recordHistory();
+    const resized = setBitWidth(old, width);
+    const nextComps = components.map((c) => (c.id === compId ? resized : c));
+    const pinRemap = new Map<string, string | null>();
+    for (const p of [...old.inputs, ...old.outputs]) {
+      const sp = snapPt10(p);
+      pinRemap.set(`${sp.x},${sp.y}`, p.id);
+    }
+    const rerouted = rerouteWiresToRemappedPins(wires, components, nextComps, pinRemap);
+    const sim = simulateCircuit(nextComps, rerouted);
+    setComponents(sim.components);
+    setWires(sim.wires);
+  };
+
+  // State change of one part (constant value, probe base) followed by a new simulation
+  const handleSetCompState = (compId: string, patch: Partial<CircuitComponentInstance['state']>) => {
+    recordHistory();
+    const nextComps = components.map((c) => (c.id === compId ? { ...c, state: { ...c.state, ...patch } } : c));
+    const sim = simulateCircuit(nextComps, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+  };
+
   const handleToggleSwitch = (e: React.MouseEvent, compId: string) => {
     e.stopPropagation();
     if (!selectedCompIds.includes(compId)) {
@@ -1608,9 +1672,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         // Enclosed components (box intersection)
         const enclosedComps = components
           .filter((c) => {
-            const meta = COMPONENT_CATALOG[c.type];
-            const compW = meta?.width || (c.type === 'subcircuit' ? 120 : 60);
-            const compH = meta?.height || (c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : 50);
+            const { width: compW, height: compH } = getComponentSize(c);
             return (
               c.x + compW >= minX &&
               c.x <= maxX &&
@@ -2772,9 +2834,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // - without: the first free spot in the visible canvas, scanning from its top-left corner
   const findFreeSpot = (probe: CircuitComponentInstance, prefer?: { x: number; y: number }) => {
     const compBox = (c: CircuitComponentInstance) => {
-      const meta = COMPONENT_CATALOG[c.type];
-      const w = c.type === 'subcircuit' ? 120 : meta?.width || 120;
-      const h = c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : meta?.height || 60;
+      const { width: w, height: h } = getComponentSize(c);
       const quarterTurn = c.rotation === 90 || c.rotation === 270;
       const cx = c.x + w / 2;
       const cy = c.y + h / 2;
@@ -2941,9 +3001,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     type Box = { x0: number; y0: number; x1: number; y1: number };
     const compBox = (c: CircuitComponentInstance): Box => {
-      const meta = COMPONENT_CATALOG[c.type];
-      const w = c.type === 'subcircuit' ? 120 : meta?.width || 60;
-      const h = c.type === 'subcircuit' ? Math.max(60, (Math.max(c.inputs.length, c.outputs.length) + 1) * 20) : meta?.height || 50;
+      const { width: w, height: h } = getComponentSize(c);
       const q = c.rotation === 90 || c.rotation === 270;
       const cx = c.x + w / 2;
       const cy = c.y + h / 2;
@@ -3763,6 +3821,54 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     } catch {}
   };
 
+  // A switch/LED wider than 1 bit, drawn like a Logisim pin: one cell per bit, MSB first, 8 bits a row with the
+  // last row holding bits 7..0; an input pin has square corners and every cell flips its bit, an output pin is rounded
+  const renderWidePin = (comp: CircuitComponentInstance, isSelected: boolean) => {
+    const w = getBitWidth(comp);
+    const size = getComponentSize(comp);
+    const isInput = comp.type === 'switch';
+    const pinBits: SignalValue[] = isInput
+      ? numberToBits(comp.state.inputValue ?? 0, w)
+      : comp.inputs[0]?.bits ?? new Array<SignalValue>(w).fill(comp.inputs[0]?.value ?? 'Z');
+    const rows = Math.ceil(w / 8);
+    const dark = cadTheme === 'dark';
+    return (
+      <g filter="url(#gateShadow)">
+        <rect
+          x={0}
+          y={0}
+          width={size.width}
+          height={size.height}
+          rx={isInput ? 2 : 10}
+          fill={dark ? '#0f172a' : '#f8fafc'}
+          stroke={isSelected ? (dark ? '#38bdf8' : '#2563eb') : dark ? '#64748b' : '#334155'}
+          strokeWidth={isSelected ? 2.5 : 1.8}
+        />
+        {pinBits.map((b, i) => {
+          const row = rows - 1 - Math.floor(i / 8);
+          const col = Math.min(w, 8) - 1 - (i % 8);
+          const cx = 10 + col * 10;
+          const cy = 10 + row * 20;
+          const ch = b === 1 ? '1' : b === 0 ? '0' : b === 'E' ? 'E' : 'x';
+          const fill = b === 1 ? '#16a34a' : b === 0 ? (dark ? '#94a3b8' : '#475569') : b === 'E' ? '#dc2626' : '#4f46e5';
+          return (
+            <g
+              key={i}
+              onClick={isInput ? (e) => handleToggleSwitchBit(e, comp.id, i) : undefined}
+              className={isInput ? 'cursor-pointer' : undefined}
+            >
+              <rect x={cx} y={cy} width={10} height={20} fill="transparent" />
+              <text x={cx + 5} y={cy + 14} textAnchor="middle" fill={fill} className="text-[12px] font-mono font-bold select-none">
+                {ch}
+              </text>
+              <title>{`bit ${i}`}</title>
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
+
   // Render Realistic Electronic & ANSI Gate SVG Symbols
   const renderGateBody = (comp: CircuitComponentInstance) => {
     const isSelected = selectedCompIds.includes(comp.id);
@@ -3777,6 +3883,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     switch (comp.type) {
       case 'switch': {
+        if (getBitWidth(comp) > 1) return renderWidePin(comp, isSelected);
         const isOn = !!comp.state.on;
         return (
           <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer group" filter="url(#gateShadow)">
@@ -3968,6 +4075,20 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               strokeWidth={1}
               filter={isOn ? 'drop-shadow(0 0 6px #3b82f6)' : undefined}
             />
+          </g>
+        );
+      }
+
+      case 'constant': {
+        const w = getBitWidth(comp);
+        const size = getComponentSize(comp);
+        const text = formatBits(numberToBits(comp.state.constValue ?? 1, w), '16');
+        return (
+          <g filter="url(#gateShadow)">
+            <rect x={0} y={0} width={size.width} height={size.height} rx={3} fill={cadTheme === 'dark' ? '#1e293b' : '#f1f5f9'} stroke={strokeColor} strokeWidth={strokeWidth} />
+            <text x={size.width / 2} y={14} textAnchor="middle" className={`text-[12px] font-mono font-bold select-none ${cadTheme === 'dark' ? 'fill-amber-300' : 'fill-amber-700'}`}>
+              {text}
+            </text>
           </g>
         );
       }
@@ -4283,6 +4404,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'led': {
+        if (getBitWidth(comp) > 1) return renderWidePin(comp, isSelected);
         const inVal = comp.inputs[0]?.value === 1;
         const color = comp.state.ledColor || 'green';
 
@@ -4411,13 +4533,32 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 inVal ? 'fill-emerald-700' : 'fill-slate-500'
               }`}
             >
-              {inVal ? 'LED (1)' : 'LED (0)'}
+              {`LED (${comp.inputs[0]?.value === 1 ? 1 : comp.inputs[0]?.value === 0 ? 0 : comp.inputs[0]?.value === 'E' ? 'E' : 'x'})`}
             </text>
           </g>
         );
       }
 
       case 'probe': {
+        const probeBits = comp.inputs[0]?.bits;
+        if (probeBits) {
+          const text = formatBits(probeBits, comp.state.radix ?? '2');
+          const boxW = Math.max(54, text.length * 8 + 16);
+          const hasE = probeBits.includes('E');
+          const undef = probeBits.some((b) => b === 'X' || b === 'Z');
+          return (
+            <g filter="url(#gateShadow)">
+              <rect x={0} y={0} width={boxW} height={42} rx={8} fill="#1e293b" stroke="#0f172a" strokeWidth={2} />
+              <rect x={6} y={6} width={boxW - 12} height={30} rx={4} fill={hasE ? '#fef2f2' : undef ? '#eef2ff' : '#f8fafc'} stroke="#334155" strokeWidth={1} />
+              <text x={boxW / 2} y={25} textAnchor="middle" className={`text-[13px] font-mono font-extrabold select-none ${hasE ? 'fill-red-600' : undef ? 'fill-indigo-600' : 'fill-slate-700'}`}>
+                {text}
+              </text>
+              <text x={boxW / 2} y={34} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">
+                {`${probeBits.length} BIT · ${RADIX_LABEL[comp.state.radix ?? '2']}`}
+              </text>
+            </g>
+          );
+        }
         const probeVal = comp.inputs[0]?.value ?? 0;
         const inVal = probeVal === 1 ? '1' : probeVal === 0 ? '0' : probeVal === 'Z' ? 'x' : probeVal;
         const probeFloat = probeVal === 'Z' || probeVal === 'X';
@@ -6042,7 +6183,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'probe', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -9550,10 +9691,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
             {/* Render Components */}
             {components.map((comp) => {
-              const meta = COMPONENT_CATALOG[comp.type];
               const isSelected = selectedCompIds.includes(comp.id);
-              const compW = comp.type === 'subcircuit' ? 120 : meta.width;
-              const compH = comp.type === 'subcircuit' ? Math.max(60, (Math.max(comp.inputs.length, comp.outputs.length) + 1) * 20) : meta.height;
+              const { width: compW, height: compH } = getComponentSize(comp);
 
               return (
                 <g
@@ -9902,6 +10041,70 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         title={m === '01' ? 'Normal çıkış (0 ve 1 sürer)' : m === '0Z' ? 'Açık kollektör: 0 sürer, 1 yerine hattı boş bırakır' : 'Açık emitör: 1 sürer, 0 yerine hattı boş bırakır'}
                       >
                         {m === '01' ? '0/1' : m === '0Z' ? '0/Z' : 'Z/1'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Bit width of a switch / LED / constant (Logisim 'Data Bits') */}
+                {(selectedComp.type === 'switch' || selectedComp.type === 'led' || selectedComp.type === 'constant') && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Bit genişliği:</span>
+                    <select
+                      value={getBitWidth(selectedComp)}
+                      onChange={(e) => handleSetBitWidth(selectedComp.id, Number(e.target.value))}
+                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Pinin taşıdığı bit sayısı (1-32)"
+                    >
+                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Constant value in hex */}
+                {selectedComp.type === 'constant' && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Değer (hex):</span>
+                    <input
+                      key={`${selectedComp.id}:${selectedComp.state.constValue ?? 1}`}
+                      defaultValue={(selectedComp.state.constValue ?? 1).toString(16)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
+                      onBlur={(e) => {
+                        const txt = e.target.value.trim().replace(/^0x/i, '');
+                        const n = /^[0-9a-f]+$/i.test(txt) ? parseInt(txt, 16) : NaN;
+                        if (Number.isNaN(n)) {
+                          e.target.value = (selectedComp.state.constValue ?? 1).toString(16);
+                          showToast('Geçersiz onaltılı değer.');
+                          return;
+                        }
+                        const v = n % 2 ** getBitWidth(selectedComp);
+                        if (v !== (selectedComp.state.constValue ?? 1)) handleSetCompState(selectedComp.id, { constValue: v });
+                        else e.target.value = v.toString(16);
+                      }}
+                      className="w-20 bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Onaltılı değer; genişliğe sığmayan üst bitler atılır"
+                    />
+                  </div>
+                )}
+
+                {/* Probe display base (Logisim 'radix') */}
+                {selectedComp.type === 'probe' && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Taban:</span>
+                    {(['2', '8', '10u', '10s', '16'] as const).map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => handleSetCompState(selectedComp.id, { radix: r })}
+                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
+                          (selectedComp.state.radix ?? '2') === r ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                        title={RADIX_TITLE[r]}
+                      >
+                        {RADIX_LABEL[r]}
                       </button>
                     ))}
                   </div>

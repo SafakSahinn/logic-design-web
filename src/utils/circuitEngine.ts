@@ -8,7 +8,7 @@ import type {
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
-import { resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
+import { MAX_BIT_WIDTH, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
@@ -62,6 +62,16 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     inputs: [],
     outputs: [{ id: 'out', name: '0', type: 'output', relX: 50, relY: 20 }],
     description: 'Sürekli Lojik 0 seviyesi',
+  },
+  constant: {
+    type: 'constant',
+    name: 'Sabit (Constant)',
+    category: 'inputs',
+    width: 30,
+    height: 20,
+    inputs: [],
+    outputs: [{ id: 'out', name: 'K', type: 'output', relX: 30, relY: 10 }],
+    description: 'Seçilen bit genişliğinde sabit bir değer sürer (Logisim Constant)',
   },
   tunnel: {
     type: 'tunnel',
@@ -970,8 +980,54 @@ export function createComponentInstance(
       asciiChar: type === 'asciiKeyboard' ? 'A' : undefined,
       asciiCode: type === 'asciiKeyboard' ? 65 : undefined,
       strobe: type === 'asciiKeyboard' ? false : undefined,
+      constValue: type === 'constant' ? 1 : undefined,
     },
   };
+}
+
+// Parts whose single pin can be wider than 1 bit (Logisim Pin and Constant); the pin's width is the part's width
+const WIDE_PIN_TYPES = new Set<ComponentType>(['switch', 'led', 'constant']);
+
+export function getBitWidth(comp: CircuitComponentInstance): number {
+  if (!WIDE_PIN_TYPES.has(comp.type)) return 1;
+  return (comp.type === 'led' ? comp.inputs[0]?.width : comp.outputs[0]?.width) ?? 1;
+}
+
+// Body size of a part: a pin wider than 1 bit is drawn like Logisim's, one 10px cell per bit, 8 bits a row;
+// a constant is as wide as its hex digits
+export function getComponentSize(comp: CircuitComponentInstance): { width: number; height: number } {
+  if (comp.type === 'subcircuit') {
+    const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
+    return { width: 120, height: Math.max(60, (maxPins + 1) * 20) };
+  }
+  const meta = COMPONENT_CATALOG[comp.type];
+  const w = getBitWidth(comp);
+  if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
+  if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
+  return { width: meta?.width ?? 60, height: meta?.height ?? 50 };
+}
+
+// Give a switch/LED/constant a new bit width: the pin gets the width (and moves with the body), the
+// stored value keeps only the bits that still exist
+export function setBitWidth(comp: CircuitComponentInstance, width: number): CircuitComponentInstance {
+  const w = Math.max(1, Math.min(MAX_BIT_WIDTH, Math.round(width)));
+  const mask = (n: number | undefined) => (n === undefined ? undefined : n % 2 ** w);
+  const pinW = (p: CircuitPin): CircuitPin => {
+    const { bits: _bits, width: _width, ...rest } = p;
+    return w > 1 ? { ...rest, width: w } : rest;
+  };
+  const next: CircuitComponentInstance = {
+    ...comp,
+    inputs: comp.type === 'led' ? comp.inputs.map(pinW) : comp.inputs,
+    outputs: comp.type === 'led' ? comp.outputs : comp.outputs.map(pinW),
+    state: {
+      ...comp.state,
+      inputValue: comp.type === 'switch' && w > 1 ? (mask(comp.state.inputValue) ?? (comp.state.on ? 1 : 0)) : undefined,
+      constValue: mask(comp.state.constValue),
+    },
+  };
+  if (comp.type === 'switch' && w === 1) next.state.on = (comp.state.inputValue ?? (comp.state.on ? 1 : 0)) % 2 === 1;
+  return updatePinPositions(next);
 }
 
 /**
@@ -1022,8 +1078,13 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
 
   const meta = COMPONENT_CATALOG[comp.type];
   const rot = comp.rotation || 0;
-  const cx = meta.width / 2;
-  const cy = meta.height / 2;
+  const size = getComponentSize(comp);
+  const cx = size.width / 2;
+  const cy = size.height / 2;
+  // A wide switch/LED/constant keeps its pin on the middle of its side
+  const sizedPin = WIDE_PIN_TYPES.has(comp.type) && (comp.type === 'constant' || getBitWidth(comp) > 1)
+    ? { relX: comp.type === 'led' ? 0 : size.width, relY: Math.round(size.height / 2 / 10) * 10 }
+    : undefined;
 
   const rotatePoint = (relX: number, relY: number) => {
     if (rot === 0) return { x: Math.round(relX / 10) * 10, y: Math.round(relY / 10) * 10 };
@@ -1050,8 +1111,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
       pinSuffix = meta.inputs[idx]?.id || `in${idx}`;
     } else {
       const pinDef = meta.inputs[idx] || { relX: 0, relY: 0, id: `in${idx}` };
-      relX = pinDef.relX;
-      relY = pinDef.relY;
+      relX = sizedPin?.relX ?? pinDef.relX;
+      relY = sizedPin?.relY ?? pinDef.relY;
       pinSuffix = pinDef.id || `in${idx}`;
     }
     const p = rotatePoint(relX, relY);
@@ -1064,7 +1125,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     const defaultRelY = Math.round((meta.height / 2) / 10) * 10;
     const pinDef = meta.outputs[idx] || { relX: meta.width, relY: defaultRelY, id: idx === 0 ? 'out' : `out${idx}` };
     const rawRelY = pinDef.relY !== undefined ? pinDef.relY : defaultRelY;
-    const p = rotatePoint(pinDef.relX, rawRelY);
+    const p = rotatePoint(sizedPin?.relX ?? pinDef.relX, sizedPin?.relY ?? rawRelY);
     const pinSuffix = pinDef.id || (idx === 0 ? 'out' : `out${idx}`);
     const canonicalId = `${comp.id}_${pinSuffix}`;
     const pinId = isMultiInputGate ? canonicalId : (pin.id.startsWith(`${comp.id}_`) ? pin.id : canonicalId);
@@ -1079,14 +1140,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
 }
 
 // Body sizes for the wire auto-router (same geometry updatePinPositions uses)
-setComponentBodySizeResolver((comp) => {
-  if (comp.type === 'subcircuit') {
-    const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
-    return { width: 120, height: Math.max(60, (maxPins + 1) * 20) };
-  }
-  const meta = COMPONENT_CATALOG[comp.type];
-  return meta ? { width: meta.width, height: meta.height } : null;
-});
+setComponentBodySizeResolver((comp) => (comp.type === 'subcircuit' || COMPONENT_CATALOG[comp.type] ? getComponentSize(comp) : null));
 
 /**
  * Propagate logic values across wires and components
@@ -1216,9 +1270,34 @@ export function simulateCircuitStep(
     });
   });
 
+  // A wide source drives its number as bits
+  const driveNumber = (comp: CircuitComponentInstance, n: number) => {
+    const out = comp.outputs[0];
+    if (!out) return;
+    const w = out.width ?? 1;
+    if (w === 1) {
+      const v: SignalValue = n % 2 === 1 ? 1 : 0;
+      if (out.value !== v) {
+        out.value = v;
+        hasChanged = true;
+      }
+      return;
+    }
+    const bits = numberToBits(n, w);
+    if (!sameBits(out.bits, bits)) {
+      out.bits = bits;
+      out.value = summarizeBits(bits);
+      hasChanged = true;
+    }
+  };
+
   // Step 1: Update source components outputs (switch, vcc, gnd, clock)
   newComps.forEach((comp) => {
-    if (comp.type === 'switch') {
+    if (comp.type === 'switch' && (comp.outputs[0]?.width ?? 1) > 1) {
+      driveNumber(comp, comp.state.inputValue ?? 0);
+    } else if (comp.type === 'constant') {
+      driveNumber(comp, comp.state.constValue ?? 1);
+    } else if (comp.type === 'switch') {
       const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
@@ -3198,6 +3277,7 @@ function booleanExprOf(
   }
   if (comp.type === 'vcc') return '1';
   if (comp.type === 'gnd') return '0';
+  if (comp.type === 'constant') return String((comp.state.constValue ?? 1) % 2);
   if (comp.type === 'clock') return 'CLK';
 
   if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
@@ -3323,6 +3403,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'clock' &&
       c.type !== 'vcc' &&
       c.type !== 'gnd' &&
+      c.type !== 'constant' &&
       c.type !== 'dipSwitch4' &&
       c.type !== 'asciiKeyboard' &&
       c.type !== 'dotMatrix8x8' &&

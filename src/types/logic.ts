@@ -53,6 +53,36 @@ export function numberToBits(n: number, width: number): SignalValue[] {
   return bits;
 }
 
+// Display bases of a probe, as Logisim's RadixOption ('10s' = signed decimal, '10u' = unsigned)
+export type Radix = '2' | '8' | '10s' | '10u' | '16';
+
+// A value in the given base like Logisim's Value.toDisplayString: octal/hex digits that hold an E bit
+// show E, ones with an undefined bit show x (scanning from the digit's top bit); decimal needs every
+// bit defined ("Hata" if any is E, "???" otherwise)
+export function formatBits(bits: SignalValue[], radix: Radix): string {
+  if (radix === '2' || bits.length <= 1) return bitsToString(bits);
+  if (radix === '8' || radix === '16') {
+    const per = radix === '8' ? 3 : 4;
+    let s = '';
+    for (let k = Math.ceil(bits.length / per) - 1; k >= 0; k--) {
+      let v = 0;
+      let ch = '';
+      for (let j = Math.min(bits.length, per * (k + 1)) - 1; j >= per * k; j--) {
+        const b = bits[j];
+        if (b === 'E') { ch = 'E'; break; }
+        if (b !== 0 && b !== 1) { ch = 'x'; break; }
+        v = v * 2 + b;
+      }
+      s += ch || v.toString(radix === '8' ? 8 : 16);
+    }
+    return s;
+  }
+  if (bits.includes('E')) return 'Hata';
+  const n = bitsToNumber(bits);
+  if (n === undefined) return '???';
+  return String(radix === '10s' && bits[bits.length - 1] === 1 ? n - 2 ** bits.length : n);
+}
+
 // One value standing for a whole bus, for code that only looks at `value` (colours, legacy reads):
 // E if any bit is E, Z if every bit floats, X if any bit is undefined, else 1 if any bit is 1, else 0
 export function summarizeBits(bits: SignalValue[]): SignalValue {
