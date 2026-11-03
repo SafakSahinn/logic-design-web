@@ -9,7 +9,7 @@ import type {
   TruthTableEntry,
 } from '../types/circuit';
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
-import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
+import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
@@ -1535,7 +1535,16 @@ export function simulateCircuitStep(
 
   // Step 1: Update source components outputs (switch, vcc, gnd, clock)
   newComps.forEach((comp) => {
-    if (comp.type === 'switch' && (comp.outputs[0]?.width ?? 1) > 1) {
+    const portBits = comp.state.portBits;
+    if (comp.type === 'switch' && portBits && portBits.length > 1 && comp.outputs[0]) {
+      // A wide IC port inside: the outside bits as they are (x/E/Z included)
+      const out = comp.outputs[0];
+      if (!sameBits(out.bits, portBits)) {
+        out.bits = [...portBits];
+        out.value = summarizeBits(portBits);
+        hasChanged = true;
+      }
+    } else if (comp.type === 'switch' && (comp.outputs[0]?.width ?? 1) > 1) {
       driveNumber(comp, comp.state.inputValue ?? 0);
     } else if (comp.type === 'constant') {
       driveNumber(comp, comp.state.constValue ?? 1);
@@ -2548,20 +2557,23 @@ export function simulateCircuitStep(
         if (subId) {
           const subDef = getSubcircuitDefinition(subId);
           if (subDef) {
+            // Every port passes its bits as they are (Logisim SubcircuitFactory.propagate); a wide pin
+            // the net gave no bits floats inside
+            const inPorts = subDef.ports.filter((p) => p.type === 'input');
+            const inBits = comp.inputs.map((pin, i): SignalValue[] => {
+              const w = inPorts[i] ? subcircuitPortWidth(subDef, inPorts[i]) : 1;
+              if (w === 1) return [pin.value];
+              return pin.bits && pin.bits.length === w ? pin.bits : new Array<SignalValue>(w).fill('Z');
+            });
             const { outputs: outVals, internal, oscillating } = evaluateSubcircuitStateful(
               subDef,
-              raw,
+              inBits,
               comp.state.subcircuitInternal
             );
             comp.state.subcircuitInternal = internal;
             if (oscillating) comp.state.oscillating = true;
             else delete comp.state.oscillating;
-            outVals.forEach((val, oIdx) => {
-              if (comp.outputs[oIdx] && comp.outputs[oIdx].value !== val) {
-                comp.outputs[oIdx].value = val;
-                hasChanged = true;
-              }
-            });
+            outVals.forEach((bits, oIdx) => setBitsOut(oIdx, bits));
           }
         }
         break;

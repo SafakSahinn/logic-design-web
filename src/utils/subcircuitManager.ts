@@ -5,6 +5,7 @@ import type {
   SubcircuitPortDefinition,
 } from '../types/circuit';
 import type { SignalValue } from '../types/logic';
+import { summarizeBits } from '../types/logic';
 import {
   createComponentInstance,
   simulateCircuit,
@@ -264,29 +265,40 @@ export function createSubcircuitInstance(
   const width = 120;
 
   // Position inputs along the left edge strictly locked to 20px multiples (10px grid)
+  const withWidth = <T extends object>(pin: T, port: SubcircuitPortDefinition): T => {
+    const w = subcircuitPortWidth(subDef, port);
+    return w > 1 ? { ...pin, width: w } : pin;
+  };
+
   const inputs = inPorts.map((port, idx) => {
     const relY = 20 * (idx + 1);
-    return {
-      id: `${compId}_${port.id}`,
-      name: port.name,
-      type: 'input' as const,
-      value: 0 as SignalValue,
-      x: x,
-      y: y + relY,
-    };
+    return withWidth(
+      {
+        id: `${compId}_${port.id}`,
+        name: port.name,
+        type: 'input' as const,
+        value: 0 as SignalValue,
+        x: x,
+        y: y + relY,
+      },
+      port
+    );
   });
 
   // Position outputs along the right edge strictly locked to 20px multiples (10px grid)
   const outputs = outPorts.map((port, idx) => {
     const relY = 20 * (idx + 1);
-    return {
-      id: `${compId}_${port.id}`,
-      name: port.name,
-      type: 'output' as const,
-      value: 0 as SignalValue,
-      x: x + width,
-      y: y + relY,
-    };
+    return withWidth(
+      {
+        id: `${compId}_${port.id}`,
+        name: port.name,
+        type: 'output' as const,
+        value: 0 as SignalValue,
+        x: x + width,
+        y: y + relY,
+      },
+      port
+    );
   });
 
   return {
@@ -310,10 +322,52 @@ export function createSubcircuitInstance(
  */
 export function evaluateSubcircuit(
   subDef: CustomSubcircuit,
-  inputVals: SignalValue[],
+  inputBits: SignalValue[][],
   previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
-): SignalValue[] {
-  return evaluateSubcircuitStateful(subDef, inputVals, previous).outputs;
+): SignalValue[][] {
+  return evaluateSubcircuitStateful(subDef, inputBits, previous).outputs;
+}
+
+// Readers whose width follows their net; as a port their width is the net's
+const WIDTH_FOLLOWER_PORTS = new Set(['probe', 'tunnel', 'pullResistor']);
+
+/** The inner pin a port stands for (an LED/probe/buzzer port is its input). */
+function portPin(components: CircuitComponentInstance[], port: SubcircuitPortDefinition) {
+  const comp = components.find((c) => c.id === port.targetCompId);
+  if (!comp) return { comp: undefined, pin: undefined };
+  const pin =
+    port.type === 'output' && ['led', 'probe', 'buzzer'].includes(comp.type)
+      ? comp.inputs[0]
+      : [...comp.inputs, ...comp.outputs].find((p) => p.id === port.targetPinId);
+  return { comp, pin };
+}
+
+/** Bit width of an IC port: stored when packaged, else the inner pin's own width (definitions made
+ * before ports had a width). */
+export function subcircuitPortWidth(subDef: CustomSubcircuit, port: SubcircuitPortDefinition): number {
+  if (port.width) return port.width;
+  return portPin(subDef.components, port).pin?.width ?? 1;
+}
+
+/** Ports with their widths filled in from the inner circuit, like Logisim takes a port's width from its
+ * Pin. A part whose width follows its net (probe, tunnel) gets the width of that net. 1 bit stays unset. */
+export function withPortWidths(
+  ports: SubcircuitPortDefinition[],
+  components: CircuitComponentInstance[],
+  wires: CircuitWire[]
+): SubcircuitPortDefinition[] {
+  let settled: CircuitComponentInstance[] | null = null;
+  return ports.map((port) => {
+    const { comp, pin } = portPin(components, port);
+    let w = pin?.width ?? 1;
+    if (comp && pin && !pin.width && WIDTH_FOLLOWER_PORTS.has(comp.type)) {
+      settled = settled ?? simulateCircuit(components, wires).components;
+      const after = portPin(settled, port).pin;
+      w = after?.bits?.length ?? 1;
+    }
+    const { width: _old, ...rest } = port;
+    return w > 1 ? { ...rest, width: w } : rest;
+  });
 }
 
 /**
@@ -324,10 +378,11 @@ const PORT_DRIVER_PREFIX = '__port_driver_';
 
 export function evaluateSubcircuitStateful(
   subDef: CustomSubcircuit,
-  inputVals: SignalValue[],
+  inputBits: SignalValue[][],
   previous?: { components: CircuitComponentInstance[]; wires: CircuitWire[] }
 ): {
-  outputs: SignalValue[];
+  /** Bits of each output port, LSB first (one entry for a 1-bit port) */
+  outputs: SignalValue[][];
   internal: { components: CircuitComponentInstance[]; wires: CircuitWire[] };
   oscillating: boolean;
 } {
@@ -353,11 +408,21 @@ export function evaluateSubcircuitStateful(
   // Drive inputs with the outside values as they are, so x and E reach the parts inside like in
   // Logisim (an open port floats inside too)
   inPorts.forEach((port, idx) => {
-    const val = inputVals[idx] ?? 'Z';
+    const w = subcircuitPortWidth(subDef, port);
+    const given = inputBits[idx];
+    const bits: SignalValue[] = given && given.length === w ? given : new Array<SignalValue>(w).fill('Z');
+    const val = w === 1 ? bits[0] : summarizeBits(bits);
     const comp = intComps.find((c) => c.id === port.targetCompId);
     if (!comp) return;
 
-    if (comp.type === 'switch' || comp.type === 'pushbutton' || comp.type === 'clock') {
+    if (comp.type === 'switch' && w > 1) {
+      // A wide switch drives the outside bits instead of its own number
+      comp.state.portBits = [...bits];
+      if (comp.outputs[0]) {
+        comp.outputs[0].bits = [...bits];
+        comp.outputs[0].value = val;
+      }
+    } else if (comp.type === 'switch' || comp.type === 'pushbutton' || comp.type === 'clock') {
       comp.state.on = val === 1;
       comp.state.portValue = val;
       if (comp.outputs[0]) comp.outputs[0].value = val;
@@ -373,8 +438,18 @@ export function evaluateSubcircuitStateful(
         x: pin.x,
         y: pin.y,
         inputs: [],
-        outputs: [{ id: `${PORT_DRIVER_PREFIX}${idx}_out`, name: 'Q', type: 'output', value: val, x: pin.x, y: pin.y }],
-        state: { on: val === 1, portValue: val },
+        outputs: [
+          {
+            id: `${PORT_DRIVER_PREFIX}${idx}_out`,
+            name: 'Q',
+            type: 'output',
+            value: val,
+            x: pin.x,
+            y: pin.y,
+            ...(w > 1 ? { width: w, bits: [...bits] } : {}),
+          },
+        ],
+        state: w > 1 ? { portBits: [...bits] } : { on: val === 1, portValue: val },
       });
     }
   });
@@ -385,18 +460,13 @@ export function evaluateSubcircuitStateful(
   const curComps = settled.components;
   const curWires = settled.wires;
 
-  // Read outputs
-  const outputs = outPorts.map((port) => {
-    const comp = curComps.find((c) => c.id === port.targetCompId);
-    if (!comp) return 0 as SignalValue;
-    if (comp.type === 'led' || comp.type === 'probe') {
-      return (comp.inputs[0]?.value ?? 0) as SignalValue;
-    }
-    const pOut = comp.outputs.find((p) => p.id === port.targetPinId);
-    if (pOut) return pOut.value;
-    const pIn = comp.inputs.find((p) => p.id === port.targetPinId);
-    if (pIn) return pIn.value;
-    return 0 as SignalValue;
+  // Read outputs: a 1-bit port its pin's value, a wide one its bits (an inner net without bits is
+  // undriven, x like Logisim's undriven output Pin)
+  const outputs = outPorts.map((port): SignalValue[] => {
+    const w = subcircuitPortWidth(subDef, port);
+    const { pin } = portPin(curComps, port);
+    if (w === 1) return [(pin?.value ?? 0) as SignalValue];
+    return pin?.bits && pin.bits.length === w ? [...pin.bits] : new Array<SignalValue>(w).fill('X');
   });
   // The hidden port drivers are rebuilt every evaluation; keep only the IC's own parts as its state
   return {
@@ -407,9 +477,26 @@ export function evaluateSubcircuitStateful(
 }
 
 /**
- * Package a selected group of components & wires into a new CustomSubcircuit
+ * Package a selected group of components & wires into a new CustomSubcircuit and save it to the library
  */
 export function packageSelectionIntoSubcircuit(
+  name: string,
+  chipCode: string,
+  description: string,
+  selectedComponents: CircuitComponentInstance[],
+  allWires: CircuitWire[],
+  allComponents: CircuitComponentInstance[] = selectedComponents
+): CustomSubcircuit {
+  const subDef = buildSubcircuitFromSelection(name, chipCode, description, selectedComponents, allWires, allComponents);
+  saveCustomSubcircuit(subDef);
+  return subDef;
+}
+
+/**
+ * The CustomSubcircuit a selection would package into, without saving it (the packaging dialog previews
+ * exactly these ports)
+ */
+export function buildSubcircuitFromSelection(
   name: string,
   chipCode: string,
   description: string,
@@ -509,7 +596,6 @@ export function packageSelectionIntoSubcircuit(
     pinPos(a).y - pinPos(b).y || pinPos(a).x - pinPos(b).x;
   inPorts.sort(byPosition);
   outPorts.sort(byPosition);
-  const ports = [...inPorts, ...outPorts];
   const width = 130;
   const height = Math.max(76, (Math.max(inPorts.length, outPorts.length) + 1) * 22);
 
@@ -537,6 +623,8 @@ export function packageSelectionIntoSubcircuit(
     elbowX: w.elbowX !== undefined ? w.elbowX + dx : undefined,
   }));
 
+  const ports = withPortWidths([...inPorts, ...outPorts], normalizedComps, normalizedWires);
+
   const subDef: CustomSubcircuit = {
     id: `sub_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
     name: name.trim() || 'Özel Entegre Devre',
@@ -552,6 +640,5 @@ export function packageSelectionIntoSubcircuit(
     createdAt: Date.now(),
   };
 
-  saveCustomSubcircuit(subDef);
   return subDef;
 }

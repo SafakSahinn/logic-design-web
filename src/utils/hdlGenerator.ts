@@ -1,7 +1,7 @@
 import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import { HEX_7SEG_MAP, OUTPUT_MODE_TYPES } from './circuitEngine';
-import { getSubcircuitDefinition } from './subcircuitManager';
+import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 
 /*
  * Verilog / VHDL export.
@@ -787,6 +787,12 @@ function buildModule(
           subModules.set(def.id, { def, moduleName: moduleNames.make(def.chipCode || def.name, 'custom_ic') });
         }
         const sub = subModules.get(def.id)!;
+        const widePorts = def.ports.filter((p) => subcircuitPortWidth(def, p) > 1);
+        if (widePorts.length > 0) {
+          warnings.push(
+            `${c.label || c.id}: çok bitli IC portları (${widePorts.map((p) => `${p.name}[${subcircuitPortWidth(def, p)}]`).join(', ')}) henüz HDL'e vektör olarak çevrilmiyor, 1 bit olarak yazıldı.`
+          );
+        }
         const portNames = subPortNames(def.ports);
         const maps = [
           ...c.inputs.map((_p, i) => [portNames.inputs[i], inp(i)] as const),

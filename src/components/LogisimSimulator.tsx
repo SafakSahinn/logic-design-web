@@ -130,10 +130,12 @@ import {
   deleteCustomSubcircuit,
   createSubcircuitInstance,
   packageSelectionIntoSubcircuit,
+  buildSubcircuitFromSelection,
   saveCustomSubcircuit,
   getSubcircuitDefinition,
+  withPortWidths,
 } from '../utils/subcircuitManager';
-import type { CustomSubcircuit } from '../types/circuit';
+import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import { MAX_BIT_WIDTH, bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
@@ -1858,25 +1860,25 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     URL.revokeObjectURL(url);
   };
 
-  // Subcircuit Packaging Analysis
+  // Subcircuit Packaging Analysis: the very ports packaging will make (selection, or the whole sheet),
+  // only while the dialog is open
+  const packagingTarget = useMemo(
+    () => (selectedCompIds.length > 0 ? components.filter((c) => selectedCompIds.includes(c.id)) : components),
+    [components, selectedCompIds]
+  );
   const subcircuitAnalysis = useMemo(() => {
-    const inputComps = components.filter((c) =>
-      ['switch', 'pushbutton', 'clock', 'tunnel', 'dipSwitch4'].includes(c.type)
-    );
-    const outputComps = components.filter((c) =>
-      ['led', 'sevenSegment', 'hexDisplay', 'buzzer', 'probe', 'tunnel', 'ledBar4'].includes(c.type)
-    );
-    const internalGates = components.filter(
-      (c) => !inputComps.includes(c) && !outputComps.includes(c)
-    );
+    const empty = { inputs: [] as SubcircuitPortDefinition[], outputs: [] as SubcircuitPortDefinition[], internalCount: 0, wireCount: 0, def: null as CustomSubcircuit | null };
+    if (!showSubcircuitModal || packagingTarget.length === 0) return empty;
+    const def = buildSubcircuitFromSelection('', '', '', packagingTarget, repairWires(wires, components), components);
+    const portComps = new Set(def.ports.map((p) => p.targetCompId));
     return {
-      inputs: inputComps,
-      outputs: outputComps,
-      internalCount: internalGates.length,
-      wireCount: wires.length,
-      totalComps: components.length,
+      inputs: def.ports.filter((p) => p.type === 'input'),
+      outputs: def.ports.filter((p) => p.type === 'output'),
+      internalCount: def.components.filter((c) => !portComps.has(c.id)).length,
+      wireCount: def.wires.length,
+      def,
     };
-  }, [components, wires]);
+  }, [showSubcircuitModal, packagingTarget, components, wires]);
 
   const handleExportSubcircuitJSON = () => {
     const pkg = {
@@ -1886,21 +1888,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       description: subcircuitDesc.trim(),
       exportedAt: new Date().toISOString(),
       interface: {
-        inputs: subcircuitAnalysis.inputs.map((c, idx) => ({
-          id: c.id,
-          name: c.label || `IN_${idx + 1}`,
-          type: c.type,
-          state: c.state?.on ? 1 : 0,
-        })),
-        outputs: subcircuitAnalysis.outputs.map((c, idx) => ({
-          id: c.id,
-          name: c.label || `OUT_${idx + 1}`,
-          type: c.type,
-        })),
+        inputs: subcircuitAnalysis.inputs.map((p) => ({ id: p.targetCompId, name: p.name, width: p.width ?? 1 })),
+        outputs: subcircuitAnalysis.outputs.map((p) => ({ id: p.targetCompId, name: p.name, width: p.width ?? 1 })),
       },
       circuit: {
-        components,
-        wires,
+        components: subcircuitAnalysis.def?.components ?? [],
+        wires: subcircuitAnalysis.def?.wires ?? [],
       },
     };
     const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' });
@@ -1919,14 +1912,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       name: subcircuitName.trim() || 'CUSTOM_IC',
       description: subcircuitDesc.trim(),
       interface: {
-        inputs: subcircuitAnalysis.inputs.map((c, idx) => c.label || `IN_${idx + 1}`),
-        outputs: subcircuitAnalysis.outputs.map((c, idx) => c.label || `OUT_${idx + 1}`),
+        inputs: subcircuitAnalysis.inputs.map((p) => ((p.width ?? 1) > 1 ? `${p.name}[${p.width}]` : p.name)),
+        outputs: subcircuitAnalysis.outputs.map((p) => ((p.width ?? 1) > 1 ? `${p.name}[${p.width}]` : p.name)),
       },
       stats: {
-        totalComponents: components.length,
-        wireCount: wires.length,
+        totalComponents: subcircuitAnalysis.def?.components.length ?? 0,
+        wireCount: subcircuitAnalysis.wireCount,
       },
-      circuit: { components, wires },
+      circuit: { components: subcircuitAnalysis.def?.components ?? [], wires: subcircuitAnalysis.def?.wires ?? [] },
     };
     navigator.clipboard.writeText(JSON.stringify(pkg, null, 2));
     setSubcircuitCopied(true);
@@ -2674,7 +2667,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       color: '#4f46e5',
       width: 136,
       height: Math.max(76, (Math.max(inPorts.length, outPorts.length) + 1) * 22),
-      ports: [...inPorts, ...outPorts],
+      ports: withPortWidths([...inPorts, ...outPorts], sheet.components, sheet.wires),
       components: sheet.components,
       wires: sheet.wires,
       createdAt: Date.now(),
@@ -3262,9 +3255,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Save selection / canvas as Custom Subcircuit into component library
   const handleSaveSubcircuitToLibrary = () => {
-    const targetComps = selectedCompIds.length > 0
-      ? components.filter((c) => selectedCompIds.includes(c.id))
-      : components;
+    const targetComps = packagingTarget;
 
     if (targetComps.length === 0) return;
 
@@ -4939,33 +4930,24 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const chipHeight = Math.max(60, (Math.max(inCount, outCount) + 1) * 20);
         const code = comp.state.subcircuitCode || 'IC-CUSTOM';
         const name = (comp.state.subcircuitName || comp.label || 'Özel Alt Devre').toUpperCase();
+        // Pin labels sit inside the body on top of it; the code and name in the middle get the room left
+        // between the two label columns (monospace widths: 9px label ~5.4px a char, 11px code ~7.2px,
+        // 8.5px name ~5.3px)
+        const labelText = (pin: CircuitPin) => pin.name + ((pin.width ?? 1) > 1 ? `[${pin.width}]` : '');
+        const colWidth = (pins: CircuitPin[]) => (pins.length ? 8 + Math.max(...pins.map((p) => labelText(p).length)) * 5.4 + 4 : 4);
+        const leftCol = colWidth(comp.inputs);
+        const rightCol = colWidth(comp.outputs);
+        const room = Math.max(0, chipWidth - 2 * Math.max(leftCol, rightCol));
+        const fit = (text: string, charW: number) => {
+          const max = Math.floor(room / charW);
+          if (text.length <= max) return text;
+          return max >= 3 ? text.substring(0, max - 1) + '…' : '';
+        };
+        const codeShown = fit(code, 7.2);
+        const nameShown = fit(name, 5.3);
 
         return (
           <g filter="url(#gateShadow)">
-            {/* Left and Right IC Pin Legs with signal labels (in local unrotated frame) */}
-            {comp.inputs.map((pin, idx) => {
-              const relY = 20 * (idx + 1);
-              return (
-                <g key={pin.id}>
-                  <rect x={-8} y={relY - 3} width={8} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                  <text x={8} y={relY + 3} className="text-[9px] font-mono font-bold fill-slate-300 select-none">
-                    {pin.name}
-                  </text>
-                </g>
-              );
-            })}
-            {comp.outputs.map((pin, idx) => {
-              const relY = 20 * (idx + 1);
-              return (
-                <g key={pin.id}>
-                  <rect x={chipWidth} y={relY - 3} width={8} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                  <text x={chipWidth - 8} y={relY + 3} textAnchor="end" className="text-[9px] font-mono font-bold fill-amber-300 select-none">
-                    {pin.name}
-                  </text>
-                </g>
-              );
-            })}
-
             {/* IC Epoxy Body */}
             <rect
               x={0}
@@ -4989,23 +4971,59 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {/* Pin 1 Dot */}
             <circle cx={10} cy={10} r={2.5} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
 
-            {/* Laser-Etched Serigraphy */}
-            <text
-              x={chipWidth / 2}
-              y={chipHeight / 2 - 6}
-              textAnchor="middle"
-              className="text-[11px] font-mono font-black fill-sky-300 tracking-wider select-none"
-            >
-              {code}
-            </text>
-            <text
-              x={chipWidth / 2}
-              y={chipHeight / 2 + 8}
-              textAnchor="middle"
-              className="text-[8.5px] font-mono font-bold fill-slate-400 tracking-wide select-none"
-            >
-              {name.length > 14 ? name.substring(0, 13) + '…' : name}
-            </text>
+            {/* Laser-Etched Serigraphy (full code and name in the tooltip when shortened) */}
+            <title>{`${code} · ${comp.state.subcircuitName || comp.label || ''}`}</title>
+            {codeShown && (
+              <text
+                x={chipWidth / 2}
+                y={chipHeight / 2 - 6}
+                textAnchor="middle"
+                className="text-[11px] font-mono font-black fill-sky-300 tracking-wider select-none"
+              >
+                {codeShown}
+              </text>
+            )}
+            {nameShown && (
+              <text
+                x={chipWidth / 2}
+                y={chipHeight / 2 + 8}
+                textAnchor="middle"
+                className="text-[8.5px] font-mono font-bold fill-slate-400 tracking-wide select-none"
+              >
+                {nameShown}
+              </text>
+            )}
+
+            {/* Left and Right IC Pin Legs with signal labels (in local unrotated frame), drawn over the
+                body so the labels show; a wide port has a thicker leg and its width in the label */}
+            {comp.inputs.map((pin, idx) => {
+              const relY = 20 * (idx + 1);
+              const wide = (pin.width ?? 1) > 1;
+              return (
+                <g key={pin.id}>
+                  <rect x={-8} y={relY - (wide ? 4.5 : 3)} width={8} height={wide ? 9 : 6} rx={1} fill="url(#icPin)" stroke={wide ? '#94a3b8' : '#64748b'} strokeWidth={wide ? 1 : 0.5} />
+                  <text x={8} y={relY + 3} className="text-[9px] font-mono font-bold fill-slate-300 select-none">
+                    {pin.name}
+                    {wide && <tspan className="fill-sky-300 font-semibold">[{pin.width}]</tspan>}
+                  </text>
+                  <title>{`${pin.name}: ${wide ? `${pin.width} bit ` : ''}giriş`}</title>
+                </g>
+              );
+            })}
+            {comp.outputs.map((pin, idx) => {
+              const relY = 20 * (idx + 1);
+              const wide = (pin.width ?? 1) > 1;
+              return (
+                <g key={pin.id}>
+                  <rect x={chipWidth} y={relY - (wide ? 4.5 : 3)} width={8} height={wide ? 9 : 6} rx={1} fill="url(#icPin)" stroke={wide ? '#94a3b8' : '#64748b'} strokeWidth={wide ? 1 : 0.5} />
+                  <text x={chipWidth - 8} y={relY + 3} textAnchor="end" className="text-[9px] font-mono font-bold fill-amber-300 select-none">
+                    {pin.name}
+                    {wide && <tspan className="fill-sky-300 font-semibold">[{pin.width}]</tspan>}
+                  </text>
+                  <title>{`${pin.name}: ${wide ? `${pin.width} bit ` : ''}çıkış`}</title>
+                </g>
+              );
+            })}
           </g>
         );
       }
@@ -12304,14 +12322,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         {subcircuitAnalysis.inputs.length}
                       </div>
                       <div className="text-[10.5px] font-bold text-emerald-800">Giriş Portu</div>
-                      <div className="text-[9px] text-emerald-600">Anahtar / Saat / Tünel</div>
+                      <div className="text-[9px] text-emerald-600">Anahtar / Saat / Buton</div>
                     </div>
                     <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-2xl text-center">
                       <div className="text-blue-700 text-lg font-mono font-extrabold">
                         {subcircuitAnalysis.outputs.length}
                       </div>
                       <div className="text-[10.5px] font-bold text-blue-800">Çıkış Portu</div>
-                      <div className="text-[9px] text-blue-600">LED / Ekran / Prob</div>
+                      <div className="text-[9px] text-blue-600">LED / Prob / Buzzer</div>
                     </div>
                     <div className="p-3 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl text-center">
                       <div className="text-indigo-700 text-lg font-mono font-extrabold">
@@ -12343,10 +12361,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           {subcircuitAnalysis.inputs.length === 0 ? (
                             <span className="text-[10px] text-slate-500 italic">Giriş yok</span>
                           ) : (
-                            subcircuitAnalysis.inputs.map((inComp, i) => (
-                              <div key={inComp.id} className="flex items-center gap-1.5">
+                            subcircuitAnalysis.inputs.map((port) => (
+                              <div key={port.id} className="flex items-center gap-1.5">
                                 <span className="px-2 py-0.5 bg-emerald-950 text-emerald-400 border border-emerald-800 rounded text-[10px] font-mono font-bold">
-                                  {inComp.label || `IN_${i + 1}`}
+                                  {port.name}
+                                  {(port.width ?? 1) > 1 && <span className="text-emerald-200/80 font-semibold">[{port.width}]</span>}
                                 </span>
                                 <div className="w-4 h-0.5 bg-emerald-500" />
                               </div>
@@ -12373,11 +12392,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           {subcircuitAnalysis.outputs.length === 0 ? (
                             <span className="text-[10px] text-slate-500 italic">Çıkış yok</span>
                           ) : (
-                            subcircuitAnalysis.outputs.map((outComp, i) => (
-                              <div key={outComp.id} className="flex items-center gap-1.5">
+                            subcircuitAnalysis.outputs.map((port) => (
+                              <div key={port.id} className="flex items-center gap-1.5">
                                 <div className="w-4 h-0.5 bg-blue-500" />
                                 <span className="px-2 py-0.5 bg-blue-950 text-blue-400 border border-blue-800 rounded text-[10px] font-mono font-bold">
-                                  {outComp.label || `OUT_${i + 1}`}
+                                  {port.name}
+                                  {(port.width ?? 1) > 1 && <span className="text-blue-200/80 font-semibold">[{port.width}]</span>}
                                 </span>
                               </div>
                             ))

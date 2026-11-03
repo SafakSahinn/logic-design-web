@@ -121,6 +121,8 @@ export interface CircuitComponentInstance {
     radix?: Radix;
     /** Set on an input source inside an IC: it drives this value from outside (x/E included) instead of `on` */
     portValue?: SignalValue;
+    /** Same for a wide input source inside an IC: the bits (LSB first) driven from outside instead of `inputValue` */
+    portBits?: SignalValue[];
     frequencyHz?: number;
     /** Clock's own rate chosen in its toolbar; unset = follow the global clock speed */
     clockRateHz?: number;
@@ -172,6 +174,8 @@ export interface SubcircuitPortDefinition {
   type: 'input' | 'output';
   targetCompId: string; // internal component id (e.g. "sw_A" or "led_out")
   targetPinId: string; // internal pin id
+  /** Bit width of the port, taken from the inner pin when packaged (Logisim: the inner Pin's width); unset = 1 */
+  width?: number;
 }
 
 export interface CustomSubcircuit {
