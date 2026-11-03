@@ -70,6 +70,8 @@ export interface PinDefinition {
   type: 'input' | 'output';
   relX: number; // px relative to component origin
   relY: number;
+  /** Bit width of the pin (Logisim BitWidth); unset = 1 */
+  width?: number;
 }
 
 export interface ComponentMetadata {
@@ -88,6 +90,10 @@ export interface CircuitPin {
   name: string;
   type: 'input' | 'output';
   value: SignalValue;
+  /** Bit width of the pin; unset = 1 */
+  width?: number;
+  /** Bits of a pin wider than 1, LSB first (`value` then holds summarizeBits of them) */
+  bits?: SignalValue[];
   x: number; // absolute canvas coordinates
   y: number;
 }
@@ -190,6 +196,12 @@ export interface CircuitWire {
   // Still changing when the simulation gave up settling (Logisim's oscillation points)
   oscillating?: boolean;
   branchPoint?: { x: number; y: number };
+  /** Bit width of the wire's net, taken from the pins on it (unset = 1) */
+  width?: number;
+  /** Bits of a net wider than 1, LSB first (`value` then holds summarizeBits of them) */
+  bits?: SignalValue[];
+  /** Pins of different widths meet on this net (Logisim "Incompatible widths"); the net reads x */
+  widthError?: boolean;
   isBus?: boolean;
   bitWidth?: number;
   busValue?: number;

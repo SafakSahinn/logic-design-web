@@ -8,7 +8,7 @@ import type {
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
-import type { SignalValue } from '../types/logic';
+import { resolveDrivers, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
@@ -1381,14 +1381,7 @@ export function simulateCircuitStep(
     });
 
     // Determine the resolved logic value on this net
-    let resolvedValue: SignalValue = 'Z';
-    if (hasConflict) {
-      resolvedValue = 'E';
-    } else if (drivenVals.size === 1) {
-      resolvedValue = drivenVals.values().next().value!;
-    } else if (driverPins.some((d) => d.value === 'X')) {
-      resolvedValue = 'X';
-    }
+    let resolvedValue = resolveDrivers(driverPins.map((d) => d.value));
     // Logisim pull resistors only act on a net nothing drives to a defined value: one level pulls
     // it there, differing pulls (or an X pull) make it E
     if (resolvedValue === 'Z' || resolvedValue === 'X') {

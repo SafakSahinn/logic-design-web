@@ -4,6 +4,64 @@ export type LogicValue = 0 | 1 | 'X';
 // LogicValue above is the truth-table/K-map value where 'X' means don't care.
 export type SignalValue = 0 | 1 | 'X' | 'Z' | 'E';
 
+// Widest pin/wire, as in Logisim 2.7.1 (evolution allows 64 but reads 32-bit files)
+export const MAX_BIT_WIDTH = 32;
+
+// Logisim's net rule for one bit: floating and unknown drivers don't count (x combined with 1 is 1),
+// differing driven values short each other out (E), an undriven bit floats (Z) or stays unknown (X)
+export function resolveDrivers(drivers: SignalValue[]): SignalValue {
+  let driven: SignalValue | undefined;
+  let unknown = false;
+  for (const d of drivers) {
+    if (d === 'Z') continue;
+    if (d === 'X') {
+      unknown = true;
+      continue;
+    }
+    if (driven === undefined) driven = d;
+    else if (driven !== d) return 'E';
+  }
+  return driven ?? (unknown ? 'X' : 'Z');
+}
+
+// Multi-bit values are SignalValue[] with bit 0 (LSB) first.
+// Text like Logisim's: MSB first, undefined bits (X/Z) as x, groups of 4 separated by spaces
+export function bitsToString(bits: SignalValue[]): string {
+  let s = '';
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const b = bits[i];
+    s += b === 0 || b === 1 ? String(b) : b === 'E' ? 'E' : 'x';
+    if (i > 0 && i % 4 === 0) s += ' ';
+  }
+  return s;
+}
+
+// Unsigned value of the bits, undefined when any bit is not 0/1
+export function bitsToNumber(bits: SignalValue[]): number | undefined {
+  let n = 0;
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const b = bits[i];
+    if (b !== 0 && b !== 1) return undefined;
+    n = n * 2 + b;
+  }
+  return n;
+}
+
+export function numberToBits(n: number, width: number): SignalValue[] {
+  const bits: SignalValue[] = [];
+  for (let i = 0; i < width; i++) bits.push((Math.floor(n / 2 ** i) % 2) as 0 | 1);
+  return bits;
+}
+
+// One value standing for a whole bus, for code that only looks at `value` (colours, legacy reads):
+// E if any bit is E, Z if every bit floats, X if any bit is undefined, else 1 if any bit is 1, else 0
+export function summarizeBits(bits: SignalValue[]): SignalValue {
+  if (bits.includes('E')) return 'E';
+  if (bits.length > 0 && bits.every((b) => b === 'Z')) return 'Z';
+  if (bits.some((b) => b === 'X' || b === 'Z')) return 'X';
+  return bits.includes(1) ? 1 : 0;
+}
+
 export interface GateInfo {
   id: string;
   name: string;
