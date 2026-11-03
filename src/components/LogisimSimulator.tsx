@@ -56,6 +56,9 @@ import {
   splitterThreads,
   SPLITTER_MAX_FANOUT,
   type SplitterAppear,
+  configureBitExtender,
+  configureBitSelector,
+  type ExtendType,
   getComponentSize,
   setBitWidth,
 } from '../utils/circuitEngine';
@@ -257,6 +260,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   alu4: { label: '4-Bit ALU', badge: '4 İşlem' },
   splitter4: { label: "4'lü Paralel Geçiş", badge: '4×1' },
   splitter: { label: 'Splitter', badge: 'Ayırıcı' },
+  bitExtender: { label: 'Bit Genişletici', badge: 'Extend' },
+  bitSelector: { label: 'Bit Seçici', badge: 'Sel' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -1040,6 +1045,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const old = components.find((c) => c.id === compId);
     if (!old) return;
     commitResizedComp(old, configureSplitter(old, patch));
+  };
+
+  // New bit extender / bit selector settings; wires follow the pins (a dropped extension input leaves an open wire end)
+  const handleConfigureBitExtender = (compId: string, patch: { inWidth?: number; outWidth?: number; type?: ExtendType }) => {
+    const old = components.find((c) => c.id === compId);
+    if (!old) return;
+    commitResizedComp(old, configureBitExtender(old, patch));
+  };
+  const handleConfigureBitSelector = (compId: string, patch: { dataWidth?: number; groupWidth?: number }) => {
+    const old = components.find((c) => c.id === compId);
+    if (!old) return;
+    commitResizedComp(old, configureBitSelector(old, patch));
   };
 
   // A part whose body/pins changed in place: wires on its old pin locations follow the pins
@@ -5990,6 +6007,44 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'bitExtender': {
+        // Logisim BitExtender painter: a box with the fill type above "extend", the port widths at the ports
+        const t = comp.state.extendType ?? 'zero';
+        const typeText = t === 'zero' ? '0' : t === 'one' ? '1' : t === 'sign' ? 'işaret' : 'giriş';
+        const small = cadTheme === 'dark' ? '#94a3b8' : '#475569';
+        return (
+          <g>
+            <rect x={0} y={0} width={40} height={40} rx={2} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+            <text x={20} y={14} textAnchor="middle" fontSize={t === 'zero' || t === 'one' ? 10 : 8} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+              {typeText}
+            </text>
+            <text x={20} y={36} textAnchor="middle" fontSize={6} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+              genişlet
+            </text>
+            <text x={3} y={27} fontSize={6} fontFamily="monospace" fill={small} className="select-none">
+              {comp.inputs[0]?.width ?? 1}
+            </text>
+            <text x={37} y={27} textAnchor="end" fontSize={6} fontFamily="monospace" fill={small} className="select-none">
+              {comp.outputs[0]?.width ?? 1}
+            </text>
+          </g>
+        );
+      }
+
+      case 'bitSelector': {
+        // Logisim BitSelector painter: a trapezoid narrowing towards the output, "Sel" inside; the select
+        // input meets the slanted bottom edge
+        return (
+          <g>
+            <polygon points="0,0 40,10 40,30 0,40" fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} strokeLinejoin="round" />
+            <line x1={30} y1={32.5} x2={30} y2={40} stroke={strokeColor} strokeWidth={1.8} />
+            <text x={18} y={23} textAnchor="middle" fontSize={8} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+              Sel
+            </text>
+          </g>
+        );
+      }
+
       case 'splitter4': {
         const in0 = comp.inputs[0]?.value === 1;
         const in1 = comp.inputs[1]?.value === 1;
@@ -6259,7 +6314,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -6271,7 +6326,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'plexers',
       title: 'Plexers & Seçiciler',
       icon: '🔀',
-      types: ['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'bcdTo7Seg', 'priorityEncoder4to2'] as ComponentType[],
+      types: ['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'bcdTo7Seg', 'priorityEncoder4to2', 'bitSelector'] as ComponentType[],
     },
     {
       id: 'arithmetic',
@@ -10237,6 +10292,83 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         {RADIX_LABEL[r]}
                       </button>
                     ))}
+                  </div>
+                )}
+
+                {/* Bit extender settings (Logisim 'in_width', 'out_width', 'type') */}
+                {selectedComp.type === 'bitExtender' && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Giriş bit:</span>
+                    <select
+                      value={selectedComp.inputs[0]?.width ?? 1}
+                      onChange={(e) => handleConfigureBitExtender(selectedComp.id, { inWidth: Number(e.target.value) })}
+                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Girişteki veri yolunun genişliği (1-32)"
+                    >
+                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-slate-400 font-semibold text-[11px]">Çıkış bit:</span>
+                    <select
+                      value={selectedComp.outputs[0]?.width ?? 1}
+                      onChange={(e) => handleConfigureBitExtender(selectedComp.id, { outWidth: Number(e.target.value) })}
+                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Çıkış genişliği (1-32); girişten darsa üst bitler atılır"
+                    >
+                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-slate-400 font-semibold text-[11px]">Doldur:</span>
+                    {(['zero', 'one', 'sign', 'input'] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => handleConfigureBitExtender(selectedComp.id, { type: t })}
+                        className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                          (selectedComp.state.extendType ?? 'zero') === t ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                        title={
+                          t === 'zero' ? 'Üst bitler 0 (işaretsiz genişletme)'
+                            : t === 'one' ? 'Üst bitler 1'
+                            : t === 'sign' ? 'Üst bitler girişin en üst biti (işaretli sayı, ikiye tümleyen)'
+                            : 'Üst bitler üstteki 1 bitlik ek girişten'
+                        }
+                      >
+                        {t === 'zero' ? '0' : t === 'one' ? '1' : t === 'sign' ? 'İşaret' : 'Giriş'}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Bit selector settings (Logisim 'width', 'group'); the select width follows */}
+                {selectedComp.type === 'bitSelector' && (
+                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                    <span className="text-slate-400 font-semibold text-[11px]">Veri bit:</span>
+                    <select
+                      value={selectedComp.inputs[0]?.width ?? 1}
+                      onChange={(e) => handleConfigureBitSelector(selectedComp.id, { dataWidth: Number(e.target.value) })}
+                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Veri girişinin genişliği (1-32)"
+                    >
+                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-slate-400 font-semibold text-[11px]">Grup bit:</span>
+                    <select
+                      value={selectedComp.outputs[0]?.width ?? 1}
+                      onChange={(e) => handleConfigureBitSelector(selectedComp.id, { groupWidth: Number(e.target.value) })}
+                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                      title="Çıkışa verilen grubun genişliği (1-32); verinin dışına taşan bitler 0 olur"
+                    >
+                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                    <span className="text-slate-500 text-[11px] font-mono" title="Seçme girişinin genişliği grup sayısına göre kendiliğinden belirlenir">
+                      seçme: {selectedComp.inputs[1]?.width ?? 1} bit
+                    </span>
                   </div>
                 )}
 

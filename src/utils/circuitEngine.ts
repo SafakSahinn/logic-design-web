@@ -8,7 +8,7 @@ import type {
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
-import { MAX_BIT_WIDTH, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
+import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
@@ -777,6 +777,35 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     ],
     description: 'Çok bitli bir veri yolunu uçlara ayırır ya da uçları birleştirir (iki yönlü, Logisim Splitter)',
   },
+  bitExtender: {
+    type: 'bitExtender',
+    name: 'Bit Genişletici (Bit Extender)',
+    category: 'combinational',
+    width: 40,
+    height: 40,
+    // Logisim Bit Extender (facing east): input on the left, output on the right, the extension
+    // input (type 'input' only; configureBitExtender drops it otherwise) on top
+    inputs: [
+      { id: 'in0', name: 'in', type: 'input', relX: 0, relY: 20, width: 8 },
+      { id: 'in1', name: 'ext', type: 'input', relX: 20, relY: 0 },
+    ],
+    outputs: [{ id: 'out0', name: 'out', type: 'output', relX: 40, relY: 20, width: 16 }],
+    description: 'Veri yolunu genişletir ya da daraltır; üst bitler 0, 1, işaret biti ya da ek girişle doldurulur (Logisim Bit Extender)',
+  },
+  bitSelector: {
+    type: 'bitSelector',
+    name: 'Bit Seçici (Bit Selector)',
+    category: 'combinational',
+    width: 40,
+    height: 40,
+    // Logisim BitSelector (facing east): data on the left, the selected group on the right, select below
+    inputs: [
+      { id: 'in0', name: 'D', type: 'input', relX: 0, relY: 20, width: 8 },
+      { id: 'in1', name: 'S', type: 'input', relX: 30, relY: 40, width: 3 },
+    ],
+    outputs: [{ id: 'out0', name: 'Q', type: 'output', relX: 40, relY: 20 }],
+    description: 'Veri yolundan seçme girişinin gösterdiği bit grubunu çıkışa verir (Logisim Bit Selector)',
+  },
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -969,7 +998,7 @@ export function createComponentInstance(
     y: y + pin.relY,
   }));
 
-  return {
+  const inst: CircuitComponentInstance = {
     id: compId,
     type,
     label: customLabel || meta.name,
@@ -997,6 +1026,8 @@ export function createComponentInstance(
       constValue: type === 'constant' ? 1 : undefined,
     },
   };
+  // A new bit extender is type zero (Logisim default), which has no extension input
+  return type === 'bitExtender' ? configureBitExtender(inst, {}) : inst;
 }
 
 // Parts whose single pin can be wider than 1 bit (Logisim Pin and Constant); the pin's width is the part's width
@@ -1148,6 +1179,75 @@ export function configureSplitter(
   });
 }
 
+// ---- Bit extender / bit selector (Logisim wiring/BitExtender, plexers/BitSelector) -----------------
+
+export type ExtendType = 'zero' | 'one' | 'sign' | 'input';
+
+const clampWidth = (n: number) => Math.max(1, Math.min(MAX_BIT_WIDTH, Math.round(n)));
+
+// A pin with a new width (no stale bits); width 1 is stored as no width
+const pinWithWidth = (p: CircuitPin, w: number): CircuitPin => {
+  const { bits: _bits, width: _width, ...rest } = p;
+  return w > 1 ? { ...rest, width: w } : rest;
+};
+
+const newPin = (comp: CircuitComponentInstance, id: string, name: string, type: 'input' | 'output'): CircuitPin => ({
+  id: `${comp.id}_${id}`,
+  name,
+  type,
+  value: 'X',
+  x: comp.x,
+  y: comp.y,
+});
+
+/** New bit extender settings; the extension input exists only for type 'input' (pin ids are kept). */
+export function configureBitExtender(
+  comp: CircuitComponentInstance,
+  patch: { inWidth?: number; outWidth?: number; type?: ExtendType }
+): CircuitComponentInstance {
+  const inW = clampWidth(patch.inWidth ?? comp.inputs[0]?.width ?? 1);
+  const outW = clampWidth(patch.outWidth ?? comp.outputs[0]?.width ?? 1);
+  const type = patch.type ?? comp.state.extendType ?? 'zero';
+  const inputs = [pinWithWidth(comp.inputs[0] ?? newPin(comp, 'in0', 'in', 'input'), inW)];
+  if (type === 'input') inputs.push(pinWithWidth(comp.inputs[1] ?? newPin(comp, 'in1', 'ext', 'input'), 1));
+  return updatePinPositions({
+    ...comp,
+    inputs,
+    outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out0', 'out', 'output'), outW)],
+    state: { ...comp.state, extendType: type },
+  });
+}
+
+/** Logisim BitSelector.updatePorts: enough select bits to number every group (at least 1). */
+export function bitSelectorSelectWidth(dataWidth: number, groupWidth: number): number {
+  let groups = Math.ceil(dataWidth / groupWidth) - 1;
+  let bits = 1;
+  if (groups > 0) {
+    while (groups !== 1) {
+      groups >>= 1;
+      bits++;
+    }
+  }
+  return bits;
+}
+
+/** New bit selector settings: data width and output group width; the select width follows. */
+export function configureBitSelector(
+  comp: CircuitComponentInstance,
+  patch: { dataWidth?: number; groupWidth?: number }
+): CircuitComponentInstance {
+  const dW = clampWidth(patch.dataWidth ?? comp.inputs[0]?.width ?? 1);
+  const gW = clampWidth(patch.groupWidth ?? comp.outputs[0]?.width ?? 1);
+  return updatePinPositions({
+    ...comp,
+    inputs: [
+      pinWithWidth(comp.inputs[0] ?? newPin(comp, 'in0', 'D', 'input'), dW),
+      pinWithWidth(comp.inputs[1] ?? newPin(comp, 'in1', 'S', 'input'), bitSelectorSelectWidth(dW, gW)),
+    ],
+    outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out0', 'Q', 'output'), gW)],
+  });
+}
+
 /**
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
@@ -1291,6 +1391,12 @@ const sigOr = (a: SignalValue, b: SignalValue): SignalValue =>
   a === 1 || b === 1 ? 1 : a === 0 && b === 0 ? 0 : 'E';
 const sigXor = (a: SignalValue, b: SignalValue): SignalValue =>
   isLevel(a) && isLevel(b) ? ((a ^ b) as 0 | 1) : 'E';
+
+// Bits an input pin reads (LSB first): undriven or open bits are x, like Logisim's unknown value
+const readBits = (pin: CircuitPin | undefined, w: number): SignalValue[] => {
+  const raw = pin?.bits && pin.bits.length === w ? pin.bits : w === 1 && pin ? [pin.value] : new Array<SignalValue>(w).fill('X');
+  return raw.map((b) => (b === 'Z' ? 'X' : b));
+};
 
 // Unconnected inputs are ignored and a gate with none connected outputs E; a single connected
 // input passes through unchanged (Logisim 2.7.1 gives x for AND(x, unconnected), E for XOR)
@@ -1778,6 +1884,20 @@ export function simulateCircuitStep(
         hasChanged = true;
       }
     };
+    // A multi-bit output takes its bits (a 1-bit one just its value)
+    const setBitsOut = (idx: number, bits: SignalValue[]) => {
+      const out = comp.outputs[idx];
+      if (!out) return;
+      if (bits.length === 1) {
+        setOut(idx, bits[0]);
+        return;
+      }
+      if (!sameBits(out.bits, bits)) {
+        out.bits = bits;
+        out.value = summarizeBits(bits);
+        hasChanged = true;
+      }
+    };
     // In Logisim, multi-input logic gates ignore unconnected (floating) input pins
     const connectedInputs = comp.inputs.filter((p) => isPinConnected(p.id));
 
@@ -1872,6 +1992,31 @@ export function simulateCircuitStep(
           comp.outputs[0].value = val;
           hasChanged = true;
         }
+        break;
+      }
+      case 'bitExtender': {
+        // Logisim Value.extendWidth: the low bits pass as they are (x/E included, extra ones cut off),
+        // new high bits are 0, 1, the top input bit (sign) or the extension input (x when open)
+        const inW = comp.inputs[0]?.width ?? 1;
+        const src = readBits(comp.inputs[0], inW);
+        const t = comp.state.extendType ?? 'zero';
+        const ext: SignalValue = t === 'one' ? 1 : t === 'sign' ? src[inW - 1] : t === 'input' ? readBits(comp.inputs[1], 1)[0] : 0;
+        const outW = comp.outputs[0]?.width ?? 1;
+        setBitsOut(0, Array.from({ length: outW }, (_, i) => (i < inW ? src[i] : ext)));
+        break;
+      }
+      case 'bitSelector': {
+        // Logisim BitSelector: group `select` of the data (bits past the data end are 0); a select
+        // with any x/E bit gives all x
+        const dW = comp.inputs[0]?.width ?? 1;
+        const gW = comp.outputs[0]?.width ?? 1;
+        const data = readBits(comp.inputs[0], dW);
+        const sel = bitsToNumber(readBits(comp.inputs[1], comp.inputs[1]?.width ?? 1));
+        setBitsOut(0, Array.from({ length: gW }, (_, i): SignalValue => {
+          if (sel === undefined) return 'X';
+          const b = sel * gW + i;
+          return b < dW ? data[b] : 0;
+        }));
         break;
       }
       case 'splitter4': {

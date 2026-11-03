@@ -53,6 +53,8 @@ export type ComponentType =
   | 'alu4'
   | 'splitter4'
   | 'splitter'
+  | 'bitExtender'
+  | 'bitSelector'
   // Sequential & Memory Elements (Ardışıl Mantık & Bellek)
   | 'dFlipFlop'
   | 'tFlipFlop'
@@ -128,6 +130,8 @@ export interface CircuitComponentInstance {
     splitBitEnd?: number[];
     /** Splitter: side the ends sit on relative to the combined end (Logisim 'appear'); unset = left */
     splitAppear?: 'left' | 'right' | 'center';
+    /** Bit extender: how the extra high bits are filled (Logisim 'type'); unset = zero */
+    extendType?: 'zero' | 'one' | 'sign' | 'input';
     /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
     pullValue?: 0 | 1 | 'X';
     /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */

@@ -804,6 +804,11 @@ function buildModule(
         // Multi-bit vectors come to the HDL export in a later step; until then the ends stay unconnected
         warnings.push(`${c.label || c.type}: splitter henüz HDL'e çevrilmiyor (çok bitli veri yolları desteklenmiyor), uçları bağlanmadı.`);
         break;
+      case 'bitExtender':
+      case 'bitSelector':
+        // Same as the splitter: multi-bit ports wait for HDL vectors
+        warnings.push(`${c.label || c.type}: ${c.type === 'bitExtender' ? 'bit genişletici' : 'bit seçici'} henüz HDL'e çevrilmiyor (çok bitli veri yolları desteklenmiyor), çıkışı bağlanmadı.`);
+        break;
       default:
         warnings.push(`${c.label || c.type}: '${c.type}' bileşeni HDL'e çevrilemiyor, çıkışları 0 bırakıldı.`);
         out.forEach((o) => o && emit(o, L.zero));
