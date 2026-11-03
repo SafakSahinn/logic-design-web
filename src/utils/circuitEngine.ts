@@ -8,7 +8,7 @@ import type {
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
-import { resolveDrivers, type SignalValue } from '../types/logic';
+import { resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
@@ -928,6 +928,7 @@ export function createComponentInstance(
     name: pin.name,
     type: 'input',
     value: 0,
+    ...(pin.width && pin.width > 1 ? { width: pin.width } : {}),
     x: x + pin.relX,
     y: y + pin.relY,
   }));
@@ -939,6 +940,7 @@ export function createComponentInstance(
     // Q' starts at 1 like the flip-flop state (q = 0, qBar = 1); a 0 there rose to 1 on the first step and
     // clocked whatever it drives
     value: POWER_UP_X_TYPES.has(type) ? 'X' : type === 'vcc' || pin.id === 'outQBar' ? 1 : 0,
+    ...(pin.width && pin.width > 1 ? { width: pin.width } : {}),
     x: x + pin.relX,
     y: y + pin.relY,
   }));
@@ -1106,6 +1108,17 @@ const gateFold = (pins: CircuitPin[], op: (a: SignalValue, b: SignalValue) => Si
   if (pins.length === 0) return 'E';
   if (op === sigXor && pins.length === 1) return isLevel(pins[0].value) ? pins[0].value : 'E';
   return pins.slice(1).reduce<SignalValue>((acc, p) => op(acc, p.value), pins[0].value);
+};
+
+// Parts whose pins take the width of the net they sit on instead of setting it
+const WIDTH_FOLLOWERS = new Set<ComponentType>(['tunnel', 'probe', 'pullResistor']);
+
+// Same bit arrays (both absent counts as same)
+export const sameBits = (a: SignalValue[] | undefined, b: SignalValue[] | undefined): boolean => {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 };
 
 // Logisim reads separate select/address pins as one bus: any E bit makes it an error, any other
@@ -1345,75 +1358,169 @@ export function simulateCircuitStep(
     if (!netPins.has(root)) netPins.set(root, []);
   });
 
-  // Evaluate each electrical net
-  netPins.forEach((pinsInNet, root) => {
-    // Collect active driving output pins on this net
-    const driverPins: CircuitPin[] = [];
+  // Active driving output pins: a high-impedance tri-state buffer and the passive tunnel conduits don't drive
+  const isDriver = (pinId: string): boolean => {
+    const pin = pinMap.get(pinId);
+    if (!pin || pin.type !== 'output') return false;
+    const ownerComp = pinOwner.get(pinId);
+    if ((ownerComp?.type === 'triState' || ownerComp?.type === 'controlledInverter') && ownerComp.state.hiZ) return false;
+    return ownerComp?.type !== 'tunnel';
+  };
+  // Logisim pull resistors only act on a net nothing drives to a defined value: one level pulls
+  // it there, differing pulls (or an X pull) make it E
+  const netPulls = (pinsInNet: string[]): Set<SignalValue> => {
+    const pulls = new Set<SignalValue>();
     pinsInNet.forEach((pinId) => {
-      const pin = pinMap.get(pinId);
-      if (!pin || pin.type !== 'output') return;
-
-      // Find owner component
-      const ownerComp = pinOwner.get(pinId);
-      if ((ownerComp?.type === 'triState' || ownerComp?.type === 'controlledInverter') && ownerComp.state.hiZ) {
-        // High impedance tri-state buffer is not actively driving the bus net
-        return;
-      }
-      if (ownerComp?.type === 'tunnel') {
-        // Tunnel pins are passive wireless conduits, not active driving sources
-        return;
-      }
-      driverPins.push(pin);
+      const owner = pinOwner.get(pinId);
+      if (owner?.type === 'pullResistor') pulls.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
     });
+    return pulls;
+  };
+  const applyPulls = (v: SignalValue, pulls: Set<SignalValue>): SignalValue =>
+    (v === 'Z' || v === 'X') && pulls.size > 0 ? (pulls.size === 1 ? pulls.values().next().value! : 'E') : v;
+  // Differing driven values (x/z don't count) short each other out
+  const isConflict = (vals: SignalValue[]): boolean => new Set(vals.filter((v) => v !== 'Z' && v !== 'X')).size > 1;
 
-    // Logisim value model: floating and unknown drivers don't count (x combined with 1 is 1),
-    // an undriven net floats (Z) or stays unknown (X), and differing driven values short each other out (E)
-    const drivenVals = new Set(driverPins.map((d) => d.value).filter((v) => v !== 'Z' && v !== 'X'));
-    const hasConflict = drivenVals.size > 1;
+  // Width of each net from the pins on it (Logisim CircuitWires bundle widths); tunnels, probes and
+  // pull resistors take the width of the net they sit on. 0 = pins of different widths meet (Logisim
+  // "Incompatible widths": the whole net reads x)
+  const netWidth = new Map<string, number>();
+  netPins.forEach((pinsInNet, root) => {
+    let width: number | undefined;
+    let mismatch = false;
+    pinsInNet.forEach((pinId) => {
+      const owner = pinOwner.get(pinId);
+      if (owner && WIDTH_FOLLOWERS.has(owner.type)) return;
+      const w = pinMap.get(pinId)!.width ?? 1;
+      if (width === undefined) width = w;
+      else if (width !== w) mismatch = true;
+    });
+    netWidth.set(root, mismatch ? 0 : (width ?? 1));
+  });
 
-    // If conflict detected, mark all wires in this net
-    const wiresInThisNet = netWires.get(root) || [];
-    wiresInThisNet.forEach((w) => {
+  // Bit links between nets, [netA, bitA, netB, bitB] (Logisim splitters unite the threads of their
+  // ends); nets on a link, and every net wider than 1, are resolved bit by bit below
+  const bitLinks: [string, number, string, number][] = [];
+  const linkedNets = new Set<string>();
+  bitLinks.forEach(([a, , b]) => {
+    linkedNets.add(a);
+    linkedNets.add(b);
+  });
+
+  // Write a net's resolved value to its wires and to the pins reading it (inputs and passive tunnel pins)
+  const assignNet = (root: string, value: SignalValue, bits: SignalValue[] | undefined, hasConflict: boolean, widthError: boolean) => {
+    (netWires.get(root) || []).forEach((w) => {
       if (w.hasConflict !== hasConflict) {
         w.hasConflict = hasConflict;
         hasChanged = true;
       }
-    });
-
-    // Determine the resolved logic value on this net
-    let resolvedValue = resolveDrivers(driverPins.map((d) => d.value));
-    // Logisim pull resistors only act on a net nothing drives to a defined value: one level pulls
-    // it there, differing pulls (or an X pull) make it E
-    if (resolvedValue === 'Z' || resolvedValue === 'X') {
-      const pulls = new Set<SignalValue>();
-      pinsInNet.forEach((pinId) => {
-        const owner = pinOwner.get(pinId);
-        if (owner?.type === 'pullResistor') pulls.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
-      });
-      if (pulls.size > 0) resolvedValue = pulls.size === 1 ? pulls.values().next().value! : 'E';
-    }
-
-    // Assign resolved value to all wires in net
-    wiresInThisNet.forEach((w) => {
-      if (w.value !== resolvedValue) {
-        w.value = resolvedValue;
+      if (w.value !== value) {
+        w.value = value;
+        hasChanged = true;
+      }
+      if (!sameBits(w.bits, bits)) {
+        w.bits = bits;
+        w.width = bits ? bits.length : undefined;
+        hasChanged = true;
+      }
+      if (!!w.widthError !== widthError) {
+        w.widthError = widthError || undefined;
         hasChanged = true;
       }
     });
-
-    // Assign resolved value to all input pins (and passive tunnel pins) in net
-    pinsInNet.forEach((pinId) => {
+    netPins.get(root)!.forEach((pinId) => {
       const pin = pinMap.get(pinId);
       if (!pin) return;
       const ownerComp = pinOwner.get(pinId);
       if (pin.type === 'input' || ownerComp?.type === 'tunnel') {
-        if (pin.value !== resolvedValue) {
-          pin.value = resolvedValue;
+        if (pin.value !== value) {
+          pin.value = value;
+          hasChanged = true;
+        }
+        // A wide pin on a net of the wrong width reads all bits x
+        const pinBits = bits ?? (widthError && (pin.width ?? 1) > 1 ? new Array<SignalValue>(pin.width!).fill('X') : undefined);
+        if (!sameBits(pin.bits, pinBits)) {
+          pin.bits = pinBits;
           hasChanged = true;
         }
       }
     });
+  };
+
+  // Evaluate each 1-bit electrical net (nets of the wrong width read x)
+  netPins.forEach((pinsInNet, root) => {
+    const width = netWidth.get(root)!;
+    if (width === 0) {
+      assignNet(root, 'X', undefined, false, true);
+      return;
+    }
+    if (width > 1 || linkedNets.has(root)) return;
+
+    const driverVals = pinsInNet.filter(isDriver).map((id) => pinMap.get(id)!.value);
+    // Logisim value model: floating and unknown drivers don't count (x combined with 1 is 1),
+    // an undriven net floats (Z) or stays unknown (X), and differing driven values short each other out (E)
+    const resolvedValue = applyPulls(resolveDrivers(driverVals), netPulls(pinsInNet));
+    assignNet(root, resolvedValue, undefined, isConflict(driverVals), false);
   });
+
+  // Multi-bit and linked nets: each bit is its own net (a Logisim wire thread), joined across links
+  const bitParent = new Map<string, string>();
+  const bitFind = (k: string): string => {
+    let r = k;
+    while (bitParent.has(r) && bitParent.get(r) !== r) r = bitParent.get(r)!;
+    if (r !== k) bitParent.set(k, r);
+    return r;
+  };
+  bitLinks.forEach(([a, ba, b, bb]) => {
+    // Links into a net of the wrong width (or past its width) are dropped, as Logisim skips invalid bundles
+    if (netWidth.get(a)! <= ba || netWidth.get(b)! <= bb) return;
+    const ra = bitFind(`${a}#${ba}`);
+    const rb = bitFind(`${b}#${bb}`);
+    if (ra !== rb) bitParent.set(ra, rb);
+  });
+  const bitNets: string[] = [];
+  netPins.forEach((_, root) => {
+    const width = netWidth.get(root)!;
+    if (width > 1 || (width === 1 && linkedNets.has(root))) bitNets.push(root);
+  });
+  if (bitNets.length > 0) {
+    const threads = new Map<string, [string, number][]>();
+    bitNets.forEach((root) => {
+      for (let b = 0; b < netWidth.get(root)!; b++) {
+        const key = bitFind(`${root}#${b}`);
+        if (!threads.has(key)) threads.set(key, []);
+        threads.get(key)!.push([root, b]);
+      }
+    });
+    const threadValue = new Map<string, { value: SignalValue; conflict: boolean }>();
+    threads.forEach((members, key) => {
+      const driverVals: SignalValue[] = [];
+      const pulls = new Set<SignalValue>();
+      members.forEach(([root, b]) => {
+        const pinsInNet = netPins.get(root)!;
+        pinsInNet.forEach((id) => {
+          if (isDriver(id)) {
+            const pin = pinMap.get(id)!;
+            driverVals.push(pin.bits?.[b] ?? pin.value);
+          }
+        });
+        netPulls(pinsInNet).forEach((p) => pulls.add(p));
+      });
+      threadValue.set(key, { value: applyPulls(resolveDrivers(driverVals), pulls), conflict: isConflict(driverVals) });
+    });
+    bitNets.forEach((root) => {
+      const width = netWidth.get(root)!;
+      const bits: SignalValue[] = [];
+      let conflict = false;
+      for (let b = 0; b < width; b++) {
+        const t = threadValue.get(bitFind(`${root}#${b}`))!;
+        bits.push(t.value);
+        conflict = conflict || t.conflict;
+      }
+      if (width === 1) assignNet(root, bits[0], undefined, conflict, false);
+      else assignNet(root, summarizeBits(bits), bits, conflict, false);
+    });
+  }
 
   // Helper to determine if a pin is electrically connected to a wire or other pin
   const isPinConnected = (pinId: string): boolean => {
@@ -2129,7 +2236,7 @@ export function simulateCircuit(
     if (i >= logFrom) {
       step.wires.forEach((w, k) => {
         const old = curWires[k];
-        if (old && (old.value !== w.value || old.busValue !== w.busValue)) oscWires.add(w.id);
+        if (old && (old.value !== w.value || !sameBits(old.bits, w.bits))) oscWires.add(w.id);
       });
       // A subcircuit that keeps changing inside is drawn with a frame, as in Logisim
       step.components.forEach((c) => {
