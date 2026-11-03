@@ -52,6 +52,7 @@ export type ComponentType =
   | 'comparator4'
   | 'alu4'
   | 'splitter4'
+  | 'splitter'
   // Sequential & Memory Elements (Ardışıl Mantık & Bellek)
   | 'dFlipFlop'
   | 'tFlipFlop'
@@ -123,6 +124,10 @@ export interface CircuitComponentInstance {
     clockRateHz?: number;
     lastClockTick?: number;
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
+    /** Splitter: end of each incoming bit, LSB first (0 = none, 1..fanout; Logisim bit0..bitN); unset = default spread of 2 bits */
+    splitBitEnd?: number[];
+    /** Splitter: side the ends sit on relative to the combined end (Logisim 'appear'); unset = left */
+    splitAppear?: 'left' | 'right' | 'center';
     /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
     pullValue?: 0 | 1 | 'X';
     /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */

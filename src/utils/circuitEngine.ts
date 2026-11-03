@@ -745,7 +745,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   splitter4: {
     type: 'splitter4',
-    name: '4-Bit Veri Yolu Ayırıcı (Splitter)',
+    name: "4'lü Paralel Geçiş (D0-D3 → Y0-Y3)",
     category: 'combinational',
     width: 84,
     height: 72,
@@ -762,6 +762,20 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'out3', name: 'Y3', type: 'output', relX: 84, relY: 60 },
     ],
     description: '4-Bit paralel veri yolu hatlarını ayırır ve dağıtır (D0-D3 -> Y0-Y3)',
+  },
+  splitter: {
+    type: 'splitter',
+    name: 'Splitter (Ayırıcı)',
+    category: 'combinational',
+    width: 20,
+    height: 20,
+    // Pins are rebuilt by configureSplitter: in0 = combined end, out<i> = end i+1
+    inputs: [{ id: 'in0', name: 'Σ', type: 'input', relX: 0, relY: 20, width: 2 }],
+    outputs: [
+      { id: 'out0', name: '1', type: 'output', relX: 20, relY: 0 },
+      { id: 'out1', name: '2', type: 'output', relX: 20, relY: 10 },
+    ],
+    description: 'Çok bitli bir veri yolunu uçlara ayırır ya da uçları birleştirir (iki yönlü, Logisim Splitter)',
   },
   counter4: {
     type: 'counter4',
@@ -1002,6 +1016,7 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   const meta = COMPONENT_CATALOG[comp.type];
   const w = getBitWidth(comp);
+  if (comp.type === 'splitter') return { width: 20, height: Math.max(20, Math.ceil(comp.outputs.length / 2) * 20) };
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
   return { width: meta?.width ?? 60, height: meta?.height ?? 50 };
@@ -1028,6 +1043,109 @@ export function setBitWidth(comp: CircuitComponentInstance, width: number): Circ
   };
   if (comp.type === 'switch' && w === 1) next.state.on = (comp.state.inputValue ?? (comp.state.on ? 1 : 0)) % 2 === 1;
   return updatePinPositions(next);
+}
+
+// ---- Splitter (Logisim circuit/Splitter*) ----------------------------------------------------------
+
+export type SplitterAppear = 'left' | 'right' | 'center';
+export const SPLITTER_MAX_FANOUT = 32;
+
+/**
+ * Logisim SplitterAttributes.computeDistribution: end (1..fanout) of each bit, LSB first. Ascending
+ * gives the low bits to end 1; with fewer ends than bits the first `bits % fanout` ends take one extra.
+ */
+export function splitterDistribution(fanout: number, bits: number, ascending = true): number[] {
+  const ret = new Array<number>(bits).fill(0);
+  if (fanout >= bits) {
+    for (let i = 0; i < bits; i++) ret[i] = ascending ? i + 1 : fanout - i;
+    return ret;
+  }
+  const perEnd = Math.floor(bits / fanout);
+  let extra = bits % fanout;
+  let curEnd = -1;
+  let left = 0;
+  for (let k = 0; k < bits; k++) {
+    const i = ascending ? k : bits - 1 - k;
+    if (left === 0) {
+      curEnd++;
+      left = perEnd;
+      if (extra > 0) {
+        left++;
+        extra--;
+      }
+    }
+    ret[i] = curEnd + 1;
+    left--;
+  }
+  return ret;
+}
+
+export function getSplitterConfig(comp: CircuitComponentInstance): { fanout: number; bitEnd: number[]; appear: SplitterAppear } {
+  const fanout = Math.max(1, comp.outputs.length);
+  return {
+    fanout,
+    bitEnd: comp.state.splitBitEnd ?? splitterDistribution(fanout, 2),
+    appear: comp.state.splitAppear ?? 'left',
+  };
+}
+
+// Index of each bit inside its end (Logisim Splitter.bit_thread), and the width of every end
+export function splitterThreads(bitEnd: number[], fanout: number): { thread: number[]; endWidth: number[] } {
+  const endWidth = new Array<number>(fanout).fill(0);
+  const thread = bitEnd.map((e) => (e > 0 && e <= fanout ? endWidth[e - 1]++ : -1));
+  return { thread, endWidth };
+}
+
+// Logisim splitter end labels: runs of consecutive bits per end, e.g. "0-3", "0,2"
+export function splitterEndLabels(bitEnd: number[], fanout: number): string[] {
+  const labels: string[] = new Array<string>(fanout).fill('');
+  let cur = -1;
+  let start = 0;
+  for (let i = 0; i <= bitEnd.length; i++) {
+    const e = i === bitEnd.length ? -1 : bitEnd[i];
+    if (e !== cur) {
+      if (cur > 0 && cur <= fanout) {
+        const run = start === i - 1 ? `${start}` : `${start}-${i - 1}`;
+        labels[cur - 1] = labels[cur - 1] ? `${labels[cur - 1]},${run}` : run;
+      }
+      cur = e;
+      start = i;
+    }
+  }
+  return labels;
+}
+
+/**
+ * New splitter settings. Like Logisim, changing the incoming width or the fan out resets the bit
+ * distribution to the default spread; pins keep their ids so attached wires can follow them.
+ */
+export function configureSplitter(
+  comp: CircuitComponentInstance,
+  patch: { incoming?: number; fanout?: number; appear?: SplitterAppear; bitEnd?: number[] }
+): CircuitComponentInstance {
+  const cur = getSplitterConfig(comp);
+  const incoming = Math.max(1, Math.min(MAX_BIT_WIDTH, Math.round(patch.incoming ?? cur.bitEnd.length)));
+  const fanout = Math.max(1, Math.min(SPLITTER_MAX_FANOUT, Math.round(patch.fanout ?? cur.fanout)));
+  let bitEnd = cur.bitEnd;
+  if (incoming !== cur.bitEnd.length || fanout !== cur.fanout) bitEnd = splitterDistribution(fanout, incoming);
+  if (patch.bitEnd && patch.bitEnd.length === incoming) bitEnd = patch.bitEnd.map((e) => (e >= 0 && e <= fanout ? e : 0));
+  const { endWidth } = splitterThreads(bitEnd, fanout);
+  const strip = (p: CircuitPin): CircuitPin => {
+    const { bits: _bits, width: _width, ...rest } = p;
+    return rest;
+  };
+  const combined = strip(comp.inputs[0] ?? { id: `${comp.id}_in0`, name: 'Σ', type: 'input', value: 0, x: 0, y: 0 });
+  const outputs: CircuitPin[] = [];
+  for (let i = 0; i < fanout; i++) {
+    const p = strip(comp.outputs[i] ?? { id: `${comp.id}_out${i}`, name: `${i + 1}`, type: 'output', value: 0, x: 0, y: 0 });
+    outputs.push(endWidth[i] === 1 ? p : { ...p, width: endWidth[i] });
+  }
+  return updatePinPositions({
+    ...comp,
+    inputs: [incoming > 1 ? { ...combined, width: incoming } : combined],
+    outputs,
+    state: { ...comp.state, splitBitEnd: bitEnd, splitAppear: patch.appear ?? cur.appear },
+  });
 }
 
 /**
@@ -1098,6 +1216,24 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
       y: Math.round((cy + (dx * sin + dy * cos)) / 10) * 10,
     };
   };
+
+  // Splitter (Logisim SplitterParameters, facing east): the combined end on the left, the ends 20px to
+  // the right and 10px apart, above it (left-handed), below it (right-handed) or around it (centered)
+  if (comp.type === 'splitter') {
+    const n = comp.outputs.length;
+    const appear = comp.state.splitAppear ?? 'left';
+    const combinedY = appear === 'right' ? 0 : appear === 'center' ? 10 * Math.floor(n / 2) : 10 * n;
+    const endY0 = appear === 'right' ? 10 : 0;
+    const cp = rotatePoint(0, combinedY);
+    return {
+      ...comp,
+      inputs: comp.inputs.map((pin) => ({ ...pin, x: comp.x + cp.x, y: comp.y + cp.y })),
+      outputs: comp.outputs.map((pin, i) => {
+        const p = rotatePoint(20, endY0 + 10 * i);
+        return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+      }),
+    };
+  }
 
   const isMultiInputGate = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'].includes(comp.type);
 
@@ -1443,7 +1579,8 @@ export function simulateCircuitStep(
     if (!pin || pin.type !== 'output') return false;
     const ownerComp = pinOwner.get(pinId);
     if ((ownerComp?.type === 'triState' || ownerComp?.type === 'controlledInverter') && ownerComp.state.hiZ) return false;
-    return ownerComp?.type !== 'tunnel';
+    // Tunnels and splitters are passive: a splitter only joins bit threads (bitLinks below)
+    return ownerComp?.type !== 'tunnel' && ownerComp?.type !== 'splitter';
   };
   // Logisim pull resistors only act on a net nothing drives to a defined value: one level pulls
   // it there, differing pulls (or an X pull) make it E
@@ -1470,7 +1607,9 @@ export function simulateCircuitStep(
     pinsInNet.forEach((pinId) => {
       const owner = pinOwner.get(pinId);
       if (owner && WIDTH_FOLLOWERS.has(owner.type)) return;
-      widths.add(pinMap.get(pinId)!.width ?? 1);
+      const w = pinMap.get(pinId)!.width ?? 1;
+      // A splitter end with no bits mapped to it carries nothing (Logisim width-0 end)
+      if (w > 0) widths.add(w);
     });
     if (widths.size > 1) {
       netWidth.set(root, 0);
@@ -1483,6 +1622,16 @@ export function simulateCircuitStep(
   // Bit links between nets, [netA, bitA, netB, bitB] (Logisim splitters unite the threads of their
   // ends); nets on a link, and every net wider than 1, are resolved bit by bit below
   const bitLinks: [string, number, string, number][] = [];
+  newComps.forEach((c) => {
+    if (c.type !== 'splitter' || !c.inputs[0]) return;
+    const { fanout, bitEnd } = getSplitterConfig(c);
+    const { thread } = splitterThreads(bitEnd, fanout);
+    const combined = findRoot(c.inputs[0].id);
+    bitEnd.forEach((e, i) => {
+      const end = e > 0 ? c.outputs[e - 1] : undefined;
+      if (end) bitLinks.push([combined, i, findRoot(end.id), thread[i]]);
+    });
+  });
   const linkedNets = new Set<string>();
   bitLinks.forEach(([a, , b]) => {
     linkedNets.add(a);

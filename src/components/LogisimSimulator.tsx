@@ -49,6 +49,13 @@ import {
   truthTableColumnTerms,
   OUTPUT_MODE_TYPES,
   getBitWidth,
+  getSplitterConfig,
+  configureSplitter,
+  splitterDistribution,
+  splitterEndLabels,
+  splitterThreads,
+  SPLITTER_MAX_FANOUT,
+  type SplitterAppear,
   getComponentSize,
   setBitWidth,
 } from '../utils/circuitEngine';
@@ -248,7 +255,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   priorityEncoder4to2: { label: '4:2 Kodlayıcı', badge: '~74HC148' },
   comparator4: { label: 'Karşılaştırıcı', badge: '4-Bit' },
   alu4: { label: '4-Bit ALU', badge: '4 İşlem' },
-  splitter4: { label: 'Bus Ayırıcı', badge: 'Splitter' },
+  splitter4: { label: "4'lü Paralel Geçiş", badge: '4×1' },
+  splitter: { label: 'Splitter', badge: 'Ayırıcı' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -279,6 +287,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [showKMapModal, setShowKMapModal] = useState<boolean>(false);
   const [showNumberConverterModal, setShowNumberConverterModal] = useState<boolean>(false);
   const [showAboutModal, setShowAboutModal] = useState<boolean>(false);
+  // Splitter bit distribution popover in the property bar
+  const [splitterDistOpen, setSplitterDistOpen] = useState<boolean>(false);
   const [showPresetsModal, setShowPresetsModal] = useState<boolean>(false);
   const [presetModalSearch, setPresetModalSearch] = useState<string>('');
   const [presetFilterCat, setPresetFilterCat] = useState<string>('all');
@@ -1012,12 +1022,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     });
   };
 
+  // The splitter bit popover belongs to one selected part
+  useEffect(() => setSplitterDistOpen(false), [selectedCompIds]);
+
   // New bit width for a switch/LED/constant: the body resizes, wires on its pin follow the pin
   const handleSetBitWidth = (compId: string, width: number) => {
     const old = components.find((c) => c.id === compId);
     if (!old || getBitWidth(old) === width) return;
+    commitResizedComp(old, setBitWidth(old, width));
+  };
+
+  // New splitter settings (incoming width, fan out, appearance, bit distribution); wires follow the pins
+  const handleConfigureSplitter = (
+    compId: string,
+    patch: { incoming?: number; fanout?: number; appear?: SplitterAppear; bitEnd?: number[] }
+  ) => {
+    const old = components.find((c) => c.id === compId);
+    if (!old) return;
+    commitResizedComp(old, configureSplitter(old, patch));
+  };
+
+  // A part whose body/pins changed in place: wires on its old pin locations follow the pins
+  const commitResizedComp = (old: CircuitComponentInstance, resized: CircuitComponentInstance) => {
+    const compId = old.id;
     recordHistory();
-    const resized = setBitWidth(old, width);
     const nextComps = components.map((c) => (c.id === compId ? resized : c));
     const pinRemap = new Map<string, string | null>();
     for (const p of [...old.inputs, ...old.outputs]) {
@@ -5912,6 +5940,56 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'splitter': {
+        // Logisim SplitterPainter (facing east): combined end lead, a spine, one lead per end and its bit range
+        const { fanout, bitEnd, appear } = getSplitterConfig(comp);
+        const { endWidth } = splitterThreads(bitEnd, fanout);
+        const labels = splitterEndLabels(bitEnd, fanout);
+        const { height } = getComponentSize(comp);
+        const cy = appear === 'right' ? 0 : appear === 'center' ? 10 * Math.floor(fanout / 2) : 10 * fanout;
+        const ey0 = appear === 'right' ? 10 : 0;
+        const ink = isSelected ? strokeColor : cadTheme === 'dark' ? '#e2e8f0' : '#1e293b';
+        const spineTop = Math.min(cy, ey0);
+        const spineBot = Math.max(cy, ey0 + 10 * (fanout - 1));
+        return (
+          <g>
+            <rect x={0} y={Math.min(0, spineTop)} width={20} height={Math.max(height, spineBot - spineTop)} fill="transparent" />
+            <line x1={0} y1={cy} x2={6} y2={cy} stroke={ink} strokeWidth={bitEnd.length > 1 ? 4.5 : 2.5} strokeLinecap="round" />
+            {spineBot > spineTop && <line x1={6} y1={spineTop} x2={6} y2={spineBot} stroke={ink} strokeWidth={4} strokeLinecap="round" />}
+            {Array.from({ length: fanout }, (_, i) => {
+              const ey = ey0 + 10 * i;
+              const w = endWidth[i];
+              return (
+                <g key={i}>
+                  <line
+                    x1={6}
+                    y1={ey}
+                    x2={20}
+                    y2={ey}
+                    stroke={w === 0 ? (cadTheme === 'dark' ? '#475569' : '#94a3b8') : ink}
+                    strokeWidth={w > 1 ? 3.5 : w === 1 ? 2 : 1}
+                    strokeDasharray={w === 0 ? '2,2' : undefined}
+                  />
+                  {labels[i] && (
+                    <text
+                      x={9}
+                      y={ey - 2.5}
+                      fontSize={6.5}
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                      fill={cadTheme === 'dark' ? '#94a3b8' : '#475569'}
+                      className="select-none pointer-events-none"
+                    >
+                      {labels[i]}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        );
+      }
+
       case 'splitter4': {
         const in0 = comp.inputs[0]?.value === 1;
         const in1 = comp.inputs[1]?.value === 1;
@@ -6181,7 +6259,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -9804,10 +9882,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         <circle
                           cx={0}
                           cy={0}
-                          r={4.5}
-                          fill={pinDotFill(pin.value)}
+                          // Splitter ends are 10px apart and carry no value of their own (the wire shows it)
+                          r={comp.type === 'splitter' ? 2.5 : 4.5}
+                          fill={comp.type === 'splitter' ? '#94a3b8' : pinDotFill(pin.value)}
                           stroke="#ffffff"
-                          strokeWidth={1.5}
+                          strokeWidth={comp.type === 'splitter' ? 1 : 1.5}
                           className="group-hover:scale-125 transition-transform pointer-events-none"
                           pointerEvents="none"
                         />
@@ -9879,10 +9958,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         <circle
                           cx={0}
                           cy={0}
-                          r={4.5}
-                          fill={pinDotFill(pin.value)}
+                          // Splitter ends are 10px apart and carry no value of their own (the wire shows it)
+                          r={comp.type === 'splitter' ? 2.5 : 4.5}
+                          fill={comp.type === 'splitter' ? '#94a3b8' : pinDotFill(pin.value)}
                           stroke="#ffffff"
-                          strokeWidth={1.5}
+                          strokeWidth={comp.type === 'splitter' ? 1 : 1.5}
                           className="group-hover:scale-125 transition-transform pointer-events-none"
                           pointerEvents="none"
                         />
@@ -10001,6 +10081,100 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     ))}
                   </div>
                 )}
+
+                {/* Splitter settings (Logisim 'incoming', 'fanout', 'appear', bit0..bitN) */}
+                {selectedComp.type === 'splitter' && (() => {
+                  const cfg = getSplitterConfig(selectedComp);
+                  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+                  return (
+                    <div className="relative flex items-center gap-1.5 pr-2 border-r border-slate-700">
+                      <span className="text-slate-400 font-semibold text-[11px]">Gelen bit:</span>
+                      <select
+                        value={cfg.bitEnd.length}
+                        onChange={(e) => handleConfigureSplitter(selectedComp.id, { incoming: Number(e.target.value) })}
+                        className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                        title="Birleşik uçtaki veri yolunun genişliği (1-32)"
+                      >
+                        {range(MAX_BIT_WIDTH).map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                      <span className="text-slate-400 font-semibold text-[11px]">Uç sayısı:</span>
+                      <select
+                        value={cfg.fanout}
+                        onChange={(e) => handleConfigureSplitter(selectedComp.id, { fanout: Number(e.target.value) })}
+                        className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                        title="Ayrılan uç sayısı (1-32); değişince bitler varsayılan düzende yeniden dağıtılır"
+                      >
+                        {range(SPLITTER_MAX_FANOUT).map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                      {(['left', 'center', 'right'] as const).map((a) => (
+                        <button
+                          key={a}
+                          onClick={() => handleConfigureSplitter(selectedComp.id, { appear: a })}
+                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                            cfg.appear === a ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          }`}
+                          title={a === 'left' ? 'Sol elli: uçlar birleşik ucun bir yanında (Logisim varsayılanı)' : a === 'right' ? 'Sağ elli: uçlar birleşik ucun öbür yanında' : 'Ortalı: uçlar birleşik ucun iki yanına dağılır'}
+                        >
+                          {a === 'left' ? 'Sol' : a === 'right' ? 'Sağ' : 'Orta'}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setSplitterDistOpen((v) => !v)}
+                        className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
+                          splitterDistOpen ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                        title="Her bitin hangi uca gideceğini seç"
+                      >
+                        Bitleri dağıt…
+                      </button>
+                      {splitterDistOpen && (
+                        <div className="absolute top-full right-0 mt-3 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-40">
+                          <div className="flex gap-1 mb-2">
+                            <button
+                              onClick={() => handleConfigureSplitter(selectedComp.id, { bitEnd: splitterDistribution(cfg.fanout, cfg.bitEnd.length, true) })}
+                              className="flex-1 px-1.5 py-1 rounded text-[10.5px] font-bold bg-slate-800 text-slate-300 hover:bg-slate-700"
+                              title="Düşük bitler 1. uca"
+                            >
+                              Artan dağıt
+                            </button>
+                            <button
+                              onClick={() => handleConfigureSplitter(selectedComp.id, { bitEnd: splitterDistribution(cfg.fanout, cfg.bitEnd.length, false) })}
+                              className="flex-1 px-1.5 py-1 rounded text-[10.5px] font-bold bg-slate-800 text-slate-300 hover:bg-slate-700"
+                              title="Yüksek bitler 1. uca"
+                            >
+                              Azalan dağıt
+                            </button>
+                          </div>
+                          <div className="max-h-72 overflow-y-auto pr-1 space-y-1">
+                            {cfg.bitEnd.map((e, i) => (
+                              <label key={i} className="flex items-center justify-between gap-2 text-[11px]">
+                                <span className="font-mono text-slate-300">Bit {i}</span>
+                                <select
+                                  value={e}
+                                  onChange={(ev) => {
+                                    const next = [...cfg.bitEnd];
+                                    next[i] = Number(ev.target.value);
+                                    handleConfigureSplitter(selectedComp.id, { bitEnd: next });
+                                  }}
+                                  className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
+                                >
+                                  <option value={0}>yok</option>
+                                  {range(cfg.fanout).map((n) => (
+                                    <option key={n} value={n}>{n}. uç</option>
+                                  ))}
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Bit width of a switch / LED / constant (Logisim 'Data Bits') */}
                 {(selectedComp.type === 'switch' || selectedComp.type === 'led' || selectedComp.type === 'constant') && (

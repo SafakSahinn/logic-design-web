@@ -10,7 +10,7 @@ const SEQUENTIAL_TYPES = ['dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 're
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
 const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4');
 // Parts that are only wiring / display and add no logic level
-const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'splitter4', 'busSplitter'];
+const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'splitter4', 'busSplitter', 'splitter'];
 
 export interface CMOSGateStats {
   gateType: string;
@@ -66,6 +66,7 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   alu4: 280,
   alu4bit: 280,
   splitter4: 0,
+  splitter: 0,
   busSplitter: 0,
   dotMatrix8x8: 128,
   rgbMatrix16x16: 512,
