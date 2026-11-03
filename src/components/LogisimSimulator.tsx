@@ -124,7 +124,7 @@ import {
   getSubcircuitDefinition,
 } from '../utils/subcircuitManager';
 import type { CustomSubcircuit } from '../types/circuit';
-import { MAX_BIT_WIDTH, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
+import { MAX_BIT_WIDTH, bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
@@ -363,7 +363,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // Default wire type (1-Bit standard vs 4-Bit Multi-bit bus)
-  const [defaultWireIsBus, setDefaultWireIsBus] = useState<boolean>(false);
 
   // Ref to prevent clearing box selection on background click
   const didDragSelectionBoxRef = useRef<boolean>(false);
@@ -2647,18 +2646,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast(`"${sheet.name}" sayfası entegre çip olarak tuvale eklendi!`);
   };
 
-  // Toggle wire between 1-Bit single line and 4-Bit Multi-bit Bus
-  const handleToggleWireBus = (wireId: string) => {
-    const target = wires.find((w) => w.id === wireId);
-    if (!target) return;
-    recordHistory();
-    // Every segment of the same connected wire gets the new width; a mixed net would be re-merged by
-    // repairWires into whatever its segments happen to say
-    const net = new Set(getConnectedWireIds(wires, wireId));
-    const makeBus = !target.isBus;
-    setWires((prev) => prev.map((w) => (net.has(w.id) ? { ...w, isBus: makeBus, bitWidth: makeBus ? 4 : 1 } : w)));
-  };
-
 
   // Resolves wire start point snapped to 10px grid (Logisim Wire.e0)
   const getWireStartPt = (wire: CircuitWire): WirePoint => {
@@ -2751,8 +2738,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           value: 0,
           startPoint: seg.e0,
           endPoint: seg.e1,
-          isBus: defaultWireIsBus,
-          bitWidth: defaultWireIsBus ? 4 : 1,
         }));
         candidateWires = [...prev, ...addedWires];
       }
@@ -6041,6 +6026,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     return computeCircuitJunctions(wires, getWireStartPt, getWireEndPt, findPinById);
   }, [wires, components]);
 
+  // Error labels ("Uyumsuz genişlik", "ÇAKIŞMA") are drawn once per connected wire group, on its first
+  // wire, instead of on every segment
+  const errorLabelWireIds = useMemo(() => {
+    const labelled = new Set<string>();
+    const seen = new Set<string>();
+    wires.forEach((w) => {
+      if (!(w.widthError || w.hasConflict) || seen.has(w.id)) return;
+      getConnectedWireIds(wires, w.id).forEach((id) => seen.add(id));
+      labelled.add(w.id);
+    });
+    return labelled;
+  }, [wires]);
+
   // Wire jumper bridges removed - Logisim standard flat crossings with solder junction dots
 
   // Generated Truth Table for active circuit: 2^N full simulations, so only while its window is open
@@ -8268,25 +8266,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
           {/* Center/Right: Canvas Display, Routing & Step 5 Theme Toggle */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Wire Bus Mode */}
-            <button
-              onClick={() => {
-                setDefaultWireIsBus(!defaultWireIsBus);
-                showToast(defaultWireIsBus ? 'Standart 1-Bit kablo modu aktif.' : '4-Bit Kalın Veri Yolu (Bus) modu aktif!');
-              }}
-              className={`px-2.5 py-1 rounded-xl font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs ${
-                defaultWireIsBus
-                  ? 'bg-blue-600 text-white border-blue-500 shadow-xs'
-                  : cadTheme === 'dark'
-                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-              }`}
-              title="Kablo Tipi: 1-Bit Hat veya 4-Bit Kalın Veri Yolu"
-            >
-              <span className="font-mono font-black">{defaultWireIsBus ? '//4' : '1B'}</span>
-              <span>{defaultWireIsBus ? '4-Bit Veri Yolu' : '1-Bit Kablo'}</span>
-            </button>
-
             {/* Snap to Grid */}
             <button
               onClick={() => setSnapToGrid(!snapToGrid)}
@@ -9187,10 +9166,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               if (!fromPin && !wire.branchPoint && !wire.startPoint) return null;
               if (!toPin && !wire.endPoint) return null;
 
-              const isHigh = wire.value === 1;
-              const isError = wire.hasConflict || wire.value === 'E';
-              // Multi-bit buses get their own value model in a later stage
-              const isFloating = !wire.isBus && (wire.value === 'Z' || wire.value === 'X');
+              // Logisim colours: a multi-bit wire is one colour (black, here the theme's ink), an
+              // unknown bundle gray, a width error orange; only 1-bit wires show 0/1/x levels
+              const wireWidth = wire.width ?? 1;
+              const isMulti = wireWidth > 1;
+              const isWidthErr = !!wire.widthError;
+              const isHigh = !isMulti && !isWidthErr && wire.value === 1;
+              const isError = !isWidthErr && (wire.hasConflict || wire.value === 'E');
+              const isFloating = !isMulti && !isWidthErr && (wire.value === 'Z' || wire.value === 'X');
+              const isMultiUnknown = isMulti && !!wire.bits && wire.bits.every((b) => b === 'X' || b === 'Z');
+              const isThick = isMulti || isWidthErr;
               const isSelected = selectedWireIds.includes(wire.id);
 
               const startPt = getWireStartPt(wire);
@@ -9297,7 +9282,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       d={pathD}
                       fill="none"
                       stroke="#ef4444"
-                      strokeWidth={wire.isBus ? 16 : 14}
+                      strokeWidth={isThick ? 16 : 14}
                       opacity={0.35}
                       strokeLinecap="round"
                       pointerEvents="none"
@@ -9309,7 +9294,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       d={pathD}
                       fill="none"
                       stroke={cadTheme === 'dark' ? '#fb7185' : '#fca5a5'}
-                      strokeWidth={wire.isBus ? 10 : 8}
+                      strokeWidth={isThick ? 11 : 8}
                       opacity={cadTheme === 'dark' ? 0.85 : 0.8}
                       strokeLinecap="round"
                       pointerEvents="none"
@@ -9319,7 +9304,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       d={pathD}
                       fill="none"
                       stroke={cadTheme === 'dark' ? '#38bdf8' : '#93c5fd'}
-                      strokeWidth={wire.isBus ? 10 : 8}
+                      strokeWidth={isThick ? 11 : 8}
                       opacity={cadTheme === 'dark' ? 0.85 : 0.8}
                       strokeLinecap="round"
                       pointerEvents="none"
@@ -9329,7 +9314,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       d={pathD}
                       fill="none"
                       stroke={cadTheme === 'dark' ? '#4ade80' : '#86efac'}
-                      strokeWidth={wire.isBus ? 9 : 7}
+                      strokeWidth={7}
                       opacity={cadTheme === 'dark' ? 0.75 : 0.6}
                       strokeLinecap="round"
                       pointerEvents="none"
@@ -9341,7 +9326,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     fill="none"
                     pointerEvents="none"
                     stroke={
-                      isError
+                      isWidthErr
+                        ? '#ff7b00'
+                        : isError
                         ? '#ef4444'
                         : isSelected
                         ? (cadTheme === 'dark' ? '#38bdf8' : '#2563eb')
@@ -9349,17 +9336,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         ? (cadTheme === 'dark' ? '#22c55e' : '#16a34a')
                         : isFloating
                         ? (cadTheme === 'dark' ? '#818cf8' : '#4f46e5')
-                        : wire.isBus
-                        ? (cadTheme === 'dark' ? '#06b6d4' : '#3b82f6')
+                        : isMultiUnknown
+                        ? (cadTheme === 'dark' ? '#64748b' : '#94a3b8')
+                        : isMulti
+                        ? (cadTheme === 'dark' ? '#e2e8f0' : '#1e293b')
                         : (cadTheme === 'dark' ? '#334155' : '#64748b')
                     }
                     strokeWidth={
-                      wire.isBus
-                        ? isError
-                          ? 6
-                          : isSelected
-                          ? 6.5
-                          : isHigh
+                      isThick
+                        ? isSelected
                           ? 5.5
                           : 4.5
                         : isError
@@ -9374,36 +9359,32 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     strokeLinecap="round"
                   />
 
-                  {/* 4-Bit Bus Slash Badge */}
-                  {wire.isBus && (
-                    <g transform={`translate(${midX}, ${midY})`} className="pointer-events-none select-none">
-                      <rect
-                        x={-13}
-                        y={-8}
-                        width={26}
-                        height={16}
-                        rx={5}
-                        fill="#0f172a"
-                        stroke="#3b82f6"
-                        strokeWidth={1}
-                        filter="drop-shadow(0 2px 4px rgba(0,0,0,0.35))"
-                      />
-                      <text
-                        x={0}
-                        y={3.5}
-                        textAnchor="middle"
-                        fill="#60a5fa"
-                        fontSize={8.5}
-                        fontWeight="black"
-                        fontFamily="monospace"
-                      >
-                        /4
-                      </text>
-                    </g>
-                  )}
+                  {/* Width mismatch label (Logisim "Incompatible widths"), once per wire group */}
+                  {isWidthErr && errorLabelWireIds.has(wire.id) && (() => {
+                    const label = `Uyumsuz genişlik: ${(wire.widthList ?? []).join(' / ')}`;
+                    const w = label.length * 5.6 + 16;
+                    return (
+                      <g transform={`translate(${midX}, ${midY})`} className="pointer-events-none select-none">
+                        <rect
+                          x={-w / 2}
+                          y={-10}
+                          width={w}
+                          height={20}
+                          rx={6}
+                          fill="#ff7b00"
+                          stroke="#ffffff"
+                          strokeWidth={1.5}
+                          filter="drop-shadow(0 2px 4px rgba(0,0,0,0.35))"
+                        />
+                        <text x={0} y={3.5} textAnchor="middle" fill="#ffffff" fontSize={9.5} fontWeight="bold" fontFamily="monospace">
+                          {label}
+                        </text>
+                      </g>
+                    );
+                  })()}
 
                   {/* Contention Warning Badge */}
-                  {wire.hasConflict && (
+                  {wire.hasConflict && errorLabelWireIds.has(wire.id) && (
                     <g transform={`translate(${midX}, ${midY})`} className="pointer-events-none">
                       <rect
                         x={-46}
@@ -9495,7 +9476,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     </g>
                   )}
 
-                  {/* Selected Wire: Compact Floating Action Pill (Delete / Toggle Bus) */}
+                  {/* Selected Wire: Compact Floating Action Pill (Delete) */}
                   {isSelected && selectedWireIds.length === 1 && !wiringFrom && !draggingWireJoint && !draggingWireJointRef.current && (
                     <g
                       transform={`translate(${midX}, ${midY < 55 ? midY + 28 : midY - 28})`}
@@ -9512,9 +9493,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       }}
                     >
                       <rect
-                        x={-28}
+                        x={-15}
                         y={-13}
-                        width={56}
+                        width={30}
                         height={26}
                         rx={13}
                         fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'}
@@ -9524,7 +9505,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       />
                       {/* Delete Wire Segment */}
                       <g
-                        transform="translate(-13, 0)"
                         onMouseDown={(e) => {
                           e.stopPropagation();
                           e.preventDefault();
@@ -9542,71 +9522,41 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         <path d="M -3,-3 L 3,3 M 3,-3 L -3,3" stroke="#ffffff" strokeWidth={1.8} strokeLinecap="round" />
                         <title>Kablo Segmentini Sil (Del / Backspace)</title>
                       </g>
-                      {/* Toggle Bus Width */}
-                      <g
-                        transform="translate(13, 0)"
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                        }}
-                        onMouseUp={(e) => {
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleWireBus(wire.id);
-                        }}
-                        className="cursor-pointer group/bus"
-                      >
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={9}
-                          fill={wire.isBus ? '#6366f1' : '#64748b'}
-                          className="group-hover/bus:opacity-80 transition-opacity"
-                        />
-                        <text
-                          x={0}
-                          y={3}
-                          textAnchor="middle"
-                          fill="#ffffff"
-                          fontSize={8}
-                          fontWeight="bold"
-                          fontFamily="monospace"
-                        >
-                          {wire.isBus ? '1B' : '/4'}
-                        </text>
-                        <title>{wire.isBus ? '1-Bit Standart Kabloya Çevir' : '4-Bit Kalın Veri Yolu (Bus) Yap'}</title>
-                      </g>
                     </g>
                   )}
 
                   {/* Floating Live Signal Tooltip on Hover */}
-                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && (
-                    <g transform={`translate(${midX}, ${midY - 16})`} className="pointer-events-none select-none">
-                      <rect
-                        x={-52}
-                        y={-10}
-                        width={104}
-                        height={20}
-                        rx={5}
-                        fill="#0f172a"
-                        stroke="#334155"
-                        strokeWidth={1}
-                        filter="drop-shadow(0 2px 4px rgba(0,0,0,0.35))"
-                      />
-                      <circle cx={-40} cy={0} r={3} fill={isHigh ? '#22c55e' : '#94a3b8'} />
-                      <text x={4} y={3.5} textAnchor="middle" fill="#ffffff" fontSize={8} fontWeight="bold" fontFamily="monospace">
-                        {wire.isBus
-                          ? isHigh
-                            ? 'BUS · 0b1111 (0xF)'
-                            : 'BUS · 0b0000 (0x0)'
-                          : isHigh
-                          ? '1 · 5V (HIGH)'
-                          : '0 · 0V (LOW)'}
-                      </text>
-                    </g>
-                  )}
+                  {hoveredWireId === wire.id && !isSelected && !wire.hasConflict && !isWidthErr && (() => {
+                    let tip: string;
+                    if (isMulti && wire.bits) {
+                      const n = bitsToNumber(wire.bits);
+                      tip = `${wireWidth} bit · ${bitsToString(wire.bits)}`;
+                      if (n !== undefined) tip += ` = 0x${n.toString(16).toUpperCase().padStart(Math.ceil(wireWidth / 4), '0')}`;
+                    } else {
+                      const v = wire.value;
+                      tip = `1 bit · ${v === 1 ? '1 (HIGH)' : v === 0 ? '0 (LOW)' : v === 'E' ? 'E (hata)' : 'x (tanımsız)'}`;
+                    }
+                    const w = tip.length * 4.9 + 30;
+                    return (
+                      <g transform={`translate(${midX}, ${midY - 16})`} className="pointer-events-none select-none">
+                        <rect
+                          x={-w / 2}
+                          y={-10}
+                          width={w}
+                          height={20}
+                          rx={5}
+                          fill="#0f172a"
+                          stroke="#334155"
+                          strokeWidth={1}
+                          filter="drop-shadow(0 2px 4px rgba(0,0,0,0.35))"
+                        />
+                        <circle cx={-w / 2 + 10} cy={0} r={3} fill={isError ? '#ef4444' : isHigh ? '#22c55e' : '#94a3b8'} />
+                        <text x={6} y={3.5} textAnchor="middle" fill="#ffffff" fontSize={8} fontWeight="bold" fontFamily="monospace">
+                          {tip}
+                        </text>
+                      </g>
+                    );
+                  })()}
                 </g>
               );
             })}
@@ -9617,13 +9567,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <circle
                   cx={j.x}
                   cy={j.y}
-                  r={j.isBus ? 6 : 4.5}
+                  r={j.width > 1 || j.widthError ? 6 : 4.5}
                   fill={
-                    j.hasConflict || j.value === 'E'
+                    j.widthError
+                      ? '#ff7b00'
+                      : j.hasConflict || j.value === 'E'
                       ? '#ef4444'
+                      : j.width > 1
+                      ? j.unknown
+                        ? (cadTheme === 'dark' ? '#64748b' : '#94a3b8')
+                        : (cadTheme === 'dark' ? '#e2e8f0' : '#1e293b')
                       : j.value === 1
                       ? (cadTheme === 'dark' ? '#22c55e' : '#16a34a')
-                      : !j.isBus && (j.value === 'Z' || j.value === 'X')
+                      : j.value === 'Z' || j.value === 'X'
                       ? (cadTheme === 'dark' ? '#818cf8' : '#4f46e5')
                       : (cadTheme === 'dark' ? '#94a3b8' : '#1e293b')
                   }

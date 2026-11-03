@@ -1464,17 +1464,20 @@ export function simulateCircuitStep(
   // pull resistors take the width of the net they sit on. 0 = pins of different widths meet (Logisim
   // "Incompatible widths": the whole net reads x)
   const netWidth = new Map<string, number>();
+  const netWidthList = new Map<string, number[]>();
   netPins.forEach((pinsInNet, root) => {
-    let width: number | undefined;
-    let mismatch = false;
+    const widths = new Set<number>();
     pinsInNet.forEach((pinId) => {
       const owner = pinOwner.get(pinId);
       if (owner && WIDTH_FOLLOWERS.has(owner.type)) return;
-      const w = pinMap.get(pinId)!.width ?? 1;
-      if (width === undefined) width = w;
-      else if (width !== w) mismatch = true;
+      widths.add(pinMap.get(pinId)!.width ?? 1);
     });
-    netWidth.set(root, mismatch ? 0 : (width ?? 1));
+    if (widths.size > 1) {
+      netWidth.set(root, 0);
+      netWidthList.set(root, [...widths].sort((a, b) => a - b));
+    } else {
+      netWidth.set(root, widths.size === 1 ? [...widths][0] : 1);
+    }
   });
 
   // Bit links between nets, [netA, bitA, netB, bitB] (Logisim splitters unite the threads of their
@@ -1504,6 +1507,11 @@ export function simulateCircuitStep(
       }
       if (!!w.widthError !== widthError) {
         w.widthError = widthError || undefined;
+        hasChanged = true;
+      }
+      const widthList = widthError ? netWidthList.get(root) : undefined;
+      if (String(w.widthList ?? '') !== String(widthList ?? '')) {
+        w.widthList = widthList;
         hasChanged = true;
       }
     });

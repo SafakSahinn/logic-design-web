@@ -72,7 +72,11 @@ export interface CircuitJunction {
   y: number;
   value: SignalValue;
   hasConflict: boolean;
-  isBus: boolean;
+  /** Bit width of the net at the dot (1 for single-bit or unknown) */
+  width: number;
+  widthError: boolean;
+  /** Multi-bit net whose every bit is x/z (drawn gray like its wires) */
+  unknown: boolean;
 }
 
 /**
@@ -453,17 +457,30 @@ interface CanonicalSeg {
   x1: number;
   y1: number;
   isVertical: boolean;
-  isBus: boolean;
-  bitWidth: number;
+  /** Multi-bit simulation fields carried over from the source wire */
+  sim: WireSim;
   value: SignalValue;
   hasConflict: boolean;
   preferredId?: string;
 }
 
+type WireSim = Pick<CircuitWire, 'width' | 'bits' | 'widthError' | 'widthList'>;
+
+const wireSim = (w: CircuitWire): WireSim => ({
+  width: w.width,
+  bits: w.bits,
+  widthError: w.widthError,
+  widthList: w.widthList,
+});
+
+// Collinear pieces of one net carry the same fields; keep the most informative ones
+const mergeSim = (a: WireSim, b: WireSim): WireSim =>
+  a.widthError ? a : b.widthError ? b : (b.width ?? 1) > (a.width ?? 1) ? b : a;
+
 const createCanonicalSeg = (
   a: WirePoint,
   b: WirePoint,
-  meta: { isBus?: boolean; bitWidth?: number; value?: SignalValue; hasConflict?: boolean; id?: string }
+  meta: { sim?: WireSim; value?: SignalValue; hasConflict?: boolean; id?: string }
 ): CanonicalSeg | null => {
   const p0 = snapPt10(a);
   const p1 = snapPt10(b);
@@ -478,8 +495,7 @@ const createCanonicalSeg = (
       x1: p0.x,
       y1,
       isVertical: true,
-      isBus: !!meta.isBus,
-      bitWidth: meta.bitWidth || (meta.isBus ? 4 : 1),
+      sim: meta.sim ?? {},
       value: meta.value ?? 0,
       hasConflict: !!meta.hasConflict,
       preferredId: meta.id,
@@ -493,8 +509,7 @@ const createCanonicalSeg = (
       x1,
       y1: p0.y,
       isVertical: false,
-      isBus: !!meta.isBus,
-      bitWidth: meta.bitWidth || (meta.isBus ? 4 : 1),
+      sim: meta.sim ?? {},
       value: meta.value ?? 0,
       hasConflict: !!meta.hasConflict,
       preferredId: meta.id,
@@ -1187,8 +1202,7 @@ export const repairWires = (
         { x: os.x1, y: os.y1 },
         { x: os.x2, y: os.y2 },
         {
-          isBus: item.wire.isBus,
-          bitWidth: item.wire.bitWidth,
+          sim: wireSim(item.wire),
           value: item.wire.value,
           hasConflict: item.wire.hasConflict,
           id: ortho.length === 1 && idx === 0 ? item.wire.id : undefined,
@@ -1332,8 +1346,7 @@ export const repairWires = (
           { x: os.x1, y: os.y1 },
           { x: os.x2, y: os.y2 },
           {
-            isBus: w.isBus,
-            bitWidth: w.bitWidth,
+            sim: wireSim(w),
             value: w.value,
             hasConflict: w.hasConflict,
             id: ortho.length === 1 && idx === 0 ? w.id : undefined,
@@ -1348,8 +1361,7 @@ export const repairWires = (
       const segsForWire: CanonicalSeg[] = [];
       for (let i = 0; i < chosenPts.length - 1; i++) {
         const cSeg = createCanonicalSeg(chosenPts[i], chosenPts[i + 1], {
-          isBus: w.isBus,
-          bitWidth: w.bitWidth,
+          sim: wireSim(w),
           value: w.value,
           hasConflict: w.hasConflict,
         });
@@ -1428,8 +1440,7 @@ export const repairWires = (
       if (next.y0 <= curr.y1) {
         // Overlapping or contiguous collinear vertical segments -> merge into maximal span
         if (next.y1 > curr.y1) curr.y1 = next.y1;
-        curr.isBus = curr.isBus || next.isBus;
-        curr.bitWidth = Math.max(curr.bitWidth, next.bitWidth);
+        curr.sim = mergeSim(curr.sim, next.sim);
         if (next.value === 1) curr.value = 1;
         curr.hasConflict = curr.hasConflict || next.hasConflict;
       } else {
@@ -1449,8 +1460,7 @@ export const repairWires = (
       if (next.x0 <= curr.x1) {
         // Overlapping or contiguous collinear horizontal segments -> merge into maximal span
         if (next.x1 > curr.x1) curr.x1 = next.x1;
-        curr.isBus = curr.isBus || next.isBus;
-        curr.bitWidth = Math.max(curr.bitWidth, next.bitWidth);
+        curr.sim = mergeSim(curr.sim, next.sim);
         if (next.value === 1) curr.value = 1;
         curr.hasConflict = curr.hasConflict || next.hasConflict;
       } else {
@@ -1545,8 +1555,7 @@ export const repairWires = (
       endPoint: { x: s.x1, y: s.y1 },
       value: s.value,
       hasConflict: s.hasConflict,
-      isBus: s.isBus,
-      bitWidth: s.bitWidth,
+      ...s.sim,
     };
   });
 };
@@ -1567,7 +1576,7 @@ export const computeCircuitJunctions = (
 ): CircuitJunction[] => {
   const allSegments: WireSegment[] = [];
   const endpointPoints = new Map<string, WirePoint>();
-  const pointWireValues = new Map<string, { value: SignalValue; hasConflict: boolean; isBus: boolean }>();
+  const pointWireValues = new Map<string, { value: SignalValue; hasConflict: boolean; width: number; widthError: boolean; unknown: boolean }>();
 
   const keyOf = (x: number, y: number) => `${x},${y}`;
 
@@ -1575,6 +1584,7 @@ export const computeCircuitJunctions = (
     const startPt = getWireStart(w);
     const endPt = getWireEnd(w, startPt);
     const segs = getWireOrthogonalSegments(w, startPt, endPt);
+    const unknown = (w.width ?? 1) > 1 && !!w.bits && w.bits.every((b) => b === 'X' || b === 'Z');
 
     for (const s of segs) {
       allSegments.push(s);
@@ -1584,19 +1594,17 @@ export const computeCircuitJunctions = (
       if (!endpointPoints.has(k1)) endpointPoints.set(k1, { x: s.x1, y: s.y1 });
       if (!endpointPoints.has(k2)) endpointPoints.set(k2, { x: s.x2, y: s.y2 });
 
-      const prev1 = pointWireValues.get(k1);
-      pointWireValues.set(k1, {
-        value: prev1?.value === 1 || w.value === 1 ? 1 : 0,
-        hasConflict: !!prev1?.hasConflict || !!w.hasConflict,
-        isBus: !!prev1?.isBus || !!w.isBus,
-      });
-
-      const prev2 = pointWireValues.get(k2);
-      pointWireValues.set(k2, {
-        value: prev2?.value === 1 || w.value === 1 ? 1 : 0,
-        hasConflict: !!prev2?.hasConflict || !!w.hasConflict,
-        isBus: !!prev2?.isBus || !!w.isBus,
-      });
+      // Wires meeting at a dot belong to one net, so they carry the same value; errors win
+      for (const k of [k1, k2]) {
+        const prev = pointWireValues.get(k);
+        pointWireValues.set(k, {
+          value: prev?.value === 'E' ? 'E' : prev?.value === 1 && w.value !== 'E' ? 1 : w.value,
+          hasConflict: !!prev?.hasConflict || !!w.hasConflict,
+          width: Math.max(prev?.width ?? 1, w.width ?? 1),
+          widthError: !!prev?.widthError || !!w.widthError,
+          unknown: prev ? prev.unknown && unknown : unknown,
+        });
+      }
     }
   }
 
@@ -1641,13 +1649,15 @@ export const computeCircuitJunctions = (
   for (const [key, dirs] of pointDirs) {
     if (dirs.size >= 3) {
       const pt = endpointPoints.get(key)!;
-      const wireInfo = pointWireValues.get(key) || { value: 0, hasConflict: false, isBus: false };
+      const wireInfo = pointWireValues.get(key) || { value: 0, hasConflict: false, width: 1, widthError: false, unknown: false };
       junctions.push({
         x: pt.x,
         y: pt.y,
         value: wireInfo.value,
         hasConflict: wireInfo.hasConflict,
-        isBus: wireInfo.isBus,
+        width: wireInfo.width,
+        widthError: wireInfo.widthError,
+        unknown: wireInfo.unknown,
       });
     }
   }

@@ -209,9 +209,8 @@ export interface CircuitWire {
   bits?: SignalValue[];
   /** Pins of different widths meet on this net (Logisim "Incompatible widths"); the net reads x */
   widthError?: boolean;
-  isBus?: boolean;
-  bitWidth?: number;
-  busValue?: number;
+  /** Distinct pin widths meeting on a width-error net, ascending (shown as "Uyumsuz genişlik: 8 / 4") */
+  widthList?: number[];
   jointOffset?: number; // Manhattan orta segment ofseti (px)
   elbowX?: number; // Manhattan dirsek X koordinatı
   sourceWireId?: string;
