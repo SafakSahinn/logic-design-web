@@ -1,24 +1,31 @@
-import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
+import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP } from './circuitEngine';
-import { getSubcircuitDefinition } from './subcircuitManager';
+import { HEX_7SEG_MAP, bitSelectorSelectWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
+import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { solveKMap } from './kmapSolver';
+import { logisimDefaultPortOffsets, logisimSplitterEnds } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 
 /*
  * Logisim 2.7 (.circ) export.
  *
  * Every part is first expanded into Logisim primitives (gates, NOT, controlled buffer, flip-flops,
- * constants, pins, clocks); blocks Logisim has no exact equivalent for (adders, plexers, decoders,
- * ALU, registers, ...) become small gate / flip-flop networks with the same behaviour as our
- * simulator. Primitives are laid out on a grid and connected with Logisim tunnels named after their
- * net, so no wire can accidentally touch another part's pin. Pin offsets were measured in Logisim
- * 2.7.1 (gates: output at loc, inputs at -(size+bubble+xor) with the AbstractGate spacing; flip-flops:
- * Q (0,0), Q' (0,20), D/T (-40,20), clock (-40,0) or (-40,10) for J-K, reset (-10,30), preset (-30,30)).
- * Open inputs follow the simulator's Logisim rules: on primitives they stay unconnected, on gate
- * networks they become x (or the fixed level the simulator reads for them). Checked in Logisim 2.7.1:
- * primitives, presets and ICs match exactly; a gate network cannot always reproduce a block's x
- * (AND(0, x) = 0, a per-bit register still loads the defined bits of a partly open word).
+ * constants, pins, clocks, splitters, bit extenders / selectors, subcircuits); blocks Logisim has no
+ * exact equivalent for (adders, plexers, decoders, ALU, registers, ...) become small gate / flip-flop
+ * networks with the same behaviour as our simulator. Primitives are laid out on a grid and connected
+ * with Logisim tunnels named after their net, so no wire can accidentally touch another part's pin.
+ * Pin offsets were measured in Logisim 2.7.1 (gates: output at loc, inputs at -(size+bubble+xor) with
+ * the AbstractGate spacing; flip-flops: Q (0,0), Q' (0,20), D/T (-40,20), clock (-40,0) or (-40,10) for
+ * J-K, reset (-10,30), preset (-30,30)). Open inputs follow the simulator's Logisim rules: on primitives
+ * they stay unconnected, on gate networks they become x (or the fixed level the simulator reads for
+ * them). Checked in Logisim 2.7.1: primitives, presets and ICs match exactly; a gate network cannot
+ * always reproduce a block's x (AND(0, x) = 0, a per-bit register still loads the defined bits of a
+ * partly open word).
+ *
+ * Bit widths: every tunnel carries the width of the pin it stands for, so a net whose pins disagree on
+ * the width is a width error in Logisim too (same-named tunnels of different widths). Parts whose width
+ * follows their net (probe, pull resistor) take the net's width. Every IC definition becomes its own
+ * <circuit> (ports = Pins in port order, Logisim's default appearance) used as a subcircuit.
  */
 
 type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
@@ -29,11 +36,21 @@ type Prim =
   | { kind: 'buf'; in: string; out: string; mode?: OutMode }
   | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
-  | { kind: 'const'; value: 0 | 1; out: string }
-  | { kind: 'inpin'; label: string; out: string }
+  | { kind: 'const'; value: number; out: string; width?: number }
+  | { kind: 'inpin'; label: string; out: string; width?: number }
   | { kind: 'clock'; label: string; out: string }
-  | { kind: 'outpin'; label: string; in: string }
-  | { kind: 'pull'; value: 0 | 1 | 'X'; at: string };
+  // width undefined: the width of the net (a probe follows it)
+  | { kind: 'outpin'; label: string; in: string; width?: number }
+  | { kind: 'pull'; value: 0 | 1 | 'X'; at: string }
+  | { kind: 'splitter'; combined: string; ends: string[]; bitEnd: number[]; appear: 'left' | 'right' | 'center'; endWidth: number[] }
+  | { kind: 'extender'; in: string; ext: string | null; out: string; inW: number; outW: number; type: string }
+  | { kind: 'selector'; data: string; sel: string; out: string; dataW: number; groupW: number }
+  | { kind: 'sub'; circuit: string; ins: string[]; outs: string[]; inW: number[]; outW: number[]; inOff: Pt[]; outOff: Pt[] };
+
+interface Pt {
+  x: number;
+  y: number;
+}
 
 export interface CircExportResult {
   xml: string;
@@ -45,71 +62,138 @@ export interface CircExportResult {
 
 const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Where the port Pins of an IC's own circuit go: inputs facing east (west edge of the box), outputs
+// facing west (east edge), each column ordered by y, so Logisim's default appearance keeps port order
+const PORT_IN_X = 40;
+const PORT_OUT_X = 80;
+const portY = (i: number) => 100 + 20 * i;
+
+interface SubcircuitInfo {
+  circuit: string;
+  inOff: Pt[];
+  outOff: Pt[];
+}
+
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
   const warnings: string[] = [];
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
-  const blocks: { prims: Prim[] }[] = [];
 
-  // --- nets (union-find over net names so aliases like splitter outputs collapse) ---------------
-  const parent = new Map<string, string>();
-  const find = (k: string): string => {
-    if (!parent.has(k)) parent.set(k, k);
-    let r = k;
-    while (parent.get(r) !== r) r = parent.get(r)!;
-    parent.set(k, r);
-    return r;
-  };
-  const union = (a: string, b: string) => {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent.set(rb, ra);
-  };
-  let fresh = 0;
-  const newNet = () => `_t${fresh++}`;
-  const C0 = '_const0';
-  const C1 = '_const1';
-  let usesC0 = false;
-  let usesC1 = false;
-  const constNet = (v: 0 | 1) => {
-    if (v) usesC1 = true;
-    else usesC0 = true;
-    return v ? C1 : C0;
-  };
-  // A Logisim part's own input that is open on the canvas stays unconnected in the file too (no
-  // tunnel), so Logisim reads it exactly like the simulator does (gates ignore it, NOT gives E ...)
-  const OPEN = '';
-  // An open input of a block built from gates gets its own undriven net (an 'OPEN' tunnel, x in
-  // Logisim) so the undefined value stays undefined; inputs the simulator reads as a fixed level
-  // when open (carry-in, reset, enable ...) are tied to that constant instead
-  const openNets: string[] = [];
-  const openNet = () => {
-    const n = newNet();
-    openNets.push(n);
+  // Circuit names of the file: the canvas first, then one per IC definition
+  const circuitNames = new Set<string>();
+  const uniqueCircuitName = (base: string) => {
+    const b = base.trim() || 'main';
+    let n = b;
+    for (let i = 2; circuitNames.has(n); i++) n = `${b} (${i})`;
+    circuitNames.add(n);
     return n;
   };
+  const topName = uniqueCircuitName(circuitName || 'main');
+  const circuitXml: string[] = [];
+  const subInfo = new Map<string, SubcircuitInfo>();
+  const building = new Set<string>();
 
-  // Builds the netlist of one circuit level; `scope` keeps nets of inlined ICs apart and `alias`
-  // binds an IC's port pins to the nets of the level above
-  const buildLevel = (comps: CircuitComponentInstance[], levelWires: CircuitWire[], scope: string, alias: Map<string, string>, depth: number) => {
+  // The <circuit> of an IC definition (built once, inner ICs first)
+  const subcircuitFor = (def: CustomSubcircuit, depth: number): SubcircuitInfo | null => {
+    const known = subInfo.get(def.id);
+    if (known) return known;
+    if (building.has(def.id) || depth > 8) return null;
+    building.add(def.id);
+    const name = uniqueCircuitName(def.name || def.id);
+    const inPorts = def.ports.filter((p) => p.type === 'input');
+    const outPorts = def.ports.filter((p) => p.type === 'output');
+    const offsets = logisimDefaultPortOffsets([
+      ...inPorts.map((_, i) => ({ loc: { x: PORT_IN_X, y: portY(i) }, facing: 'east' })),
+      ...outPorts.map((_, i) => ({ loc: { x: PORT_OUT_X, y: portY(i) }, facing: 'west' })),
+    ]);
+    const info = { circuit: name, inOff: offsets.slice(0, inPorts.length), outOff: offsets.slice(inPorts.length) };
+    const body = buildCircuit(def.components, def.wires, def, depth + 1);
+    circuitXml.push(`  <circuit name="${xmlEsc(name)}">\n${body}\n  </circuit>`);
+    building.delete(def.id);
+    subInfo.set(def.id, info);
+    return info;
+  };
+
+  // Builds the parts of one circuit (the canvas, or an IC definition with its ports as Pins)
+  const buildCircuit = (comps: CircuitComponentInstance[], levelWires: CircuitWire[], def: CustomSubcircuit | null, depth: number): string => {
+    const blocks: { prims: Prim[] }[] = [];
+    const fixed: Array<{ x: number; y: number; prim: Prim }> = [];
+
+    // --- nets (union-find over net names so aliases like splitter outputs collapse) -------------
+    const parent = new Map<string, string>();
+    const find = (k: string): string => {
+      if (!parent.has(k)) parent.set(k, k);
+      let r = k;
+      while (parent.get(r) !== r) r = parent.get(r)!;
+      parent.set(k, r);
+      return r;
+    };
+    const union = (a: string, b: string) => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(rb, ra);
+    };
+    let fresh = 0;
+    const newNet = () => `_t${fresh++}`;
+    const C0 = '_const0';
+    const C1 = '_const1';
+    let usesC0 = false;
+    let usesC1 = false;
+    const constNet = (v: 0 | 1) => {
+      if (v) usesC1 = true;
+      else usesC0 = true;
+      return v ? C1 : C0;
+    };
+    // A Logisim part's own input that is open on the canvas stays unconnected in the file too (no
+    // tunnel), so Logisim reads it exactly like the simulator does (gates ignore it, NOT gives E ...)
+    const OPEN = '';
+    // An open input of a block built from gates gets its own undriven net (an 'OPEN' tunnel, x in
+    // Logisim) so the undefined value stays undefined; inputs the simulator reads as a fixed level
+    // when open (carry-in, reset, enable ...) are tied to that constant instead
+    const openNets: string[] = [];
+    const openNet = () => {
+      const n = newNet();
+      openNets.push(n);
+      return n;
+    };
+
+    // Inside an IC the port pins are bound to the nets of the circuit's own port Pins
+    const inScope = def !== null;
+    const alias = new Map<string, string>();
+    if (def) {
+      const inPorts = def.ports.filter((p) => p.type === 'input');
+      const outPorts = def.ports.filter((p) => p.type === 'output');
+      inPorts.forEach((p, i) => {
+        const net = `_port_in${i}`;
+        alias.set(p.targetPinId, net);
+        fixed.push({ x: PORT_IN_X, y: portY(i), prim: { kind: 'inpin', label: p.name, out: net, width: subcircuitPortWidth(def, p) } });
+      });
+      outPorts.forEach((p, i) => {
+        const net = `_port_out${i}`;
+        const target = def.components.find((x) => x.id === p.targetCompId);
+        const pinId = target && ['led', 'probe', 'buzzer'].includes(target.type) ? target.inputs[0]?.id : p.targetPinId;
+        if (pinId) alias.set(pinId, net);
+        fixed.push({ x: PORT_OUT_X, y: portY(i), prim: { kind: 'outpin', label: p.name, in: net, width: subcircuitPortWidth(def, p) } });
+      });
+    }
+
     const conns = getLogicalConnections(comps, levelWires);
     const netOfPin = new Map<string, string>();
     const connected = new Set<string>();
     for (const w of conns) {
-      const n = `${scope}${w.fromPinId}`;
-      netOfPin.set(w.fromPinId, n);
-      netOfPin.set(w.toPinId, n);
+      netOfPin.set(w.fromPinId, w.fromPinId);
+      netOfPin.set(w.toPinId, w.fromPinId);
       connected.add(w.fromPinId);
       connected.add(w.toPinId);
     }
     for (const [pinId, outer] of alias) {
-      const n = netOfPin.get(pinId) || `${scope}${pinId}`;
+      const n = netOfPin.get(pinId) || pinId;
       netOfPin.set(pinId, n);
       connected.add(pinId);
       union(outer, n);
     }
     // Output pins always get a net; an unconnected input reads `floating` (undefined: x)
-    const outNet = (pinId?: string) => (pinId ? netOfPin.get(pinId) || `${scope}${pinId}` : newNet());
+    const outNet = (pinId?: string) => (pinId ? netOfPin.get(pinId) || pinId : newNet());
     const inNet = (pinId: string | undefined, floating?: 0 | 1) =>
       pinId && connected.has(pinId) ? netOfPin.get(pinId)! : floating === undefined ? openNet() : constNet(floating);
     const isConn = (pinId?: string) => !!pinId && connected.has(pinId);
@@ -149,19 +233,22 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       const pin = (i: number) => pinNet(c.inputs[i]?.id);
       const out = (i: number) => outNet(c.outputs[i]?.id);
       const label = (c.label || c.type).trim();
-      const inScope = scope !== '';
+      const w0 = (p?: { width?: number }) => p?.width ?? 1;
 
       switch (c.type) {
         case 'switch':
-        case 'pushbutton':
+        case 'pushbutton': {
           // Inside an IC: a switch bound to a port is driven from outside, any other one is a constant
           if (inScope && c.outputs[0] && alias.has(c.outputs[0].id)) break;
-          if (inScope) P.push({ kind: 'const', value: c.state.on ? 1 : 0, out: out(0) });
+          const width = w0(c.outputs[0]);
+          const value = width > 1 ? (c.state.inputValue ?? 0) : c.state.on ? 1 : 0;
+          if (inScope) P.push({ kind: 'const', value, out: out(0), width });
           else {
-            P.push({ kind: 'inpin', label, out: out(0) });
+            P.push({ kind: 'inpin', label, out: out(0), width });
             inputs.push({ label, compId: c.id, pinIndex: 0 });
           }
           break;
+        }
         case 'clock':
           if (inScope && c.outputs[0] && alias.has(c.outputs[0].id)) break;
           if (inScope) P.push({ kind: 'const', value: 0, out: out(0) });
@@ -174,9 +261,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'gnd':
           P.push({ kind: 'const', value: c.type === 'vcc' ? 1 : 0, out: out(0) });
           break;
-        case 'constant':
-          P.push({ kind: 'const', value: (c.state.constValue ?? 1) % 2 === 1 ? 1 : 0, out: out(0) });
+        case 'constant': {
+          const width = w0(c.outputs[0]);
+          const v = c.state.constValue ?? 1;
+          P.push({ kind: 'const', value: width >= 32 ? v >>> 0 : v % 2 ** width, out: out(0), width });
           break;
+        }
         case 'dipSwitch4':
         case 'asciiKeyboard':
           c.outputs.forEach((p, i) => {
@@ -199,7 +289,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           if (inScope) break; // an IC's outputs reach the outside through its ports
           c.inputs.forEach((p, i) => {
             const l = c.inputs.length === 1 ? label : `${label}_${p.name}`;
-            P.push({ kind: 'outpin', label: l, in: pin(i) });
+            // A probe follows its net's width; every other display has a fixed width
+            P.push({ kind: 'outpin', label: l, in: pin(i), width: c.type === 'probe' ? undefined : w0(p) });
             outputs.push({ label: l, compId: c.id, pinId: p.id });
           });
           break;
@@ -237,6 +328,28 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'splitter4':
           // An open bit leaves its output undriven: x in Logisim, as in the simulator
           for (let i = 0; i < 4; i++) if (c.outputs[i] && isConn(c.inputs[i]?.id)) union(pin(i), out(i));
+          break;
+        case 'splitter': {
+          // Logisim splitter: passive and bidirectional like ours, so every end is just a connection
+          const { fanout, bitEnd, appear } = getSplitterConfig(c);
+          const { endWidth } = splitterThreads(bitEnd, fanout);
+          const end = (i: number) => (isConn(c.outputs[i]?.id) ? netOfPin.get(c.outputs[i].id)! : OPEN);
+          P.push({ kind: 'splitter', combined: pin(0), ends: Array.from({ length: fanout }, (_, i) => end(i)), bitEnd, appear, endWidth });
+          break;
+        }
+        case 'bitExtender':
+          P.push({
+            kind: 'extender',
+            in: pin(0),
+            ext: c.inputs[1] ? pin(1) : null,
+            out: out(0),
+            inW: w0(c.inputs[0]),
+            outW: w0(c.outputs[0]),
+            type: c.state.extendType ?? 'zero',
+          });
+          break;
+        case 'bitSelector':
+          P.push({ kind: 'selector', data: pin(0), sel: pin(1), out: out(0), dataW: w0(c.inputs[0]), groupW: w0(c.outputs[0]) });
           break;
         case 'halfAdder': {
           const [a, b] = [ins(0), ins(1)];
@@ -473,23 +586,25 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         case 'subcircuit': {
-          const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
-          if (!def || depth > 8) {
-            warnings.push(`${label}: alt devre tanımı bulunamadı, aktarılmadı.`);
+          const sdef = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
+          const info = sdef ? subcircuitFor(sdef, depth) : null;
+          if (!sdef || !info) {
+            warnings.push(`${label}: alt devre tanımı ${sdef ? 'kendi içinde kendini kullanıyor' : 'bulunamadı'}, aktarılmadı.`);
             break;
           }
-          // Inline the IC: its port pins share the nets of this instance's pins
-          const inner = new Map<string, string>();
-          const inPorts = def.ports.filter((p) => p.type === 'input');
-          const outPorts = def.ports.filter((p) => p.type === 'output');
-          // An open IC input is an undriven net inside (x in Logisim, as the simulator's floating port)
-          inPorts.forEach((p, i) => inner.set(p.targetPinId, isConn(c.inputs[i]?.id) ? netOfPin.get(c.inputs[i].id)! : newNet()));
-          outPorts.forEach((p, i) => {
-            const target = def.components.find((x) => x.id === p.targetCompId);
-            const pinId = target && ['led', 'probe'].includes(target.type) ? target.inputs[0]?.id : p.targetPinId;
-            if (pinId) inner.set(pinId, out(i));
+          // An open IC input stays unconnected: the inner Pin floats (x), like the simulator's open port
+          const inPorts = sdef.ports.filter((p) => p.type === 'input');
+          const outPorts = sdef.ports.filter((p) => p.type === 'output');
+          P.push({
+            kind: 'sub',
+            circuit: info.circuit,
+            ins: inPorts.map((_, i) => pin(i)),
+            outs: outPorts.map((_, i) => (c.outputs[i] ? out(i) : OPEN)),
+            inW: inPorts.map((p) => subcircuitPortWidth(sdef, p)),
+            outW: outPorts.map((p) => subcircuitPortWidth(sdef, p)),
+            inOff: info.inOff,
+            outOff: info.outOff,
           });
-          buildLevel(def.components, def.wires, `${scope}${c.id}/`, inner, depth + 1);
           break;
         }
         default:
@@ -499,60 +614,53 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         warnings.push(`${label}: boştaki giriş(ler)i Logisim'e x (sürücüsüz OPEN tüneli) olarak aktarıldı; kapılarla kurulan karşılığı bazı çıkışlarda simülatörden farklı sonuç verebilir.`);
       if (P.length) blocks.push({ prims: P });
     }
-  };
 
-  buildLevel(components, wires, '', new Map(), 0);
-  const constPrims: Prim[] = [];
-  if (usesC0) constPrims.push({ kind: 'const', value: 0, out: C0 });
-  if (usesC1) constPrims.push({ kind: 'const', value: 1, out: C1 });
-  if (constPrims.length) blocks.unshift({ prims: constPrims });
+    const constPrims: Prim[] = [];
+    if (usesC0) constPrims.push({ kind: 'const', value: 0, out: C0 });
+    if (usesC1) constPrims.push({ kind: 'const', value: 1, out: C1 });
+    if (constPrims.length) blocks.unshift({ prims: constPrims });
 
-  // --- readable tunnel names: pins keep their label, the rest are numbered --------------------
-  const netName = new Map<string, string>();
-  const used = new Set<string>();
-  const claim = (base: string) => {
-    let n = base.replace(/\s+/g, '_') || 'n';
-    for (let i = 2; used.has(n); i++) n = `${base}_${i}`;
-    used.add(n);
-    return n;
-  };
-  for (const b of blocks)
-    for (const p of b.prims) {
+    // --- readable tunnel names: pins keep their label, the rest are numbered ------------------
+    const netName = new Map<string, string>();
+    const used = new Set<string>();
+    const claim = (base: string) => {
+      let n = base.replace(/\s+/g, '_') || 'n';
+      for (let i = 2; used.has(n); i++) n = `${base}_${i}`;
+      used.add(n);
+      return n;
+    };
+    for (const p of [...fixed.map((f) => f.prim), ...blocks.flatMap((b) => b.prims)]) {
       if (p.kind === 'inpin' || p.kind === 'clock') netName.set(find(p.out), netName.get(find(p.out)) || claim(p.label));
     }
-  let counter = 0;
-  const openRoots = new Set(openNets.map(find));
-  const nameOf = (net: string) => {
-    const r = find(net);
-    if (!netName.has(r)) netName.set(r, claim(r === find(C0) ? 'GND' : r === find(C1) ? 'VCC' : openRoots.has(r) ? 'OPEN' : `n${counter++}`));
-    return netName.get(r)!;
-  };
+    let counter = 0;
+    const openRoots = new Set(openNets.map(find));
+    const nameOf = (net: string) => {
+      const r = find(net);
+      if (!netName.has(r)) netName.set(r, claim(r === find(C0) ? 'GND' : r === find(C1) ? 'VCC' : openRoots.has(r) ? 'OPEN' : `n${counter++}`));
+      return netName.get(r)!;
+    };
 
-  // --- layout -------------------------------------------------------------------------------
-  const xml: string[] = [];
-  const tunnel = (x: number, y: number, net: string, sink: boolean) =>
-    net !== OPEN &&
-    xml.push(`    <comp lib="0" loc="(${x},${y})" name="Tunnel"><a name="facing" val="${sink ? 'east' : 'west'}"/><a name="label" val="${xmlEsc(nameOf(net))}"/></comp>`);
-  // Logisim gate "Output Value" ('out'); the default 0/1 is left out like Logisim does
-  const outAttr = (m?: OutMode) => (m && m !== '01' ? `<a name="out" val="${m}"/>` : '');
-  const CELL_W = 220;
-  const CELL_H = 110;
-  const PER_ROW = 8;
-  let cell = 0;
-  const gateOffsets = (n: number) => {
-    // Logisim AbstractGate input spacing for size 50
-    const [ss, sd, sl] = n <= 3 ? [-10, 20, 20] : [-5, 10, 10];
-    return Array.from({ length: n }, (_, i) => (n % 2 ? ss * (n - 1) + sd * i : ss * n + sd * i + (i >= n / 2 ? sl : 0)));
-  };
-  for (const b of blocks) {
-    // each block starts on a fresh row when it would not fit, so its parts stay together
-    if (cell % PER_ROW !== 0 && (cell % PER_ROW) + b.prims.length > PER_ROW && b.prims.length <= PER_ROW) cell += PER_ROW - (cell % PER_ROW);
-    for (const p of b.prims) {
-      const n = p.kind === 'gate' ? p.ins.length : 0;
-      const extraRows = n > 8 ? Math.ceil((n - 8) / 10) : 0;
-      const x = 200 + (cell % PER_ROW) * CELL_W;
-      const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + (extraRows ? extraRows * 50 : 0);
-      cell += 1 + extraRows * PER_ROW;
+    // --- layout -----------------------------------------------------------------------------
+    const xml: string[] = [];
+    // Tunnels are written last: one whose width follows its net (probe, pull resistor) needs the widths
+    // of all the other tunnels of that net
+    const tunnels: Array<{ x: number; y: number; net: string; sink: boolean; width?: number }> = [];
+    const tunnel = (x: number, y: number, net: string, sink: boolean, width?: number) => {
+      if (net !== OPEN) tunnels.push({ x, y, net, sink, width });
+    };
+    const widthAttr = (w?: number) => (w && w > 1 ? `<a name="width" val="${w}"/>` : '');
+    // Logisim gate "Output Value" ('out'); the default 0/1 is left out like Logisim does
+    const outAttr = (m?: OutMode) => (m && m !== '01' ? `<a name="out" val="${m}"/>` : '');
+    const CELL_W = 220;
+    const CELL_H = 110;
+    const PER_ROW = 8;
+    let cell = 0;
+    const gateOffsets = (n: number) => {
+      // Logisim AbstractGate input spacing for size 50
+      const [ss, sd, sl] = n <= 3 ? [-10, 20, 20] : [-5, 10, 10];
+      return Array.from({ length: n }, (_, i) => (n % 2 ? ss * (n - 1) + sd * i : ss * n + sd * i + (i >= n / 2 ? sl : 0)));
+    };
+    const emit = (p: Prim, x: number, y: number) => {
       switch (p.kind) {
         case 'gate': {
           const neg = p.type === 'NAND' || p.type === 'NOR' || p.type === 'XNOR' ? 10 : 0;
@@ -561,71 +669,155 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           xml.push(
             `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate"><a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? '<a name="xor" val="odd"/>' : ''}${outAttr(p.mode)}</comp>`
           );
-          gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx, y + dy, p.ins[i], true));
-          tunnel(x, y, p.out, false);
+          gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx, y + dy, p.ins[i], true, 1));
+          tunnel(x, y, p.out, false, 1);
           break;
         }
         case 'not':
           xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${outAttr(p.mode)}</comp>`);
-          tunnel(x - 30, y, p.in, true);
-          tunnel(x, y, p.out, false);
+          tunnel(x - 30, y, p.in, true, 1);
+          tunnel(x, y, p.out, false, 1);
           break;
         case 'buf':
           xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${outAttr(p.mode)}</comp>`);
-          tunnel(x - 20, y, p.in, true);
-          tunnel(x, y, p.out, false);
+          tunnel(x - 20, y, p.in, true, 1);
+          tunnel(x, y, p.out, false, 1);
           break;
         case 'tri':
           // Logisim's (wide) controlled inverter is 10 longer than the buffer
           xml.push(`    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}"/>`);
-          tunnel(x - (p.inv ? 30 : 20), y, p.in, true);
-          tunnel(x - (p.inv ? 20 : 10), y + 10, p.en, true);
-          tunnel(x, y, p.out, false);
+          tunnel(x - (p.inv ? 30 : 20), y, p.in, true, 1);
+          tunnel(x - (p.inv ? 20 : 10), y + 10, p.en, true, 1);
+          tunnel(x, y, p.out, false, 1);
           break;
         case 'ff': {
           const name = p.type === 'D' ? 'D Flip-Flop' : p.type === 'T' ? 'T Flip-Flop' : 'J-K Flip-Flop';
           xml.push(`    <comp lib="4" loc="(${x},${y})" name="${name}"/>`);
           if (p.type === 'JK') {
-            if (p.a) tunnel(x - 40, y, p.a, true);
-            if (p.b) tunnel(x - 40, y + 20, p.b, true);
-            if (p.clk) tunnel(x - 40, y + 10, p.clk, true);
+            if (p.a) tunnel(x - 40, y, p.a, true, 1);
+            if (p.b) tunnel(x - 40, y + 20, p.b, true, 1);
+            if (p.clk) tunnel(x - 40, y + 10, p.clk, true, 1);
           } else {
-            if (p.a) tunnel(x - 40, y + 20, p.a, true);
-            if (p.clk) tunnel(x - 40, y, p.clk, true);
+            if (p.a) tunnel(x - 40, y + 20, p.a, true, 1);
+            if (p.clk) tunnel(x - 40, y, p.clk, true, 1);
           }
-          if (p.reset) tunnel(x - 10, y + 30, p.reset, true);
-          if (p.preset) tunnel(x - 30, y + 30, p.preset, true);
-          if (p.q) tunnel(x, y, p.q, false);
-          if (p.qn) tunnel(x, y + 20, p.qn, false);
+          if (p.reset) tunnel(x - 10, y + 30, p.reset, true, 1);
+          if (p.preset) tunnel(x - 30, y + 30, p.preset, true, 1);
+          if (p.q) tunnel(x, y, p.q, false, 1);
+          if (p.qn) tunnel(x, y + 20, p.qn, false, 1);
           break;
         }
         case 'const':
-          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Constant"><a name="value" val="0x${p.value}"/></comp>`);
-          tunnel(x, y, p.out, false);
+          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Constant">${widthAttr(p.width)}<a name="value" val="0x${p.value.toString(16)}"/></comp>`);
+          tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'inpin':
-          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pin"><a name="tristate" val="false"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
-          tunnel(x, y, p.out, false);
+          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pin">${widthAttr(p.width)}<a name="tristate" val="false"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
+          tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'clock':
           xml.push(`    <comp lib="0" loc="(${x},${y})" name="Clock"><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
-          tunnel(x, y, p.out, false);
+          tunnel(x, y, p.out, false, 1);
           break;
-        case 'outpin':
-          xml.push(
-            `    <comp lib="0" loc="(${x},${y})" name="Pin"><a name="facing" val="west"/><a name="output" val="true"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`
-          );
-          tunnel(x, y, p.in, true);
+        case 'outpin': {
+          // The width is filled in with the tunnels (a probe's follows its net)
+          const at = xml.length;
+          xml.push('');
+          tunnel(x, y, p.in, true, p.width);
+          const t = tunnels[tunnels.length - 1];
+          pendingPins.push({ at, x, y, label: p.label, width: p.width, tunnel: p.in !== OPEN ? t : undefined });
           break;
+        }
         case 'pull':
           xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pull Resistor"><a name="pull" val="${p.value}"/></comp>`);
           tunnel(x, y, p.at, true);
           break;
+        case 'splitter': {
+          // Logisim's bitN attribute: end index from 0, 'none' = not mapped (ours: end from 1, 0 = none)
+          const fanout = p.ends.length;
+          const bits = p.bitEnd.map((e, i) => `<a name="bit${i}" val="${e > 0 ? e - 1 : 'none'}"/>`).join('');
+          const appear = p.appear === 'left' ? '' : `<a name="appear" val="${p.appear}"/>`;
+          xml.push(
+            `    <comp lib="0" loc="(${x},${y})" name="Splitter"><a name="fanout" val="${fanout}"/><a name="incoming" val="${p.bitEnd.length}"/>${appear}${bits}</comp>`
+          );
+          tunnel(x, y, p.combined, false, p.bitEnd.length);
+          logisimSplitterEnds('east', p.appear, fanout).forEach((o, i) => {
+            if (p.endWidth[i] > 0) tunnel(x + o.x, y + o.y, p.ends[i], true, p.endWidth[i]);
+          });
+          break;
+        }
+        case 'extender':
+          xml.push(
+            `    <comp lib="0" loc="(${x},${y})" name="Bit Extender"><a name="in_width" val="${p.inW}"/><a name="out_width" val="${p.outW}"/><a name="type" val="${p.type}"/></comp>`
+          );
+          tunnel(x - 40, y, p.in, true, p.inW);
+          if (p.ext !== null) tunnel(x - 20, y - 20, p.ext, true, 1);
+          tunnel(x, y, p.out, false, p.outW);
+          break;
+        case 'selector':
+          xml.push(`    <comp lib="2" loc="(${x},${y})" name="BitSelector">${widthAttr(p.dataW)}<a name="group" val="${p.groupW}"/></comp>`);
+          tunnel(x - 30, y, p.data, true, p.dataW);
+          tunnel(x - 10, y + 10, p.sel, true, bitSelectorSelectWidth(p.dataW, p.groupW));
+          tunnel(x, y, p.out, false, p.groupW);
+          break;
+        case 'sub':
+          xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
+          p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
+          p.outOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.outs[i], false, p.outW[i]));
+          break;
+      }
+    };
+    const pendingPins: Array<{ at: number; x: number; y: number; label: string; width?: number; tunnel?: (typeof tunnels)[number] }> = [];
+
+    for (const f of fixed) emit(f.prim, f.x, f.y);
+    // Rows a primitive needs: wide gates and tall subcircuit boxes take more than one
+    const rowsOf = (p: Prim) => {
+      if (p.kind === 'gate') return 1 + (p.ins.length > 8 ? Math.ceil((p.ins.length - 8) / 10) : 0);
+      if (p.kind === 'sub') {
+        const ys = [...p.inOff, ...p.outOff].map((o) => o.y);
+        return ys.length ? Math.ceil((Math.max(...ys) - Math.min(...ys, 0) + 40) / CELL_H) : 1;
+      }
+      if (p.kind === 'splitter') return Math.ceil((10 * p.ends.length + 40) / CELL_H);
+      return 1;
+    };
+    for (const b of blocks) {
+      // each block starts on a fresh row when it would not fit, so its parts stay together
+      if (cell % PER_ROW !== 0 && (cell % PER_ROW) + b.prims.length > PER_ROW && b.prims.length <= PER_ROW) cell += PER_ROW - (cell % PER_ROW);
+      for (const p of b.prims) {
+        const extraRows = rowsOf(p) - 1;
+        // A primitive reaching above its loc (gate inputs, splitter ends, subcircuit ports) is moved down
+        const up =
+          p.kind === 'sub'
+            ? -Math.min(0, ...p.inOff.map((o) => o.y), ...p.outOff.map((o) => o.y))
+            : p.kind === 'splitter'
+              ? -Math.min(0, ...logisimSplitterEnds('east', p.appear, p.ends.length).map((o) => o.y))
+              : extraRows * 50;
+        const x = 200 + (cell % PER_ROW) * CELL_W;
+        const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + Math.ceil(up / 10) * 10;
+        cell += 1 + extraRows * PER_ROW;
+        emit(p, x, y);
       }
     }
-  }
 
-  const circuit = xmlEsc((circuitName || 'main').trim() || 'main');
+    // Net widths from the tunnels of a fixed width; the others follow
+    const netWidth = new Map<string, number>();
+    for (const t of tunnels) if (t.width !== undefined && !netWidth.has(find(t.net))) netWidth.set(find(t.net), t.width);
+    for (const t of tunnels) {
+      const w = t.width ?? netWidth.get(find(t.net)) ?? 1;
+      xml.push(
+        `    <comp lib="0" loc="(${t.x},${t.y})" name="Tunnel"><a name="facing" val="${t.sink ? 'east' : 'west'}"/>${widthAttr(w)}<a name="label" val="${xmlEsc(nameOf(t.net))}"/></comp>`
+      );
+    }
+    for (const p of pendingPins) {
+      const w = p.width ?? (p.tunnel ? (netWidth.get(find(p.tunnel.net)) ?? 1) : 1);
+      xml[p.at] =
+        `    <comp lib="0" loc="(${p.x},${p.y})" name="Pin"><a name="facing" val="west"/><a name="output" val="true"/>${widthAttr(w)}<a name="label" val="${xmlEsc(p.label)}"/></comp>`;
+    }
+    return xml.join('\n');
+  };
+
+  const top = buildCircuit(components, wires, null, 0);
+  const circuit = xmlEsc(topName);
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project source="2.7.1" version="1.0">
   This file was exported by LogicDesign Studio.
@@ -637,8 +829,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#I/O" name="5"/>
   <main name="${circuit}"/>
   <circuit name="${circuit}">
-${xml.join('\n')}
+${top}
   </circuit>
+${circuitXml.join('\n')}
 </project>
 `;
   return { xml: doc, warnings, inputs, outputs };

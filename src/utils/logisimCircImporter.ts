@@ -1,15 +1,38 @@
-import type { CircuitComponentInstance, CircuitWire, ComponentType } from '../types/circuit';
-import { createComponentInstance, updatePinPositions } from './circuitEngine';
+import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
+import type { Radix } from '../types/logic';
+import {
+  configureBitExtender,
+  configureBitSelector,
+  configureSplitter,
+  createComponentInstance,
+  getComponentSize,
+  setBitWidth,
+  splitterDistribution,
+  updatePinPositions,
+} from './circuitEngine';
+import { createSubcircuitInstance } from './subcircuitManager';
+import { repairWires } from './wiringEngine';
 
 export interface ImportedCircuitSheet {
   name: string;
   components: CircuitComponentInstance[];
   wires: CircuitWire[];
-  // What could not be imported exactly (skipped parts, multi-bit pins, negated inputs ...)
+  // What could not be imported exactly (skipped parts, wide gates, negated inputs ...)
   warnings: string[];
 }
 
 export type ImportedLogisimCircuit = ImportedCircuitSheet;
+
+export interface ImportedCircFile {
+  /** One sheet per Logisim circuit, in file order */
+  sheets: ImportedCircuitSheet[];
+  /** IC definitions for the circuits used as subcircuits (inner ones first); the caller adds them to the
+   * library before simulating. The id is derived from the circuit's content, so importing the same file
+   * again gives the same ids. */
+  subcircuits: CustomSubcircuit[];
+  /** Name of the file's main circuit (Logisim <main>) */
+  main?: string;
+}
 
 /**
  * Maps standard CAD / .circ circuit component names to LogicDesign Studio component types.
@@ -39,6 +62,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   }
   if (n === 'probe') return 'probe';
   if (n === 'led') return 'led';
+  if (n === 'splitter') return 'splitter';
+  if (n === 'bit extender') return 'bitExtender';
+  if (n === 'bitselector') return 'bitSelector';
   if (n.includes('7-segment') || n === 'seven segment') return 'sevenSegment';
   if (n.includes('hex digit') || n === 'hex display') return 'hexDisplay';
   if (n.includes('buzzer') || n === 'speaker') return 'buzzer';
@@ -55,7 +81,6 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'decoder') return 'decoder2to4';
   if (n === 'comparator') return 'comparator4';
   if (n === 'alu' || n.includes('arithmetic logic unit')) return 'alu4';
-  if (n === 'splitter') return 'splitter4';
 
   // Sequential
   if (n.includes('d flip-flop') || n === 'd flip flop') return 'dFlipFlop';
@@ -70,6 +95,12 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
 
   return null;
 }
+
+// Parts whose width is taken over from the file; any other Logisim part wider than 1 bit becomes 1 bit
+const WIDE_IMPORT = new Set<ComponentType>(['switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit']);
+
+// Logisim Probe 'radix' attribute -> ours
+const RADIX: Record<string, Radix> = { '2': '2', '8': '8', '10signed': '10s', '10unsigned': '10u', '16': '16' };
 
 /**
  * Parses coordinates string "(x,y)" into { x: number, y: number }
@@ -98,6 +129,71 @@ const rotateOffset = (p: Pt, rot: number): Pt => {
   if (rot === 270) return { x: p.y, y: -p.x };
   return p;
 };
+
+/**
+ * Logisim 2.7.1 SplitterParameters: location of every split end relative to the splitter's loc (the
+ * combined end), end 0 first. Not a plain rotation of the east-facing layout: facing west / north the
+ * ends run the other way round (checked in Logisim for every facing and appearance).
+ */
+export function logisimSplitterEnds(facing: string, appear: string, fanout: number): Pt[] {
+  const justify = appear === 'right' ? 1 : appear === 'left' ? -1 : 0; // center and legacy: 0
+  const w = 20;
+  let dx0: number, dy0: number, ddx: number, ddy: number;
+  if (facing === 'north' || facing === 'south') {
+    const m = facing === 'north' ? 1 : -1;
+    dx0 = justify === 0 ? 10 * (Math.floor((fanout + 1) / 2) - 1) : m * justify < 0 ? -10 : 10 * fanout;
+    dy0 = -m * w;
+    ddx = -10;
+    ddy = 0;
+  } else {
+    const m = facing === 'west' ? -1 : 1;
+    dx0 = m * w;
+    dy0 = justify === 0 ? -10 * Math.floor(fanout / 2) : m * justify > 0 ? 10 : -10 * fanout;
+    ddx = 0;
+    ddy = 10;
+  }
+  return Array.from({ length: fanout }, (_, i) => ({ x: dx0 + i * ddx, y: dy0 + i * ddy }));
+}
+
+/**
+ * Logisim 2.7.1 DefaultAppearance: where each Pin of a circuit appears on its subcircuit box, relative to
+ * the anchor (the instance's loc). A pin facing east sits on the west edge and so on; pins of an edge are
+ * ordered by y (west / east) or x (north / south), 10 apart. The anchor is the first east port, else the
+ * first north, west, south one.
+ */
+export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
+  const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
+  const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
+  pins.forEach((p, i) => edge[edgeOf[p.facing] ?? 'west'].push(i));
+  // Location.compareTo: x first, then y
+  const cmpXY = (a: number, b: number) => pins[a].loc.x - pins[b].loc.x || pins[a].loc.y - pins[b].loc.y;
+  edge.west.sort((a, b) => pins[a].loc.y - pins[b].loc.y || cmpXY(a, b));
+  edge.east.sort((a, b) => pins[a].loc.y - pins[b].loc.y || cmpXY(a, b));
+  edge.north.sort(cmpXY);
+  edge.south.sort(cmpXY);
+  const [nN, nS, nE, nW] = [edge.north.length, edge.south.length, edge.east.length, edge.west.length];
+  const maxVert = Math.max(nN, nS);
+  const maxHorz = Math.max(nE, nW);
+  const offset = (numFacing: number, numOpposite: number, maxOthers: number) => {
+    const maxThis = Math.max(numFacing, numOpposite);
+    const maxOffs = maxThis <= 1 ? (maxOthers === 0 ? 15 : 10) : maxThis === 2 ? 10 : maxOthers === 0 ? 5 : 10;
+    return maxOffs + 10 * Math.trunc((maxThis - numFacing) / 2);
+  };
+  const dim = (maxThis: number, maxOthers: number) => (maxThis < 3 ? 30 : maxOthers === 0 ? 10 * maxThis : 10 * maxThis + 10);
+  const oN = offset(nN, nS, maxHorz);
+  const oS = offset(nS, nN, maxHorz);
+  const oE = offset(nE, nW, maxVert);
+  const oW = offset(nW, nE, maxVert);
+  const width = dim(maxVert, maxHorz);
+  const height = dim(maxHorz, maxVert);
+  const anchor = nE > 0 ? { x: width, y: oE } : nN > 0 ? { x: oN, y: 0 } : nW > 0 ? { x: 0, y: oW } : nS > 0 ? { x: oS, y: height } : { x: 0, y: 0 };
+  const out: Pt[] = new Array(pins.length);
+  edge.west.forEach((pi, k) => (out[pi] = { x: 0 - anchor.x, y: oW + 10 * k - anchor.y }));
+  edge.east.forEach((pi, k) => (out[pi] = { x: width - anchor.x, y: oE + 10 * k - anchor.y }));
+  edge.north.forEach((pi, k) => (out[pi] = { x: oN + 10 * k - anchor.x, y: 0 - anchor.y }));
+  edge.south.forEach((pi, k) => (out[pi] = { x: oS + 10 * k - anchor.x, y: height - anchor.y }));
+  return out;
+}
 
 // Logisim controlled buffer / inverter: data input, then control input (below the body when
 // right-handed, above when left-handed). The inverter is 30 long unless its size is narrow (20).
@@ -130,6 +226,42 @@ const FF_POINTS: Record<string, { inputs: Pt[]; outputs: Pt[] }> = {
   srLatch: { inputs: [{ x: -40, y: 0 }, { x: -40, y: 20 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // S, R (clock dropped)
 };
 
+// Logisim 2.7.1 BitSelector: data and select inputs per facing (output at loc); not a plain rotation
+const BIT_SELECTOR_POINTS: Record<string, [Pt, Pt]> = {
+  east: [{ x: -30, y: 0 }, { x: -10, y: 10 }],
+  west: [{ x: 30, y: 0 }, { x: 10, y: 10 }],
+  north: [{ x: 0, y: 30 }, { x: -10, y: 10 }],
+  south: [{ x: 0, y: -30 }, { x: -10, y: -10 }],
+};
+
+// FNV-1a, for content-derived IC ids
+const hash32 = (s: string) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
+// A Logisim Pin of a circuit, i.e. a port when the circuit is used as a subcircuit
+interface CircPin {
+  loc: Pt;
+  facing: string;
+  isOutput: boolean;
+  label: string;
+  width: number;
+  compId: string;
+  pinId: string;
+}
+
+interface SubcircuitInfo {
+  def: CustomSubcircuit;
+  // Logisim port locations relative to the instance's loc (facing east), in our port order
+  inOffsets: Pt[];
+  outOffsets: Pt[];
+}
+
 /**
  * Parses Standard CAD XML (.circ) file and converts to native project sheets.
  *
@@ -137,34 +269,122 @@ const FF_POINTS: Record<string, { inputs: Pt[]; outputs: Pt[] }> = {
  * Logisim parts have other sizes than ours. So the importer rebuilds the electrical nets from the wire
  * geometry (segments joined at endpoints, or an endpoint on another segment), finds which Logisim pin
  * location each net reaches, and connects the matching pins of our parts. repairWires then routes them.
+ * Bit widths come over as they are (wide pins, constants, splitters, bit extenders / selectors, IC
+ * ports); a circuit used inside another one becomes an IC definition.
  */
-export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
+export function importCircXmlFile(xmlText: string): ImportedCircFile {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
 
-  const circuits = xmlDoc.getElementsByTagName('circuit');
+  const circuits = Array.from(xmlDoc.getElementsByTagName('circuit'));
   if (circuits.length === 0) {
     throw new Error('Geçerli bir .circ devre dosyası bulunamadı (circuit etiketi yok).');
   }
 
-  const results: ImportedCircuitSheet[] = [];
-  const circuitNames = new Set(Array.from(circuits).map((c) => c.getAttribute('name') || ''));
+  const circuitByName = new Map<string, Element>();
+  circuits.forEach((c, i) => circuitByName.set(c.getAttribute('name') || `Devre ${i + 1}`, c));
   // Logisim parts that carry no logic
   const DECORATIVE = new Set(['text', 'probe text']);
 
-  for (let cIdx = 0; cIdx < circuits.length; cIdx++) {
-    const circuitElem = circuits[cIdx];
-    const circuitName = circuitElem.getAttribute('name') || `Devre ${cIdx + 1}`;
+  const imported = new Map<string, { sheet: ImportedCircuitSheet; pins: CircPin[]; signature: string }>();
+  const inProgress = new Set<string>();
+  const subInfo = new Map<string, SubcircuitInfo | null>();
+  const subcircuits: CustomSubcircuit[] = [];
 
-    // Only direct children: a <circuit> never nests, but be safe against stray matches
+  // IC definition of a circuit used as a subcircuit (null: recursive use)
+  const subcircuitOf = (name: string): SubcircuitInfo | null => {
+    if (subInfo.has(name)) return subInfo.get(name)!;
+    const r = importNamed(name);
+    if (!r) return null;
+    const elem = circuitByName.get(name)!;
+
+    // Port locations: the circuit's own appearance when the file has one, else Logisim's default
+    let offsets = logisimDefaultPortOffsets(r.pins);
+    const appear = elem.getElementsByTagName('appear')[0];
+    if (appear) {
+      const centre = (e: Element): Pt => ({
+        x: Number(e.getAttribute('x')) + Number(e.getAttribute('width')) / 2,
+        y: Number(e.getAttribute('y')) + Number(e.getAttribute('height')) / 2,
+      });
+      const anchorElem = appear.getElementsByTagName('circ-anchor')[0];
+      const ports = Array.from(appear.getElementsByTagName('circ-port'));
+      if (anchorElem && ports.length) {
+        const a = centre(anchorElem);
+        const custom = r.pins.map((p) => {
+          const port = ports.find((e) => {
+            // Logisim writes the pin location as "x,y" here (no parentheses)
+            const m = (e.getAttribute('pin') || '').match(/(-?\d+)\s*,\s*(-?\d+)/);
+            const at = m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+            return at && at.x === p.loc.x && at.y === p.loc.y;
+          });
+          if (!port) return null;
+          const c = centre(port);
+          return { x: c.x - a.x, y: c.y - a.y };
+        });
+        if (custom.every((c) => c)) offsets = custom as Pt[];
+      }
+    }
+
+    // Our IC: inputs on the left, outputs on the right, each in the order they appear on the Logisim box
+    const order = r.pins.map((_, i) => i).sort((a, b) => offsets[a].y - offsets[b].y || offsets[a].x - offsets[b].x);
+    const ins = order.filter((i) => !r.pins[i].isOutput);
+    const outs = order.filter((i) => r.pins[i].isOutput);
+    const port = (i: number, k: number): SubcircuitPortDefinition => {
+      const p = r.pins[i];
+      const def: SubcircuitPortDefinition = {
+        id: `port_${p.isOutput ? 'out' : 'in'}_${k}`,
+        name: p.label || `${p.isOutput ? 'out' : 'in'}${k}`,
+        type: p.isOutput ? 'output' : 'input',
+        targetCompId: p.compId,
+        targetPinId: p.pinId,
+      };
+      // Logisim takes a port's width from its Pin
+      if (p.width > 1) def.width = p.width;
+      return def;
+    };
+    const ports = [...ins.map(port), ...outs.map(port)];
+    const components: CircuitComponentInstance[] = JSON.parse(JSON.stringify(r.sheet.components));
+    const def: CustomSubcircuit = {
+      id: `sub_circ_${hash32(name + '|' + r.signature)}`,
+      name,
+      chipCode: 'IC-CIRC',
+      description: `Logisim .circ dosyasından içe aktarıldı ("${name}" devresi).`,
+      category: 'custom',
+      width: 120,
+      height: Math.max(60, (Math.max(ins.length, outs.length) + 1) * 20),
+      ports,
+      components,
+      wires: repairWires(JSON.parse(JSON.stringify(r.sheet.wires)), components),
+      createdAt: 0,
+    };
+    const info = { def, inOffsets: ins.map((i) => offsets[i]), outOffsets: outs.map((i) => offsets[i]) };
+    subInfo.set(name, info);
+    subcircuits.push(def);
+    return info;
+  };
+
+  const importNamed = (name: string) => {
+    if (imported.has(name)) return imported.get(name)!;
+    if (inProgress.has(name)) return null;
+    inProgress.add(name);
+    const r = importCircuit(circuitByName.get(name)!, name, circuits.indexOf(circuitByName.get(name)!));
+    inProgress.delete(name);
+    imported.set(name, r);
+    return r;
+  };
+
+  const importCircuit = (circuitElem: Element, circuitName: string, cIdx: number) => {
     const rawComps = Array.from(circuitElem.getElementsByTagName('comp'));
     const rawWires = Array.from(circuitElem.getElementsByTagName('wire'));
+    // Content signature for the IC id: parts with their attributes, wires, and the ICs used inside
+    const sig: string[] = [];
 
     // 1. Wire segments and nets (union-find over grid points)
     const segs: Array<{ a: Pt; b: Pt }> = [];
     for (const wireNode of rawWires) {
       const a = parseCoord(wireNode.getAttribute('from'));
       const b = parseCoord(wireNode.getAttribute('to'));
+      sig.push(`w${wireNode.getAttribute('from')}${wireNode.getAttribute('to')}`);
       if (a && b && (a.x !== b.x || a.y !== b.y)) segs.push({ a, b });
     }
     const key = (p: Pt) => `${p.x},${p.y}`;
@@ -210,6 +430,7 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
     const components: CircuitComponentInstance[] = [];
     const skipped = new Map<string, number>();
     const warnings: string[] = [];
+    const pins: CircPin[] = [];
     const attach: Array<{ at: Pt; compId: string; pinId: string; isOutput: boolean }> = [];
     // Our parts are bigger than Logisim's (an AND gate is 80px instead of 50px), spread the layout out
     const SCALE = 1.6;
@@ -221,14 +442,19 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       compName: string;
       loc: Pt;
       nativeType: ComponentType;
+      attr: Record<string, string>;
+      isOutput: boolean;
       label?: string;
+      facing: string;
       rot: number;
       size: number;
+      width: number;
       inputsAttr: number;
       xorMode?: string;
       leftHanded: boolean;
       pull?: string;
       outMode?: '01' | '0Z' | 'Z1';
+      sub?: SubcircuitInfo;
       where: string;
     };
     const parts: RawPart[] = [];
@@ -237,6 +463,14 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       const r = rotateOffset(off, rot);
       return { x: loc.x + r.x, y: loc.y + r.y };
     };
+    const num = (v: string | undefined, dflt: number) => {
+      const n = v === undefined ? NaN : parseInt(v, 10);
+      return Number.isFinite(n) && n > 0 ? n : dflt;
+    };
+    // Splitter end points, bit extender / selector inputs (the output or combined end is at loc)
+    const splitterEnds = (attr: Record<string, string>) => logisimSplitterEnds(attr.facing || 'east', attr.appear || 'left', num(attr.fanout, 2));
+    const extenderPoints = (attr: Record<string, string>): Pt[] =>
+      (attr.type ?? 'zero') === 'input' ? [{ x: -40, y: 0 }, { x: -20, y: -20 }] : [{ x: -40, y: 0 }];
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -244,49 +478,61 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (!loc) continue;
 
       const attrs = compNode.getElementsByTagName('a');
-      let isOutput = false;
-      let constVal: string | undefined = undefined;
-      let label: string | undefined = undefined;
-      let facing = 'east';
-      let size = 0;
-      let width = 1;
-      let inputsAttr = 0;
-      let xorMode: string | undefined;
-      let leftHanded = false;
-      let pull: string | undefined;
-      let outMode: '01' | '0Z' | 'Z1' | undefined;
-      const negated: number[] = [];
+      const attr: Record<string, string> = {};
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
-        const aVal = attrs[a].getAttribute('val') || attrs[a].textContent || '';
-        if (aName === 'output' && aVal === 'true') isOutput = true;
-        if (aName === 'val' || aName === 'value') constVal = aVal;
-        if (aName === 'label' && aVal) label = aVal;
-        if (aName === 'facing') facing = aVal;
-        if (aName === 'size') size = parseInt(aVal, 10) || 0;
-        if (aName === 'width') width = parseInt(aVal, 10) || 1;
-        if (aName === 'inputs') inputsAttr = parseInt(aVal, 10) || 0;
-        if (aName === 'xor') xorMode = aVal;
-        if (aName === 'control') leftHanded = aVal === 'left';
-        if (aName === 'pull') pull = aVal;
-        if (aName === 'out' && (aVal === '0Z' || aVal === 'Z1')) outMode = aVal;
-        const neg = aName?.match(/^negate(\d+)$/);
-        if (neg && aVal === 'true') negated.push(Number(neg[1]) + 1);
+        if (aName) attr[aName] = attrs[a].getAttribute('val') ?? attrs[a].textContent ?? '';
       }
+      sig.push(`c${compNode.getAttribute('lib') ?? ''}:${compName}${compNode.getAttribute('loc')}${Object.entries(attr).map(([k, v]) => `${k}=${v}`).join(',')}`);
+      const isOutput = attr.output === 'true';
+      const constVal = attr.value ?? attr.val;
+      const label = attr.label || undefined;
+      const facing = attr.facing || 'east';
+      const size = parseInt(attr.size ?? '', 10) || 0;
+      const width = num(attr.width, 1);
+      const inputsAttr = parseInt(attr.inputs ?? '', 10) || 0;
+      const leftHanded = attr.control === 'left';
+      const outMode = attr.out === '0Z' || attr.out === 'Z1' ? attr.out : undefined;
+      const negated = Object.entries(attr)
+        .filter(([k, v]) => /^negate\d+$/.test(k) && v === 'true')
+        .map(([k]) => Number(k.slice(6)) + 1)
+        .sort((a, b) => a - b);
 
-      const nativeType = mapCircCompType(compName, isOutput, constVal);
+      // A part named after another circuit of the file (no library) is a subcircuit instance
+      const isSub = !compNode.getAttribute('lib') && circuitByName.has(compName);
+      let nativeType = isSub ? 'subcircuit' : mapCircCompType(compName, isOutput, constVal);
+      let sub: SubcircuitInfo | undefined;
+      if (isSub) {
+        sub = subcircuitOf(compName) ?? undefined;
+        if (!sub) {
+          warnings.push(`${compName} (${loc.x},${loc.y}): devre kendi içinde kendini kullanıyor, alt devre örneği alınmadı.`);
+          continue;
+        }
+        sig.push(`s${sub.def.id}`);
+      }
       if (!nativeType) {
         if (!DECORATIVE.has(compName.trim().toLowerCase())) {
-          const why = circuitNames.has(compName) ? `${compName} (alt devre örneği)` : compName || '(adsız)';
+          const why = compName || '(adsız)';
           skipped.set(why, (skipped.get(why) || 0) + 1);
         }
         continue;
       }
+      // Wide constants and output pins keep their width
+      if ((nativeType === 'gnd' || nativeType === 'vcc') && width > 1) nativeType = 'constant';
+      // A Logisim output Pin has a fixed width, like our LED (drawn the same way when wide); a probe would
+      // follow its net and hide a width mismatch
+      if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
+      if (width > 1 && !WIDE_IMPORT.has(nativeType)) {
+        warnings.push(
+          GATE_TYPES.includes(nativeType) || nativeType === 'not' || nativeType === 'buffer' || nativeType === 'triState' || nativeType === 'controlledInverter'
+            ? `${where}: ${width} bitlik kapı; burada kapılar 1 bitlik, tek bit olarak alındı.`
+            : `${where}: ${width} bitlik, tek bit olarak alındı.`
+        );
+      }
       if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      parts.push({ compName, loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, outMode, where });
+      parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, leftHanded, pull: attr.pull, outMode, sub, where });
 
       occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
       const ff = FF_POINTS[nativeType];
@@ -294,13 +540,41 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
+      const extra: Pt[] =
+        nativeType === 'splitter'
+          ? splitterEnds(attr)
+          : nativeType === 'bitExtender'
+            ? extenderPoints(attr)
+            : nativeType === 'bitSelector'
+              ? BIT_SELECTOR_POINTS[facing] ?? BIT_SELECTOR_POINTS.east
+              : sub
+                ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
+                : [];
+      for (const off of extra) occupied.add(key({ x: loc.x + off.x, y: loc.y + off.y }));
     }
     const used = (p: Pt) => netAt(p) !== null || occupied.has(key(p));
     let privatePoints = 0; // fake coordinates that only join the parts of one split gate
 
+    // Our part with pin `pinId` on the (scaled) Logisim loc; `points` are the Logisim connection points
+    // of its pins (null: that pin has none)
+    const place = (inst: CircuitComponentInstance, anchorPinId: string, loc: Pt, label: string | undefined, points: Array<[string, Pt | null]>) => {
+      inst = updatePinPositions(inst);
+      const a = [...inst.inputs, ...inst.outputs].find((p) => p.id === anchorPinId)!;
+      const anchor = scaled(loc);
+      inst = updatePinPositions({ ...inst, x: inst.x + anchor.x - a.x, y: inst.y + anchor.y - a.y });
+      if (label) inst.label = label;
+      components.push(inst);
+      for (const [pinId, at] of points) {
+        const pin = [...inst.inputs, ...inst.outputs].find((p) => p.id === pinId);
+        if (pin && at) attach.push({ at, compId: inst.id, pinId, isOutput: pin.type === 'output' });
+      }
+      return inst;
+    };
+    const at = (loc: Pt, off: Pt): Pt => ({ x: loc.x + off.x, y: loc.y + off.y });
+
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { loc, nativeType, label, rot, size, inputsAttr, xorMode, leftHanded, pull, outMode, where } = part;
+      const { loc, nativeType, attr, label, rot, size, width, inputsAttr, xorMode, leftHanded, pull, outMode, where } = part;
       const anchor = scaled(loc);
       const isGate = GATE_TYPES.includes(nativeType);
 
@@ -381,25 +655,94 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
         continue;
       }
 
+      if (nativeType === 'splitter') {
+        // Logisim splitter: combined end at loc; bitN = end index from 0, 'none' = not mapped (ours: end from 1, 0 = none)
+        const fanout = num(attr.fanout, 2);
+        const incoming = num(attr.incoming, 2);
+        const dflt = splitterDistribution(fanout, incoming);
+        const bitEnd = Array.from({ length: incoming }, (_, b) => {
+          const v = attr[`bit${b}`];
+          if (v === undefined) return dflt[b];
+          if (v === 'none') return 0;
+          const e = parseInt(v, 10);
+          return Number.isFinite(e) && e >= 0 && e < fanout ? e + 1 : 0;
+        });
+        const appear = attr.appear === 'right' ? 'right' : attr.appear === 'center' || attr.appear === 'legacy' ? 'center' : 'left';
+        let inst = configureSplitter(createComponentInstance('splitter', 0, 0), { incoming, fanout, appear, bitEnd });
+        inst.rotation = rot as 0 | 90 | 180 | 270;
+        const ends = splitterEnds(attr);
+        place(inst, inst.inputs[0].id, loc, label, [[inst.inputs[0].id, loc], ...inst.outputs.map((p, i): [string, Pt] => [p.id, at(loc, ends[i])])]);
+        continue;
+      }
+      if (nativeType === 'bitExtender') {
+        const type = (['zero', 'one', 'sign', 'input'] as const).find((t) => t === attr.type) ?? 'zero';
+        const inst = configureBitExtender(createComponentInstance('bitExtender', 0, 0), { inWidth: num(attr.in_width, 8), outWidth: num(attr.out_width, 16), type });
+        const pts = extenderPoints(attr);
+        place(inst, inst.outputs[0].id, loc, label, [
+          [inst.outputs[0].id, loc],
+          [inst.inputs[0].id, at(loc, pts[0])],
+          ...(inst.inputs[1] ? ([[inst.inputs[1].id, at(loc, pts[1])]] as Array<[string, Pt]>) : []),
+        ]);
+        continue;
+      }
+      if (nativeType === 'bitSelector') {
+        let inst = configureBitSelector(createComponentInstance('bitSelector', 0, 0), { dataWidth: num(attr.width, 8), groupWidth: num(attr.group, 1) });
+        inst.rotation = rot as 0 | 90 | 180 | 270;
+        const [d, s] = BIT_SELECTOR_POINTS[part.facing] ?? BIT_SELECTOR_POINTS.east;
+        inst = updatePinPositions(inst);
+        place(inst, inst.outputs[0].id, loc, label, [
+          [inst.outputs[0].id, loc],
+          [inst.inputs[0].id, at(loc, d)],
+          [inst.inputs[1].id, at(loc, s)],
+        ]);
+        continue;
+      }
+      if (nativeType === 'subcircuit' && part.sub) {
+        const { def, inOffsets, outOffsets } = part.sub;
+        const inst = createSubcircuitInstance(def, 0, 0, label || def.name);
+        const anchorPin = inst.outputs[0] ?? inst.inputs[0];
+        if (!anchorPin) {
+          components.push(updatePinPositions({ ...inst, x: anchor.x, y: anchor.y }));
+          continue;
+        }
+        place(inst, anchorPin.id, loc, undefined, [
+          ...inst.inputs.map((p, k): [string, Pt] => [p.id, at(loc, rotateOffset(inOffsets[k], rot))]),
+          ...inst.outputs.map((p, k): [string, Pt] => [p.id, at(loc, rotateOffset(outOffsets[k], rot))]),
+        ]);
+        continue;
+      }
+
       let inst = updatePinPositions(createComponentInstance(nativeType, 0, 0));
-      const pins = [...inst.inputs, ...inst.outputs];
       if (nativeType === 'tunnel') {
-        // Logisim tunnel: one connection point at loc; ours joins every tunnel with the same label
+        // Logisim tunnel: one connection point at loc; ours joins every tunnel with the same label (width follows the net)
         const pin = inst.inputs[0];
         inst = updatePinPositions({ ...inst, x: anchor.x - pin.x, y: anchor.y - pin.y, label: label || 'Tünel' });
         components.push(inst);
         attach.push({ at: loc, compId: inst.id, pinId: inst.inputs[0].id, isOutput: false });
         continue;
       }
-      if (pins.length === 1) {
+      // Wide input / output pins and constants keep their width (and a constant its value)
+      if ((nativeType === 'switch' || nativeType === 'led') && width > 1) inst = setBitWidth(inst, width);
+      if (nativeType === 'constant') {
+        inst = setBitWidth(inst, width);
+        const v = parseConstValue(attr.value ?? attr.val);
+        inst.state = { ...inst.state, constValue: width >= 32 ? v >>> 0 : v % 2 ** width };
+      }
+      if (nativeType === 'probe' && attr.radix && RADIX[attr.radix]) inst.state = { ...inst.state, radix: RADIX[attr.radix] };
+      const pinsOf = [...inst.inputs, ...inst.outputs];
+      if (pinsOf.length === 1) {
         // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
-        inst = updatePinPositions({ ...inst, x: anchor.x - pins[0].x, y: anchor.y - pins[0].y });
+        inst = updatePinPositions({ ...inst, x: anchor.x - pinsOf[0].x, y: anchor.y - pinsOf[0].y });
         if (label) inst.label = label;
         // Logisim's pull attribute: 0 (default), 1 or X
         if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
         components.push(inst);
         const pin = [...inst.inputs, ...inst.outputs][0];
         attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        // A Logisim Pin is a port of its circuit when the circuit is used as a subcircuit
+        if (part.compName.trim().toLowerCase() === 'pin') {
+          pins.push({ loc, facing: part.facing, isOutput: part.isOutput, label: label || '', width, compId: inst.id, pinId: pin.id });
+        }
         continue;
       }
 
@@ -439,10 +782,10 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     // 3. One star of pin-to-pin connections per net, driven from an output pin when there is one
     const byNet = new Map<string, typeof attach>();
-    for (const at of attach) {
-      const net = netAt(at.at) ?? `pin:${key(at.at)}`; // parts touching pin-to-pin without a wire
+    for (const a of attach) {
+      const net = netAt(a.at) ?? `pin:${key(a.at)}`; // parts touching pin-to-pin without a wire
       if (!byNet.has(net)) byNet.set(net, []);
-      byNet.get(net)!.push(at);
+      byNet.get(net)!.push(a);
     }
     const wires: CircuitWire[] = [];
     let wireNo = 0;
@@ -463,19 +806,37 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
       }
     }
 
-    // 3b. Our parts are larger than Logisim's and some have extra pins (a tunnel's second pin), so a pin
-    // can land on another part's pin; the simulator joins pins sharing a grid point, which would short
-    // nets. Connections are explicit wires here, so nudge such parts down until their pins are clear.
+    // 3b. Our parts are larger than Logisim's (a wide pin is one cell per bit), so a part can land on
+    // another one: on its pins (the simulator joins pins sharing a grid point, which would short nets) or
+    // over its body (hiding it). Connections are explicit wires here, so nudge such parts down until both
+    // their pins and their body are clear.
     const pinPoint = (p: Pt) => `${Math.round(p.x / 10) * 10},${Math.round(p.y / 10) * 10}`;
+    const box = (c: CircuitComponentInstance) => {
+      const { width, height } = getComponentSize(c);
+      const turned = c.rotation === 90 || c.rotation === 270;
+      const [w, h] = turned ? [height, width] : [width, height];
+      const cx = c.x + width / 2;
+      const cy = c.y + height / 2;
+      const pts = [...c.inputs, ...c.outputs];
+      return {
+        x1: Math.min(cx - w / 2, ...pts.map((p) => p.x)),
+        y1: Math.min(cy - h / 2, ...pts.map((p) => p.y)),
+        x2: Math.max(cx + w / 2, ...pts.map((p) => p.x)),
+        y2: Math.max(cy + h / 2, ...pts.map((p) => p.y)),
+      };
+    };
     const taken = new Map<string, string>();
+    const boxes: Array<ReturnType<typeof box>> = [];
+    const overlaps = (b: ReturnType<typeof box>) => boxes.some((o) => b.x1 < o.x2 && o.x1 < b.x2 && b.y1 < o.y2 && o.y1 < b.y2);
     for (let k = 0; k < components.length; k++) {
       let comp = components[k];
-      for (let tries = 0; tries < 40; tries++) {
+      for (let tries = 0; tries < 400; tries++) {
         const pts = [...comp.inputs, ...comp.outputs].map(pinPoint);
-        if (!pts.some((pt) => taken.has(pt) && taken.get(pt) !== comp.id)) break;
+        if (!pts.some((pt) => taken.has(pt) && taken.get(pt) !== comp.id) && !overlaps(box(comp))) break;
         comp = updatePinPositions({ ...comp, y: comp.y + 10 });
       }
       components[k] = comp;
+      boxes.push(box(comp));
       for (const p of [...comp.inputs, ...comp.outputs]) taken.set(pinPoint(p), comp.id);
     }
 
@@ -492,15 +853,27 @@ export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
 
     skipped.forEach((count, what) => warnings.unshift(`Desteklenmeyen bileşen atlandı: ${what}${count > 1 ? ` ×${count}` : ''}`));
 
-    results.push({
-      name: circuitName,
-      components,
-      wires,
-      warnings,
-    });
-  }
+    return { sheet: { name: circuitName, components, wires, warnings }, pins, signature: sig.join(';') };
+  };
 
-  return results;
+  const sheets: ImportedCircuitSheet[] = [];
+  for (const [name] of circuitByName) {
+    const r = importNamed(name);
+    if (r) sheets.push(r.sheet);
+  }
+  return { sheets, subcircuits, main: xmlDoc.getElementsByTagName('main')[0]?.getAttribute('name') || undefined };
+}
+
+// Logisim writes a Constant's value as hex (0x..); older files may hold a decimal
+function parseConstValue(v: string | undefined): number {
+  if (v === undefined || v === '') return 1; // Logisim's default constant is 1
+  const n = /^0x/i.test(v) ? parseInt(v.slice(2), 16) : parseInt(v, 10);
+  return Number.isFinite(n) ? n : 1;
+}
+
+/** Sheets only (the IC definitions of subcircuits are dropped); kept for older callers. */
+export function importCircXmlProject(xmlText: string): ImportedCircuitSheet[] {
+  return importCircXmlFile(xmlText).sheets;
 }
 
 // Backward-compatible alias

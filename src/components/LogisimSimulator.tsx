@@ -111,7 +111,7 @@ import {
   Hand,
   MousePointer,
 } from 'lucide-react';
-import { importCircXmlProject } from '../utils/circXmlImporter';
+import { importCircXmlFile } from '../utils/circXmlImporter';
 import { analyzeCircuit, type CircuitAnalysisReport } from '../utils/circuitAnalyzer';
 import { IC_DATASHEETS } from '../utils/icDatasheets';
 import { StandaloneKMapSolver } from './StandaloneKMapSolver';
@@ -2158,9 +2158,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // Check if file is standard CAD (.circ) XML format
       if (file.name.endsWith('.circ') || text.trim().startsWith('<?xml') || text.includes('<project') || text.includes('<circuit')) {
         try {
-          const importedCircuits = importCircXmlProject(text);
+          const imported = importCircXmlFile(text);
+          const importedCircuits = imported.sheets;
           if (importedCircuits.length > 0) {
             recordHistory();
+            // Circuits used as subcircuits become library ICs (ids follow the content: a re-import reuses them)
+            let addedCircIcs = 0;
+            for (const def of imported.subcircuits) {
+              if (!getSubcircuitDefinition(def.id)) {
+                saveCustomSubcircuit({ ...def, createdAt: Date.now() });
+                addedCircIcs++;
+              }
+            }
+            if (addedCircIcs > 0) setCustomSubcircuits(getAllSubcircuits());
             // Anything the importer could not convert exactly is listed in a note on that sheet
             const newSheets: CircuitSheet[] = importedCircuits.map((c, idx) => ({
               id: `sheet_circ_${Date.now()}_${idx}`,
@@ -2188,18 +2198,20 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             // Imported connections are pin-to-pin: route every sheet once so they are stored as real wires
             for (const sh of newSheets) sh.wires = repairWires(sh.wires, sh.components);
             setSheets(newSheets);
-            setActiveSheetId(newSheets[0].id);
-            const sim = simulateCircuit(newSheets[0].components, newSheets[0].wires);
+            // Open Logisim's main circuit
+            const first = newSheets[Math.max(0, importedCircuits.findIndex((c) => c.name === imported.main))];
+            setActiveSheetId(first.id);
+            const sim = simulateCircuit(first.components, first.wires);
             setComponents(sim.components);
             setWires(sim.wires);
-            setAnnotations(newSheets[0].annotations || []);
+            setAnnotations(first.annotations || []);
             setSelectedCompId(null);
             setSelectedWireId(null);
             handleResetView();
             showToast(
               warningCount > 0
                 ? `${file.name} içe aktarıldı, ${warningCount} uyarı var (sayfalardaki kırmızı notlara bakın).`
-                : `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!`,
+                : `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!${addedCircIcs > 0 ? ` ${addedCircIcs} alt devre entegre olarak kütüphaneye eklendi.` : ''}`,
               warningCount > 0 ? 6000 : 3000
             );
             return;
@@ -8297,13 +8309,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <Upload className="w-3.5 h-3.5" />
                 <span className="hidden md:inline">Yükle</span>
               </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,.circ"
-                onChange={handleImportJSON}
-                className="hidden"
-              />
               <button
                 onClick={handleExportPNG}
                 className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
@@ -13515,6 +13520,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       )}
 
       {/* Desktop Extra Modals (K-Map, Number Converter, Presets, About) */}
+      {/* File input for "Devre Aç / Yükle" (Ctrl+O): rendered in both layouts, the desktop one has no web toolbar */}
+      <input ref={fileInputRef} type="file" accept=".json,.circ" onChange={handleImportJSON} className="hidden" />
       {desktopMode && renderDesktopExtraModals()}
 
             {/* Secondary Confirmation Modal for Clear Canvas */}
