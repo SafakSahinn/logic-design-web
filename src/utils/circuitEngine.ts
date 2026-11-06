@@ -2668,6 +2668,224 @@ export function simulateCircuit(
 }
 
 /**
+ * Multi-bit bus demo presets (Aşama 2l). Built with the multi-bit parts that exist so far (wide
+ * switch/LED/constant/probe, tunnel, splitter, bit extender, bit selector); the fixed 4-bit parts (ALU,
+ * hex display...) still have 1-bit pins, so splitters bridge a bus to them.
+ */
+type BusPartOptions = {
+  width?: number;
+  state?: Partial<CircuitComponentInstance['state']>;
+  rotation?: CircuitComponentInstance['rotation'];
+  splitter?: Parameters<typeof configureSplitter>[1];
+  extender?: Parameters<typeof configureBitExtender>[1];
+  selector?: Parameters<typeof configureBitSelector>[1];
+};
+
+function busPart(
+  type: ComponentType,
+  x: number,
+  y: number,
+  label: string,
+  id: string,
+  opt: BusPartOptions = {}
+): CircuitComponentInstance {
+  let c = createComponentInstance(type, x, y, label, id);
+  if (opt.rotation) c = { ...c, rotation: opt.rotation };
+  if (opt.width && opt.width > 1) c = setBitWidth(c, opt.width);
+  if (opt.splitter) c = configureSplitter(c, opt.splitter);
+  if (opt.extender) c = configureBitExtender(c, opt.extender);
+  if (opt.selector) c = configureBitSelector(c, opt.selector);
+  if (opt.state) c = { ...c, state: { ...c.state, ...opt.state } };
+  return updatePinPositions(c);
+}
+
+// Wire list builder: link(fromPart, fromPin, toPart, toPin) with pins as objects of the parts
+function busWires() {
+  const wires: CircuitWire[] = [];
+  const link = (a: CircuitComponentInstance, ap: CircuitPin, b: CircuitComponentInstance, bp: CircuitPin) => {
+    wires.push({ id: `w${wires.length + 1}`, fromCompId: a.id, fromPinId: ap.id, toCompId: b.id, toPinId: bp.id, value: 0 });
+  };
+  return { wires, link };
+}
+
+function busSplitJoinPreset(): CircuitPreset {
+  const sw = busPart('switch', 40, 150, 'Veri (8 bit)', 'bsj_sw', { width: 8, state: { inputValue: 0xa5 } });
+  const pIn = busPart('probe', 160, 60, 'Giriş (hex)', 'bsj_pin', { state: { radix: '16' } });
+  // 8 bits -> two 4-bit halves (end 1 = b3..b0, end 2 = b7..b4)
+  const nib = busPart('splitter', 200, 150, 'Yarımlara Ayır', 'bsj_nib', { splitter: { incoming: 8, fanout: 2 } });
+  // each half -> 4 single lines for its hex digit
+  const sHi = busPart('splitter', 300, 50, 'Üst Yarım', 'bsj_shi', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
+  const hexHi = busPart('hexDisplay', 360, 40, 'Üst Hane (b7..b4)', 'bsj_hexhi');
+  const sLo = busPart('splitter', 480, 50, 'Alt Yarım', 'bsj_slo', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
+  const hexLo = busPart('hexDisplay', 540, 40, 'Alt Hane (b3..b0)', 'bsj_hexlo');
+  // the halves crossed over into a west-facing joining splitter: they swap places
+  const join = busPart('splitter', 380, 250, 'Birleştir', 'bsj_join', { splitter: { incoming: 8, fanout: 2 }, rotation: 180 });
+  const led = busPart('led', 450, 230, 'Yer Değişmiş (8 bit)', 'bsj_led', { width: 8 });
+  const pOut = busPart('probe', 450, 300, 'Çıkış (hex)', 'bsj_pout', { state: { radix: '16' } });
+  const { wires, link } = busWires();
+  link(sw, sw.outputs[0], pIn, pIn.inputs[0]);
+  link(sw, sw.outputs[0], nib, nib.inputs[0]);
+  link(nib, nib.outputs[1], sHi, sHi.inputs[0]);
+  link(nib, nib.outputs[0], sLo, sLo.inputs[0]);
+  for (let i = 0; i < 4; i++) link(sHi, sHi.outputs[i], hexHi, hexHi.inputs[i]);
+  for (let i = 0; i < 4; i++) link(sLo, sLo.outputs[i], hexLo, hexLo.inputs[i]);
+  link(nib, nib.outputs[0], join, join.outputs[1]);
+  link(nib, nib.outputs[1], join, join.outputs[0]);
+  link(join, join.inputs[0], led, led.inputs[0]);
+  link(join, join.inputs[0], pOut, pOut.inputs[0]);
+  return {
+    id: 'bus_split_join',
+    name: 'Çok Bitli: 8-Bit Veri Yolunu Bölme ve Birleştirme (Splitter)',
+    category: 'bus',
+    description:
+      '8 bitlik bir veri yolu splitter ile iki 4 bitlik yarıma bölünür; her yarım ikinci bir splitter ile tek bitlere açılıp Hex ekranda gösterilir. Aynı yarımlar, batıya bakan bir splitter ile yer değiştirerek yeniden 8 bite birleştirilir (A5 → 5A). Splitter iki yönlüdür: aynı parça hem ayırır hem birleştirir.',
+    components: [sw, pIn, nib, sHi, hexHi, sLo, hexLo, join, led, pOut],
+    wires,
+  };
+}
+
+function busAluPreset(): CircuitPreset {
+  const a = busPart('switch', 150, 130, 'A (4 bit)', 'bal_a', { width: 4, state: { inputValue: 7 } });
+  const b = busPart('switch', 180, 320, 'B (4 bit)', 'bal_b', { width: 4, state: { inputValue: 5 } });
+  const op = busPart('switch', 240, 80, 'İşlem (S1 S0)', 'bal_op', { width: 2, state: { inputValue: 0 } });
+  const cin = busPart('switch', 170, 190, 'Elde Girişi (Cin)', 'bal_cin');
+  const sa = busPart('splitter', 250, 150, 'A bitleri', 'bal_sa', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
+  const sb = busPart('splitter', 330, 260, 'B bitleri', 'bal_sb', { splitter: { incoming: 4, fanout: 4 }, rotation: 270 });
+  const sop = busPart('splitter', 320, 100, 'S bitleri', 'bal_sop', { splitter: { incoming: 2, fanout: 2 }, rotation: 90 });
+  const alu = busPart('alu4', 300, 140, '4-Bit ALU', 'bal_alu');
+  const sf = busPart('splitter', 440, 150, 'Sonucu Birleştir', 'bal_sf', { splitter: { incoming: 4, fanout: 4, bitEnd: [4, 3, 2, 1] }, rotation: 180 });
+  const ledF = busPart('led', 500, 130, 'F (4 bit)', 'bal_ledf', { width: 4 });
+  const pF = busPart('probe', 500, 60, 'F (ondalık)', 'bal_pf', { state: { radix: '10u' } });
+  const ledC = busPart('led', 520, 190, 'Elde Çıkışı (Cout)', 'bal_ledc');
+  const ledZ = busPart('led', 520, 270, 'Sıfır (Z)', 'bal_ledz');
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], sa, sa.inputs[0]);
+  link(b, b.outputs[0], sb, sb.inputs[0]);
+  link(op, op.outputs[0], sop, sop.inputs[0]);
+  for (let i = 0; i < 4; i++) link(sa, sa.outputs[i], alu, alu.inputs[i]);
+  link(cin, cin.outputs[0], alu, alu.inputs[4]);
+  for (let i = 0; i < 4; i++) link(sb, sb.outputs[i], alu, alu.inputs[5 + i]);
+  link(sop, sop.outputs[0], alu, alu.inputs[9]);
+  link(sop, sop.outputs[1], alu, alu.inputs[10]);
+  // bit i of F is end 4-i of the west-facing joiner (bit 0 on top, next to F0)
+  for (let i = 0; i < 4; i++) link(alu, alu.outputs[i], sf, sf.outputs[3 - i]);
+  link(sf, sf.inputs[0], ledF, ledF.inputs[0]);
+  link(sf, sf.inputs[0], pF, pF.inputs[0]);
+  link(alu, alu.outputs[4], ledC, ledC.inputs[0]);
+  link(alu, alu.outputs[5], ledZ, ledZ.inputs[0]);
+  return {
+    id: 'bus_alu4',
+    name: "Çok Bitli: 4-Bit ALU'yu Veri Yollarıyla Sürmek",
+    category: 'bus',
+    description:
+      "A ve B 4 bitlik, işlem seçimi 2 bitlik veri yollarından gelir; splitter'lar yolları ALU'nun tek bitlik pinlerine dağıtır, sonuç bitleri yeniden 4 bitlik F yoluna birleştirilir. Başlangıç: 7 + 5 = 12. İşlem: 00 toplama, 01 çıkarma, 10 VE, 11 VEYA.",
+    components: [a, b, op, cin, sa, sb, sop, alu, sf, ledF, pF, ledC, ledZ],
+    wires,
+  };
+}
+
+function busSignExtendPreset(): CircuitPreset {
+  const x = busPart('switch', 40, 170, 'X (4 bit)', 'bse_x', { width: 4, state: { inputValue: 0xa } });
+  const pu = busPart('probe', 40, 60, 'X işaretsiz', 'bse_pu', { state: { radix: '10u' } });
+  const ps = busPart('probe', 40, 260, 'X işaretli', 'bse_ps', { state: { radix: '10s' } });
+  const ez = busPart('bitExtender', 240, 90, 'Sıfırla Genişlet', 'bse_ez', { extender: { inWidth: 4, outWidth: 8, type: 'zero' } });
+  const es = busPart('bitExtender', 240, 250, 'İşaretle Genişlet', 'bse_es', { extender: { inWidth: 4, outWidth: 8, type: 'sign' } });
+  const lz = busPart('led', 380, 80, 'Sıfır dolgulu (8 bit)', 'bse_lz', { width: 8 });
+  const pz = busPart('probe', 380, 150, 'İşaretsiz ondalık', 'bse_pz', { state: { radix: '10u' } });
+  const ls = busPart('led', 380, 240, 'İşaret dolgulu (8 bit)', 'bse_ls', { width: 8 });
+  const pss = busPart('probe', 380, 310, 'İşaretli ondalık', 'bse_pss', { state: { radix: '10s' } });
+  const { wires, link } = busWires();
+  link(x, x.outputs[0], pu, pu.inputs[0]);
+  link(x, x.outputs[0], ps, ps.inputs[0]);
+  link(x, x.outputs[0], ez, ez.inputs[0]);
+  link(x, x.outputs[0], es, es.inputs[0]);
+  link(ez, ez.outputs[0], lz, lz.inputs[0]);
+  link(ez, ez.outputs[0], pz, pz.inputs[0]);
+  link(es, es.outputs[0], ls, ls.inputs[0]);
+  link(es, es.outputs[0], pss, pss.inputs[0]);
+  return {
+    id: 'bus_sign_extend',
+    name: 'Çok Bitli: İşaretli ve İşaretsiz Genişletme (Bit Extender)',
+    category: 'bus',
+    description:
+      "Aynı 4 bitlik sayı iki bit genişleticiyle 8 bite çıkarılır. Sıfırla genişletme üst bitlere 0 koyar ve işaretsiz değeri korur (1010 = 10 → 0000 1010). İşaretle genişletme en üst biti kopyalar ve ikiye tümleyen değeri korur (1010 = −6 → 1111 1010 = −6).",
+    components: [x, pu, ps, ez, es, lz, pz, ls, pss],
+    wires,
+  };
+}
+
+function busBitSelectorPreset(): CircuitPreset {
+  const d = busPart('switch', 40, 180, 'Veri (8 bit)', 'bbs_d', { width: 8, state: { inputValue: 0x3c } });
+  const pd = busPart('probe', 40, 90, 'Veri (hex)', 'bbs_pd', { state: { radix: '16' } });
+  const half = busPart('switch', 180, 240, 'Yarım Seç (0 alt, 1 üst)', 'bbs_half');
+  const selN = busPart('bitSelector', 220, 180, 'Yarım Bayt Seçici', 'bbs_seln', { selector: { dataWidth: 8, groupWidth: 4 } });
+  const sn = busPart('splitter', 300, 200, 'Bitler', 'bbs_sn', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
+  const hex = busPart('hexDisplay', 380, 190, 'Seçilen Yarım Bayt', 'bbs_hex');
+  const pn = busPart('probe', 300, 100, 'Seçilen (ikili)', 'bbs_pn');
+  const idx = busPart('switch', 200, 460, 'Bit No (0-7)', 'bbs_idx', { width: 3, state: { inputValue: 2 } });
+  const selB = busPart('bitSelector', 220, 380, 'Tek Bit Seçici (8:1 MUX)', 'bbs_selb', { selector: { dataWidth: 8, groupWidth: 1 } });
+  const lb = busPart('led', 330, 370, 'Seçilen Bit', 'bbs_lb');
+  const { wires, link } = busWires();
+  link(d, d.outputs[0], pd, pd.inputs[0]);
+  link(d, d.outputs[0], selN, selN.inputs[0]);
+  link(half, half.outputs[0], selN, selN.inputs[1]);
+  link(selN, selN.outputs[0], sn, sn.inputs[0]);
+  for (let i = 0; i < 4; i++) link(sn, sn.outputs[i], hex, hex.inputs[i]);
+  link(selN, selN.outputs[0], pn, pn.inputs[0]);
+  link(d, d.outputs[0], selB, selB.inputs[0]);
+  link(idx, idx.outputs[0], selB, selB.inputs[1]);
+  link(selB, selB.outputs[0], lb, lb.inputs[0]);
+  return {
+    id: 'bus_bit_selector',
+    name: 'Çok Bitli: Bit Seçici ile Çoklayıcı (MUX)',
+    category: 'bus',
+    description:
+      'Bit seçici, veri yolunu eşit gruplara böler ve seçme girişinin gösterdiği grubu çıkışa verir; yani bir çoklayıcıdır. Üstteki 4 bitlik gruplarla çalışır (1 bit seçme: alt ya da üst yarım bayt), alttaki 1 bitlik gruplarla 8:1 MUX gibi davranır (3 bit seçme). Veri 3C: alt yarım C, üst yarım 3; bit 2 = 1.',
+    components: [d, pd, half, selN, sn, hex, pn, idx, selB, lb],
+    wires,
+  };
+}
+
+function busTriStatePreset(): CircuitPreset {
+  const parts: CircuitComponentInstance[] = [];
+  const { wires, link } = busWires();
+  const side = (key: 'a' | 'b', y: number, value: number, enabled: boolean) => {
+    const name = key.toUpperCase();
+    const src = busPart('switch', 40, y + 30, `Kaynak ${name} (4 bit)`, `bts_${key}`, { width: 4, state: { inputValue: value } });
+    const en = busPart('switch', 40, y + 130, `${name} Yola Yazsın (EN${name})`, `bts_en${key}`, { state: { on: enabled } });
+    const sp = busPart('splitter', 160, y + 30, `${name} bitleri`, `bts_s${key}`, { splitter: { incoming: 4, fanout: 4 } });
+    const bufs = [0, 1, 2, 3].map((i) => busPart('triState', 240, y + i * 50 - 20, `Tampon ${name}${i}`, `bts_t${key}${i}`));
+    const jn = busPart('splitter', 400, y + 30, `${name} → yol`, `bts_j${key}`, { splitter: { incoming: 4, fanout: 4 }, rotation: 180 });
+    const tun = busPart('tunnel', 450, y + 20, 'VERİ YOLU', `bts_tun${key}`);
+    link(src, src.outputs[0], sp, sp.inputs[0]);
+    bufs.forEach((t, i) => {
+      link(sp, sp.outputs[i], t, t.inputs[0]);
+      link(en, en.outputs[0], t, t.inputs[1]);
+      link(t, t.outputs[0], jn, jn.outputs[i]);
+    });
+    link(jn, jn.inputs[0], tun, tun.inputs[0]);
+    parts.push(src, en, sp, ...bufs, jn, tun);
+  };
+  side('a', 40, 0x3, true);
+  side('b', 290, 0x5, false);
+  const tunOut = busPart('tunnel', 600, 220, 'VERİ YOLU', 'bts_tunout');
+  const led = busPart('led', 720, 210, 'Ortak Yol (4 bit)', 'bts_led', { width: 4 });
+  const probe = busPart('probe', 720, 280, 'Ortak Yol (ikili)', 'bts_probe');
+  link(tunOut, tunOut.outputs[0], led, led.inputs[0]);
+  link(tunOut, tunOut.outputs[0], probe, probe.inputs[0]);
+  parts.push(tunOut, led, probe);
+  return {
+    id: 'bus_tristate_shared',
+    name: 'Çok Bitli: Tri-State Tamponlarla Ortak 4-Bit Veri Yolu',
+    category: 'bus',
+    description:
+      "İki 4 bitlik kaynak, bit başına birer tri-state tamponla aynı veri yoluna bağlanır; yol tünellerle (VERİ YOLU) taşınır. Aynı anda yalnız bir EN açık olmalı. İkisi birden açılırsa farklı olan bitler çakışır (0011 + 0101 = 0EE1, kırmızı), ikisi de kapalıysa yol sürülmez (xxxx, gri).",
+    components: parts,
+    wires,
+  };
+}
+
+/**
  * Standard Circuit Presets from "Sıfırdan İşlemciye"
  */
 const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
@@ -3402,6 +3620,11 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w15', fromCompId: 'sw_b', fromPinId: 'sw_b_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inB', value: 1 },
     ],
   },
+  busSplitJoinPreset(),
+  busAluPreset(),
+  busSignExtendPreset(),
+  busBitSelectorPreset(),
+  busTriStatePreset(),
 ];
 
 export const CIRCUIT_PRESETS: CircuitPreset[] = RAW_CIRCUIT_PRESETS.map((preset) => ({
@@ -3720,7 +3943,7 @@ export function generateBooleanExpression(
 }
 
 // Observable outputs of a circuit: LEDs, probes, buzzers and every output pin of the logic parts
-// (splitter ends excluded: they only re-route bits that are already shown elsewhere)
+// (splitter ends and tunnels excluded: they only re-route bits that are already shown elsewhere)
 function getObservableOutputs(components: CircuitComponentInstance[]) {
   const outputList: { id: string; name: string; compId: string; pinIndex?: number; width: number }[] = [];
   components.forEach((c) => {
@@ -3744,7 +3967,8 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'dotMatrix8x8' &&
       c.type !== 'rgbMatrix16x16' &&
       c.type !== 'textLabel' &&
-      c.type !== 'splitter'
+      c.type !== 'splitter' &&
+      c.type !== 'tunnel'
     ) {
       c.outputs.forEach((pin, pIdx) => {
         outputList.push({
