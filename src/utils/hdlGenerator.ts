@@ -401,11 +401,50 @@ function buildModule(
   // Short block prefix so pin suffixes (_q0, _cout ...) survive in the signal names
   for (const c of internalComps) compNames.set(c.id, baseIdentifier(c.label || c.type, c.type.toLowerCase()).slice(0, 24).replace(/_$/, ''));
 
+  // A bus bit (splitter thread) driven only by 1-bit tri-state outputs that sit on different wires: like
+  // a 1-bit tri-state net, they all drive one shared signal (otherwise only the first would be read)
+  const threadOfTriDriver = new Map<string, string>();
+  {
+    const byRoot = new Map<string, Set<string>>();
+    for (const id of pinById.keys()) {
+      if (!isDriverPin(id) && !portBound.has(id)) continue;
+      const key = netKey(id);
+      if (!linkedKeys.has(key)) continue;
+      const w = netWidthInfo(key).width;
+      for (let b = 0; b < w; b++) {
+        const root = bitFind(`${key}#${b}`);
+        if (!byRoot.has(root)) byRoot.set(root, new Set());
+        byRoot.get(root)!.add(id);
+      }
+    }
+    for (const [root, ids] of byRoot) {
+      const list = [...ids];
+      const nets = new Set(list.map(netKey));
+      if (nets.size < 2) continue;
+      const allTri = list.every((id) => {
+        const owner = pinOwner.get(id);
+        return !portBound.has(id) && (pinById.get(id)?.width ?? 1) === 1 && canFloat(owner) && internalComps.includes(owner!);
+      });
+      if (allTri) for (const id of list) threadOfTriDriver.set(id, root);
+    }
+  }
+  const threadSignal = new Map<string, string>();
+
   // Nets with several drivers share one signal (tri-state bus)
   const busSignal = new Map<string, string>();
   for (const c of internalComps) {
     for (const p of c.outputs) {
       if (pinExpr.has(p.id)) continue;
+      const root = threadOfTriDriver.get(p.id);
+      if (root !== undefined) {
+        if (!threadSignal.has(root)) {
+          const bn = names.make(`bus_${compNames.get(c.id)}_${p.name}`, 'bus');
+          threadSignal.set(root, bn);
+          declare(bn, 1);
+        }
+        pinExpr.set(p.id, threadSignal.get(root)!);
+        continue;
+      }
       const drivers = netDrivers(p.id);
       if (drivers.length > 1) {
         const key = drivers.slice().sort().join('|');
