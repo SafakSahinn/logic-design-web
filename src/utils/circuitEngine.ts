@@ -3521,6 +3521,14 @@ export function getInputSignalNames(components: CircuitComponentInstance[]): Map
 // per stage) fall back to the driving part's name instead of growing without bound
 const MAX_EXPR_LENGTH = 240;
 
+// A cone that reaches a wide (multi-bit) signal has no single-bit formula: such an output gets no
+// expression (the truth table still gives every bit its minimal SOP). Not '?', which the tri-state
+// formula uses as its condition operator.
+const OPAQUE_EXPR = '\u0000';
+const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
+// Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
+const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector']);
+
 interface BooleanExprContext {
   driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;
   byId: Map<string, CircuitComponentInstance>;
@@ -3587,16 +3595,18 @@ function booleanExprOf(
   if (!comp) return '?';
 
   if (comp.type === 'switch' || comp.type === 'pushbutton') {
+    if (isWidePin(comp.outputs[0])) return OPAQUE_EXPR;
     return ctx.inputNames.get(comp.id) || (comp.type === 'switch' ? 'SW' : 'BTN');
   }
   if (comp.type === 'vcc') return '1';
   if (comp.type === 'gnd') return '0';
-  if (comp.type === 'constant') return String((comp.state.constValue ?? 1) % 2);
+  if (comp.type === 'constant') return isWidePin(comp.outputs[0]) ? OPAQUE_EXPR : String((comp.state.constValue ?? 1) % 2);
   if (comp.type === 'clock') return 'CLK';
 
   if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
     const inPin = comp.inputs[0];
     if (!inPin) return '?';
+    if (isWidePin(inPin)) return OPAQUE_EXPR;
     const driver = ctx.driverOf(inPin.id);
     if (!driver) return '0';
     if (visited.has(comp.id)) return '...';
@@ -3606,6 +3616,13 @@ function booleanExprOf(
   }
 
   if (visited.has(comp.id)) return '...';
+  if (
+    BUS_ONLY_TYPES.has(comp.type) ||
+    (pinIndex !== undefined && isWidePin(comp.outputs[pinIndex])) ||
+    comp.inputs.some(isWidePin)
+  ) {
+    return OPAQUE_EXPR;
+  }
   // A cone without feedback has the same text whichever path reached it, so it is computed once
   const memoKey = `${comp.id}#${pinIndex ?? ''}`;
   const cached = ctx.memo.get(memoKey);
@@ -3623,6 +3640,7 @@ function booleanExprOf(
   };
 
   const inputExprs = comp.inputs.map((p) => traceInput(p.id));
+  if (inputExprs.some((e) => e.includes(OPAQUE_EXPR))) return OPAQUE_EXPR;
 
   let result: string;
   switch (comp.type) {
@@ -3697,18 +3715,21 @@ export function generateBooleanExpression(
   components: CircuitComponentInstance[],
   wires: CircuitWire[]
 ): string {
-  return booleanExprOf(compId, pinIndex, createBooleanExprContext(components, wires), new Set());
+  const expr = booleanExprOf(compId, pinIndex, createBooleanExprContext(components, wires), new Set());
+  return expr.includes(OPAQUE_EXPR) ? '?' : expr;
 }
 
 // Observable outputs of a circuit: LEDs, probes, buzzers and every output pin of the logic parts
+// (splitter ends excluded: they only re-route bits that are already shown elsewhere)
 function getObservableOutputs(components: CircuitComponentInstance[]) {
-  const outputList: { id: string; name: string; compId: string; pinIndex?: number }[] = [];
+  const outputList: { id: string; name: string; compId: string; pinIndex?: number; width: number }[] = [];
   components.forEach((c) => {
     if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
       outputList.push({
         id: c.id,
         name: c.label || (c.type === 'led' ? 'LED' : c.type === 'buzzer' ? 'Buzzer' : 'Prob'),
         compId: c.id,
+        width: c.inputs[0]?.width ?? 1,
       });
     } else if (
       c.outputs.length > 0 &&
@@ -3722,7 +3743,8 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'asciiKeyboard' &&
       c.type !== 'dotMatrix8x8' &&
       c.type !== 'rgbMatrix16x16' &&
-      c.type !== 'textLabel'
+      c.type !== 'textLabel' &&
+      c.type !== 'splitter'
     ) {
       c.outputs.forEach((pin, pIdx) => {
         outputList.push({
@@ -3730,6 +3752,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
           name: `${c.label || c.type}.${pin.name}`,
           compId: c.id,
           pinIndex: pIdx,
+          width: pin.width ?? 1,
         });
       });
     }
@@ -3746,7 +3769,8 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
 
 /**
  * Boolean expression of every observable output, keyed by output name. Needs no simulation, so the
- * canvas formula HUD can use it without building the whole truth table.
+ * canvas formula HUD can use it without building the whole truth table. Outputs wider than 1 bit, and
+ * single bits whose cone reaches a bus, have no single formula and are left out.
  */
 export function generateBooleanExpressions(
   components: CircuitComponentInstance[],
@@ -3755,16 +3779,57 @@ export function generateBooleanExpressions(
   const ctx = createBooleanExprContext(components, wires);
   const booleanExpressions: { [outputName: string]: string } = {};
   getObservableOutputs(components).forEach((out) => {
+    if (out.width > 1) return;
     const expr = booleanExprOf(out.compId, out.pinIndex, ctx, new Set());
-    if (expr && expr !== '?' && expr !== '0') {
+    if (expr && expr !== '?' && expr !== '0' && !expr.includes(OPAQUE_EXPR)) {
       booleanExpressions[out.name] = expr;
     }
   });
   return booleanExpressions;
 }
 
+// Input bits a truth table sweeps (2^8 = 256 rows; Logisim-evolution allows 20) and the most it minimises
+export const MAX_TRUTH_TABLE_INPUT_BITS = 8;
+export const MAX_MINIMIZE_INPUT_BITS = 6;
+
+// Bit width of an input source as the truth table drives it (a push button is always 1 bit)
+const truthInputWidth = (c: CircuitComponentInstance) => (c.type === 'switch' ? c.outputs[0]?.width ?? 1 : 1);
+
+// Bit `bit` of an input source's current value
+const truthInputBit = (c: CircuitComponentInstance, bit: number): 0 | 1 =>
+  truthInputWidth(c) > 1 ? ((Math.floor((c.state.inputValue ?? 0) / 2 ** bit) % 2) as 0 | 1) : c.state.on ? 1 : 0;
+
 /**
- * Automatically compute Truth Table (2^N combinations) for canvas circuit
+ * Sets input sources to the bits of one truth-table row. `values` follows `columns` (one entry per bit,
+ * MSB first within a part); parts not in `columns` are left as they are.
+ */
+export function applyTruthTableInputs(
+  components: CircuitComponentInstance[],
+  columns: TruthTableData['inputs'],
+  values: (SignalValue | number)[]
+): CircuitComponentInstance[] {
+  const byComp = new Map<string, { bit: number; v: 0 | 1 }[]>();
+  columns.forEach((col, k) => {
+    if (!col.compId || k >= values.length) return;
+    const list = byComp.get(col.compId) || [];
+    list.push({ bit: col.bit ?? 0, v: values[k] === 1 ? 1 : 0 });
+    byComp.set(col.compId, list);
+  });
+  return components.map((c) => {
+    const bits = byComp.get(c.id);
+    if (!bits) return c;
+    if (truthInputWidth(c) > 1) {
+      let n = c.state.inputValue ?? 0;
+      for (const { bit, v } of bits) n += (v - (Math.floor(n / 2 ** bit) % 2)) * 2 ** bit;
+      return { ...c, state: { ...c.state, inputValue: n } };
+    }
+    return { ...c, state: { ...c.state, on: bits[0].v === 1 } };
+  });
+}
+
+/**
+ * Automatically compute Truth Table (2^N combinations) for canvas circuit. Like Logisim-evolution's
+ * Analyze.computeTable, a wide input or output is one column per bit, MSB first.
  */
 export function generateTruthTable(
   components: CircuitComponentInstance[],
@@ -3773,53 +3838,101 @@ export function generateTruthTable(
   // 1. Identify input switches & buttons
   const switchComps = components.filter((c) => c.type === 'switch' || c.type === 'pushbutton');
   if (switchComps.length === 0) return null;
-  // Limit to max 6 switches (max 64 rows)
-  const activeSwitches = switchComps.slice(0, 6);
 
   // 2. Identify observable outputs (LEDs, Probes, Buzzer, or output pins of gates/blocks)
   const outputList = getObservableOutputs(components);
 
   if (outputList.length === 0) return null;
 
-  const numCombinations = Math.pow(2, activeSwitches.length);
+  const inputNames = getInputSignalNames(components);
+  const nameOf = (s: CircuitComponentInstance) => inputNames.get(s.id) || 'Giriş';
+
+  // Whole parts, in canvas order, while their bits fit; a part that does not fit and every part after
+  // it keep their current value
+  const activeSwitches: CircuitComponentInstance[] = [];
+  let inputBits = 0;
+  for (const s of switchComps) {
+    const w = truthInputWidth(s);
+    if (inputBits + w > MAX_TRUTH_TABLE_INPUT_BITS) break;
+    activeSwitches.push(s);
+    inputBits += w;
+  }
+
+  const inputColumns: TruthTableData['inputs'] = [];
+  activeSwitches.forEach((s) => {
+    const w = truthInputWidth(s);
+    const name = nameOf(s);
+    for (let b = w - 1; b >= 0; b--) {
+      inputColumns.push(
+        w > 1
+          ? { id: `${s.id}#${b}`, name: `${name}[${b}]`, compId: s.id, bit: b, group: name, width: w }
+          : { id: s.id, name, compId: s.id, bit: 0 }
+      );
+    }
+  });
+  const outputColumns: TruthTableData['outputs'] = [];
+  outputList.forEach((o) => {
+    for (let b = o.width - 1; b >= 0; b--) {
+      outputColumns.push(
+        o.width > 1
+          ? { id: `${o.id}#${b}`, name: `${o.name}[${b}]`, compId: o.compId, bit: b, group: o.name, width: o.width }
+          : { id: o.id, name: o.name, compId: o.compId, bit: 0 }
+      );
+    }
+  });
+
+  const notes: string[] = [];
+  const restSwitches = switchComps.slice(activeSwitches.length);
+  if (restSwitches.length > 0) {
+    notes.push(
+      `Tabloya en fazla ${MAX_TRUTH_TABLE_INPUT_BITS} giriş biti alınabilir; ${restSwitches
+        .map((s) => (truthInputWidth(s) > 1 ? `${nameOf(s)} (${truthInputWidth(s)} bit)` : nameOf(s)))
+        .join(', ')} şu anki değerinde sabit tutuldu.`
+    );
+  }
+  if (inputColumns.length === 0) {
+    return { inputs: [], outputs: outputColumns, rows: [], notes };
+  }
+
+  const numCombinations = Math.pow(2, inputColumns.length);
   const rows: TruthTableData['rows'] = [];
 
   // Determine current live inputs
-  const currentInputs = activeSwitches.map((s) => (s.state.on ? 1 : 0));
+  const switchById = new Map(activeSwitches.map((s) => [s.id, s]));
+  const currentInputs = inputColumns.map((col) => truthInputBit(switchById.get(col.compId!)!, col.bit ?? 0));
 
   for (let i = 0; i < numCombinations; i++) {
     // Generate binary representation
     const inputVals: SignalValue[] = [];
-    for (let bit = activeSwitches.length - 1; bit >= 0; bit--) {
+    for (let bit = inputColumns.length - 1; bit >= 0; bit--) {
       inputVals.push(((i >> bit) & 1) as SignalValue);
     }
 
     // Clone components with new input switch states
-    const testComps = components.map((c) => {
-      const sIdx = activeSwitches.findIndex((s) => s.id === c.id);
-      if (sIdx !== -1) {
-        return {
-          ...c,
-          state: { ...c.state, on: inputVals[sIdx] === 1 },
-        };
-      }
-      return c;
-    });
+    const testComps = applyTruthTableInputs(components, inputColumns, inputVals);
 
     const sim = simulateCircuit(testComps, wires);
+    const simById = new Map(sim.components.map((c) => [c.id, c]));
 
     // Read outputs like Logisim-evolution's Analyze.computeTable: an oscillating row is '@' in
     // every column, E is a conflict, X / Z are don't cares
-    const outputVals: TruthTableEntry[] = outputList.map((out) => {
-      if (sim.oscillating) return '@';
-      const found = sim.components.find((c) => c.id === out.compId);
-      let v: SignalValue | undefined;
+    const outputVals: TruthTableEntry[] = [];
+    outputList.forEach((out) => {
+      const found = simById.get(out.compId);
+      let pin: CircuitPin | undefined;
       if (found && (found.type === 'led' || found.type === 'probe' || found.type === 'buzzer')) {
-        v = found.inputs[0]?.value;
+        pin = found.inputs[0];
       } else if (found && out.pinIndex !== undefined) {
-        v = found.outputs[out.pinIndex]?.value;
+        pin = found.outputs[out.pinIndex];
       }
-      return v === 1 ? 1 : v === 0 ? 0 : v === 'E' ? 'E' : '-';
+      for (let b = out.width - 1; b >= 0; b--) {
+        if (sim.oscillating) {
+          outputVals.push('@');
+          continue;
+        }
+        const v = out.width > 1 ? pin?.bits?.[b] : pin?.value;
+        outputVals.push(v === 1 ? 1 : v === 0 ? 0 : v === 'E' ? 'E' : '-');
+      }
     });
 
     const isCurrent = inputVals.every((v, idx) => v === currentInputs[idx]);
@@ -3843,20 +3956,18 @@ export function generateTruthTable(
     };
   } = {};
 
-  const inputNames = getInputSignalNames(components);
-  const varNames = activeSwitches.map((s) => inputNames.get(s.id) || 'Giriş');
-  outputList.forEach((out, outIdx) => {
-    const { minterms, dontCares } = truthTableColumnTerms(rows, outIdx);
-    minimalExpressions[out.name] = minimizeBooleanExpression(varNames, minterms, dontCares);
-  });
-
-  const notes: string[] = [];
-  if (switchComps.length > activeSwitches.length) {
-    const rest = switchComps.slice(activeSwitches.length).map((s) => inputNames.get(s.id) || s.label);
+  if (inputColumns.length <= MAX_MINIMIZE_INPUT_BITS) {
+    const varNames = inputColumns.map((c) => c.name);
+    outputColumns.forEach((out, outIdx) => {
+      const { minterms, dontCares } = truthTableColumnTerms(rows, outIdx);
+      minimalExpressions[out.name] = minimizeBooleanExpression(varNames, minterms, dontCares);
+    });
+  } else {
     notes.push(
-      `Tabloya ilk ${activeSwitches.length} giriş alındı; ${rest.join(', ')} şu anki değerinde sabit tutuldu.`
+      `Tabloda ${inputColumns.length} giriş biti var; en sade ifade (Quine-McCluskey) ve Karnaugh haritası en fazla ${MAX_MINIMIZE_INPUT_BITS} bit için hesaplanır.`
     );
   }
+
   const stateful = components.filter(
     (c) => COMPONENT_CATALOG[c.type]?.category === 'sequential' && c.type !== 'rom16x4'
   );
@@ -3869,8 +3980,8 @@ export function generateTruthTable(
   }
 
   return {
-    inputs: activeSwitches.map((s) => ({ id: s.id, name: inputNames.get(s.id) || 'Giriş' })),
-    outputs: outputList.map((o) => ({ id: o.id, name: o.name })),
+    inputs: inputColumns,
+    outputs: outputColumns,
     booleanExpressions,
     minimalExpressions,
     rows,

@@ -28,6 +28,7 @@ import type {
   ComponentCategory,
   CircuitAnnotation,
   TruthTableEntry,
+  TruthTableData,
 } from '../types/circuit';
 import {
   COMPONENT_CATALOG,
@@ -41,6 +42,7 @@ import {
   CHIPTUNE_NOTE_FREQS,
   CHIPTUNE_NOTE_NAMES,
   generateTruthTable,
+  applyTruthTableInputs,
   generateBooleanExpressions,
   synthesizeCircuitFromBooleanExpression,
   getMultiInputGatePinRelY,
@@ -186,6 +188,19 @@ const WAVE_ERROR_FILL = '#f97676';
 const waveSymbol = (v: SignalValue): string => (v === 'E' ? 'E' : v === 'Z' ? 'z' : v === 'X' ? 'x' : String(v));
 
 // Truth-table / K-map cell: hover text and colour of the non-binary entries
+// Header cells over the truth-table columns: one spanning the bits of each wide part (A[7..0]), an
+// empty one over each run of 1-bit columns
+const truthColumnGroups = (cols: TruthTableData['inputs']): { label: string; span: number }[] => {
+  const out: { label: string; span: number; key: string }[] = [];
+  cols.forEach((c) => {
+    const key = c.group !== undefined ? `g:${c.compId}:${c.group}` : '';
+    const last = out[out.length - 1];
+    if (last && last.key === key) last.span++;
+    else out.push({ key, span: 1, label: c.group !== undefined ? `${c.group}[${(c.width ?? 1) - 1}..0]` : '' });
+  });
+  return out;
+};
+
 const truthEntryTitle = (v: TruthTableEntry): string | undefined =>
   v === 'E'
     ? 'E: devrede çakışan çıkış değerleri var (sadeleştirmede önemsiz sayılır)'
@@ -1350,29 +1365,20 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   }, []);
 
   // Apply a specific input combination from K-Map cell directly to canvas switches
+  // `inputValues` holds one bit per truth-table input column (a wide switch has one column per bit)
   const handleApplyInputsFromKMap = useCallback(
-    (inputValues: number[]) => {
-      const switchComps = components.filter((c) => c.type === 'switch' || c.type === 'pushbutton').slice(0, 6);
-      if (switchComps.length === 0) return;
+    (inputValues: number[], columns: TruthTableData['inputs']) => {
+      if (columns.length === 0) return;
 
       setComponents((prev) => {
-        const updated = prev.map((c) => {
-          const sIdx = switchComps.findIndex((s) => s.id === c.id);
-          if (sIdx !== -1 && sIdx < inputValues.length) {
-            return {
-              ...c,
-              state: { ...c.state, on: inputValues[sIdx] === 1 },
-            };
-          }
-          return c;
-        });
+        const updated = applyTruthTableInputs(prev, columns, inputValues);
         const sim = simulateCircuit(updated, wires);
         setWires(sim.wires);
         return sim.components;
       });
       playSwitchSound(true);
     },
-    [components, wires]
+    [wires]
   );
 
 
@@ -11062,6 +11068,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               {!truthTableData || truthTableData.inputs.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 text-sm space-y-2">
                   <p className="font-semibold text-slate-700">Analiz üretilemedi</p>
+                  {truthTableData?.notes?.map((n) => (
+                    <p key={n} className="text-amber-800">⚠ {n}</p>
+                  ))}
                   <p>Doğruluk tablosu ve Karnaugh haritası oluşturmak için tuvalde en az 1 adet <strong>Giriş Anahtarı (Switch/Buton)</strong> ve 1 adet çıkış elemanı (LED, Prob vb.) bulunmalıdır.</p>
                 </div>
               ) : truthModalTab === 'table' ? (
@@ -11100,6 +11109,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   <div className="overflow-x-auto border border-slate-200 rounded-2xl">
                     <table className="w-full text-center border-collapse text-xs">
                       <thead>
+                        {/* Parts wider than 1 bit: their name over their bit columns (A[7..0]) */}
+                        {[...truthTableData.inputs, ...truthTableData.outputs].some((c) => c.group) && (
+                          <tr className="bg-slate-50 border-b border-slate-200">
+                            {truthColumnGroups(truthTableData.inputs).map((g, idx) => (
+                              <th
+                                key={`gi${idx}`}
+                                colSpan={g.span}
+                                className="py-1 px-2 font-mono font-bold text-[10px] text-blue-800 border-r border-slate-200"
+                              >
+                                {g.label}
+                              </th>
+                            ))}
+                            {truthColumnGroups(truthTableData.outputs).map((g, idx) => (
+                              <th
+                                key={`go${idx}`}
+                                colSpan={g.span}
+                                className="py-1 px-2 font-mono font-bold text-[10px] text-emerald-800 border-r border-slate-200"
+                              >
+                                {g.label}
+                              </th>
+                            ))}
+                            <th colSpan={2} />
+                          </tr>
+                        )}
                         <tr className="bg-slate-100/80 border-b border-slate-200">
                           {truthTableData.inputs.map((inp, idx) => (
                             <th key={idx} className="py-2.5 px-3 font-mono font-bold text-blue-700 border-r border-slate-200">
@@ -11153,7 +11186,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                             <td className="py-2 px-2">
                               <button
                                 onClick={() => {
-                                  handleApplyInputsFromKMap(row.inputValues.map((v) => (v === 1 ? 1 : 0)));
+                                  handleApplyInputsFromKMap(row.inputValues.map((v) => (v === 1 ? 1 : 0)), truthTableData.inputs);
                                   showToast(`m${rIdx} (${row.inputValues.join('')}) durumu tuval anahtarlarına uygulandı!`);
                                 }}
                                 className="px-2 py-0.5 text-[10px] font-sans font-bold bg-blue-50 hover:bg-blue-600 text-blue-700 hover:text-white rounded-md border border-blue-200 transition-colors cursor-pointer"
@@ -11298,7 +11331,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                                     return (
                                       <td
                                         key={cIdx}
-                                        onClick={() => handleApplyInputsFromKMap(combinedInputs)}
+                                        onClick={() => handleApplyInputsFromKMap(combinedInputs, truthTableData.inputs)}
                                         title={`${truthEntryTitle(val) ? `${truthEntryTitle(val)}\n` : ''}Tıkla: Tuvaldeki anahtarları bu lojik kombinasyona ayarla (m${mIndex}: ${rowVarName}=${row.label}, ${colVarName}=${col.label})`}
                                         className={`relative px-7 py-5 border-b border-r border-slate-200 last:border-r-0 transition-all cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:z-10 ${
                                           isLiveActive

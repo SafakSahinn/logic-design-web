@@ -246,9 +246,23 @@ export interface CircuitPreset {
 // 'E' = conflicting drivers, '@' = the circuit oscillates for this row
 export type TruthTableEntry = 0 | 1 | '-' | 'E' | '@';
 
+// One truth-table column = one bit. A part wider than 1 bit gives one column per bit, MSB first
+// (Logisim-evolution Analyze: "A[2] A[1] A[0]"); its columns share `group` (the part's name) and `width`.
+export interface TruthTableColumn {
+  id: string;
+  name: string;
+  /** Part the bit belongs to (input switch, output LED/probe or logic part) */
+  compId?: string;
+  /** Bit index within the part's pin (0 = LSB); 0 for 1-bit parts */
+  bit?: number;
+  /** Set on the columns of a part wider than 1 bit: the part's name, shown as a header over its bits */
+  group?: string;
+  width?: number;
+}
+
 export interface TruthTableData {
-  inputs: { id: string; name: string }[];
-  outputs: { id: string; name: string }[];
+  inputs: TruthTableColumn[];
+  outputs: TruthTableColumn[];
   booleanExpressions?: { [outputName: string]: string };
   minimalExpressions?: {
     [outputName: string]: {
