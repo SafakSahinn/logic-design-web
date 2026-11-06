@@ -140,7 +140,7 @@ import {
 import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import { MAX_BIT_WIDTH, bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
-import { generateVCD } from '../utils/vcdGenerator';
+import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
@@ -186,8 +186,15 @@ const numText = (n: number | null): string => (n === null ? '?' : String(n));
 const WAVE_UNKNOWN_FILL = '#eaaa6c';
 const WAVE_ERROR_FILL = '#f97676';
 const waveSymbol = (v: SignalValue): string => (v === 'E' ? 'E' : v === 'Z' ? 'z' : v === 'X' ? 'x' : String(v));
+// A wide sample as one value: its hex text (x / E digits as Logisim shows them) and the colour class
+// of the bus segment: E if any bit is E, x if any bit is undefined / floating, else a normal value
+const waveBusText = (bits: SignalValue[]): string => formatBits(bits, '16').toUpperCase().replace(/X/g, 'x');
+const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
+  bits.includes('E') ? 'E' : bits.some((b) => b !== 0 && b !== 1) ? 'X' : 'ok';
+// Key that tells two samples apart (scalar value or the bit pattern)
+const waveKey = (v: WaveformValue | undefined): string =>
+  v === undefined ? '0' : Array.isArray(v) ? `b${v.join('')}` : String(v);
 
-// Truth-table / K-map cell: hover text and colour of the non-binary entries
 // Header cells over the truth-table columns: one spanning the bits of each wide part (A[7..0]), an
 // empty one over each run of 1-bit columns
 const truthColumnGroups = (cols: TruthTableData['inputs']): { label: string; span: number }[] => {
@@ -201,6 +208,7 @@ const truthColumnGroups = (cols: TruthTableData['inputs']): { label: string; spa
   return out;
 };
 
+// Truth-table / K-map cell: hover text and colour of the non-binary entries
 const truthEntryTitle = (v: TruthTableEntry): string | undefined =>
   v === 'E'
     ? 'E: devrede çakışan çıkış değerleri var (sadeleştirmede önemsiz sayılır)'
@@ -508,7 +516,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Waveform / Timing Scope State (Zamanlama Diyagramı)
   const [showWaveform, setShowWaveform] = useState<boolean>(false);
-  const [waveformSamples, setWaveformSamples] = useState<{ time: number; values: Record<string, SignalValue> }[]>([]);
+  const [waveformSamples, setWaveformSamples] = useState<WaveformSample[]>([]);
   const [isWaveformPaused, setIsWaveformPaused] = useState<boolean>(false);
   const sampleTimeRef = useRef<number>(0);
 
@@ -3456,7 +3464,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   );
 
   const observableChannels = useMemo(() => {
-    const list: { key: string; name: string; color: string; type: string }[] = [];
+    const list: { key: string; name: string; color: string; type: string; width?: number }[] = [];
     const colors = [
       '#06b6d4', // cyan
       '#10b981', // emerald
@@ -3475,9 +3483,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       if (c.type === 'clock') {
         list.push({ key: c.id, name: `${name} (CLK)`, color: colors[cIdx++ % colors.length], type: 'clock' });
       } else if (c.type === 'switch' || c.type === 'pushbutton') {
-        list.push({ key: c.id, name: `${name} (${c.type === 'switch' ? 'SW' : 'BTN'})`, color: colors[cIdx++ % colors.length], type: c.type });
+        // A wide switch is one bus row (Logisim-evolution chronogram), named with its width
+        const w = c.type === 'switch' ? c.outputs[0]?.width ?? 1 : 1;
+        list.push({
+          key: c.id,
+          name: `${name}${w > 1 ? `[${w}]` : ''} (${c.type === 'switch' ? 'SW' : 'BTN'})`,
+          color: colors[cIdx++ % colors.length],
+          type: c.type,
+          width: w,
+        });
       } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
-        list.push({ key: c.id, name: `${name} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output' });
+        const w = c.inputs[0]?.width ?? 1;
+        list.push({ key: c.id, name: `${name}${w > 1 ? `[${w}]` : ''} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output', width: w });
       } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
         list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
       } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
@@ -3521,9 +3538,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const sampleRateMs = Math.max(100, Math.min(400, Math.floor(1000 / (clockHz * 2))));
 
     const takeSample = () => {
-      const values: Record<string, SignalValue> = {};
+      const values: Record<string, WaveformValue> = {};
       components.forEach((c) => {
-        if (c.type === 'clock' || c.type === 'switch' || c.type === 'pushbutton') {
+        const outW = c.outputs[0]?.width ?? 1;
+        const inW = c.inputs[0]?.width ?? 1;
+        if (c.type === 'switch' && outW > 1) {
+          values[c.id] = c.outputs[0].bits ? [...c.outputs[0].bits] : numberToBits(c.state.inputValue ?? 0, outW);
+        } else if ((c.type === 'led' || c.type === 'probe') && inW > 1) {
+          values[c.id] = c.inputs[0].bits ? [...c.inputs[0].bits] : Array<SignalValue>(inW).fill('X');
+        } else if (c.type === 'clock' || c.type === 'switch' || c.type === 'pushbutton') {
           values[c.id] = c.state.on ? 1 : 0;
         } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
           values[c.id] = c.inputs[0]?.value ?? 0;
@@ -10875,18 +10898,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
                 // Runs of equal samples; 0/1 runs form the step line, x / z / E runs are full-height
                 // boxes (Logisim-evolution chronogram)
-                const segs: { v: SignalValue; x0: number; x1: number }[] = [];
+                const isBus = (channel.width ?? 1) > 1;
+                const segs: { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number }[] = [];
                 waveformSamples.forEach((smp, i) => {
-                  const v = smp.values[channel.key] ?? 0;
+                  const raw = smp.values[channel.key];
+                  const key = waveKey(raw);
                   const x1 = 10 + (i + 1) * slotWidth;
                   const last = segs[segs.length - 1];
-                  if (last && last.v === v) last.x1 = x1;
-                  else segs.push({ v, x0: 10 + i * slotWidth, x1 });
+                  if (last && last.key === key) last.x1 = x1;
+                  else if (Array.isArray(raw)) segs.push({ v: 0, bits: raw, key, x0: 10 + i * slotWidth, x1 });
+                  else segs.push({ v: raw ?? 0, key, x0: 10 + i * slotWidth, x1 });
                 });
                 let pathD = '';
                 let prevBinary = false;
                 segs.forEach((sg) => {
-                  if (sg.v !== 0 && sg.v !== 1) {
+                  if (isBus || (sg.v !== 0 && sg.v !== 1)) {
                     prevBinary = false;
                     return;
                   }
@@ -10895,8 +10921,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   prevBinary = true;
                 });
 
-                const lastSampleVal: SignalValue =
-                  sampleCount > 0 ? waveformSamples[sampleCount - 1].values[channel.key] ?? 0 : 0;
+                const lastRaw = sampleCount > 0 ? waveformSamples[sampleCount - 1].values[channel.key] : undefined;
+                const lastBits = Array.isArray(lastRaw) ? lastRaw : undefined;
+                const lastBusKind = lastBits ? waveBusKind(lastBits) : undefined;
+                // A bus badge shows its hex value and takes the colour of a 1 / E / x sample
+                const lastSampleVal: SignalValue = lastBits
+                  ? lastBusKind === 'E'
+                    ? 'E'
+                    : lastBusKind === 'X'
+                    ? 'X'
+                    : lastBits.includes(1)
+                    ? 1
+                    : 0
+                  : Array.isArray(lastRaw)
+                  ? 0
+                  : lastRaw ?? 0;
 
                 return (
                   <div
@@ -10922,7 +10961,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                             : 'bg-slate-900 text-slate-500 border border-slate-800'
                         }`}
                       >
-                        {waveSymbol(lastSampleVal)}
+                        {lastBits ? waveBusText(lastBits) : waveSymbol(lastSampleVal)}
                       </span>
                     </div>
 
@@ -10944,18 +10983,51 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         ))}
 
                         {/* Baseline */}
-                        <line x1={10} y1={yLow} x2={svgWidth - 10} y2={yLow} stroke="#334155" strokeWidth={1} />
+                        {!isBus && <line x1={10} y1={yLow} x2={svgWidth - 10} y2={yLow} stroke="#334155" strokeWidth={1} />}
 
                         {/* Waveform Fill Area under the 1 runs */}
                         {segs
-                          .filter((sg) => sg.v === 1)
+                          .filter((sg) => !isBus && sg.v === 1)
                           .map((sg, k) => (
                             <rect key={`a${k}`} x={sg.x0} y={yHigh} width={sg.x1 - sg.x0} height={yLow - yHigh} fill={channel.color} opacity={0.15} />
                           ))}
 
+                        {/* Bus rows: one hexagon per run of equal values with its hex text; E red, x orange */}
+                        {isBus &&
+                          segs.map((sg, k) => {
+                            const bits = sg.bits ?? [];
+                            const kind = waveBusKind(bits);
+                            const col = kind === 'E' ? WAVE_ERROR_FILL : kind === 'X' ? WAVE_UNKNOWN_FILL : channel.color;
+                            const slope = Math.min(4, (sg.x1 - sg.x0) / 2);
+                            const yMid = (yHigh + yLow) / 2;
+                            const text = waveBusText(bits);
+                            return (
+                              <g key={`b${k}`}>
+                                <polygon
+                                  points={`${sg.x0},${yMid} ${sg.x0 + slope},${yHigh} ${sg.x1 - slope},${yHigh} ${sg.x1},${yMid} ${sg.x1 - slope},${yLow} ${sg.x0 + slope},${yLow}`}
+                                  fill={col}
+                                  fillOpacity={kind === 'ok' ? 0.15 : 0.55}
+                                  stroke={col}
+                                  strokeWidth={1.5}
+                                />
+                                {sg.x1 - sg.x0 >= text.length * 6.5 + 8 && (
+                                  <text
+                                    x={(sg.x0 + sg.x1) / 2}
+                                    y={yMid + 3.5}
+                                    textAnchor="middle"
+                                    className={`text-[10px] font-mono font-extrabold select-none ${kind === 'ok' ? 'fill-slate-100' : 'fill-slate-950'}`}
+                                  >
+                                    {text}
+                                  </text>
+                                )}
+                                <title>{`${channel.name}: ${bitsToString(bits)} = 0x${text}`}</title>
+                              </g>
+                            );
+                          })}
+
                         {/* x / z / E runs */}
                         {segs
-                          .filter((sg) => sg.v !== 0 && sg.v !== 1)
+                          .filter((sg) => !isBus && sg.v !== 0 && sg.v !== 1)
                           .map((sg, k) => (
                             <g key={`u${k}`}>
                               <rect
