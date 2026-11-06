@@ -12954,7 +12954,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               <textarea
                 value={testbenchText}
                 onChange={(e) => setTestbenchText(e.target.value)}
-                placeholder={`# Örnek format:\n0 0 | 0 0\n0 1 | 1 0\n1 0 | 1 0\n1 1 | 0 1`}
+                placeholder={`# Örnek format:\n0 0 | 0 0\n0 1 | 1 0\n1 0 | 1 0\n1 1 | 0 1\n# Çok bitli değer: 0101, 0xA5 ya da 10; beklenende x = önemsiz bit (1x0x)`}
                 className="w-full h-36 p-3.5 bg-slate-950 text-emerald-300 font-mono text-xs rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 shadow-inner"
               />
 
