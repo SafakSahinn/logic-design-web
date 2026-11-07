@@ -49,6 +49,10 @@ export type ComponentType =
   | 'decoder3to8'
   | 'bcdTo7Seg'
   | 'priorityEncoder4to2'
+  | 'multiplexer'
+  | 'demultiplexer'
+  | 'decoder'
+  | 'priorityEncoder'
   | 'comparator4'
   | 'alu4'
   | 'splitter4'
@@ -142,6 +146,12 @@ export interface CircuitComponentInstance {
     negated?: number[];
     /** XOR/XNOR with more than two inputs: odd = parity (odd number of 1s), one = exactly one 1 (Logisim 'xor'); unset = odd */
     xorMode?: 'odd' | 'one';
+    /** Plexers (MUX/DEMUX/decoder/priority encoder): output value while disabled by enable 0 (Logisim 'disabled'): 0 or floating (x); unset = 0 */
+    plexDisabled?: '0' | 'Z';
+    /** Demultiplexer/decoder: unselected outputs float (x) instead of 0 (Logisim 'tristate'); unset = false */
+    plexTristate?: boolean;
+    /** Plexers: select (and enable) pins on the bottom/left side or the top/right side (Logisim 'selloc'); unset = bl */
+    selectLoc?: 'bl' | 'tr';
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;

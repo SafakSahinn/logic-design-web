@@ -806,6 +806,64 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out0', name: 'Q', type: 'output', relX: 40, relY: 20 }],
     description: 'Veri yolundan seçme girişinin gösterdiği bit grubunu çıkışa verir (Logisim Bit Selector)',
   },
+  // Parametric plexers (Logisim std/plexers). configurePlexer rebuilds the pins; the ids below are the keys
+  // plexerLayout places, so a pin keeps its id (and its wires) when the select or data width changes
+  multiplexer: {
+    type: 'multiplexer',
+    name: 'Çoklayıcı (MUX)',
+    category: 'combinational',
+    width: 60,
+    height: 60,
+    inputs: [
+      { id: 'in0', name: '0', type: 'input', relX: 0, relY: 20 },
+      { id: 'in1', name: '1', type: 'input', relX: 0, relY: 40 },
+      { id: 'sel', name: 'S', type: 'input', relX: 30, relY: 60 },
+    ],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 60, relY: 30 }],
+    description: 'Seçme girişinin değerindeki veri girişini çıkışa aktarır; seçme 1-5 bit, veri 1-32 bit, isteğe bağlı enable (Logisim Multiplexer)',
+  },
+  demultiplexer: {
+    type: 'demultiplexer',
+    name: 'Çoklayıcı Çözücü (DEMUX)',
+    category: 'combinational',
+    width: 60,
+    height: 60,
+    inputs: [
+      { id: 'in', name: 'D', type: 'input', relX: 0, relY: 30 },
+      { id: 'sel', name: 'S', type: 'input', relX: 30, relY: 60 },
+    ],
+    outputs: [
+      { id: 'out0', name: '0', type: 'output', relX: 60, relY: 20 },
+      { id: 'out1', name: '1', type: 'output', relX: 60, relY: 40 },
+    ],
+    description: 'Veri girişini seçme girişinin gösterdiği çıkışa yönlendirir, öbür çıkışlar 0 (ya da yüzer); seçme 1-5 bit, veri 1-32 bit (Logisim Demultiplexer)',
+  },
+  decoder: {
+    type: 'decoder',
+    name: 'Kod Çözücü (Decoder)',
+    category: 'combinational',
+    width: 40,
+    height: 60,
+    inputs: [
+      { id: 'sel', name: 'S', type: 'input', relX: 20, relY: 60 },
+      { id: 'en', name: 'EN', type: 'input', relX: 10, relY: 60 },
+    ],
+    outputs: [
+      { id: 'out0', name: '0', type: 'output', relX: 40, relY: 20 },
+      { id: 'out1', name: '1', type: 'output', relX: 40, relY: 40 },
+    ],
+    description: 'Seçme girişinin değerindeki çıkışı 1 yapar, öbürleri 0 (ya da yüzer); seçme 1-5 bit, isteğe bağlı enable (Logisim Decoder)',
+  },
+  priorityEncoder: {
+    type: 'priorityEncoder',
+    name: 'Öncelikli Kodlayıcı (Priority Encoder)',
+    category: 'combinational',
+    width: 60,
+    height: 180,
+    inputs: [{ id: 'in0', name: '0', type: 'input', relX: 0, relY: 20 }],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 60, relY: 90 }],
+    description: '1 olan en yüksek numaralı girişin numarasını verir; GS bir giriş aktifken 1, EO hiçbiri aktif değilken 1 (Logisim Priority Encoder, 2-32 giriş)',
+  },
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -1027,7 +1085,12 @@ export function createComponentInstance(
     },
   };
   // A new bit extender is type zero (Logisim default), which has no extension input
-  return type === 'bitExtender' ? configureBitExtender(inst, {}) : inst;
+  if (type === 'bitExtender') return configureBitExtender(inst, {});
+  // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
+  if (PLEXER_TYPES.has(type)) {
+    return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
+  }
+  return inst;
 }
 
 // Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
@@ -1052,6 +1115,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   const w = getBitWidth(comp);
   if (MULTI_INPUT_GATE_TYPES.includes(comp.type)) return { width: meta.width, height: multiInputGateHeight(comp.inputs.length) };
   if (comp.type === 'splitter') return { width: 20, height: Math.max(20, Math.ceil(comp.outputs.length / 2) * 20) };
+  if (PLEXER_TYPES.has(comp.type)) {
+    const l = plexerLayout(comp);
+    return { width: l.width, height: l.height };
+  }
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
   return { width: meta?.width ?? 60, height: meta?.height ?? 50 };
@@ -1252,6 +1319,118 @@ export function configureBitSelector(
   });
 }
 
+// ---- Parametric plexers (Logisim std/plexers: Multiplexer, Demultiplexer, Decoder, PriorityEncoder) -------
+
+export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder']);
+export const PLEXER_MAX_SELECT = 5;
+
+/** Key of a pin inside its part ('in3', 'sel', 'out', ...): the pin id without the part id prefix */
+export const pinKey = (comp: CircuitComponentInstance, pin: CircuitPin): string =>
+  pin.id.startsWith(`${comp.id}_`) ? pin.id.slice(comp.id.length + 1) : pin.id;
+
+export interface PlexerConfig {
+  /** Select bits (priority encoder: output code bits); the part has 2^select data inputs / outputs */
+  select: number;
+  /** Data width (MUX / DEMUX; 1 for the others) */
+  width: number;
+  /** Has an enable input (always on a priority encoder) */
+  enable: boolean;
+}
+
+export function getPlexerConfig(comp: CircuitComponentInstance): PlexerConfig {
+  const find = (pins: CircuitPin[], key: string) => pins.find((p) => pinKey(comp, p) === key);
+  const selPin = comp.type === 'priorityEncoder' ? find(comp.outputs, 'out') : find(comp.inputs, 'sel');
+  const dataPin = comp.type === 'multiplexer' ? find(comp.outputs, 'out') : comp.type === 'demultiplexer' ? find(comp.inputs, 'in') : undefined;
+  return {
+    select: selPin?.width ?? 1,
+    width: dataPin?.width ?? 1,
+    enable: comp.type === 'priorityEncoder' || !!find(comp.inputs, 'en'),
+  };
+}
+
+/**
+ * Pins of a plexer in a fixed order the simulator relies on:
+ *  - multiplexer:     inputs in0..in(n-1), sel, [en];  outputs out
+ *  - demultiplexer:   inputs in, sel, [en];            outputs out0..out(n-1)
+ *  - decoder:         inputs sel, [en];                outputs out0..out(n-1)
+ *  - priority encoder: inputs in0..in(n-1), en (EN_IN); outputs out (code), eo (EN_OUT), gs
+ * Pins keep their ids (and wires) when the settings change; pins that are no longer needed are dropped.
+ */
+export function configurePlexer(comp: CircuitComponentInstance, patch: Partial<PlexerConfig>): CircuitComponentInstance {
+  const cur = getPlexerConfig(comp);
+  const s = Math.max(1, Math.min(PLEXER_MAX_SELECT, Math.round(patch.select ?? cur.select)));
+  const w = comp.type === 'multiplexer' || comp.type === 'demultiplexer' ? clampWidth(patch.width ?? cur.width) : 1;
+  const en = comp.type === 'priorityEncoder' ? true : patch.enable ?? cur.enable;
+  const n = 1 << s;
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, name: string, type: 'input' | 'output', width: number): CircuitPin => ({
+    ...pinWithWidth(old.get(key) ?? newPin(comp, key, name, type), width),
+    name,
+  });
+  const many = (prefix: string, type: 'input' | 'output', width: number) =>
+    Array.from({ length: n }, (_, i) => pin(`${prefix}${i}`, String(i), type, width));
+  let inputs: CircuitPin[];
+  let outputs: CircuitPin[];
+  const enPin = en ? [pin('en', comp.type === 'priorityEncoder' ? 'EI' : 'EN', 'input', 1)] : [];
+  if (comp.type === 'multiplexer') {
+    inputs = [...many('in', 'input', w), pin('sel', 'S', 'input', s), ...enPin];
+    outputs = [pin('out', 'Y', 'output', w)];
+  } else if (comp.type === 'demultiplexer') {
+    inputs = [pin('in', 'D', 'input', w), pin('sel', 'S', 'input', s), ...enPin];
+    outputs = many('out', 'output', w);
+  } else if (comp.type === 'decoder') {
+    inputs = [pin('sel', 'S', 'input', s), ...enPin];
+    outputs = many('out', 'output', 1);
+  } else {
+    inputs = [...many('in', 'input', 1), ...enPin];
+    outputs = [pin('out', 'Y', 'output', s), pin('eo', 'EO', 'output', 1), pin('gs', 'GS', 'output', 1)];
+  }
+  return updatePinPositions({ ...comp, inputs, outputs });
+}
+
+/**
+ * Unrotated layout of a plexer (facing east). Data pins sit 20px apart up to 8 of them, 10px apart for 16
+ * and 32. MUX: data on the left, output in the middle of the right side; DEMUX the mirror image; decoder:
+ * outputs on the right; select (and the enable next to it) on the bottom side, or the top with selectLoc
+ * 'tr'. Priority encoder: inputs on the left, code output mid-right with GS below it, EN_IN on the bottom
+ * and EN_OUT on the top (like Logisim).
+ */
+export function plexerLayout(comp: CircuitComponentInstance): { width: number; height: number; pins: Record<string, { x: number; y: number }>; n: number; spacing: number } {
+  const { select } = getPlexerConfig(comp);
+  const n = 1 << select;
+  const sp = n <= 8 ? 20 : 10;
+  const row = (i: number) => (sp === 20 ? 20 : 10) + i * sp;
+  const height = sp === 20 ? 20 * n + 20 : 10 * n + 20;
+  const mid = height / 2;
+  const edge = comp.state.selectLoc === 'tr' ? 0 : height;
+  const pins: Record<string, { x: number; y: number }> = {};
+  let width = 60;
+  if (comp.type === 'multiplexer') {
+    for (let i = 0; i < n; i++) pins[`in${i}`] = { x: 0, y: row(i) };
+    pins.sel = { x: 30, y: edge };
+    pins.en = { x: 40, y: edge };
+    pins.out = { x: 60, y: mid };
+  } else if (comp.type === 'demultiplexer') {
+    pins.in = { x: 0, y: mid };
+    for (let i = 0; i < n; i++) pins[`out${i}`] = { x: 60, y: row(i) };
+    pins.sel = { x: 30, y: edge };
+    pins.en = { x: 20, y: edge };
+  } else if (comp.type === 'decoder') {
+    width = 40;
+    for (let i = 0; i < n; i++) pins[`out${i}`] = { x: 40, y: row(i) };
+    pins.sel = { x: 20, y: edge };
+    pins.en = { x: 10, y: edge };
+  } else {
+    for (let i = 0; i < n; i++) pins[`in${i}`] = { x: 0, y: row(i) };
+    pins.en = { x: 30, y: height };
+    pins.eo = { x: 30, y: 0 };
+    pins.out = { x: 60, y: mid };
+    pins.gs = { x: 60, y: mid + sp };
+  }
+  return { width, height, pins, n, spacing: sp };
+}
+
 /**
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
@@ -1346,6 +1525,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
         return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
       }),
     };
+  }
+
+  if (PLEXER_TYPES.has(comp.type)) {
+    const l = plexerLayout(comp);
+    const place = (pin: CircuitPin) => {
+      const at = l.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
+      const p = rotatePoint(at.x, at.y);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
 
   const isMultiInputGate = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'].includes(comp.type);
@@ -2023,6 +2212,57 @@ export function simulateCircuitStep(
         const ext: SignalValue = t === 'one' ? 1 : t === 'sign' ? src[inW - 1] : t === 'input' ? readBits(comp.inputs[1], 1)[0] : 0;
         const outW = comp.outputs[0]?.width ?? 1;
         setBitsOut(0, Array.from({ length: outW }, (_, i) => (i < inW ? src[i] : ext)));
+        break;
+      }
+      case 'multiplexer':
+      case 'demultiplexer':
+      case 'decoder': {
+        // Logisim Multiplexer / Demultiplexer / Decoder (2.7.1 and evolution alike): enable 0 gives the
+        // 'disabled' value (0 or x) on every output, an E enable (when wired) E; otherwise a fully defined
+        // select picks the input (MUX) or the output that gets the data / 1 (DEMUX / decoder; the others are 0,
+        // or x when three-state), a select with an E bit gives E and any other undefined select x
+        const { select: s, width: w, enable } = getPlexerConfig(comp);
+        const n = 1 << s;
+        const isMux = comp.type === 'multiplexer';
+        const selIdx = isMux ? n : comp.type === 'demultiplexer' ? 1 : 0;
+        const enPin = enable ? comp.inputs[selIdx + 1] : undefined;
+        const fill = (v: SignalValue): SignalValue[] => new Array<SignalValue>(w).fill(v);
+        const en = enPin ? readBits(enPin, 1)[0] : 1;
+        let blocked: SignalValue[] | null = null;
+        if (en === 0) blocked = fill(comp.state.plexDisabled === 'Z' ? 'X' : 0);
+        else if (en === 'E' && enPin && isPinConnected(enPin.id)) blocked = fill('E');
+        const selBits = readBits(comp.inputs[selIdx], s);
+        const sel = bitsToNumber(selBits);
+        const bad: SignalValue[] | null = blocked ?? (sel === undefined ? fill(selBits.includes('E') ? 'E' : 'X') : null);
+        if (isMux) {
+          setBitsOut(0, bad ?? readBits(comp.inputs[sel!], w));
+          break;
+        }
+        const others = bad ?? fill(comp.state.plexTristate ? 'X' : 0);
+        const hit = bad ? -1 : sel!;
+        const data: SignalValue[] = comp.type === 'decoder' ? [1] : readBits(comp.inputs[0], w);
+        for (let i = 0; i < n; i++) setBitsOut(i, i === hit ? data : others);
+        break;
+      }
+      case 'priorityEncoder': {
+        // Logisim PriorityEncoder: enabled unless EN_IN is 0; the highest input at 1 gives its number, GS 1 and
+        // EN_OUT 0; with none the code is x (disabled: the 'disabled' value), GS 0 and EN_OUT = enabled
+        const { select: s } = getPlexerConfig(comp);
+        const n = 1 << s;
+        const enabled = readBits(comp.inputs[n], 1)[0] !== 0;
+        let hi = -1;
+        if (enabled) {
+          for (let i = n - 1; i >= 0; i--) {
+            if (readBits(comp.inputs[i], 1)[0] === 1) {
+              hi = i;
+              break;
+            }
+          }
+        }
+        const none: SignalValue = enabled ? 'X' : comp.state.plexDisabled === 'Z' ? 'X' : 0;
+        setBitsOut(0, hi < 0 ? new Array<SignalValue>(s).fill(none) : numberToBits(hi, s));
+        setOut(1, hi < 0 && enabled ? 1 : 0);
+        setOut(2, hi < 0 ? 0 : 1);
         break;
       }
       case 'bitSelector': {
