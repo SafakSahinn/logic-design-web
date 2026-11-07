@@ -6,14 +6,18 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType } from '../types/circuit';
 import { MAX_BIT_WIDTH, type Radix } from '../types/logic';
 import {
+  GATE_WIDTH_TYPES,
+  MULTI_INPUT_GATE_TYPES,
   OUTPUT_MODE_TYPES,
   SPLITTER_MAX_FANOUT,
   configureBitExtender,
   configureBitSelector,
   configureSplitter,
   getBitWidth,
+  getGateWidth,
   getSplitterConfig,
   setBitWidth,
+  setGateWidth,
   updatePinPositions,
 } from './circuitEngine';
 import { snapPt10 } from './wiringEngine';
@@ -50,7 +54,8 @@ export type AttrKind =
   | 'buttons' // row of toggle buttons
   | 'hex' // hexadecimal text field
   | 'info' // read-only value
-  | 'bitMap'; // splitter: one drop-down per incoming bit
+  | 'bitMap' // splitter: one drop-down per incoming bit
+  | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
 
 export interface AttrDef {
   key: string;
@@ -101,6 +106,7 @@ export function changeGateInputCount(
   const oldInputs = comp.inputs;
   const oldPinLocations = oldInputs.map((p) => snapPt10({ x: p.x, y: p.y }));
 
+  const width = getGateWidth(comp);
   const newInputs: CircuitPin[] = Array.from({ length: newCount }).map((_, idx) => {
     const existing = oldInputs[idx];
     return {
@@ -108,11 +114,17 @@ export function changeGateInputCount(
       name: String.fromCharCode(65 + idx),
       type: 'input' as const,
       value: existing ? existing.value : 0,
+      ...(width > 1 ? { width } : {}),
       x: comp.x,
       y: comp.y, // placed by updatePinPositions
     };
   });
-  const updatedComp = updatePinPositions({ ...comp, inputs: newInputs, state: { ...comp.state, gateInputsCount: newCount } });
+  // A negation belongs to an input slot (like Logisim's negateN): slots that are gone lose theirs
+  const negated = comp.state.negated?.filter((i) => i < newCount);
+  const state = { ...comp.state, gateInputsCount: newCount };
+  if (negated?.length) state.negated = negated;
+  else delete state.negated;
+  const updatedComp = updatePinPositions({ ...comp, inputs: newInputs, state });
 
   // Which old input pins have wires on them
   const attachedOld = new Set<number>();
@@ -206,7 +218,7 @@ export function changeGateInputCount(
 // Attribute tables
 // ---------------------------------------------------------------------------------------------------------
 
-const MULTI_INPUT_GATES = new Set<ComponentType>(['and', 'or', 'nand', 'nor', 'xor', 'xnor']);
+const MULTI_INPUT_GATES = new Set<ComponentType>(MULTI_INPUT_GATE_TYPES as ComponentType[]);
 
 const gateInputsAttr: AttrDef = {
   key: 'inputs',
@@ -230,6 +242,50 @@ const outputModeAttr: AttrDef = {
   ],
   get: (c) => c.state.outputMode ?? '01',
   set: (c, v) => ((c.state.outputMode ?? '01') === v ? null : withState(c, { outputMode: v as '01' | '0Z' | 'Z1' })),
+};
+
+const gateWidthAttr: AttrDef = {
+  key: 'gateWidth',
+  label: 'Bit genişliği',
+  kind: 'select',
+  title: 'Veri girişlerinin ve çıkışın bit sayısı (1-32); kapı her biti ayrı hesaplar',
+  options: WIDTH_OPTIONS,
+  get: (c) => getGateWidth(c),
+  set: (c, v) => (getGateWidth(c) === Number(v) ? null : { comp: setGateWidth(c, Number(v)), stateOnly: true }),
+};
+
+const negateAttr: AttrDef = {
+  key: 'negated',
+  label: 'Giriş evirme',
+  kind: 'flags',
+  title: 'Seçilen girişler kapıya girmeden terslenir (girişte baloncuk)',
+  options: (c) => c.inputs.map((p, i) => ({ value: i, label: p.name || String(i + 1), title: `${i + 1}. girişi evir` })),
+  get: (c) => [...(c.state.negated ?? [])].sort((a, b) => a - b).join(','),
+  set: (c, v) => {
+    const op = String(v);
+    const idx = Number(op.slice(1));
+    if (!/^[+-]\d+$/.test(op) || idx >= c.inputs.length) return null;
+    const cur = c.state.negated ?? [];
+    const has = cur.includes(idx);
+    if ((op[0] === '+') === has) return null;
+    const next = op[0] === '+' ? [...cur, idx].sort((a, b) => a - b) : cur.filter((i) => i !== idx);
+    const state: CircuitComponentInstance['state'] = { ...c.state, negated: next };
+    if (next.length === 0) delete state.negated;
+    return { comp: { ...c, state }, stateOnly: true };
+  },
+};
+
+const xorModeAttr: AttrDef = {
+  key: 'xorMode',
+  label: 'Çok girişli',
+  kind: 'buttons',
+  title: 'İkiden çok girişte çıkış ne zaman 1 olur (iki girişte ikisi aynıdır)',
+  options: [
+    { value: 'odd', label: 'Tek sayıda 1', title: 'Parite: 1 olan giriş sayısı tekse 1' },
+    { value: 'one', label: 'Tam bir tane 1', title: 'Yalnızca bir giriş 1 ise 1 (Logisim varsayılanı)' },
+  ],
+  get: (c) => c.state.xorMode ?? 'odd',
+  set: (c, v) => ((c.state.xorMode ?? 'odd') === v ? null : withState(c, { xorMode: v as 'odd' | 'one' })),
 };
 
 const bitWidthAttr: AttrDef = {
@@ -448,7 +504,9 @@ const labelPosAttr: AttrDef = {
 /** Attributes of a part type, in panel order (the label text itself is a field of the panel) */
 export function getComponentAttributes(type: ComponentType): AttrDef[] {
   const list: AttrDef[] = [];
-  if (MULTI_INPUT_GATES.has(type)) list.push(gateInputsAttr);
+  if (GATE_WIDTH_TYPES.includes(type)) list.push(gateWidthAttr);
+  if (MULTI_INPUT_GATES.has(type)) list.push(gateInputsAttr, negateAttr);
+  if (type === 'xor' || type === 'xnor') list.push(xorModeAttr);
   if (OUTPUT_MODE_TYPES.includes(type)) list.push(outputModeAttr);
   switch (type) {
     case 'switch':

@@ -1398,13 +1398,6 @@ const readBits = (pin: CircuitPin | undefined, w: number): SignalValue[] => {
   return raw.map((b) => (b === 'Z' ? 'X' : b));
 };
 
-// Unconnected inputs are ignored and a gate with none connected outputs E; a single connected
-// input passes through unchanged (Logisim 2.7.1 gives x for AND(x, unconnected), E for XOR)
-const gateFold = (pins: CircuitPin[], op: (a: SignalValue, b: SignalValue) => SignalValue): SignalValue => {
-  if (pins.length === 0) return 'E';
-  if (op === sigXor && pins.length === 1) return isLevel(pins[0].value) ? pins[0].value : 'E';
-  return pins.slice(1).reduce<SignalValue>((acc, p) => op(acc, p.value), pins[0].value);
-};
 
 // Parts whose pins take the width of the net they sit on instead of setting it
 const WIDTH_FOLLOWERS = new Set<ComponentType>(['tunnel', 'probe', 'pullResistor']);
@@ -1474,6 +1467,63 @@ const gateOutput = (comp: CircuitComponentInstance, v: SignalValue): SignalValue
   (comp.state.outputMode === '0Z' && v === 1) || (comp.state.outputMode === 'Z1' && v === 0) ? 'Z' : v;
 
 const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter']);
+
+// Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
+export const MULTI_INPUT_GATE_TYPES = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+
+// Gate outputs Logisim computes bit by bit with the 1-bit rules (Value.and/or/xor/not on each bit)
+const logicGateBits = (comp: CircuitComponentInstance, connected: CircuitPin[], w: number): SignalValue[] => {
+  // No connected input: Logisim gives an error value of the gate's width
+  if (connected.length === 0) return new Array<SignalValue>(w).fill('E');
+  const negated = comp.state.negated;
+  const ins = connected.map((p) => {
+    const bits = readBits(p, w);
+    return negated?.includes(comp.inputs.indexOf(p)) ? bits.map(sigNot) : bits;
+  });
+  const t = comp.type;
+  const invert = t === 'nand' || t === 'nor' || t === 'xnor';
+  const one = (t === 'xor' || t === 'xnor') && comp.state.xorMode === 'one';
+  const out: SignalValue[] = [];
+  for (let b = 0; b < w; b++) {
+    const col = ins.map((bits) => bits[b]);
+    let v: SignalValue;
+    if (t === 'and' || t === 'nand') v = col.reduce((acc, x) => sigAnd(acc, x));
+    else if (t === 'or' || t === 'nor') v = col.reduce((acc, x) => sigOr(acc, x));
+    else if (one) {
+      // Exactly one 1 (GateFunctions.computeExactlyOne): any undefined bit makes it E
+      v = col.every(isLevel) ? (col.filter((x) => x === 1).length === 1 ? 1 : 0) : 'E';
+    } else {
+      // Odd parity; a single input passes as it is (x stays x) like Logisim's computeOddParity
+      v = col.reduce((acc, x) => sigXor(acc, x));
+    }
+    out.push(gateOutput(comp, invert ? sigNot(v) : v));
+  }
+  return out;
+};
+
+// ---- Gate width (Logisim 'Data Bits' of the gates library) -----------------------------------------------
+export const GATE_WIDTH_TYPES: ComponentType[] = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
+// Controlled buffer / inverter: the data pin and the output take the width, the control pin stays 1 bit
+const isGateDataPin = (comp: CircuitComponentInstance, inputIdx: number) =>
+  (comp.type !== 'triState' && comp.type !== 'controlledInverter') || inputIdx === 0;
+
+export function getGateWidth(comp: CircuitComponentInstance): number {
+  return comp.outputs[0]?.width ?? 1;
+}
+
+// New gate width: pins keep their place and id, only their width changes (values restart unknown)
+export function setGateWidth(comp: CircuitComponentInstance, width: number): CircuitComponentInstance {
+  const w = Math.max(1, Math.min(MAX_BIT_WIDTH, Math.round(width)));
+  const pinW = (p: CircuitPin, value: SignalValue): CircuitPin => {
+    const { bits: _bits, width: _width, ...rest } = p;
+    return w > 1 ? { ...rest, width: w, value } : { ...rest, value };
+  };
+  return {
+    ...comp,
+    inputs: comp.inputs.map((p, i) => (isGateDataPin(comp, i) ? pinW(p, 0) : p)),
+    outputs: comp.outputs.map((p) => pinW(p, 'X')),
+  };
+}
 
 export function simulateCircuitStep(
   components: CircuitComponentInstance[],
@@ -1912,95 +1962,44 @@ export function simulateCircuitStep(
 
     switch (comp.type) {
       case 'not': {
-        const val: SignalValue = gateOutput(comp, sigNot(comp.inputs[0]?.value ?? 'Z'));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
+        // Logisim NOT: each bit inverted, an undefined bit (or an open input) gives E
+        const w = getGateWidth(comp);
+        setBitsOut(0, readBits(comp.inputs[0], w).map((v) => gateOutput(comp, sigNot(v))));
         break;
       }
       case 'buffer': {
         // Logisim buffer: passes 0/1/E unchanged, an undriven or open input comes out as x
-        const a = comp.inputs[0]?.value ?? 'Z';
-        const val: SignalValue = gateOutput(comp, a === 'Z' ? 'X' : a);
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
+        const w = getGateWidth(comp);
+        setBitsOut(0, readBits(comp.inputs[0], w).map((v) => gateOutput(comp, v)));
         break;
       }
-      case 'and': {
-        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigAnd));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
+      case 'and':
+      case 'or':
+      case 'nand':
+      case 'nor':
+      case 'xor':
+      case 'xnor':
+        setBitsOut(0, logicGateBits(comp, connectedInputs, getGateWidth(comp)));
         break;
-      }
-      case 'or': {
-        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigOr));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'nand': {
-        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigAnd)));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'nor': {
-        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigOr)));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'xor': {
-        const val: SignalValue = gateOutput(comp, gateFold(connectedInputs, sigXor));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'xnor': {
-        const val: SignalValue = gateOutput(comp, sigNot(gateFold(connectedInputs, sigXor)));
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'triState': {
-        // Logisim controlled buffer: enable 1 passes the data, 0 floats, anything else is an error
-        const data = comp.inputs[0]?.value ?? 'Z';
-        const en = comp.inputs[1]?.value ?? 'Z';
-        const isHiZ = en === 0;
-        comp.state.hiZ = isHiZ;
-        const val: SignalValue = isHiZ ? 'Z' : en === 1 ? data : 'E';
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
-        break;
-      }
+      case 'triState':
       case 'controlledInverter': {
-        // Logisim controlled inverter: enable 1 gives NOT(data) (undefined data -> E), 0 floats,
-        // anything else is an error (Logisim 2.7.1; evolution floats on x/open enable instead)
+        // Logisim controlled buffer / inverter: enable 1 passes the data (inverted: undefined bits -> E),
+        // 0 floats, anything else is an error on every bit (Logisim 2.7.1; evolution floats on x/open enable)
+        const w = getGateWidth(comp);
         const en = comp.inputs[1]?.value ?? 'Z';
         const isHiZ = en === 0;
         comp.state.hiZ = isHiZ;
-        const val: SignalValue = isHiZ ? 'Z' : en === 1 ? sigNot(comp.inputs[0]?.value ?? 'Z') : 'E';
-        if (comp.outputs[0] && comp.outputs[0].value !== val) {
-          comp.outputs[0].value = val;
-          hasChanged = true;
-        }
+        const data = readBits(comp.inputs[0], w);
+        setBitsOut(
+          0,
+          isHiZ
+            ? new Array<SignalValue>(w).fill('Z')
+            : en === 1
+              ? comp.type === 'controlledInverter'
+                ? data.map(sigNot)
+                : data
+              : new Array<SignalValue>(w).fill('E')
+        );
         break;
       }
       case 'bitExtender': {
@@ -3868,12 +3867,18 @@ function booleanExprOf(
     return e === NO_EXPR ? null : e;
   };
 
-  const traced = comp.inputs.map((p) => traceInput(p.id));
+  const negated = comp.state.negated ?? [];
+  const traced = comp.inputs.map((p, i) => {
+    const e = traceInput(p.id);
+    return e !== null && negated.includes(i) ? (e.length === 1 ? `${e}'` : `(${e})'`) : e;
+  });
   let inputExprs: string[];
   if (SKIP_OPEN_INPUT_GATES.has(comp.type)) {
     // Like the simulator (and Logisim), a gate leaves inputs without a driver out
     inputExprs = traced.filter((e): e is string => e !== null);
     if (inputExprs.length === 0) return NO_EXPR;
+    // "Exactly one 1" over three or more inputs is no XOR chain (Logisim's analyzer refuses it too)
+    if ((comp.type === 'xor' || comp.type === 'xnor') && comp.state.xorMode === 'one' && inputExprs.length > 2) return OPAQUE_EXPR;
   } else if ((comp.type === 'not' || comp.type === 'buffer') && traced[0] === null) {
     return NO_EXPR;
   } else {

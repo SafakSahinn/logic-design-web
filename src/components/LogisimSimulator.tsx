@@ -10115,6 +10115,27 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     />
                   );
                 }
+                case 'flags': {
+                  // On when every selected part has the flag; a click sets or clears it on all of them
+                  const sets = values.map((v) => new Set(String(v).split(',').filter((t) => t !== '')));
+                  return (
+                    <div className="flex flex-wrap gap-1" title={def.title}>
+                      {options.map((o) => {
+                        const on = sets.every((s) => s.has(String(o.value)));
+                        return (
+                          <button
+                            key={String(o.value)}
+                            onClick={() => handleApplyAttribute(def, `${on ? '-' : '+'}${o.value}`, ids)}
+                            className={btnCls(on)}
+                            title={o.title}
+                          >
+                            {o.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                }
                 case 'info':
                   return (
                     <span className={`text-[11px] font-mono ${dark ? 'text-slate-300' : 'text-slate-700'}`} title={def.title}>

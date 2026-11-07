@@ -138,6 +138,10 @@ export interface CircuitComponentInstance {
     pullValue?: 0 | 1 | 'X';
     /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */
     outputMode?: '01' | '0Z' | 'Z1';
+    /** Gate inputs (0-based) whose value is inverted before the gate reads it (Logisim 'negateN'); unset = none */
+    negated?: number[];
+    /** XOR/XNOR with more than two inputs: odd = parity (odd number of 1s), one = exactly one 1 (Logisim 'xor'); unset = odd */
+    xorMode?: 'odd' | 'one';
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
