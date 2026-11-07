@@ -1680,11 +1680,15 @@ export const rerouteWiresToRemappedPins = (
   pinRemap: Map<string, string | null>
 ): CircuitWire[] => {
   const keyOf = (pt: WirePoint) => `${pt.x},${pt.y}`;
-  const wires = repairWires(rawWires, oldComps);
+  let wires = repairWires(rawWires, oldComps);
 
   const newPinLoc = new Map<string, { compId: string; loc: WirePoint }>();
+  const newPinKeys = new Set<string>();
   for (const comp of newComps) {
-    for (const pin of [...comp.inputs, ...comp.outputs]) newPinLoc.set(pin.id, { compId: comp.id, loc: snapPt10(pin) });
+    for (const pin of [...comp.inputs, ...comp.outputs]) {
+      newPinLoc.set(pin.id, { compId: comp.id, loc: snapPt10(pin) });
+      newPinKeys.add(keyOf(snapPt10(pin)));
+    }
   }
   const oldPinAt = new Map<string, { compId: string; pinId: string }>();
   for (const comp of oldComps) {
@@ -1693,12 +1697,52 @@ export const rerouteWiresToRemappedPins = (
 
   // Remapped locations whose pin really moved (a pin that keeps its spot keeps its wires untouched)
   const movedTo = new Map<string, string>();
+  // Wires name their pins by id, and a gate's pin ids shift when its input count changes (the pin that
+  // stays at a spot can get another id; a removed pin's id can belong to a pin elsewhere). Without
+  // renaming, repairWires would pull such a wire over to wherever its old id now sits and short it.
+  const rename = new Map<string, { compId: string; pinId: string }>();
+  // Removed pins: their wires stay as open ends at the old spot, unless a new pin sits right there
+  const openAt = new Map<string, WirePoint>();
+  const trim = new Set<string>();
   for (const [oldKey, newPinId] of pinRemap) {
-    if (!newPinId) continue;
+    const oldPin = oldPinAt.get(oldKey);
+    if (!newPinId) {
+      if (!oldPin) continue;
+      if (newPinKeys.has(oldKey)) trim.add(oldKey);
+      else {
+        const [x, y] = oldKey.split(',').map(Number);
+        openAt.set(oldPin.pinId, { x, y });
+      }
+      continue;
+    }
     const np = newPinLoc.get(newPinId);
-    if (np && keyOf(np.loc) !== oldKey) movedTo.set(oldKey, newPinId);
+    if (!np) continue;
+    if (keyOf(np.loc) !== oldKey) movedTo.set(oldKey, newPinId);
+    else if (oldPin && oldPin.pinId !== newPinId) rename.set(oldPin.pinId, { compId: np.compId, pinId: newPinId });
   }
-  if (movedTo.size === 0) return repairWires(wires, newComps);
+  if (rename.size > 0 || openAt.size > 0) {
+    wires = wires.map((w) => {
+      let next = w;
+      const fix = (end: 'from' | 'to') => {
+        const pinId = end === 'from' ? next.fromPinId : next.toPinId;
+        if (!pinId) return;
+        const r = rename.get(pinId);
+        const open = openAt.get(pinId);
+        if (r) next = end === 'from' ? { ...next, fromCompId: r.compId, fromPinId: r.pinId } : { ...next, toCompId: r.compId, toPinId: r.pinId };
+        else if (open) {
+          const loc = `loc_${open.x}_${open.y}`;
+          next =
+            end === 'from'
+              ? { ...next, fromCompId: '', fromPinId: loc, startPoint: open }
+              : { ...next, toCompId: '', toPinId: loc, endPoint: open };
+        }
+      };
+      fix('from');
+      fix('to');
+      return next;
+    });
+  }
+  if (movedTo.size === 0 && trim.size === 0) return repairWires(wires, newComps);
 
   const ends = wires.map((w) => ({ s: snapPt10(w.startPoint!), e: snapPt10(w.endPoint!) }));
   const atLoc = new Map<string, number[]>();
@@ -1711,7 +1755,10 @@ export const rerouteWiresToRemappedPins = (
 
   const removed = new Set<number>();
   const extra: CircuitWire[] = [];
-  for (const [startKey, newPinId] of movedTo) {
+  // Chains from a moved pin are re-routed; chains of a removed pin whose spot now holds another pin are
+  // dropped (left there they would wire that pin to the removed one's net)
+  const starts: Array<[string, string | null]> = [...movedTo, ...[...trim].map((k): [string, null] => [k, null])];
+  for (const [startKey, newPinId] of starts) {
     for (const first of atLoc.get(startKey) || []) {
       if (removed.has(first)) continue;
       const chain = [first];
@@ -1734,6 +1781,7 @@ export const rerouteWiresToRemappedPins = (
         curKey = keyOf(cur);
       }
       chain.forEach((i) => removed.add(i));
+      if (!newPinId) continue;
 
       const w0 = wires[first];
       const startPin = newPinLoc.get(newPinId)!;

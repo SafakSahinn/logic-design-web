@@ -46,6 +46,8 @@ import {
   generateBooleanExpressions,
   synthesizeCircuitFromBooleanExpression,
   getMultiInputGatePinRelY,
+  multiInputGateHeight,
+  getGateWidth,
   getInputSignalNames,
   minimizeBooleanExpression,
   truthTableColumnTerms,
@@ -1069,6 +1071,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const sim = simulateCircuit(res.comps, nextWires);
     setComponents(sim.components);
     setWires(sim.wires);
+    // A part that grew (e.g. a gate with more inputs) can put a pin onto a wire passing by, which joins it to
+    // that wire like dropping a part on a wire does: say so, the user can undo
+    if (res.rewire && sim.wires.filter((w) => w.hasConflict).length > wires.filter((w) => w.hasConflict).length) {
+      showToast('Yeni pin konumları çevredeki bir tele değdi ve kısa devre oluştu; Ctrl+Z ile geri alabilir ya da telleri düzeltebilirsiniz.', 6000);
+    }
   };
 
   // Attribute panel label field (single part)
@@ -4046,7 +4053,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'not': {
         return (
           <g filter="url(#gateShadow)">
-            <line x1={0} y1={30} x2={12} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={0} y1={30} x2={12} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <polygon
               points="12,14 54,30 12,46"
               fill={fillColor}
@@ -4061,7 +4068,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               stroke={strokeColor}
               strokeWidth={strokeWidth}
             />
-            <line x1={65.5} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={65.5} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <text x={28} y={33} textAnchor="middle" className={`text-[11px] font-bold ${gateTextClass} select-none`}>
               NOT
             </text>
@@ -4072,14 +4079,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'buffer': {
         return (
           <g filter="url(#gateShadow)">
-            <line x1={0} y1={30} x2={12} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={0} y1={30} x2={12} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <polygon
               points="12,14 58,30 12,46"
               fill={fillColor}
               stroke={strokeColor}
               strokeWidth={strokeWidth}
             />
-            <line x1={58} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={58} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <text x={29} y={33} textAnchor="middle" className={`text-[10px] font-bold ${gateTextClass} select-none`}>
               BUF
             </text>
@@ -4087,138 +4094,79 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'and': {
-        return (
-          <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={12} y2={relY} stroke="#64748b" strokeWidth={2} />;
-            })}
-            <path
-              d="M 12,10 L 45,10 A 20,20 0 0,1 45,50 L 12,50 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <line x1={65} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={35} y={34} textAnchor="middle" className="text-xs font-bold fill-slate-800 select-none">
-              AND{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
-            </text>
-          </g>
-        );
-      }
-
-      case 'or': {
-        return (
-          <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={14} y2={relY} stroke="#64748b" strokeWidth={2} />;
-            })}
-            <path
-              d="M 12,10 Q 24,30 12,50 Q 48,50 68,30 Q 48,10 12,10 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <line x1={68} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={36} y={34} textAnchor="middle" className="text-xs font-bold fill-slate-800 select-none">
-              OR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
-            </text>
-          </g>
-        );
-      }
-
-      case 'nand': {
-        return (
-          <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={12} y2={relY} stroke="#64748b" strokeWidth={2} />;
-            })}
-            <path
-              d="M 12,10 L 45,10 A 20,20 0 0,1 45,50 L 12,50 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <circle cx={70} cy={30} r={5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={75} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={35} y={34} textAnchor="middle" className="text-[11px] font-bold fill-slate-800 select-none">
-              NAND{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
-            </text>
-          </g>
-        );
-      }
-
-      case 'nor': {
-        return (
-          <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={14} y2={relY} stroke="#64748b" strokeWidth={2} />;
-            })}
-            <path
-              d="M 12,10 Q 24,30 12,50 Q 48,50 68,30 Q 48,10 12,10 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <circle cx={73} cy={30} r={5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={78} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={36} y={34} textAnchor="middle" className="text-[11px] font-bold fill-slate-800 select-none">
-              NOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
-            </text>
-          </g>
-        );
-      }
-
-      case 'xor': {
-        return (
-          <g filter="url(#gateShadow)">
-            {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={10} y2={relY} stroke="#64748b" strokeWidth={2} />;
-            })}
-            <path
-              d="M 6,10 Q 20,30 6,50"
-              fill="none"
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <path
-              d="M 14,10 Q 28,30 14,50 Q 50,50 72,30 Q 50,10 14,10 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <line x1={72} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={38} y={34} textAnchor="middle" className="text-xs font-bold fill-slate-800 select-none">
-              XOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
-            </text>
-          </g>
-        );
-      }
-
+      case 'and':
+      case 'or':
+      case 'nand':
+      case 'nor':
+      case 'xor':
       case 'xnor': {
+        // One drawing for every logic gate: the body grows with the input count (more than 5 inputs),
+        // a wide gate has thick leads and a negated input a bubble where its lead meets the body
+        const t = comp.type;
+        const H = multiInputGateHeight(comp.inputs.length);
+        const top = 10;
+        const bot = H - 10;
+        const mid = H / 2;
+        const isOrShape = t === 'or' || t === 'nor';
+        const isXorShape = t === 'xor' || t === 'xnor';
+        const bubbleOut = t === 'nand' || t === 'nor' || t === 'xnor';
+        // Where an input lead meets the back of the body: the OR/XOR back is a quadratic curve
+        // (x = start + 2·bulge·t(1-t) over t = 0..1 from top to bottom), the AND back is straight
+        const leadEndAt = (y: number) => {
+          const u = Math.min(1, Math.max(0, (y - top) / (bot - top)));
+          return isXorShape ? 6 + 28 * u * (1 - u) : isOrShape ? 12 + 24 * u * (1 - u) : 12;
+        };
+        const leadW = getGateWidth(comp) > 1 ? 4.5 : 2;
+        const negated = comp.state.negated ?? [];
+        const bodyEnd = isXorShape ? 72 : isOrShape ? 68 : 65;
+        const bubbleCx = t === 'nand' ? 70 : t === 'nor' ? 73 : 75;
+        const bubbleR = t === 'xnor' ? 4.5 : 5;
+        const body = isXorShape
+          ? `M 14,${top} Q 28,${mid} 14,${bot} Q 50,${bot} 72,${mid} Q 50,${top} 14,${top} Z`
+          : isOrShape
+            ? `M 12,${top} Q 24,${mid} 12,${bot} Q 48,${bot} 68,${mid} Q 48,${top} 12,${top} Z`
+            : `M 12,${top} L 45,${top} A 20,${(bot - top) / 2} 0 0,1 45,${bot} L 12,${bot} Z`;
+        const name = t.toUpperCase();
         return (
           <g filter="url(#gateShadow)">
             {comp.inputs.map((pin, idx) => {
-              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, COMPONENT_CATALOG[comp.type].height);
-              return <line key={pin.id} x1={0} y1={relY} x2={10} y2={relY} stroke="#64748b" strokeWidth={2} />;
+              const relY = getMultiInputGatePinRelY(comp.inputs.length, idx, H);
+              return <line key={pin.id} x1={0} y1={relY} x2={leadEndAt(relY) + 1} y2={relY} stroke="#64748b" strokeWidth={leadW} />;
             })}
-            <path d="M 6,10 Q 20,30 6,50" fill="none" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path
-              d="M 14,10 Q 28,30 14,50 Q 50,50 72,30 Q 50,10 14,10 Z"
-              fill={fillColor}
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <circle cx={75} cy={30} r={4.5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={79.5} y1={30} x2={80} y2={30} stroke="#64748b" strokeWidth={2} />
-            <text x={38} y={34} textAnchor="middle" className="text-[10px] font-bold fill-slate-800 select-none">
-              XNOR{comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
+            {isXorShape && <path d={`M 6,${top} Q 20,${mid} 6,${bot}`} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} />}
+            <path d={body} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+            {comp.inputs.map((pin, idx) =>
+              negated.includes(idx) ? (
+                <circle
+                  key={`neg_${pin.id}`}
+                  cx={leadEndAt(getMultiInputGatePinRelY(comp.inputs.length, idx, H)) + (isXorShape ? 4 : -3.5)}
+                  cy={getMultiInputGatePinRelY(comp.inputs.length, idx, H)}
+                  r={3.5}
+                  fill="#ffffff"
+                  stroke={strokeColor}
+                  strokeWidth={1.4}
+                >
+                  <title>{`${pin.name} girişi evrilir`}</title>
+                </circle>
+              ) : null
+            )}
+            {bubbleOut && <circle cx={bubbleCx} cy={mid} r={bubbleR} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />}
+            <line x1={bubbleOut ? bubbleCx + bubbleR : bodyEnd} y1={mid} x2={80} y2={mid} stroke="#64748b" strokeWidth={leadW} />
+            <text
+              x={isXorShape ? 38 : isOrShape ? 36 : 35}
+              y={mid + 4}
+              textAnchor="middle"
+              className={`${name.length > 3 ? (name.length > 4 ? 'text-[10px]' : 'text-[11px]') : 'text-xs'} font-bold fill-slate-800 select-none`}
+            >
+              {name}
+              {comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
             </text>
+            {isXorShape && comp.state.xorMode === 'one' && (
+              <text x={38} y={mid + 14} textAnchor="middle" className="text-[8px] font-mono font-bold fill-slate-600 select-none">
+                =1
+                <title>Çok girişli: tam bir tane 1</title>
+              </text>
+            )}
           </g>
         );
       }
@@ -4227,7 +4175,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const enVal = comp.inputs[1]?.value === 1;
         return (
           <g filter="url(#gateShadow)">
-            <line x1={0} y1={30} x2={16} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={0} y1={30} x2={16} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <line x1={35} y1={50} x2={35} y2={36} stroke="#64748b" strokeWidth={2} />
             <circle cx={35} cy={50} r={3} fill={enVal ? '#3b82f6' : '#64748b'} />
             <polygon
@@ -4236,7 +4184,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               stroke={strokeColor}
               strokeWidth={strokeWidth}
             />
-            <line x1={54} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={54} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <text x={30} y={33} textAnchor="middle" className="text-[9px] font-mono font-bold fill-slate-700 select-none">
               TRI
             </text>
@@ -4251,7 +4199,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const enVal = comp.inputs[1]?.value === 1;
         return (
           <g filter="url(#gateShadow)">
-            <line x1={0} y1={30} x2={16} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={0} y1={30} x2={16} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <line x1={35} y1={50} x2={35} y2={36} stroke="#64748b" strokeWidth={2} />
             <circle cx={35} cy={50} r={3} fill={enVal ? '#3b82f6' : '#64748b'} />
             <polygon
@@ -4261,7 +4209,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               strokeWidth={strokeWidth}
             />
             <circle cx={57.5} cy={30} r={5.5} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <line x1={63} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={2} />
+            <line x1={63} y1={30} x2={70} y2={30} stroke="#64748b" strokeWidth={getGateWidth(comp) > 1 ? 4 : 2} />
             <text x={29} y={33} textAnchor="middle" className="text-[9px] font-mono font-bold fill-slate-700 select-none">
               TRI
             </text>

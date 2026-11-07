@@ -91,7 +91,7 @@ const resized = (old: CircuitComponentInstance, next: CircuitComponentInstance):
 // ---------------------------------------------------------------------------------------------------------
 
 export const MIN_GATE_INPUTS = 2;
-export const MAX_GATE_INPUTS = 5;
+export const MAX_GATE_INPUTS = 32;
 
 export function changeGateInputCount(
   comp: CircuitComponentInstance,
@@ -124,7 +124,13 @@ export function changeGateInputCount(
   const state = { ...comp.state, gateInputsCount: newCount };
   if (negated?.length) state.negated = negated;
   else delete state.negated;
-  const updatedComp = updatePinPositions({ ...comp, inputs: newInputs, state });
+  let updatedComp = updatePinPositions({ ...comp, inputs: newInputs, state });
+  // A taller (or shorter) body grows around the output like in Logisim: the output pin stays where it was
+  const oldOut = comp.outputs[0];
+  const newOut = updatedComp.outputs[0];
+  if (oldOut && newOut && (oldOut.x !== newOut.x || oldOut.y !== newOut.y)) {
+    updatedComp = updatePinPositions({ ...updatedComp, x: updatedComp.x + oldOut.x - newOut.x, y: updatedComp.y + oldOut.y - newOut.y });
+  }
 
   // Which old input pins have wires on them
   const attachedOld = new Set<number>();
@@ -223,7 +229,7 @@ const MULTI_INPUT_GATES = new Set<ComponentType>(MULTI_INPUT_GATE_TYPES as Compo
 const gateInputsAttr: AttrDef = {
   key: 'inputs',
   label: 'Giriş sayısı',
-  kind: 'buttons',
+  kind: 'select',
   title: 'Kapının giriş sayısı; bağlı teller yeni girişlere dağıtılır',
   options: numberOptions(MIN_GATE_INPUTS, MAX_GATE_INPUTS),
   get: (c) => c.inputs.length,

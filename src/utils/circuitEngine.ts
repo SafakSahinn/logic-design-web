@@ -1030,6 +1030,9 @@ export function createComponentInstance(
   return type === 'bitExtender' ? configureBitExtender(inst, {}) : inst;
 }
 
+// Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
+export const MULTI_INPUT_GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+
 // Parts whose single pin can be wider than 1 bit (Logisim Pin and Constant); the pin's width is the part's width
 const WIDE_PIN_TYPES = new Set<ComponentType>(['switch', 'led', 'constant']);
 
@@ -1047,6 +1050,7 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   const meta = COMPONENT_CATALOG[comp.type];
   const w = getBitWidth(comp);
+  if (MULTI_INPUT_GATE_TYPES.includes(comp.type)) return { width: meta.width, height: multiInputGateHeight(comp.inputs.length) };
   if (comp.type === 'splitter') return { width: 20, height: Math.max(20, Math.ceil(comp.outputs.length / 2) * 20) };
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
@@ -1257,8 +1261,17 @@ export function getMultiInputGatePinRelY(count: number, idx: number, height: num
   if (count === 3) return idx === 0 ? 10 : idx === 1 ? 30 : 50;
   if (count === 4) return idx === 0 ? 10 : idx === 1 ? 20 : idx === 2 ? 40 : 50;
   if (count === 5) return (idx + 1) * 10;
-  const spacing = height / (count + 1);
-  return Math.round((spacing * (idx + 1)) / 10) * 10;
+  // More than 5 inputs: 10px apart around the output like Logisim (an even count skips the middle point)
+  const mid = multiInputGateHeight(count) / 2;
+  void height;
+  if (count % 2 === 1) return mid + 10 * (idx - (count - 1) / 2);
+  return mid + 10 * (idx - count / 2) + (idx >= count / 2 ? 10 : 0);
+}
+
+/** Body height of a logic gate with `count` inputs: 60 up to 5 inputs, then 10px per input (output stays mid-height on the grid) */
+export function multiInputGateHeight(count: number): number {
+  if (count <= 5) return 60;
+  return (count % 2 === 1 ? count + 1 : count + 2) * 10;
 }
 
 export function updatePinPositions(comp: CircuitComponentInstance): CircuitComponentInstance {
@@ -1343,7 +1356,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     let pinSuffix = `in${idx}`;
     if (isMultiInputGate) {
       relX = 0;
-      relY = getMultiInputGatePinRelY(comp.inputs.length, idx, meta.height);
+      relY = getMultiInputGatePinRelY(comp.inputs.length, idx, size.height);
       pinSuffix = meta.inputs[idx]?.id || `in${idx}`;
     } else {
       const pinDef = meta.inputs[idx] || { relX: 0, relY: 0, id: `in${idx}` };
@@ -1360,7 +1373,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
   const newOutputs = comp.outputs.map((pin, idx) => {
     const defaultRelY = Math.round((meta.height / 2) / 10) * 10;
     const pinDef = meta.outputs[idx] || { relX: meta.width, relY: defaultRelY, id: idx === 0 ? 'out' : `out${idx}` };
-    const rawRelY = pinDef.relY !== undefined ? pinDef.relY : defaultRelY;
+    // A tall gate keeps its output in the middle of its side
+    const rawRelY = isMultiInputGate && size.height !== meta.height ? size.height / 2 : pinDef.relY !== undefined ? pinDef.relY : defaultRelY;
     const p = rotatePoint(sizedPin?.relX ?? pinDef.relX, sizedPin?.relY ?? rawRelY);
     const pinSuffix = pinDef.id || (idx === 0 ? 'out' : `out${idx}`);
     const canonicalId = `${comp.id}_${pinSuffix}`;
@@ -1468,8 +1482,6 @@ const gateOutput = (comp: CircuitComponentInstance, v: SignalValue): SignalValue
 
 const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter']);
 
-// Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
-export const MULTI_INPUT_GATE_TYPES = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
 
 // Gate outputs Logisim computes bit by bit with the 1-bit rules (Value.and/or/xor/not on each bit)
 const logicGateBits = (comp: CircuitComponentInstance, connected: CircuitPin[], w: number): SignalValue[] => {
@@ -3870,7 +3882,7 @@ function booleanExprOf(
   const negated = comp.state.negated ?? [];
   const traced = comp.inputs.map((p, i) => {
     const e = traceInput(p.id);
-    return e !== null && negated.includes(i) ? (e.length === 1 ? `${e}'` : `(${e})'`) : e;
+    return e !== null && negated.includes(i) ? (/^[A-Za-z0-9_]+$/.test(e) ? `${e}'` : `(${e})'`) : e;
   });
   let inputExprs: string[];
   if (SKIP_OPEN_INPUT_GATES.has(comp.type)) {
