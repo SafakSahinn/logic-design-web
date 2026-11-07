@@ -52,17 +52,10 @@ import {
   OUTPUT_MODE_TYPES,
   getBitWidth,
   getSplitterConfig,
-  configureSplitter,
   splitterDistribution,
   splitterEndLabels,
   splitterThreads,
-  SPLITTER_MAX_FANOUT,
-  type SplitterAppear,
-  configureBitExtender,
-  configureBitSelector,
-  type ExtendType,
   getComponentSize,
-  setBitWidth,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -125,7 +118,16 @@ import {
   Save,
   Info,
   Zap,
+  SlidersHorizontal,
 } from 'lucide-react';
+import {
+  applyAttribute,
+  getComponentAttributes,
+  parseHexAttr,
+  resolveAttrOptions,
+  type AttrDef,
+  type AttrValue,
+} from '../utils/componentAttributes';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
 import {
   getAllSubcircuits,
@@ -138,7 +140,7 @@ import {
   withPortWidths,
 } from '../utils/subcircuitManager';
 import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
-import { MAX_BIT_WIDTH, bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
+import { bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/vcdGenerator';
 import { buildExportSvg } from '../utils/canvasExport';
@@ -228,13 +230,6 @@ const truthEntryTextClass = (v: TruthTableEntry): string =>
 
 // Probe display bases (Logisim RadixOption)
 const RADIX_LABEL: Record<Radix, string> = { '2': 'BIN', '8': 'OCT', '10u': 'DEC', '10s': '±DEC', '16': 'HEX' };
-const RADIX_TITLE: Record<Radix, string> = {
-  '2': 'İkili (taban 2)',
-  '8': 'Sekizli (taban 8)',
-  '10u': 'Onluk, işaretsiz',
-  '10s': 'Onluk, işaretli (ikiye tümleyen)',
-  '16': 'Onaltılı (taban 16)',
-};
 
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
@@ -317,8 +312,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [showKMapModal, setShowKMapModal] = useState<boolean>(false);
   const [showNumberConverterModal, setShowNumberConverterModal] = useState<boolean>(false);
   const [showAboutModal, setShowAboutModal] = useState<boolean>(false);
-  // Splitter bit distribution popover in the property bar
+  // Splitter bit distribution list in the attribute panel
   const [splitterDistOpen, setSplitterDistOpen] = useState<boolean>(false);
+  // Attribute panel folded to its title row (remembered per browser)
+  const [attrPanelCollapsed, setAttrPanelCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('lds.attrPanelCollapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [showPresetsModal, setShowPresetsModal] = useState<boolean>(false);
   const [presetModalSearch, setPresetModalSearch] = useState<string>('');
   const [presetFilterCat, setPresetFilterCat] = useState<string>('all');
@@ -1055,58 +1058,25 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // The splitter bit popover belongs to one selected part
   useEffect(() => setSplitterDistOpen(false), [selectedCompIds]);
 
-  // New bit width for a switch/LED/constant: the body resizes, wires on its pin follow the pin
-  const handleSetBitWidth = (compId: string, width: number) => {
-    const old = components.find((c) => c.id === compId);
-    if (!old || getBitWidth(old) === width) return;
-    commitResizedComp(old, setBitWidth(old, width));
-  };
-
-  // New splitter settings (incoming width, fan out, appearance, bit distribution); wires follow the pins
-  const handleConfigureSplitter = (
-    compId: string,
-    patch: { incoming?: number; fanout?: number; appear?: SplitterAppear; bitEnd?: number[] }
-  ) => {
-    const old = components.find((c) => c.id === compId);
-    if (!old) return;
-    commitResizedComp(old, configureSplitter(old, patch));
-  };
-
-  // New bit extender / bit selector settings; wires follow the pins (a dropped extension input leaves an open wire end)
-  const handleConfigureBitExtender = (compId: string, patch: { inWidth?: number; outWidth?: number; type?: ExtendType }) => {
-    const old = components.find((c) => c.id === compId);
-    if (!old) return;
-    commitResizedComp(old, configureBitExtender(old, patch));
-  };
-  const handleConfigureBitSelector = (compId: string, patch: { dataWidth?: number; groupWidth?: number }) => {
-    const old = components.find((c) => c.id === compId);
-    if (!old) return;
-    commitResizedComp(old, configureBitSelector(old, patch));
-  };
-
-  // A part whose body/pins changed in place: wires on its old pin locations follow the pins
-  const commitResizedComp = (old: CircuitComponentInstance, resized: CircuitComponentInstance) => {
-    const compId = old.id;
+  // Attribute panel: one attribute value for the given parts (all of one type) in one undo step. Wires on
+  // pins that moved follow them (a removed pin leaves an open wire end); a state-only change keeps the wires.
+  const handleApplyAttribute = (def: AttrDef, value: AttrValue, targetIds: string[]) => {
+    const base = def.canonicalWires ? repairWires(wires, components) : wires;
+    const res = applyAttribute(def, value, components, targetIds, base);
+    if (!res) return;
     recordHistory();
-    const nextComps = components.map((c) => (c.id === compId ? resized : c));
-    const pinRemap = new Map<string, string | null>();
-    for (const p of [...old.inputs, ...old.outputs]) {
-      const sp = snapPt10(p);
-      pinRemap.set(`${sp.x},${sp.y}`, p.id);
-    }
-    const rerouted = rerouteWiresToRemappedPins(wires, components, nextComps, pinRemap);
-    const sim = simulateCircuit(nextComps, rerouted);
+    const nextWires = res.rewire ? rerouteWiresToRemappedPins(base, components, res.comps, res.remap) : base;
+    const sim = simulateCircuit(res.comps, nextWires);
     setComponents(sim.components);
     setWires(sim.wires);
   };
 
-  // State change of one part (constant value, probe base) followed by a new simulation
-  const handleSetCompState = (compId: string, patch: Partial<CircuitComponentInstance['state']>) => {
+  // Attribute panel label field (single part)
+  const handleSetLabel = (compId: string, label: string) => {
+    const comp = components.find((c) => c.id === compId);
+    if (!comp || (comp.label || '') === label) return;
     recordHistory();
-    const nextComps = components.map((c) => (c.id === compId ? { ...c, state: { ...c.state, ...patch } } : c));
-    const sim = simulateCircuit(nextComps, wires);
-    setComponents(sim.components);
-    setWires(sim.wires);
+    setComponents((prev) => prev.map((c) => (c.id === compId ? { ...c, label } : c)));
   };
 
   const handleToggleSwitch = (e: React.MouseEvent, compId: string) => {
@@ -3300,169 +3270,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast(`"${newSub.name}" (${newSub.chipCode}) kütüphaneye eklendi!`);
   };
 
-  // Change input count for multi-input gates (2 to 5 inputs) preserving attached wires like Logisim
-  const handleChangeGateInputs = useCallback(
-    (compId: string, targetCountOrDelta: number, isAbsolute = false) => {
-      const comp = components.find((c) => c.id === compId);
-      if (!comp) return;
-      const currentCount = comp.inputs.length;
-      const newCount = isAbsolute
-        ? Math.max(2, Math.min(5, targetCountOrDelta))
-        : Math.max(2, Math.min(5, currentCount + targetCountOrDelta));
-      if (newCount === currentCount) return;
-
-      recordHistory();
-
-      // Ensure all wires are normalized into canonical straight segments first
-      const normalizedWires = repairWires(wires, components);
-
-      // 1. Snapshot previous input pins and their locations
-      const oldInputs = comp.inputs;
-      const oldPinLocations = oldInputs.map((p) => snapPt10({ x: p.x, y: p.y }));
-
-      // 2. Build new inputs array with canonical pin IDs (comp.id_in0, comp.id_in1, ...)
-      const newInputs: CircuitPin[] = Array.from({ length: newCount }).map((_, idx) => {
-        const canonicalId = comp.id + '_in' + idx;
-        const existing = oldInputs[idx];
-        return {
-          id: canonicalId,
-          name: String.fromCharCode(65 + idx),
-          type: 'input' as const,
-          value: existing ? existing.value : 0,
-          x: comp.x,
-          y: comp.y, // precisely positioned by updatePinPositions below
-        };
-      });
-
-      const updatedComp = updatePinPositions({
-        ...comp,
-        inputs: newInputs,
-        state: {
-          ...comp.state,
-          gateInputsCount: newCount,
-        },
-      });
-
-      // 3. Snapshot exact wire attachments to old pins before any mutations
-      interface WireAttachment {
-        wireId: string;
-        end: 'start' | 'end';
-        oldIdx: number;
-      }
-      const attachments: WireAttachment[] = [];
-
-      for (const w of normalizedWires) {
-        if (w.endPoint) {
-          const ep = snapPt10(w.endPoint);
-          for (let i = 0; i < currentCount; i++) {
-            const pin = oldInputs[i];
-            const oldLoc = oldPinLocations[i];
-            if (
-              (w.toCompId === compId && w.toPinId === pin.id) ||
-              ((!w.toCompId || w.toCompId === compId) && ep.x === oldLoc.x && ep.y === oldLoc.y)
-            ) {
-              attachments.push({ wireId: w.id, end: 'end', oldIdx: i });
-              break;
-            }
-          }
-        }
-        if (w.startPoint) {
-          const sp = snapPt10(w.startPoint);
-          for (let i = 0; i < currentCount; i++) {
-            const pin = oldInputs[i];
-            const oldLoc = oldPinLocations[i];
-            if (
-              (w.fromCompId === compId && w.fromPinId === pin.id) ||
-              ((!w.fromCompId || w.fromCompId === compId) && sp.x === oldLoc.x && sp.y === oldLoc.y)
-            ) {
-              attachments.push({ wireId: w.id, end: 'start', oldIdx: i });
-              break;
-            }
-          }
-        }
-      }
-
-      // Distinct old pin indices that actually have attached wires
-      const connectedOldIndices = Array.from(new Set(attachments.map((a) => a.oldIdx))).sort((a, b) => a - b);
-      const K = connectedOldIndices.length;
-
-      // 4. Collision-free target mapping from old pin indices to new pins
-      const targetMap = new Map<number, CircuitPin>();
-      const claimedNewIndices = new Set<number>();
-
-      if (K === 1) {
-        const oldIdx = connectedOldIndices[0];
-        let newIdx = 0;
-        if (oldIdx === currentCount - 1 && newCount > 1) {
-          newIdx = newCount - 1;
-        } else if (oldIdx > 0 && oldIdx < currentCount - 1) {
-          newIdx = Math.round((oldIdx / (currentCount - 1)) * (newCount - 1));
-        }
-        targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
-        claimedNewIndices.add(newIdx);
-      } else if (K === 2 && newCount >= 2) {
-        targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
-        targetMap.set(connectedOldIndices[1], updatedComp.inputs[newCount - 1]);
-        claimedNewIndices.add(0);
-        claimedNewIndices.add(newCount - 1);
-      } else if (K <= newCount) {
-        connectedOldIndices.forEach((oldIdx, i) => {
-          let newIdx: number;
-          if (i === 0) newIdx = 0;
-          else if (i === K - 1) newIdx = newCount - 1;
-          else newIdx = Math.round((i / (K - 1)) * (newCount - 1));
-
-          while (claimedNewIndices.has(newIdx) && newIdx < newCount - 1) newIdx++;
-          while (claimedNewIndices.has(newIdx) && newIdx > 0) newIdx--;
-          targetMap.set(oldIdx, updatedComp.inputs[newIdx]);
-          claimedNewIndices.add(newIdx);
-        });
-      } else {
-        // More connected wires than available pins (e.g. 3 wires reduced to 2 pins)
-        targetMap.set(connectedOldIndices[0], updatedComp.inputs[0]);
-        claimedNewIndices.add(0);
-        targetMap.set(connectedOldIndices[K - 1], updatedComp.inputs[newCount - 1]);
-        claimedNewIndices.add(newCount - 1);
-
-        for (let i = 1; i < K - 1; i++) {
-          const oldIdx = connectedOldIndices[i];
-          for (let cand = 1; cand < newCount - 1; cand++) {
-            if (!claimedNewIndices.has(cand)) {
-              targetMap.set(oldIdx, updatedComp.inputs[cand]);
-              claimedNewIndices.add(cand);
-              break;
-            }
-          }
-        }
-      }
-
-      // Also map remaining slots to unconnected pins for clean reference stability
-      for (let i = 0; i < currentCount; i++) {
-        if (!targetMap.has(i)) {
-          if (i < newCount && !claimedNewIndices.has(i)) {
-            targetMap.set(i, updatedComp.inputs[i]);
-            claimedNewIndices.add(i);
-          }
-        }
-      }
-
-      // 5. Re-attach the wires: chains on a pin that moved are re-routed to its new location (net-aware and
-      // around component bodies, like a component move; hand-made jogs could overlap neighbouring wires and
-      // short them). Wires of a removed pin stay as open wire ends, like in Logisim.
-      const pinRemap = new Map<string, string | null>();
-      oldPinLocations.forEach((loc, i) => {
-        pinRemap.set(`${loc.x},${loc.y}`, targetMap.get(i)?.id ?? null);
-      });
-      const nextComps = components.map((c) => (c.id === compId ? updatedComp : c));
-      const repaired = rerouteWiresToRemappedPins(normalizedWires, components, nextComps, pinRemap);
-      const sim = simulateCircuit(nextComps, repaired);
-
-      setWires(sim.wires);
-      setComponents(sim.components);
-    },
-    [components, wires, recordHistory]
-  );
-
   const observableChannels = useMemo(() => {
     const list: { key: string; name: string; color: string; type: string; width?: number }[] = [];
     const colors = [
@@ -3604,7 +3411,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {
         return;
       }
 
@@ -9843,11 +9650,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   onDoubleClick={(e) => handleComponentDoubleClick(e, comp)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (e.shiftKey) {
-                      setSelectedCompIds((prev) =>
-                        prev.includes(comp.id) ? prev.filter((id) => id !== comp.id) : [...prev, comp.id]
-                      );
-                    } else {
+                    // Shift-click is toggled once in handleComponentMouseDown; toggling again here undid it
+                    if (!e.shiftKey) {
                       if (!selectedCompIds.includes(comp.id)) {
                         setSelectedCompIds([comp.id]);
                         setSelectedWireIds([]);
@@ -10126,13 +9930,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const selectedComp = components.find((c) => c.id === selectedCompIds[0]);
             if (!selectedComp) return null;
             const meta = COMPONENT_CATALOG[selectedComp.type];
-            const isConfigurableGate =
-              meta.category === 'gates' &&
-              selectedComp.type !== 'not' &&
-              selectedComp.type !== 'buffer' &&
-              selectedComp.type !== 'triState' &&
-              selectedComp.type !== 'controlledInverter';
-            const curInputCount = selectedComp.inputs.length;
 
             return (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-slate-900/90 hover:bg-slate-900 text-white px-4 py-2 rounded-2xl shadow-2xl backdrop-blur-md border border-slate-700/80 flex items-center gap-3 text-xs animate-in fade-in slide-in-from-top-3 duration-150">
@@ -10143,378 +9940,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     {selectedComp.label || meta.name}
                   </span>
                 </div>
-
-                {/* Gate Input Count Selector (2, 3, 4, 5 Giriş) */}
-                {isConfigurableGate && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Giriş:</span>
-                    {[2, 3, 4, 5].map((cnt) => (
-                      <button
-                        key={cnt}
-                        onClick={() => handleChangeGateInputs(selectedComp.id, cnt, true)}
-                        className={`px-2 py-0.5 rounded-lg font-mono font-bold text-[11px] cursor-pointer transition-colors ${
-                          curInputCount === cnt
-                            ? 'bg-blue-600 text-white shadow-2xs'
-                            : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'
-                        }`}
-                        title={`${cnt} Girişli Yap`}
-                      >
-                        {cnt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Gate output value (Logisim "Output Value") */}
-                {OUTPUT_MODE_TYPES.includes(selectedComp.type) && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Çıkış:</span>
-                    {(['01', '0Z', 'Z1'] as const).map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => {
-                          recordHistory();
-                          setComponents((prev) =>
-                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, outputMode: m } } : c))
-                          );
-                        }}
-                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
-                          (selectedComp.state.outputMode ?? '01') === m ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                        title={m === '01' ? 'Normal çıkış (0 ve 1 sürer)' : m === '0Z' ? 'Açık kollektör: 0 sürer, 1 yerine hattı boş bırakır' : 'Açık emitör: 1 sürer, 0 yerine hattı boş bırakır'}
-                      >
-                        {m === '01' ? '0/1' : m === '0Z' ? '0/Z' : 'Z/1'}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Splitter settings (Logisim 'incoming', 'fanout', 'appear', bit0..bitN) */}
-                {selectedComp.type === 'splitter' && (() => {
-                  const cfg = getSplitterConfig(selectedComp);
-                  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
-                  return (
-                    <div className="relative flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                      <span className="text-slate-400 font-semibold text-[11px]">Gelen bit:</span>
-                      <select
-                        value={cfg.bitEnd.length}
-                        onChange={(e) => handleConfigureSplitter(selectedComp.id, { incoming: Number(e.target.value) })}
-                        className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                        title="Birleşik uçtaki veri yolunun genişliği (1-32)"
-                      >
-                        {range(MAX_BIT_WIDTH).map((n) => (
-                          <option key={n} value={n}>{n}</option>
-                        ))}
-                      </select>
-                      <span className="text-slate-400 font-semibold text-[11px]">Uç sayısı:</span>
-                      <select
-                        value={cfg.fanout}
-                        onChange={(e) => handleConfigureSplitter(selectedComp.id, { fanout: Number(e.target.value) })}
-                        className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                        title="Ayrılan uç sayısı (1-32); değişince bitler varsayılan düzende yeniden dağıtılır"
-                      >
-                        {range(SPLITTER_MAX_FANOUT).map((n) => (
-                          <option key={n} value={n}>{n}</option>
-                        ))}
-                      </select>
-                      {(['left', 'center', 'right'] as const).map((a) => (
-                        <button
-                          key={a}
-                          onClick={() => handleConfigureSplitter(selectedComp.id, { appear: a })}
-                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                            cfg.appear === a ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                          }`}
-                          title={a === 'left' ? 'Sol elli: uçlar birleşik ucun bir yanında (Logisim varsayılanı)' : a === 'right' ? 'Sağ elli: uçlar birleşik ucun öbür yanında' : 'Ortalı: uçlar birleşik ucun iki yanına dağılır'}
-                        >
-                          {a === 'left' ? 'Sol' : a === 'right' ? 'Sağ' : 'Orta'}
-                        </button>
-                      ))}
-                      <button
-                        onClick={() => setSplitterDistOpen((v) => !v)}
-                        className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                          splitterDistOpen ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                        title="Her bitin hangi uca gideceğini seç"
-                      >
-                        Bitleri dağıt…
-                      </button>
-                      {splitterDistOpen && (
-                        <div className="absolute top-full right-0 mt-3 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-2 z-40">
-                          <div className="flex gap-1 mb-2">
-                            <button
-                              onClick={() => handleConfigureSplitter(selectedComp.id, { bitEnd: splitterDistribution(cfg.fanout, cfg.bitEnd.length, true) })}
-                              className="flex-1 px-1.5 py-1 rounded text-[10.5px] font-bold bg-slate-800 text-slate-300 hover:bg-slate-700"
-                              title="Düşük bitler 1. uca"
-                            >
-                              Artan dağıt
-                            </button>
-                            <button
-                              onClick={() => handleConfigureSplitter(selectedComp.id, { bitEnd: splitterDistribution(cfg.fanout, cfg.bitEnd.length, false) })}
-                              className="flex-1 px-1.5 py-1 rounded text-[10.5px] font-bold bg-slate-800 text-slate-300 hover:bg-slate-700"
-                              title="Yüksek bitler 1. uca"
-                            >
-                              Azalan dağıt
-                            </button>
-                          </div>
-                          <div className="max-h-72 overflow-y-auto pr-1 space-y-1">
-                            {cfg.bitEnd.map((e, i) => (
-                              <label key={i} className="flex items-center justify-between gap-2 text-[11px]">
-                                <span className="font-mono text-slate-300">Bit {i}</span>
-                                <select
-                                  value={e}
-                                  onChange={(ev) => {
-                                    const next = [...cfg.bitEnd];
-                                    next[i] = Number(ev.target.value);
-                                    handleConfigureSplitter(selectedComp.id, { bitEnd: next });
-                                  }}
-                                  className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                                >
-                                  <option value={0}>yok</option>
-                                  {range(cfg.fanout).map((n) => (
-                                    <option key={n} value={n}>{n}. uç</option>
-                                  ))}
-                                </select>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Bit width of a switch / LED / constant (Logisim 'Data Bits') */}
-                {(selectedComp.type === 'switch' || selectedComp.type === 'led' || selectedComp.type === 'constant') && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Bit genişliği:</span>
-                    <select
-                      value={getBitWidth(selectedComp)}
-                      onChange={(e) => handleSetBitWidth(selectedComp.id, Number(e.target.value))}
-                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Pinin taşıdığı bit sayısı (1-32)"
-                    >
-                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Constant value in hex */}
-                {selectedComp.type === 'constant' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Değer (hex):</span>
-                    <input
-                      key={`${selectedComp.id}:${selectedComp.state.constValue ?? 1}`}
-                      defaultValue={(selectedComp.state.constValue ?? 1).toString(16)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                      }}
-                      onBlur={(e) => {
-                        const txt = e.target.value.trim().replace(/^0x/i, '');
-                        const n = /^[0-9a-f]+$/i.test(txt) ? parseInt(txt, 16) : NaN;
-                        if (Number.isNaN(n)) {
-                          e.target.value = (selectedComp.state.constValue ?? 1).toString(16);
-                          showToast('Geçersiz onaltılı değer.');
-                          return;
-                        }
-                        const v = n % 2 ** getBitWidth(selectedComp);
-                        if (v !== (selectedComp.state.constValue ?? 1)) handleSetCompState(selectedComp.id, { constValue: v });
-                        else e.target.value = v.toString(16);
-                      }}
-                      className="w-20 bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Onaltılı değer; genişliğe sığmayan üst bitler atılır"
-                    />
-                  </div>
-                )}
-
-                {/* Probe display base (Logisim 'radix') */}
-                {selectedComp.type === 'probe' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Taban:</span>
-                    {(['2', '8', '10u', '10s', '16'] as const).map((r) => (
-                      <button
-                        key={r}
-                        onClick={() => handleSetCompState(selectedComp.id, { radix: r })}
-                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
-                          (selectedComp.state.radix ?? '2') === r ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                        title={RADIX_TITLE[r]}
-                      >
-                        {RADIX_LABEL[r]}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Bit extender settings (Logisim 'in_width', 'out_width', 'type') */}
-                {selectedComp.type === 'bitExtender' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Giriş bit:</span>
-                    <select
-                      value={selectedComp.inputs[0]?.width ?? 1}
-                      onChange={(e) => handleConfigureBitExtender(selectedComp.id, { inWidth: Number(e.target.value) })}
-                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Girişteki veri yolunun genişliği (1-32)"
-                    >
-                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                    <span className="text-slate-400 font-semibold text-[11px]">Çıkış bit:</span>
-                    <select
-                      value={selectedComp.outputs[0]?.width ?? 1}
-                      onChange={(e) => handleConfigureBitExtender(selectedComp.id, { outWidth: Number(e.target.value) })}
-                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Çıkış genişliği (1-32); girişten darsa üst bitler atılır"
-                    >
-                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                    <span className="text-slate-400 font-semibold text-[11px]">Doldur:</span>
-                    {(['zero', 'one', 'sign', 'input'] as const).map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => handleConfigureBitExtender(selectedComp.id, { type: t })}
-                        className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                          (selectedComp.state.extendType ?? 'zero') === t ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                        title={
-                          t === 'zero' ? 'Üst bitler 0 (işaretsiz genişletme)'
-                            : t === 'one' ? 'Üst bitler 1'
-                            : t === 'sign' ? 'Üst bitler girişin en üst biti (işaretli sayı, ikiye tümleyen)'
-                            : 'Üst bitler üstteki 1 bitlik ek girişten'
-                        }
-                      >
-                        {t === 'zero' ? '0' : t === 'one' ? '1' : t === 'sign' ? 'İşaret' : 'Giriş'}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Bit selector settings (Logisim 'width', 'group'); the select width follows */}
-                {selectedComp.type === 'bitSelector' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Veri bit:</span>
-                    <select
-                      value={selectedComp.inputs[0]?.width ?? 1}
-                      onChange={(e) => handleConfigureBitSelector(selectedComp.id, { dataWidth: Number(e.target.value) })}
-                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Veri girişinin genişliği (1-32)"
-                    >
-                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                    <span className="text-slate-400 font-semibold text-[11px]">Grup bit:</span>
-                    <select
-                      value={selectedComp.outputs[0]?.width ?? 1}
-                      onChange={(e) => handleConfigureBitSelector(selectedComp.id, { groupWidth: Number(e.target.value) })}
-                      className="bg-slate-800 text-slate-200 text-[11px] font-mono rounded px-1 py-0.5 border border-slate-600"
-                      title="Çıkışa verilen grubun genişliği (1-32); verinin dışına taşan bitler 0 olur"
-                    >
-                      {Array.from({ length: MAX_BIT_WIDTH }, (_, i) => i + 1).map((n) => (
-                        <option key={n} value={n}>{n}</option>
-                      ))}
-                    </select>
-                    <span className="text-slate-500 text-[11px] font-mono" title="Seçme girişinin genişliği grup sayısına göre kendiliğinden belirlenir">
-                      seçme: {selectedComp.inputs[1]?.width ?? 1} bit
-                    </span>
-                  </div>
-                )}
-
-                {/* Pull resistor level */}
-                {selectedComp.type === 'pullResistor' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Çekilen değer:</span>
-                    {([0, 1, 'X'] as const).map((pv) => (
-                      <button
-                        key={pv}
-                        onClick={() => {
-                          recordHistory();
-                          setComponents((prev) =>
-                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, pullValue: pv } } : c))
-                          );
-                        }}
-                        className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-colors ${
-                          (selectedComp.state.pullValue ?? 0) === pv ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                        title={pv === 0 ? 'Pull-down (0)' : pv === 1 ? 'Pull-up (1)' : 'Hata (E)'}
-                      >
-                        {pv}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* LED Color Picker */}
-                {selectedComp.type === 'led' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Renk:</span>
-                    {(['green', 'red', 'blue', 'yellow'] as const).map((col) => (
-                      <button
-                        key={col}
-                        onClick={() => {
-                          recordHistory();
-                          setComponents((prev) =>
-                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, ledColor: col } } : c))
-                          );
-                        }}
-                        className={`w-4 h-4 rounded-full border transition-transform ${
-                          (selectedComp.state.ledColor || 'green') === col ? 'ring-2 ring-white scale-110' : 'opacity-70 hover:opacity-100'
-                        } ${
-                          col === 'green' ? 'bg-emerald-500 border-emerald-400' :
-                          col === 'red' ? 'bg-rose-500 border-rose-400' :
-                          col === 'blue' ? 'bg-blue-500 border-blue-400' : 'bg-amber-400 border-amber-300'
-                        }`}
-                        title={`${col.toUpperCase()} Renk`}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {/* Clock Frequency Switcher */}
-                {selectedComp.type === 'clock' && (
-                  <div className="flex items-center gap-1.5 pr-2 border-r border-slate-700">
-                    <span className="text-slate-400 font-semibold text-[11px]">Hız:</span>
-                    <button
-                      title="Genel saat hızını kullan"
-                      onClick={() => {
-                        recordHistory();
-                        setComponents((prev) =>
-                          prev.map((c) => {
-                            if (c.id !== selectedComp.id) return c;
-                            const { clockRateHz: _drop, ...rest } = c.state;
-                            void _drop;
-                            return { ...c, state: rest };
-                          })
-                        );
-                      }}
-                      className={`px-1.5 py-0.5 rounded font-bold text-[10px] cursor-pointer transition-colors outline-none focus:outline-none focus:ring-0 focus-visible:outline-none select-none ${
-                        selectedComp.state.clockRateHz == null ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Genel ({clockHz}Hz)
-                    </button>
-                    {[0.5, 1, 2, 4, 6, 8].map((hz) => (
-                      <button
-                        key={hz}
-                        onClick={() => {
-                          recordHistory();
-                          setComponents((prev) =>
-                            prev.map((c) => (c.id === selectedComp.id ? { ...c, state: { ...c.state, clockRateHz: hz } } : c))
-                          );
-                        }}
-                        className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] cursor-pointer transition-colors outline-none focus:outline-none focus:ring-0 focus-visible:outline-none select-none ${
-                          selectedComp.state.clockRateHz === hz ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {hz}Hz
-                      </button>
-                    ))}
-                  </div>
-                )}
 
                 {/* Actions: Rename, Rotate, Duplicate, Delete */}
                 <div className="flex items-center gap-1">
@@ -10589,6 +10014,236 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               </div>
             </div>
           )}
+
+          {/* Attribute panel (Logisim attribute table): the selected part, or every selected part of one type */}
+          {(() => {
+            const targets = components.filter((c) => selectedCompIds.includes(c.id));
+            if (targets.length === 0 || targets.some((c) => c.type !== targets[0].type)) return null;
+            const first = targets[0];
+            const meta = COMPONENT_CATALOG[first.type];
+            if (!meta && first.type !== 'subcircuit') return null;
+            const single = targets.length === 1;
+            const ids = targets.map((c) => c.id);
+            const ctx = { clockHz };
+            const defs = getComponentAttributes(first.type).filter((d) => single || !d.singleOnly);
+            const dark = cadTheme === 'dark';
+            const rowLabel = dark ? 'text-slate-400' : 'text-slate-500';
+            const fieldCls = `w-full text-[11px] font-mono rounded-md px-1.5 py-1 border outline-none ${
+              dark ? 'bg-slate-800 text-slate-200 border-slate-600 focus:border-blue-500' : 'bg-white text-slate-800 border-slate-300 focus:border-blue-500'
+            }`;
+            const btnCls = (on: boolean) =>
+              `px-1.5 py-0.5 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                on ? 'bg-blue-600 text-white' : dark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`;
+            const title = single ? first.label || meta?.name || first.type : `${targets.length} × ${meta?.name ?? first.type}`;
+
+            const renderValue = (def: AttrDef) => {
+              const values = targets.map((c) => def.get(c));
+              const common = values.every((v) => v === values[0]) ? values[0] : undefined;
+              const options = resolveAttrOptions(def, first, ctx);
+              switch (def.kind) {
+                case 'select':
+                  return (
+                    <select
+                      value={common === undefined ? '' : String(common)}
+                      onChange={(e) => {
+                        const opt = options.find((o) => String(o.value) === e.target.value);
+                        if (opt) handleApplyAttribute(def, opt.value, ids);
+                      }}
+                      className={fieldCls}
+                      title={def.title}
+                    >
+                      {common === undefined && <option value="" disabled>—</option>}
+                      {options.map((o) => (
+                        <option key={String(o.value)} value={String(o.value)}>{o.label}</option>
+                      ))}
+                    </select>
+                  );
+                case 'buttons':
+                  return (
+                    <div className="flex flex-wrap gap-1" title={def.title}>
+                      {options.map((o) =>
+                        o.swatch ? (
+                          <button
+                            key={String(o.value)}
+                            onClick={() => handleApplyAttribute(def, o.value, ids)}
+                            className={`w-4 h-4 rounded-full border cursor-pointer transition-transform ${
+                              common === o.value ? `ring-2 ${dark ? 'ring-white' : 'ring-slate-700'} scale-110` : 'opacity-70 hover:opacity-100'
+                            }`}
+                            style={{ backgroundColor: o.swatch, borderColor: o.swatch }}
+                            title={o.title ?? o.label}
+                          />
+                        ) : (
+                          <button
+                            key={String(o.value)}
+                            onClick={() => handleApplyAttribute(def, o.value, ids)}
+                            className={btnCls(common === o.value)}
+                            title={o.title}
+                          >
+                            {o.label}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  );
+                case 'hex': {
+                  const shown = common === undefined ? '' : Number(common).toString(16);
+                  return (
+                    <input
+                      key={`${ids.join('|')}:${shown}`}
+                      defaultValue={shown}
+                      placeholder={common === undefined ? '—' : undefined}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') {
+                          (e.target as HTMLInputElement).value = shown;
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                      onBlur={(e) => {
+                        if (e.target.value.trim() === '' && common === undefined) return;
+                        const n = parseHexAttr(e.target.value);
+                        if (n === undefined) {
+                          e.target.value = shown;
+                          showToast('Geçersiz onaltılı değer.');
+                          return;
+                        }
+                        handleApplyAttribute(def, n, ids);
+                      }}
+                      className={fieldCls}
+                      title={def.title}
+                    />
+                  );
+                }
+                case 'info':
+                  return (
+                    <span className={`text-[11px] font-mono ${dark ? 'text-slate-300' : 'text-slate-700'}`} title={def.title}>
+                      {common === undefined ? '—' : `${common} bit`}
+                    </span>
+                  );
+                case 'bitMap': {
+                  // Splitter bit distribution (single part): Logisim bit0..bitN, 0 = no end
+                  const cfg = getSplitterConfig(first);
+                  const ends = Array.from({ length: cfg.fanout }, (_, i) => i + 1);
+                  return (
+                    <div>
+                      <button onClick={() => setSplitterDistOpen((v) => !v)} className={btnCls(splitterDistOpen)} title={def.title}>
+                        {splitterDistOpen ? 'Gizle' : `Göster (${cfg.bitEnd.length} bit)`}
+                      </button>
+                      {splitterDistOpen && (
+                        <div className="mt-1.5">
+                          <div className="flex gap-1 mb-1.5">
+                            <button
+                              onClick={() => handleApplyAttribute(def, splitterDistribution(cfg.fanout, cfg.bitEnd.length, true).join(','), ids)}
+                              className={`flex-1 ${btnCls(false)}`}
+                              title="Düşük bitler 1. uca"
+                            >
+                              Artan dağıt
+                            </button>
+                            <button
+                              onClick={() => handleApplyAttribute(def, splitterDistribution(cfg.fanout, cfg.bitEnd.length, false).join(','), ids)}
+                              className={`flex-1 ${btnCls(false)}`}
+                              title="Yüksek bitler 1. uca"
+                            >
+                              Azalan dağıt
+                            </button>
+                          </div>
+                          <div className="max-h-56 overflow-y-auto pr-1 space-y-1">
+                            {cfg.bitEnd.map((e, i) => (
+                              <label key={i} className="flex items-center justify-between gap-2 text-[11px]">
+                                <span className={`font-mono ${dark ? 'text-slate-300' : 'text-slate-600'}`}>Bit {i}</span>
+                                <select
+                                  value={e}
+                                  onChange={(ev) => {
+                                    const next = [...cfg.bitEnd];
+                                    next[i] = Number(ev.target.value);
+                                    handleApplyAttribute(def, next.join(','), ids);
+                                  }}
+                                  className={`${fieldCls} !w-auto`}
+                                >
+                                  <option value={0}>yok</option>
+                                  {ends.map((n) => (
+                                    <option key={n} value={n}>{n}. uç</option>
+                                  ))}
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+              }
+            };
+
+            return (
+              <div
+                className={`absolute top-16 right-4 z-30 w-72 max-w-[calc(100%-2rem)] max-h-[calc(100%-9rem)] flex flex-col rounded-2xl border shadow-xl backdrop-blur-md text-xs animate-in fade-in duration-150 ${
+                  dark ? 'bg-slate-900/95 border-slate-700 text-slate-100' : 'bg-white/95 border-slate-200 text-slate-900'
+                }`}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  onClick={() => {
+                    setAttrPanelCollapsed((v) => {
+                      try {
+                        localStorage.setItem('lds.attrPanelCollapsed', v ? '0' : '1');
+                      } catch {
+                        /* storage blocked: the panel just doesn't remember */
+                      }
+                      return !v;
+                    });
+                  }}
+                  className={`flex items-center gap-2 px-3 py-2 text-left cursor-pointer ${attrPanelCollapsed ? '' : `border-b ${dark ? 'border-slate-700' : 'border-slate-200'}`}`}
+                  title={attrPanelCollapsed ? 'Özellikleri göster' : 'Özellikleri gizle'}
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                  <span className="font-extrabold shrink-0">Özellikler</span>
+                  <span className={`truncate min-w-0 flex-1 ${rowLabel}`}>{title}</span>
+                  <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${attrPanelCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+                {!attrPanelCollapsed && (
+                  <div className="overflow-y-auto px-3 py-2 space-y-2">
+                    {single && first.type !== 'textLabel' && (
+                      <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                        <span className={`text-[11px] font-semibold ${rowLabel}`}>Etiket</span>
+                        <input
+                          key={`${first.id}:${first.label || ''}`}
+                          defaultValue={first.label || ''}
+                          placeholder={meta?.name}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                            if (e.key === 'Escape') {
+                              (e.target as HTMLInputElement).value = first.label || '';
+                              (e.target as HTMLInputElement).blur();
+                            }
+                          }}
+                          onBlur={(e) => handleSetLabel(first.id, e.target.value.trim())}
+                          className={`${fieldCls} font-sans`}
+                          title="Parçanın adı (HDL ve tablolarda da kullanılır)"
+                        />
+                      </div>
+                    )}
+                    {defs.map((def) => (
+                      <div
+                        key={def.key}
+                        className={def.kind === 'bitMap' ? 'space-y-1' : 'grid grid-cols-[5.5rem_1fr] items-center gap-2'}
+                      >
+                        <span className={`text-[11px] font-semibold ${rowLabel}`} title={def.title}>{def.label}</span>
+                        {renderValue(def)}
+                      </div>
+                    ))}
+                    {defs.length === 0 && !single && (
+                      <p className={`text-[11px] ${rowLabel}`}>Bu parçanın ortak ayarı yok.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Keyboard Shortcuts Trigger Button */}
           <button
