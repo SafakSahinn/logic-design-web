@@ -54,6 +54,10 @@ import {
   OUTPUT_MODE_TYPES,
   getBitWidth,
   getSplitterConfig,
+  getPlexerConfig,
+  pinKey as plexerPinKey,
+  plexerLayout,
+  RETIRED_PALETTE_TYPES,
   splitterDistribution,
   splitterEndLabels,
   splitterThreads,
@@ -284,6 +288,10 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   splitter: { label: 'Splitter', badge: 'Ayırıcı' },
   bitExtender: { label: 'Bit Genişletici', badge: 'Extend' },
   bitSelector: { label: 'Bit Seçici', badge: 'Sel' },
+  multiplexer: { label: 'Çoklayıcı (MUX)', badge: 'MUX' },
+  demultiplexer: { label: 'Çoklayıcı Çözücü (DEMUX)', badge: 'DMX' },
+  decoder: { label: 'Kod Çözücü', badge: 'DEC' },
+  priorityEncoder: { label: 'Öncelikli Kodlayıcı', badge: 'PRI' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -5845,6 +5853,77 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'multiplexer':
+      case 'demultiplexer':
+      case 'decoder':
+      case 'priorityEncoder': {
+        // Logisim plexer painters: a trapezoid narrowing towards the MUX output (towards the DEMUX / decoder
+        // input), the name inside, a grey "0" next to pin 0 and a grey dot just inside the select pin
+        const l = plexerLayout(comp);
+        const W = l.width;
+        const H = l.height;
+        const { select } = getPlexerConfig(comp);
+        const grey = cadTheme === 'dark' ? '#94a3b8' : '#64748b';
+        const pinOf = (key: string) => comp.inputs.concat(comp.outputs).find((p) => plexerPinKey(comp, p) === key);
+        const lead = (key: string, x: number, y0: number, y1: number) => {
+          const p = pinOf(key);
+          if (!p) return null;
+          return <line key={key} x1={x} y1={y0} x2={x} y2={y1} stroke={strokeColor} strokeWidth={(p.width ?? 1) > 1 ? 4 : 1.8} />;
+        };
+        if (comp.type === 'priorityEncoder') {
+          const pe = l.pins;
+          return (
+            <g>
+              <rect x={0} y={0} width={W} height={H} rx={2} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+              <text x={W / 2} y={H / 2 + 3} textAnchor="middle" fontSize={9} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+                Pri
+              </text>
+              <text x={3} y={pe.in0.y + 3} fontSize={6.5} fontFamily="monospace" fill={grey} className="select-none">0</text>
+              <text x={pe.en.x} y={H - 3} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EI</text>
+              <text x={pe.eo.x} y={9} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EO</text>
+              <text x={W - 3} y={pe.gs.y + 2.5} textAnchor="end" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">GS</text>
+            </g>
+          );
+        }
+        const sl = select === 1 ? 10 : 20;
+        const isMux = comp.type === 'multiplexer';
+        // y of the top / bottom edge at x (the slanted sides)
+        const topY = (x: number) => (isMux ? (sl * x) / W : sl * (1 - x / W));
+        const botY = (x: number) => H - topY(x);
+        const points = isMux ? `0,0 ${W},${sl} ${W},${H - sl} 0,${H}` : `0,${sl} ${W},0 ${W},${H} 0,${H - sl}`;
+        const atTop = comp.state.selectLoc === 'tr';
+        const edgeLead = (key: string) => {
+          const at = l.pins[key];
+          return at ? lead(key, at.x, atTop ? 0 : H, atTop ? topY(at.x) : botY(at.x)) : null;
+        };
+        const selAt = l.pins.sel;
+        const dotY = atTop ? topY(selAt.x) + 4.5 : botY(selAt.x) - 4.5;
+        const first = isMux ? l.pins.in0 : l.pins.out0;
+        const name = isMux ? 'MUX' : comp.type === 'demultiplexer' ? 'DMX' : 'DEC';
+        return (
+          <g>
+            <polygon points={points} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} strokeLinejoin="round" />
+            {edgeLead('sel')}
+            {edgeLead('en')}
+            <circle cx={selAt.x} cy={dotY} r={2.2} fill={grey} opacity={0.6} />
+            <text
+              x={isMux ? 3 : W - 3}
+              y={first.y + 3}
+              textAnchor={isMux ? 'start' : 'end'}
+              fontSize={6.5}
+              fontFamily="monospace"
+              fill={grey}
+              className="select-none"
+            >
+              0
+            </text>
+            <text x={W / 2} y={H / 2 + 3} textAnchor="middle" fontSize={W < 50 ? 8 : 9} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+              {name}
+            </text>
+          </g>
+        );
+      }
+
       case 'bitSelector': {
         // Logisim BitSelector painter: a trapezoid narrowing towards the output, "Sel" inside; the select
         // input meets the slanted bottom edge
@@ -6055,7 +6134,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     // 1. Standard Components
     Object.values(COMPONENT_CATALOG).forEach((meta) => {
-      if (meta.type === 'subcircuit') return;
+      if (meta.type === 'subcircuit' || RETIRED_PALETTE_TYPES.has(meta.type)) return;
       if (!q || has(meta.name) || has(meta.type) || has(meta.description)) {
         items.push({
           id: meta.type,
@@ -6140,7 +6219,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'plexers',
       title: 'Plexers & Seçiciler',
       icon: '🔀',
-      types: ['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'bcdTo7Seg', 'priorityEncoder4to2', 'bitSelector'] as ComponentType[],
+      types: ['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder', 'bcdTo7Seg', 'bitSelector'] as ComponentType[],
     },
     {
       id: 'arithmetic',
@@ -8476,7 +8555,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <>
                   {Object.values(COMPONENT_CATALOG)
                     .filter((meta) => {
-                      if (meta.type === 'subcircuit') return false;
+                      if (meta.type === 'subcircuit' || RETIRED_PALETTE_TYPES.has(meta.type)) return false;
                       if (paletteSearch.trim()) {
                         const q = paletteSearch.toLowerCase();
                         return (

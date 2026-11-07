@@ -1322,6 +1322,12 @@ export function configureBitSelector(
 // ---- Parametric plexers (Logisim std/plexers: Multiplexer, Demultiplexer, Decoder, PriorityEncoder) -------
 
 export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder']);
+
+/**
+ * Fixed-size parts replaced by parametric ones (Aşama 3). They still load and simulate (built-in example
+ * circuits use them until they are rebuilt) but are no longer offered in the palettes.
+ */
+export const RETIRED_PALETTE_TYPES = new Set<ComponentType>(['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'priorityEncoder4to2']);
 export const PLEXER_MAX_SELECT = 5;
 
 /** Key of a pin inside its part ('in3', 'sel', 'out', ...): the pin id without the part id prefix */
@@ -4198,6 +4204,37 @@ function booleanExprOf(
     case 'controlledInverter':
       result = `(${inputExprs[1]} ? ${inputExprs[0].length === 1 ? `${inputExprs[0]}'` : `(${inputExprs[0]})'`} : Z)`;
       break;
+    case 'multiplexer':
+    case 'demultiplexer':
+    case 'decoder': {
+      // Only 1-bit select and data reach here (wider pins hide the cone). Floating outputs have no formula
+      const { enable } = getPlexerConfig(comp);
+      const selIdx = comp.type === 'multiplexer' ? 2 : comp.type === 'demultiplexer' ? 1 : 0;
+      if ((enable && comp.state.plexDisabled === 'Z') || (comp.type !== 'multiplexer' && comp.state.plexTristate)) return OPAQUE_EXPR;
+      const sel = inputExprs[selIdx];
+      const nsel = /^[A-Za-z0-9_]+$/.test(sel) ? `${sel}'` : `(${sel})'`;
+      const term = (e: string) => (e.includes('+') || e.includes('⊕') ? `(${e})` : e);
+      let core: string;
+      if (comp.type === 'multiplexer') core = `(${nsel}·${term(inputExprs[0])} + ${term(sel)}·${term(inputExprs[1])})`;
+      else {
+        const lit = pinIndex === 1 ? term(sel) : nsel;
+        core = comp.type === 'decoder' ? lit : `(${term(inputExprs[0])} · ${lit})`;
+      }
+      // An open enable counts as enabled, like the simulator
+      const en = enable && traced[selIdx + 1] !== null ? inputExprs[selIdx + 1] : null;
+      result = en ? `(${term(en)} · ${core})` : core;
+      break;
+    }
+    case 'priorityEncoder': {
+      // GS = some input is 1, EO = enabled and none is; the code output itself is x when no input is 1
+      const n = comp.inputs.length - 1;
+      if (pinIndex === 0) return OPAQUE_EXPR;
+      const any = `(${inputExprs.slice(0, n).join(' + ')})`;
+      const en = traced[n] !== null ? inputExprs[n] : null;
+      const enT = en && (en.includes('+') || en.includes('⊕')) ? `(${en})` : en;
+      result = pinIndex === 2 ? (en ? `(${enT} · ${any})` : any) : en ? `(${enT} · ${any}')` : `${any}'`;
+      break;
+    }
     default:
       return `${comp.label || comp.type}`;
   }

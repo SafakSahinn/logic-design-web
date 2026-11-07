@@ -9,13 +9,18 @@ import {
   GATE_WIDTH_TYPES,
   MULTI_INPUT_GATE_TYPES,
   OUTPUT_MODE_TYPES,
+  PLEXER_MAX_SELECT,
   SPLITTER_MAX_FANOUT,
   configureBitExtender,
   configureBitSelector,
+  configurePlexer,
   configureSplitter,
   getBitWidth,
   getGateWidth,
+  getPlexerConfig,
   getSplitterConfig,
+  pinKey,
+  type PlexerConfig,
   setBitWidth,
   setGateWidth,
   updatePinPositions,
@@ -444,6 +449,106 @@ const bitSelectorAttrs: AttrDef[] = [
   },
 ];
 
+// ---- Plexers: like Logisim the part grows around its anchor pin (MUX output, DEMUX data input, decoder select,
+// priority encoder code output), which stays where it was
+const PLEXER_ANCHOR: Record<string, string> = { multiplexer: 'out', demultiplexer: 'in', decoder: 'sel', priorityEncoder: 'out' };
+
+function reconfigurePlexer(c: CircuitComponentInstance, patch: Partial<PlexerConfig>, state?: Partial<CircuitComponentInstance['state']>): AttrEdit {
+  const key = PLEXER_ANCHOR[c.type];
+  const anchor = [...c.inputs, ...c.outputs].find((p) => pinKey(c, p) === key);
+  let next = configurePlexer(state ? { ...c, state: { ...c.state, ...state } } : c, patch);
+  const moved = [...next.inputs, ...next.outputs].find((p) => pinKey(next, p) === key);
+  if (anchor && moved && (anchor.x !== moved.x || anchor.y !== moved.y)) {
+    next = updatePinPositions({ ...next, x: next.x + anchor.x - moved.x, y: next.y + anchor.y - moved.y });
+  }
+  // Pins keep their ids; a pin that is gone (fewer inputs, enable off) is named null so its wires stay as
+  // open ends, or are dropped where another pin now sits (they would short that pin to the old net)
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.inputs, ...c.outputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const FLOAT_OPTIONS: AttrOption[] = [
+  { value: '0', label: '0', title: 'Çıkış 0' },
+  { value: 'Z', label: 'Yüzer (x)', title: 'Çıkış sürülmez (x); başka bir sürücüyle aynı hatta bağlanabilir' },
+];
+
+const plexerSelectAttr: AttrDef = {
+  key: 'plexSelect',
+  label: 'Seçme bit',
+  kind: 'select',
+  title: 'Seçme girişinin genişliği; 2^n veri girişi / çıkışı (1-5)',
+  options: Array.from({ length: PLEXER_MAX_SELECT }, (_, i) => ({ value: i + 1, label: `${i + 1}  (${2 ** (i + 1)})` })),
+  get: (c) => getPlexerConfig(c).select,
+  set: (c, v) => (getPlexerConfig(c).select === Number(v) ? null : reconfigurePlexer(c, { select: Number(v) })),
+};
+
+const priorityInputsAttr: AttrDef = {
+  ...plexerSelectAttr,
+  label: 'Giriş sayısı',
+  title: 'Giriş sayısı (2-32); kod çıkışı log2(giriş) bittir',
+  options: Array.from({ length: PLEXER_MAX_SELECT }, (_, i) => ({ value: i + 1, label: `${2 ** (i + 1)}  (${i + 1} bit kod)` })),
+};
+
+const plexerWidthAttr: AttrDef = {
+  key: 'plexWidth',
+  label: 'Veri bit',
+  kind: 'select',
+  title: 'Veri girişlerinin ve çıkışlarının genişliği (1-32)',
+  options: WIDTH_OPTIONS,
+  get: (c) => getPlexerConfig(c).width,
+  set: (c, v) => (getPlexerConfig(c).width === Number(v) ? null : reconfigurePlexer(c, { width: Number(v) })),
+};
+
+const plexerEnableAttr: AttrDef = {
+  key: 'plexEnable',
+  label: 'Enable',
+  kind: 'buttons',
+  options: [
+    { value: 'yes', label: 'Var', title: 'Enable girişi var; 0 iken çıkışlar devre dışı değerini alır' },
+    { value: 'no', label: 'Yok', title: 'Enable girişi yok, parça hep çalışır' },
+  ],
+  get: (c) => (getPlexerConfig(c).enable ? 'yes' : 'no'),
+  set: (c, v) => ((getPlexerConfig(c).enable ? 'yes' : 'no') === v ? null : reconfigurePlexer(c, { enable: v === 'yes' })),
+};
+
+const plexerDisabledAttr: AttrDef = {
+  key: 'plexDisabled',
+  label: 'Devre dışı çıkış',
+  kind: 'buttons',
+  title: 'Enable 0 iken çıkışların değeri (Logisim "Disabled Output")',
+  options: FLOAT_OPTIONS,
+  get: (c) => c.state.plexDisabled ?? '0',
+  set: (c, v) => ((c.state.plexDisabled ?? '0') === v ? null : withState(c, { plexDisabled: v as '0' | 'Z' })),
+};
+
+const plexerTristateAttr: AttrDef = {
+  key: 'plexTristate',
+  label: 'Seçilmeyen çıkış',
+  kind: 'buttons',
+  title: 'Seçilmeyen çıkışların değeri (Logisim "Three-State")',
+  options: FLOAT_OPTIONS,
+  get: (c) => (c.state.plexTristate ? 'Z' : '0'),
+  set: (c, v) => ((c.state.plexTristate ? 'Z' : '0') === v ? null : withState(c, { plexTristate: v === 'Z' })),
+};
+
+const plexerSelectLocAttr: AttrDef = {
+  key: 'selectLoc',
+  label: 'Seçme bacağı',
+  kind: 'buttons',
+  title: 'Seçme (ve enable) girişinin bulunduğu kenar (Logisim "Select Location")',
+  options: [
+    { value: 'bl', label: 'Alt / Sol' },
+    { value: 'tr', label: 'Üst / Sağ' },
+  ],
+  get: (c) => c.state.selectLoc ?? 'bl',
+  set: (c, v) => ((c.state.selectLoc ?? 'bl') === v ? null : reconfigurePlexer(c, {}, { selectLoc: v as 'bl' | 'tr' })),
+};
+
 const pullAttr: AttrDef = {
   key: 'pullValue',
   label: 'Çekilen değer',
@@ -533,6 +638,18 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'bitSelector':
       list.push(...bitSelectorAttrs);
+      break;
+    case 'multiplexer':
+      list.push(plexerSelectAttr, plexerWidthAttr, plexerEnableAttr, plexerDisabledAttr, plexerSelectLocAttr);
+      break;
+    case 'demultiplexer':
+      list.push(plexerSelectAttr, plexerWidthAttr, plexerEnableAttr, plexerDisabledAttr, plexerTristateAttr, plexerSelectLocAttr);
+      break;
+    case 'decoder':
+      list.push(plexerSelectAttr, plexerEnableAttr, plexerDisabledAttr, plexerTristateAttr, plexerSelectLocAttr);
+      break;
+    case 'priorityEncoder':
+      list.push(priorityInputsAttr, plexerDisabledAttr);
       break;
     case 'pullResistor':
       list.push(pullAttr);
