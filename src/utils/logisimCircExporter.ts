@@ -1,9 +1,9 @@
 import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP, bitSelectorSelectWidth, getGateWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
+import { HEX_7SEG_MAP, bitSelectorSelectWidth, getGateWidth, getPlexerConfig, getSplitterConfig, pinKey, splitterThreads } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { solveKMap } from './kmapSolver';
-import { logisimDefaultPortOffsets, logisimSplitterEnds } from './logisimCircImporter';
+import { logisimDefaultPortOffsets, logisimPlexerPortKeys, logisimPlexerPorts, logisimSplitterEnds, type LogisimPlexer } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 
 /*
@@ -46,7 +46,20 @@ type Prim =
   | { kind: 'splitter'; combined: string; ends: string[]; bitEnd: number[]; appear: 'left' | 'right' | 'center'; endWidth: number[] }
   | { kind: 'extender'; in: string; ext: string | null; out: string; inW: number; outW: number; type: string }
   | { kind: 'selector'; data: string; sel: string; out: string; dataW: number; groupW: number }
-  | { kind: 'sub'; circuit: string; ins: string[]; outs: string[]; inW: number[]; outW: number[]; inOff: Pt[]; outOff: Pt[] };
+  | { kind: 'sub'; circuit: string; ins: string[]; outs: string[]; inW: number[]; outW: number[]; inOff: Pt[]; outOff: Pt[] }
+  // A real Logisim plexer (facing east, select bottom-left); nets / widths / sinks in Logisim's port order
+  | {
+      kind: 'plexer';
+      part: LogisimPlexer;
+      select: number;
+      width: number;
+      enable: boolean;
+      disabled: '0' | 'Z';
+      tristate: boolean;
+      nets: string[];
+      widths: number[];
+      sinks: boolean[];
+    };
 
 interface Pt {
   x: number;
@@ -361,6 +374,38 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'bitSelector':
           P.push({ kind: 'selector', data: pin(0), sel: pin(1), out: out(0), dataW: w0(c.inputs[0]), groupW: w0(c.outputs[0]) });
           break;
+        case 'multiplexer':
+        case 'demultiplexer':
+        case 'decoder':
+        case 'priorityEncoder': {
+          // Logisim has the same part, so it is written as is; open inputs stay open (read as x by both)
+          const { select, width, enable } = getPlexerConfig(c);
+          const keys = logisimPlexerPortKeys(c.type, select, enable);
+          const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+          const nets: string[] = [];
+          const widths: number[] = [];
+          const sinks: boolean[] = [];
+          for (const k of keys) {
+            const p = byKey.get(k);
+            const isIn = !!p && c.inputs.includes(p);
+            nets.push(!p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN);
+            widths.push(p?.width ?? 1);
+            sinks.push(isIn);
+          }
+          P.push({
+            kind: 'plexer',
+            part: c.type,
+            select,
+            width,
+            enable,
+            disabled: c.state.plexDisabled ?? '0',
+            tristate: !!c.state.plexTristate,
+            nets,
+            widths,
+            sinks,
+          });
+          break;
+        }
         case 'halfAdder': {
           const [a, b] = [ins(0), ins(1)];
           g('XOR', [a, b], out(0));
@@ -778,6 +823,18 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           tunnel(x - 10, y + 10, p.sel, true, bitSelectorSelectWidth(p.dataW, p.groupW));
           tunnel(x, y, p.out, false, p.groupW);
           break;
+        case 'plexer': {
+          // Every attribute is written out: the defaults differ between Logisim versions
+          const name = { multiplexer: 'Multiplexer', demultiplexer: 'Demultiplexer', decoder: 'Decoder', priorityEncoder: 'Priority Encoder' }[p.part];
+          let attrs = `<a name="select" val="${p.select}"/>`;
+          if (p.part === 'multiplexer' || p.part === 'demultiplexer') attrs += widthAttr(p.width);
+          if (p.part === 'demultiplexer' || p.part === 'decoder') attrs += `<a name="tristate" val="${p.tristate}"/>`;
+          attrs += `<a name="disabled" val="${p.disabled}"/>`;
+          if (p.part !== 'priorityEncoder') attrs += `<a name="enable" val="${p.enable}"/>`;
+          xml.push(`    <comp lib="2" loc="(${x},${y})" name="${name}">${attrs}</comp>`);
+          logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).forEach((o, k) => tunnel(x + o.x, y + o.y, p.nets[k], p.sinks[k], p.widths[k]));
+          break;
+        }
         case 'sub':
           xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
@@ -796,6 +853,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         return ys.length ? Math.ceil((Math.max(...ys) - Math.min(...ys, 0) + 40) / CELL_H) : 1;
       }
       if (p.kind === 'splitter') return Math.ceil((10 * p.ends.length + 40) / CELL_H);
+      if (p.kind === 'plexer') {
+        const ys = logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).map((o) => o.y);
+        return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
+      }
       return 1;
     };
     for (const b of blocks) {
@@ -809,7 +870,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             ? -Math.min(0, ...p.inOff.map((o) => o.y), ...p.outOff.map((o) => o.y))
             : p.kind === 'splitter'
               ? -Math.min(0, ...logisimSplitterEnds('east', p.appear, p.ends.length).map((o) => o.y))
-              : extraRows * 50;
+              : p.kind === 'plexer'
+                ? -Math.min(0, ...logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).map((o) => o.y)) + 10
+                : extraRows * 50;
         const x = 200 + (cell % PER_ROW) * CELL_W;
         const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + Math.ceil(up / 10) * 10;
         cell += 1 + extraRows * PER_ROW;

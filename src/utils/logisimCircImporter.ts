@@ -3,8 +3,11 @@ import type { Radix } from '../types/logic';
 import {
   configureBitExtender,
   configureBitSelector,
+  configurePlexer,
   configureSplitter,
   createComponentInstance,
+  PLEXER_TYPES,
+  pinKey,
   getComponentSize,
   setBitWidth,
   setGateWidth,
@@ -77,9 +80,10 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // Combinational
   if (n === 'adder') return 'fullAdder';
   if (n === 'subtractor') return 'fullSubtractor';
-  if (n === 'multiplexer' || n === 'mux') return 'mux2';
-  if (n === 'demultiplexer' || n === 'demux') return 'demux2';
-  if (n === 'decoder') return 'decoder2to4';
+  if (n === 'multiplexer' || n === 'mux') return 'multiplexer';
+  if (n === 'demultiplexer' || n === 'demux') return 'demultiplexer';
+  if (n === 'decoder') return 'decoder';
+  if (n === 'priority encoder') return 'priorityEncoder';
   if (n === 'comparator') return 'comparator4';
   if (n === 'alu' || n.includes('arithmetic logic unit')) return 'alu4';
 
@@ -101,6 +105,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
 const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buffer', 'triState', 'controlledInverter',
+  'multiplexer', 'demultiplexer',
 ]);
 // Logisim's most inputs per gate; ours takes as many
 const MAX_IMPORT_GATE_INPUTS = 32;
@@ -159,6 +164,140 @@ export function logisimSplitterEnds(facing: string, appear: string, fanout: numb
     ddy = 10;
   }
   return Array.from({ length: fanout }, (_, i) => ({ x: dx0 + i * ddx, y: dy0 + i * ddy }));
+}
+
+export type LogisimPlexer = 'multiplexer' | 'demultiplexer' | 'decoder' | 'priorityEncoder';
+
+const dirStep: Record<string, Pt> = { east: { x: 1, y: 0 }, west: { x: -1, y: 0 }, north: { x: 0, y: -1 }, south: { x: 0, y: 1 } };
+
+/**
+ * Logisim 2.7.1 plexer ports (std/plexers updatePorts) relative to the part's loc, in Logisim's port order:
+ *  - Multiplexer:   data 0..n-1, select, [enable], output (at loc)
+ *  - Demultiplexer: outputs 0..n-1, select, [enable], data input (at loc)
+ *  - Decoder:       outputs 0..n-1, select (at loc), [enable]
+ *  - Priority Encoder: inputs 0..n-1, output (at loc), EN_IN, EN_OUT, GS (no enable / select location)
+ * The two-way parts have their own table per facing, which is not a rotation of the east one; every facing
+ * and select location was checked on the Logisim 2.7.1 jar.
+ */
+export function logisimPlexerPorts(kind: LogisimPlexer, facing: string, selloc: string, select: number, enable: boolean): Pt[] {
+  const n = 1 << select;
+  const m = selloc === 'tr' ? -1 : 1;
+  const tr = (p: Pt, d: number): Pt => ({ x: p.x + (dirStep[facing] ?? dirStep.east).x * d, y: p.y + (dirStep[facing] ?? dirStep.east).y * d });
+  const P = (x: number, y: number): Pt => ({ x, y });
+  if (kind === 'priorityEncoder') {
+    if (facing === 'north' || facing === 'south') {
+      const x = -5 * n + 10;
+      const y = facing === 'north' ? 40 : -40;
+      return [...Array.from({ length: n }, (_, k) => P(x + 10 * k, y)), P(0, 0), P(x + 10 * n, y / 2), P(x - 10, y / 2), P(10, 0)];
+    }
+    const x = facing === 'west' ? 40 : -40;
+    const y = -5 * n + 10;
+    return [...Array.from({ length: n }, (_, k) => P(x, y + 10 * k)), P(0, 0), P(x / 2, y + 10 * n), P(x / 2, y - 10), P(0, 10)];
+  }
+  if (kind === 'decoder') {
+    const isTr = selloc === 'tr';
+    let ps: Pt[];
+    if (n === 2) {
+      if (facing === 'north' || facing === 'south') {
+        const y = facing === 'north' ? -10 : 10;
+        ps = isTr ? [P(-30, y), P(-10, y)] : [P(10, y), P(30, y)];
+      } else {
+        const x = facing === 'west' ? -10 : 10;
+        ps = isTr ? [P(x, 10), P(x, 30)] : [P(x, -30), P(x, -10)];
+      }
+    } else {
+      let dx: number, ddx: number, dy: number, ddy: number;
+      if (facing === 'north' || facing === 'south') {
+        dy = facing === 'north' ? -20 : 20;
+        ddy = 0;
+        dx = isTr ? -10 * n : 0;
+        ddx = 10;
+      } else {
+        dx = facing === 'west' ? -20 : 20;
+        ddx = 0;
+        dy = isTr ? 0 : -10 * n;
+        ddy = 10;
+      }
+      ps = Array.from({ length: n }, (_, k) => P(dx + k * ddx, dy + k * ddy));
+    }
+    return [...ps, P(0, 0), ...(enable ? [tr(P(0, 0), -10)] : [])];
+  }
+  const isMux = kind === 'multiplexer';
+  // The demultiplexer is the multiplexer mirrored: its ends sit on the facing side
+  const s = isMux ? 1 : -1;
+  let ps: Pt[];
+  let sel: Pt;
+  if (n === 2) {
+    if (facing === 'west') {
+      ps = [P(s * 30, -10), P(s * 30, 10)];
+      sel = P(s * 20, m * 20);
+    } else if (facing === 'north') {
+      ps = [P(-10, s * 30), P(10, s * 30)];
+      sel = P(m * -20, s * 20);
+    } else if (facing === 'south') {
+      ps = [P(-10, -s * 30), P(10, -s * 30)];
+      sel = P(m * -20, -s * 20);
+    } else {
+      ps = [P(-s * 30, -10), P(-s * 30, 10)];
+      sel = P(-s * 20, m * 20);
+    }
+  } else {
+    let dx = -(n / 2) * 10;
+    let ddx = 10;
+    let dy = -(n / 2) * 10;
+    let ddy = 10;
+    if (facing === 'west') {
+      dx = s * 40;
+      ddx = 0;
+      sel = P(s * 20, m * (dy + 10 * n));
+    } else if (facing === 'north') {
+      dy = s * 40;
+      ddy = 0;
+      sel = P(m * dx, s * 20);
+    } else if (facing === 'south') {
+      dy = -s * 40;
+      ddy = 0;
+      sel = P(m * dx, -s * 20);
+    } else {
+      dx = -s * 40;
+      ddx = 0;
+      sel = P(-s * 20, m * (dy + 10 * n));
+    }
+    ps = Array.from({ length: n }, (_, k) => P(dx + k * ddx, dy + k * ddy));
+  }
+  return [...ps, sel, ...(enable ? [tr(sel, isMux ? 10 : -10)] : []), P(0, 0)];
+}
+
+/** Our pin key for each Logisim plexer port (same order as logisimPlexerPorts) */
+export function logisimPlexerPortKeys(kind: LogisimPlexer, select: number, enable: boolean): string[] {
+  const n = 1 << select;
+  const many = (p: string) => Array.from({ length: n }, (_, k) => `${p}${k}`);
+  const en = enable ? ['en'] : [];
+  if (kind === 'multiplexer') return [...many('in'), 'sel', ...en, 'out'];
+  if (kind === 'demultiplexer') return [...many('out'), 'sel', ...en, 'in'];
+  if (kind === 'decoder') return [...many('out'), 'sel', ...en];
+  return [...many('in'), 'out', 'en', 'eo', 'gs'];
+}
+
+/**
+ * Plexer attribute defaults of the program that wrote a file. Logisim leaves attributes at their default out
+ * of the file, and the defaults changed: Logisim 2.7.1 floats disabled outputs and (from 2.6.3.220) gives
+ * MUX / DEMUX / decoder an enable input; Logisim-evolution disables to 0 and, after 3.6.1, adds no enable
+ * to new MUX / DEMUX (the decoder keeps it).
+ */
+export function logisimPlexerDefaults(source: string, kind: LogisimPlexer): { enable: boolean; disabled: '0' | 'Z' } {
+  const v = (source.match(/\d+/g) ?? ['2', '7', '1']).map(Number);
+  const cmp = (o: number[]) => {
+    for (let k = 0; k < Math.max(v.length, o.length); k++) {
+      const d = (v[k] ?? 0) - (o[k] ?? 0);
+      if (d !== 0) return d;
+    }
+    return 0;
+  };
+  // The priority encoder has no enable setting: its EN_IN is always there
+  if (kind === 'priorityEncoder') return { enable: true, disabled: (v[0] ?? 2) < 3 ? 'Z' : '0' };
+  if ((v[0] ?? 2) < 3) return { enable: cmp([2, 6, 3, 220]) >= 0, disabled: 'Z' };
+  return { enable: kind === 'decoder' || cmp([3, 6, 1]) <= 0, disabled: '0' };
 }
 
 /**
@@ -283,6 +422,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
   const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
 
   const circuits = Array.from(xmlDoc.getElementsByTagName('circuit'));
+  // Version of the program that wrote the file (its attribute defaults are not written out)
+  const fileSource = xmlDoc.documentElement?.getAttribute('source') ?? '2.7.1';
   if (circuits.length === 0) {
     throw new Error('Geçerli bir .circ devre dosyası bulunamadı (circuit etiketi yok).');
   }
@@ -479,6 +620,20 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const splitterEnds = (attr: Record<string, string>) => logisimSplitterEnds(attr.facing || 'east', attr.appear || 'left', num(attr.fanout, 2));
     const extenderPoints = (attr: Record<string, string>): Pt[] =>
       (attr.type ?? 'zero') === 'input' ? [{ x: -40, y: 0 }, { x: -20, y: -20 }] : [{ x: -40, y: 0 }];
+    // Plexer settings from the attributes, falling back to the writing program's defaults
+    const plexerSettings = (kind: LogisimPlexer, attr: Record<string, string>) => {
+      const d = logisimPlexerDefaults(fileSource, kind);
+      const select = Math.min(5, num(attr.select, kind === 'priorityEncoder' ? 3 : 1));
+      const enable = kind === 'priorityEncoder' ? true : attr.enable === 'true' ? true : attr.enable === 'false' ? false : d.enable;
+      return {
+        select,
+        enable,
+        disabled: attr.disabled === '0' || attr.disabled === 'Z' ? (attr.disabled as '0' | 'Z') : d.disabled,
+        tristate: attr.tristate === 'true',
+        selloc: attr.selloc === 'tr' ? ('tr' as const) : ('bl' as const),
+        ports: logisimPlexerPorts(kind, attr.facing || 'east', attr.selloc || 'bl', select, enable),
+      };
+    };
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -548,7 +703,9 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             ? extenderPoints(attr)
             : nativeType === 'bitSelector'
               ? BIT_SELECTOR_POINTS[facing] ?? BIT_SELECTOR_POINTS.east
-              : sub
+              : PLEXER_TYPES.has(nativeType)
+                ? plexerSettings(nativeType as LogisimPlexer, attr).ports
+                : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
       for (const off of extra) occupied.add(key({ x: loc.x + off.x, y: loc.y + off.y }));
@@ -705,6 +862,28 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           [inst.inputs[0].id, at(loc, d)],
           [inst.inputs[1].id, at(loc, s)],
         ]);
+        continue;
+      }
+      if (PLEXER_TYPES.has(nativeType)) {
+        const kind = nativeType as LogisimPlexer;
+        const st = plexerSettings(kind, attr);
+        let inst = createComponentInstance(kind, 0, 0);
+        inst = {
+          ...inst,
+          rotation: rot as 0 | 90 | 180 | 270,
+          state: { ...inst.state, plexDisabled: st.disabled, plexTristate: st.tristate, selectLoc: st.selloc },
+        };
+        inst = configurePlexer(inst, { select: st.select, width, enable: st.enable });
+        const keys = logisimPlexerPortKeys(kind, st.select, st.enable);
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const anchorKey = kind === 'demultiplexer' ? 'in' : kind === 'decoder' ? 'sel' : 'out';
+        place(
+          inst,
+          idOf(anchorKey)!,
+          loc,
+          label,
+          keys.map((k, j): [string, Pt | null] => [idOf(k) ?? '', at(loc, st.ports[j])])
+        );
         continue;
       }
       if (nativeType === 'subcircuit' && part.sub) {

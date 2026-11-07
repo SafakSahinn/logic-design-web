@@ -1406,10 +1406,17 @@ export function plexerLayout(comp: CircuitComponentInstance): { width: number; h
   const { select } = getPlexerConfig(comp);
   const n = 1 << select;
   const sp = n <= 8 ? 20 : 10;
-  const row = (i: number) => (sp === 20 ? 20 : 10) + i * sp;
   const height = sp === 20 ? 20 * n + 20 : 10 * n + 20;
   const mid = height / 2;
-  const edge = comp.state.selectLoc === 'tr' ? 0 : height;
+  // Like Logisim, whatever the facing: pins are numbered top to bottom / left to right, and the select
+  // location means the bottom or left side ('bl') or the top or right side ('tr') on screen. This layout is
+  // rotated with the part, so turned 90 / 180 degrees the numbering runs the other way locally, and turned
+  // 180 / 270 the select side swaps
+  const rot = comp.rotation || 0;
+  const dataFlip = rot === 90 || rot === 180;
+  const selFlip = rot === 180 || rot === 270;
+  const row = (i: number) => (sp === 20 ? 20 : 10) + (dataFlip ? n - 1 - i : i) * sp;
+  const edge = (comp.state.selectLoc === 'tr') !== selFlip ? 0 : height;
   const pins: Record<string, { x: number; y: number }> = {};
   let width = 60;
   if (comp.type === 'multiplexer') {
@@ -1428,11 +1435,12 @@ export function plexerLayout(comp: CircuitComponentInstance): { width: number; h
     pins.sel = { x: 20, y: edge };
     pins.en = { x: 10, y: edge };
   } else {
+    // EN_IN follows the last input, EN_OUT sits before the first one, GS just after the code output
     for (let i = 0; i < n; i++) pins[`in${i}`] = { x: 0, y: row(i) };
-    pins.en = { x: 30, y: height };
-    pins.eo = { x: 30, y: 0 };
+    pins.en = { x: 30, y: dataFlip ? 0 : height };
+    pins.eo = { x: 30, y: dataFlip ? height : 0 };
     pins.out = { x: 60, y: mid };
-    pins.gs = { x: 60, y: mid + sp };
+    pins.gs = { x: 60, y: dataFlip ? mid - sp : mid + sp };
   }
   return { width, height, pins, n, spacing: sp };
 }

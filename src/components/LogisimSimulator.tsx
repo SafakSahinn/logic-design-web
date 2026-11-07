@@ -5879,8 +5879,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 Pri
               </text>
               <text x={3} y={pe.in0.y + 3} fontSize={6.5} fontFamily="monospace" fill={grey} className="select-none">0</text>
-              <text x={pe.en.x} y={H - 3} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EI</text>
-              <text x={pe.eo.x} y={9} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EO</text>
+              <text x={pe.en.x} y={pe.en.y === 0 ? 9 : H - 3} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EI</text>
+              <text x={pe.eo.x} y={pe.eo.y === 0 ? 9 : H - 3} textAnchor="middle" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">EO</text>
               <text x={W - 3} y={pe.gs.y + 2.5} textAnchor="end" fontSize={6} fontFamily="monospace" fill={grey} className="select-none">GS</text>
             </g>
           );
@@ -5891,7 +5891,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const topY = (x: number) => (isMux ? (sl * x) / W : sl * (1 - x / W));
         const botY = (x: number) => H - topY(x);
         const points = isMux ? `0,0 ${W},${sl} ${W},${H - sl} 0,${H}` : `0,${sl} ${W},0 ${W},${H} 0,${H - sl}`;
-        const atTop = comp.state.selectLoc === 'tr';
+        const atTop = l.pins.sel.y === 0;
         const edgeLead = (key: string) => {
           const at = l.pins[key];
           return at ? lead(key, at.x, atTop ? 0 : H, atTop ? topY(at.x) : botY(at.x)) : null;
@@ -10329,7 +10329,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 {Object.entries(hudExpressions).map(([name, expr]) => (
                   <div
                     key={name}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border font-mono text-[11px] ${
+                    className={`inline-flex shrink-0 whitespace-nowrap items-center gap-1 px-2 py-0.5 rounded-lg border font-mono text-[11px] ${
                       cadTheme === 'dark'
                         ? 'bg-slate-800 border-slate-700 text-cyan-300'
                         : 'bg-indigo-50 border-indigo-200 text-indigo-900'

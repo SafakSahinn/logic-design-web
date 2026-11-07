@@ -1,6 +1,7 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import { getSubcircuitDefinition } from './subcircuitManager';
+import { getPlexerConfig } from './circuitEngine';
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
@@ -147,6 +148,19 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
     case 'xor':
     case 'xnor':
       return 8 * Math.max(1, n - 1); // chain of 2-input stages
+    case 'multiplexer':
+    case 'demultiplexer':
+    case 'decoder':
+    case 'priorityEncoder': {
+      // Same scale as the fixed parts in the table (2:1 MUX 14, 4:1 34, 1:4 DEMUX 28, 3:8 decoder 52,
+      // 4:2 priority encoder 48), per data bit for MUX / DEMUX
+      const { select, width } = getPlexerConfig(c);
+      const k = 1 << select;
+      if (c.type === 'multiplexer') return width * (10 * k - 6);
+      if (c.type === 'demultiplexer') return width * (8 * k - 4);
+      if (c.type === 'decoder') return 7 * k - 4;
+      return 12 * k;
+    }
     case 'subcircuit': {
       const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
       if (!def || seen.has(def.id)) return 0;

@@ -1,7 +1,7 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { numberToBits } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
-import { GATE_WIDTH_TYPES, HEX_7SEG_MAP, OUTPUT_MODE_TYPES, getGateWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
+import { GATE_WIDTH_TYPES, HEX_7SEG_MAP, OUTPUT_MODE_TYPES, PLEXER_TYPES, getGateWidth, getPlexerConfig, getSplitterConfig, splitterThreads } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 
 /*
@@ -146,9 +146,15 @@ const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
-// Parts that can leave their output net floating: tri-state parts and open collector / emitter gates
+// Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
+// encoder always has one) or three-state unselected outputs
+const plexerFloats = (c: CircuitComponentInstance) =>
+  PLEXER_TYPES.has(c.type) &&
+  ((c.state.plexDisabled === 'Z' && getPlexerConfig(c).enable) || ((c.type === 'demultiplexer' || c.type === 'decoder') && !!c.state.plexTristate));
+// Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers
 const canFloat = (c?: CircuitComponentInstance) =>
-  !!c && (TRI_TYPES.includes(c.type) || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01'));
+  !!c &&
+  (TRI_TYPES.includes(c.type) || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
 
 export interface PortDecl {
   name: string;
@@ -1146,6 +1152,76 @@ function buildModule(
           fill = e === L.one || e === L.zero ? { k: 'lit', v: e === L.one ? 1 : 0 } : { k: 'sig', e };
         }
         emit(out[0], compose(Array.from({ length: outW }, (_, b) => (b < src.length ? src[b] : fill))));
+        break;
+      }
+      case 'multiplexer':
+      case 'demultiplexer':
+      case 'decoder': {
+        // As in the simulator: enable 0 gives the disabled value (0, or Z for a floating one), otherwise the
+        // select picks the input (MUX) / the output that gets the data or 1 (the others 0, or Z when
+        // three-state). An open enable counts as enabled; an open select reads 0 here (x in the simulator)
+        const { select: s, width: w, enable } = getPlexerConfig(c);
+        const n = 1 << s;
+        const isMux = c.type === 'multiplexer';
+        const dw = c.type === 'decoder' ? 1 : w;
+        const selIdx = isMux ? n : c.type === 'demultiplexer' ? 1 : 0;
+        const zeroOf = (k: number) => (k > 1 ? bitLiteral(new Array<0 | 1>(k).fill(0)) : L.zero);
+        const hiZOf = (k: number) => (k > 1 ? (lang === 'verilog' ? `${k}'bz` : "(others => 'Z')") : L.hiZ);
+        const dataOf = (i: number) => (w > 1 ? compose(wideBits(i)) : inp(i));
+        const selExpr = s > 1 ? compose(wideBits(selIdx)) : inp(selIdx);
+        const sel = lang === 'vhdl' ? asName(selExpr, s, `${nm}_sel`) : selExpr;
+        const en = enable ? inp(selIdx + 1, L.one) : null;
+        const dis = c.state.plexDisabled === 'Z' ? hiZOf(dw) : zeroOf(dw);
+        const lit = (k: number) => bitLiteral(numberToBits(k, s).map((b) => (b === 1 ? 1 : 0)) as (0 | 1)[]);
+        const selIs = (k: number) => (lang === 'verilog' ? (s === 1 ? (k ? wrap(sel) : `~${wrap(sel)}`) : `(${sel} == ${lit(k)})`) : `${sel} = ${lit(k)}`);
+        // Verilog nested conditionals / VHDL when-else chain over the conditions, the last value as default
+        const chain = (lhs: string, arms: Array<[string, string]>, last: string) => {
+          if (lang === 'verilog') {
+            emit(lhs, arms.reduceRight((acc, [cond, v]) => `${cond} ? ${wrap(v)} : ${wrap(acc)}`, last));
+          } else {
+            body.push(`  ${lhs} <= ${arms.map(([cond, v]) => `${v} when ${cond} else `).join('')}${last};`);
+          }
+        };
+        const enArm = (): Array<[string, string]> =>
+          en === null ? [] : [[lang === 'verilog' ? `(${en} == 1'b0)` : is0(en), dis]];
+        if (isMux) {
+          const arms: Array<[string, string]> = [...enArm()];
+          for (let k = 0; k < n - 1; k++) arms.push([selIs(k), dataOf(k)]);
+          chain(out[0], arms, dataOf(n - 1));
+          break;
+        }
+        const data = c.type === 'decoder' ? L.one : dataOf(0);
+        const others = c.state.plexTristate ? hiZOf(dw) : zeroOf(dw);
+        for (let k = 0; k < n; k++) {
+          if (!out[k]) continue;
+          chain(out[k], [...enArm(), [selIs(k), data]], others);
+        }
+        break;
+      }
+      case 'priorityEncoder': {
+        // Enabled unless EN_IN is 0 (open = enabled); only inputs at 1 count, so open ones read 0. With no
+        // input at 1 the code is x in the simulator, 0 here
+        const { select: s } = getPlexerConfig(c);
+        const n = 1 << s;
+        const ins = Array.from({ length: n }, (_, i) => inp(i, L.zero));
+        const en = inp(n, L.one);
+        const lit = (k: number) => bitLiteral(numberToBits(k, s).map((b) => (b === 1 ? 1 : 0)) as (0 | 1)[]);
+        const dis = c.state.plexDisabled === 'Z' ? (s > 1 ? (lang === 'verilog' ? `${s}'bz` : "(others => 'Z')") : L.hiZ) : lit(0);
+        const any = L.or(ins);
+        if (out[0]) {
+          body.push(L.comment('hiçbir giriş 1 değilken kod simülatörde x, burada 0'));
+          if (lang === 'verilog') {
+            let e = lit(0);
+            for (let k = 0; k < n; k++) e = `${wrap(ins[k])} ? ${lit(k)} : ${wrap(e)}`;
+            emit(out[0], `(${en} == 1'b0) ? ${wrap(dis)} : ${wrap(e)}`);
+          } else {
+            const arms = [`${dis} when ${is0(en)} else `];
+            for (let k = n - 1; k >= 0; k--) arms.push(`${lit(k)} when ${is1(ins[k])} else `);
+            body.push(`  ${out[0]} <= ${arms.join('')}${lit(0)};`);
+          }
+        }
+        if (out[1]) emit(out[1], L.and([en, L.not(any)])); // EN_OUT
+        if (out[2]) emit(out[2], L.and([en, any])); // GS
         break;
       }
       case 'bitSelector': {
