@@ -1,6 +1,6 @@
 import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP, bitSelectorSelectWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
+import { HEX_7SEG_MAP, bitSelectorSelectWidth, getGateWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { solveKMap } from './kmapSolver';
 import { logisimDefaultPortOffsets, logisimSplitterEnds } from './logisimCircImporter';
@@ -31,10 +31,11 @@ import type { LogicValue } from '../types/logic';
 type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
 type OutMode = '01' | '0Z' | 'Z1';
 type Prim =
-  | { kind: 'gate'; type: GateKind; ins: string[]; out: string; mode?: OutMode }
-  | { kind: 'not'; in: string; out: string; mode?: OutMode }
-  | { kind: 'buf'; in: string; out: string; mode?: OutMode }
-  | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean }
+  // width: data bits (1 unless a canvas gate is wider); negated: input slots from 0; xor: multi-input XOR rule
+  | { kind: 'gate'; type: GateKind; ins: string[]; out: string; mode?: OutMode; width?: number; negated?: number[]; xor?: 'odd' | 'one' }
+  | { kind: 'not'; in: string; out: string; mode?: OutMode; width?: number }
+  | { kind: 'buf'; in: string; out: string; mode?: OutMode; width?: number }
+  | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean; width?: number }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: number; out: string; width?: number }
   | { kind: 'inpin'; label: string; out: string; width?: number }
@@ -307,23 +308,32 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // gives E, a single one passes through); a Logisim gate has at least 2 inputs
           const gIns = c.inputs.map((_, i) => pin(i));
           while (gIns.length < 2) gIns.push(OPEN);
-          P.push({ kind: 'gate', type: c.type.toUpperCase() as GateKind, ins: gIns, out: out(0), mode: c.state.outputMode });
+          P.push({
+            kind: 'gate',
+            type: c.type.toUpperCase() as GateKind,
+            ins: gIns,
+            out: out(0),
+            mode: c.state.outputMode,
+            width: getGateWidth(c),
+            negated: c.state.negated,
+            xor: c.state.xorMode ?? 'odd',
+          });
           break;
         }
         case 'not':
-          P.push({ kind: 'not', in: pin(0), out: out(0), mode: c.state.outputMode });
+          P.push({ kind: 'not', in: pin(0), out: out(0), mode: c.state.outputMode, width: getGateWidth(c) });
           break;
         case 'buffer':
-          P.push({ kind: 'buf', in: pin(0), out: out(0), mode: c.state.outputMode });
+          P.push({ kind: 'buf', in: pin(0), out: out(0), mode: c.state.outputMode, width: getGateWidth(c) });
           break;
         case 'triState':
-          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0) });
+          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), width: getGateWidth(c) });
           break;
         case 'pullResistor':
           if (isConn(c.inputs[0]?.id)) P.push({ kind: 'pull', value: c.state.pullValue ?? 0, at: pin(0) });
           break;
         case 'controlledInverter':
-          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), inv: true });
+          P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), inv: true, width: getGateWidth(c) });
           break;
         case 'splitter4':
           // An open bit leaves its output undriven: x in Logisim, as in the simulator
@@ -666,29 +676,37 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           const neg = p.type === 'NAND' || p.type === 'NOR' || p.type === 'XNOR' ? 10 : 0;
           const xorBonus = p.type === 'XOR' || p.type === 'XNOR' ? 10 : 0;
           const dx = 50 + neg + xorBonus;
+          const w = p.width ?? 1;
+          const negated = p.negated ?? [];
+          // A negated input (Logisim 'negateN') sits 10 further out, behind its bubble
+          const negAttrs = negated.map((i) => `<a name="negate${i}" val="true"/>`).join('');
           xml.push(
-            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate"><a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? '<a name="xor" val="odd"/>' : ''}${outAttr(p.mode)}</comp>`
+            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate">${widthAttr(w)}<a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? `<a name="xor" val="${p.xor === 'one' ? '1' : 'odd'}"/>` : ''}${outAttr(p.mode)}${negAttrs}</comp>`
           );
-          gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx, y + dy, p.ins[i], true, 1));
-          tunnel(x, y, p.out, false, 1);
+          gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx - (negated.includes(i) ? 10 : 0), y + dy, p.ins[i], true, w));
+          tunnel(x, y, p.out, false, w);
           break;
         }
         case 'not':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${outAttr(p.mode)}</comp>`);
-          tunnel(x - 30, y, p.in, true, 1);
-          tunnel(x, y, p.out, false, 1);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${widthAttr(p.width)}${outAttr(p.mode)}</comp>`);
+          tunnel(x - 30, y, p.in, true, p.width ?? 1);
+          tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'buf':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${outAttr(p.mode)}</comp>`);
-          tunnel(x - 20, y, p.in, true, 1);
-          tunnel(x, y, p.out, false, 1);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${widthAttr(p.width)}${outAttr(p.mode)}</comp>`);
+          tunnel(x - 20, y, p.in, true, p.width ?? 1);
+          tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'tri':
-          // Logisim's (wide) controlled inverter is 10 longer than the buffer
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}"/>`);
-          tunnel(x - (p.inv ? 30 : 20), y, p.in, true, 1);
+          // Logisim's (wide) controlled inverter is 10 longer than the buffer; the control stays 1 bit
+          xml.push(
+            p.width && p.width > 1
+              ? `    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}">${widthAttr(p.width)}</comp>`
+              : `    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}"/>`
+          );
+          tunnel(x - (p.inv ? 30 : 20), y, p.in, true, p.width ?? 1);
           tunnel(x - (p.inv ? 20 : 10), y + 10, p.en, true, 1);
-          tunnel(x, y, p.out, false, 1);
+          tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'ff': {
           const name = p.type === 'D' ? 'D Flip-Flop' : p.type === 'T' ? 'T Flip-Flop' : 'J-K Flip-Flop';

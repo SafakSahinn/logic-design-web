@@ -7,6 +7,7 @@ import {
   createComponentInstance,
   getComponentSize,
   setBitWidth,
+  setGateWidth,
   splitterDistribution,
   updatePinPositions,
 } from './circuitEngine';
@@ -97,7 +98,12 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
 }
 
 // Parts whose width is taken over from the file; any other Logisim part wider than 1 bit becomes 1 bit
-const WIDE_IMPORT = new Set<ComponentType>(['switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit']);
+const WIDE_IMPORT = new Set<ComponentType>([
+  'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
+  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buffer', 'triState', 'controlledInverter',
+]);
+// Logisim's most inputs per gate; ours takes as many
+const MAX_IMPORT_GATE_INPUTS = 32;
 
 // Logisim Probe 'radix' attribute -> ours
 const RADIX: Record<string, Radix> = { '2': '2', '8': '8', '10signed': '10s', '10unsigned': '10u', '16': '16' };
@@ -451,6 +457,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       width: number;
       inputsAttr: number;
       xorMode?: string;
+      /** Negated gate inputs, 1-based (Logisim negateN + 1) */
+      negated: number[];
       leftHanded: boolean;
       pull?: string;
       outMode?: '01' | '0Z' | 'Z1';
@@ -523,16 +531,9 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1 && !WIDE_IMPORT.has(nativeType)) {
-        warnings.push(
-          GATE_TYPES.includes(nativeType) || nativeType === 'not' || nativeType === 'buffer' || nativeType === 'triState' || nativeType === 'controlledInverter'
-            ? `${where}: ${width} bitlik kapı; burada kapılar 1 bitlik, tek bit olarak alındı.`
-            : `${where}: ${width} bitlik, tek bit olarak alındı.`
-        );
-      }
-      if (negated.length > 0) warnings.push(`${where}: ${negated.join(', ')}. giriş(ler)deki tersleme dairesi alınmadı, araya NOT kapısı ekleyin.`);
+      if (width > 1 && !WIDE_IMPORT.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
-      parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, leftHanded, pull: attr.pull, outMode, sub, where });
+      parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
       const ff = FF_POINTS[nativeType];
@@ -574,13 +575,15 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
     for (const part of parts) {
-      const { loc, nativeType, attr, label, rot, size, width, inputsAttr, xorMode, leftHanded, pull, outMode, where } = part;
+      const { loc, nativeType, attr, label, rot, size, width, inputsAttr, xorMode, negated, leftHanded, pull, outMode, where } = part;
       const anchor = scaled(loc);
       const isGate = GATE_TYPES.includes(nativeType);
 
       const isControlled = nativeType === 'triState' || nativeType === 'controlledInverter';
       if (isGate || nativeType === 'not' || nativeType === 'buffer' || isControlled) {
         let inputPoints: Pt[];
+        // Negated inputs among the kept (wired) input points
+        let gateNegated: number[] = [];
         if (isGate) {
           const isXor = nativeType === 'xor' || nativeType === 'xnor';
           const bubble = nativeType === 'nand' || nativeType === 'nor' || nativeType === 'xnor' ? 10 : 0;
@@ -588,10 +591,13 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           // No 'inputs' attribute: Logisim 2.7 defaults to 5; every smaller count uses a subset of those points
           const n = inputsAttr || 5;
           const axis = gsize + (isXor ? 10 : 0) + bubble;
-          inputPoints = gateInputOffsets(n, gsize).map((dy) => local(loc, { x: -axis, y: dy }, rot)).filter(used);
-          if (isXor && inputPoints.length > 2 && xorMode !== 'odd') {
-            warnings.push(`${where}: Logisim bu XOR'u "yalnızca bir giriş 1" olarak hesaplar; burada tek sayıda 1 (parite) kuralı kullanılır.`);
-          }
+          // A negated input (Logisim 'negateN', N from 0) sits 10 further out, behind its bubble
+          const neg = new Set(negated.map((k) => k - 1));
+          const slots = gateInputOffsets(n, gsize)
+            .map((dy, k) => ({ k, pt: local(loc, { x: -(axis + (neg.has(k) ? 10 : 0)), y: dy }, rot) }))
+            .filter((sl) => used(sl.pt));
+          inputPoints = slots.map((sl) => sl.pt);
+          gateNegated = slots.flatMap((sl, j) => (neg.has(sl.k) ? [j] : []));
         } else if (isControlled) {
           inputPoints = controlledOffsets(nativeType, size, leftHanded).map((off) => local(loc, off, rot));
         } else if (nativeType === 'buffer') {
@@ -602,7 +608,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
         // Our gates take at most 5 inputs: wider Logisim gates become groups of the base operation
         // feeding the original gate (inversion stays on the last one), joined by private connection points
-        if (isGate && inputPoints.length > 5) {
+        if (isGate && inputPoints.length > MAX_IMPORT_GATE_INPUTS) {
           const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType;
           const feeds: Pt[] = [];
           for (let gi = 0; gi * 5 < inputPoints.length; gi++) {
@@ -627,7 +633,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
         let inst = createComponentInstance(nativeType, 0, 0);
         if (isGate && inputPoints.length > 2) {
-          const n = Math.min(5, inputPoints.length);
+          const n = Math.min(MAX_IMPORT_GATE_INPUTS, inputPoints.length);
           inst.inputs = Array.from({ length: n }).map((_, k) => ({
             id: `${inst.id}_in${k}`,
             name: String.fromCharCode(65 + k),
@@ -641,6 +647,10 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         inst.rotation = rot as 0 | 90 | 180 | 270;
         // Output Value applies to the gate that drives the net (the last one of a split wide gate)
         if (outMode) inst.state = { ...inst.state, outputMode: outMode };
+        if (gateNegated.length) inst.state = { ...inst.state, negated: gateNegated };
+        // A Logisim XOR without the attribute is "exactly one 1" (its default); ours defaults to parity
+        if ((nativeType === 'xor' || nativeType === 'xnor') && xorMode !== 'odd') inst.state = { ...inst.state, xorMode: 'one' };
+        if (width > 1) inst = setGateWidth(inst, width);
         inst = updatePinPositions(inst);
         // Put our output pin exactly on the (scaled) Logisim anchor
         const out = inst.outputs[0];
