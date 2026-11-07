@@ -1,7 +1,7 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { numberToBits } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP, OUTPUT_MODE_TYPES, getSplitterConfig, splitterThreads } from './circuitEngine';
+import { GATE_WIDTH_TYPES, HEX_7SEG_MAP, OUTPUT_MODE_TYPES, getGateWidth, getSplitterConfig, splitterThreads } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 
 /*
@@ -695,10 +695,24 @@ function buildModule(
     };
     // Gate output value: open collector drives only 0 (a 1 floats), open emitter only 1
     // (VHDL tests the select as "sel = '1'", so a compound one needs its own parentheses)
+    // Gates wider than 1 bit work on vectors: the operators are bitwise in both languages
+    const gateW = GATE_WIDTH_TYPES.includes(c.type) ? getGateWidth(c) : 1;
     const emitGate = (f: string) => {
+      if (gateW > 1 && c.state.outputMode && c.state.outputMode !== '01') {
+        // Open collector / emitter on a vector: every bit floats on its own
+        const v = asName(f, gateW, `${nm}_f`);
+        for (let b = 0; b < gateW; b++) {
+          const sel = vecIndex(v, b);
+          emit(vecIndex(out[0], b), c.state.outputMode === '0Z' ? L.mux(sel, L.hiZ, L.zero) : L.mux(sel, L.one, L.hiZ));
+        }
+        return;
+      }
       const sel = lang === 'vhdl' ? wrap(f) : f;
       emit(out[0], c.state.outputMode === '0Z' ? L.mux(sel, L.hiZ, L.zero) : c.state.outputMode === 'Z1' ? L.mux(sel, L.one, L.hiZ) : f);
     };
+    // All-0 / all-Z value of the gate's width
+    const zeroW = gateW > 1 ? bitLiteral(new Array<0 | 1>(gateW).fill(0)) : L.zero;
+    const hiZW = gateW > 1 ? (lang === 'verilog' ? `${gateW}'bz` : "(others => 'Z')") : L.hiZ;
     // All bits of input pin i (multi-bit readers); open or mismatched bits are 0 and noted like inp()
     const wideBits = (i: number): Bit[] => {
       const pin = c.inputs[i];
@@ -708,6 +722,8 @@ function buildModule(
       return r.bits;
     };
     const connectedIns = c.inputs.filter((p) => isConnected(p.id) || portBound.has(p.id)).map((p) => inputExpr(p.id));
+    // Data input i of a gate: a vector for a wide gate (open bits 0, noted)
+    const gateIn = (i: number) => (gateW > 1 ? compose(wideBits(i)) : inp(i));
     // Open pins of a 4-bit data / address group: the simulator never stores an undefined word and
     // a RAM / ROM ignores an undefined address
     const openNibble = (from: number) =>
@@ -717,10 +733,10 @@ function buildModule(
 
     switch (c.type) {
       case 'not':
-        emitGate(L.not(inp(0)));
+        emitGate(L.not(gateIn(0)));
         break;
       case 'buffer':
-        emitGate(inp(0));
+        emitGate(gateIn(0));
         break;
       case 'and':
       case 'or':
@@ -728,22 +744,37 @@ function buildModule(
       case 'nor':
       case 'xor':
       case 'xnor': {
-        if (connectedIns.length === 0) {
+        // Open inputs are left out like in the simulator; a negated input is inverted first
+        const negated = c.state.negated ?? [];
+        const ins =
+          gateW > 1 || negated.length
+            ? c.inputs.flatMap((p, i) => {
+                if (!isConnected(p.id) && !portBound.has(p.id)) return [];
+                const e = gateW > 1 ? compose(wideBits(i)) : inputExpr(p.id);
+                return [negated.includes(i) ? L.not(e) : e];
+              })
+            : connectedIns;
+        if (ins.length === 0) {
           body.push(L.comment('hiçbir girişi bağlı değil: simülatörde çıkış E, burada 0'));
           floatingParts.push(c.label || c.type);
-          emit(out[0], L.zero);
+          emit(out[0], zeroW);
           break;
         }
-        const base =
-          c.type === 'and' || c.type === 'nand' ? L.and(connectedIns) : c.type === 'or' || c.type === 'nor' ? L.or(connectedIns) : L.xor(connectedIns);
+        let base: string;
+        if (c.type === 'and' || c.type === 'nand') base = L.and(ins);
+        else if (c.type === 'or' || c.type === 'nor') base = L.or(ins);
+        else if (c.state.xorMode === 'one' && ins.length > 2) {
+          // Exactly one 1: some input is 1 while every other one is 0
+          base = L.or(ins.map((_, i) => L.and(ins.map((y, j) => (i === j ? y : L.not(y))))));
+        } else base = L.xor(ins);
         emitGate(c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' ? L.not(base) : base);
         break;
       }
       case 'triState':
-        emit(out[0], L.mux(inp(1), inp(0), L.hiZ));
+        emit(out[0], L.mux(inp(1), gateIn(0), hiZW));
         break;
       case 'controlledInverter':
-        emit(out[0], L.mux(inp(1), L.not(inp(0)), L.hiZ));
+        emit(out[0], L.mux(inp(1), L.not(gateIn(0)), hiZW));
         break;
       case 'splitter4':
         for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], inp(i));
