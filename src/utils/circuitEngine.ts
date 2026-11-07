@@ -3748,6 +3748,11 @@ const MAX_EXPR_LENGTH = 240;
 // expression (the truth table still gives every bit its minimal SOP). Not '?', which the tri-state
 // formula uses as its condition operator.
 const OPAQUE_EXPR = '\u0000';
+// A gate none of whose inputs has a driver has no formula at all (Logisim's ExpressionComputer leaves
+// its output out); a gate reading it skips that input like an open one
+const NO_EXPR = '\u0001';
+// Gates that ignore inputs without a driver, like Logisim's analyzer
+const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor']);
 const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
 const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector']);
@@ -3854,15 +3859,28 @@ function booleanExprOf(
   newVisited.add(comp.id);
 
   let hitLoop = false;
-  const traceInput = (inputPinId: string): string => {
+  // Formula of an input; null when nothing drives it (or its driver has no formula)
+  const traceInput = (inputPinId: string): string | null => {
     const driver = ctx.driverOf(inputPinId);
-    if (!driver) return '0';
+    if (!driver) return null;
     const e = booleanExprOf(driver.comp.id, driver.outIdx, ctx, newVisited);
     if (e.includes('...')) hitLoop = true;
-    return e;
+    return e === NO_EXPR ? null : e;
   };
 
-  const inputExprs = comp.inputs.map((p) => traceInput(p.id));
+  const traced = comp.inputs.map((p) => traceInput(p.id));
+  let inputExprs: string[];
+  if (SKIP_OPEN_INPUT_GATES.has(comp.type)) {
+    // Like the simulator (and Logisim), a gate leaves inputs without a driver out
+    inputExprs = traced.filter((e): e is string => e !== null);
+    if (inputExprs.length === 0) return NO_EXPR;
+  } else if ((comp.type === 'not' || comp.type === 'buffer') && traced[0] === null) {
+    return NO_EXPR;
+  } else {
+    // Other parts read a fixed level (or x) on an open input; a driver without a formula hides the cone
+    if (traced.some((e, i) => e === null && ctx.driverOf(comp.inputs[i].id))) return OPAQUE_EXPR;
+    inputExprs = traced.map((e) => e ?? '0');
+  }
   if (inputExprs.some((e) => e.includes(OPAQUE_EXPR))) return OPAQUE_EXPR;
 
   let result: string;
@@ -3939,7 +3957,7 @@ export function generateBooleanExpression(
   wires: CircuitWire[]
 ): string {
   const expr = booleanExprOf(compId, pinIndex, createBooleanExprContext(components, wires), new Set());
-  return expr.includes(OPAQUE_EXPR) ? '?' : expr;
+  return expr.includes(OPAQUE_EXPR) || expr === NO_EXPR ? '?' : expr;
 }
 
 // Observable outputs of a circuit: LEDs, probes, buzzers and every output pin of the logic parts
@@ -4005,7 +4023,7 @@ export function generateBooleanExpressions(
   getObservableOutputs(components).forEach((out) => {
     if (out.width > 1) return;
     const expr = booleanExprOf(out.compId, out.pinIndex, ctx, new Set());
-    if (expr && expr !== '?' && expr !== '0' && !expr.includes(OPAQUE_EXPR)) {
+    if (expr && expr !== '?' && expr !== '0' && expr !== NO_EXPR && !expr.includes(OPAQUE_EXPR)) {
       booleanExpressions[out.name] = expr;
     }
   });
