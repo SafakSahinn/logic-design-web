@@ -12,6 +12,114 @@ import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBit
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 
+// ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
+
+/** Shifter distance width: enough bits to count to the data width (at least 1), like Logisim. */
+export function shifterDistBits(w: number): number {
+  let s = 1;
+  while (1 << s < w) s++;
+  return s;
+}
+
+/** Bit adder output width: enough bits to count every input bit (Logisim BitAdder.computeOutputBits). */
+export function bitAdderOutBits(w: number, n: number): number {
+  let o = 1;
+  while (2 ** o <= w * n) o++;
+  return o;
+}
+
+/** Bit finder index width: enough bits to number every input bit (at least 1). */
+export function bitFinderOutBits(w: number): number {
+  let o = 1;
+  while (2 ** o <= w - 1) o++;
+  return o;
+}
+
+/** Width of an arithmetic part's pin for data width w (bit adder: n inputs). */
+export function arithPinWidth(type: ComponentType, key: string, w: number, n: number): number {
+  if (key === 'gt' || key === 'eq' || key === 'lt' || key === 'ovf' || key === 'present') return 1;
+  if (key === 'cin' || key === 'cout' || key === 'bin' || key === 'bout') return type === 'multiplier' ? w : 1;
+  if (key === 'dist') return shifterDistBits(w);
+  if (key === 'out' && type === 'bitAdder') return bitAdderOutBits(w, n);
+  if (key === 'out' && type === 'bitFinder') return bitFinderOutBits(w);
+  return w;
+}
+
+/**
+ * Unrotated layout of an arithmetic part, the frame's origin at the body's top-left corner. Logisim's
+ * geometry: a 40x40 body whose location is the main output in the middle of the right side; operands on the
+ * left (A above, B below, a single input in the middle), carry / borrow / upper-half input on top, carry /
+ * borrow / remainder / flag output at the bottom. The bit adder grows 10px per input past 3 (its box is
+ * rounded out to the 10px grid). `anchor` is Logisim's location in this frame.
+ */
+export function arithGeometry(type: ComponentType, n: number): {
+  width: number;
+  height: number;
+  pins: Record<string, { x: number; y: number }>;
+  anchor: { x: number; y: number };
+} {
+  if (type === 'bitAdder') {
+    const top = n < 4 ? 20 : Math.floor((n - 1) / 2) * 10 + 5;
+    const h = Math.max(40, 10 * n);
+    const t = Math.ceil(top / 10) * 10;
+    const height = t + Math.ceil((h - top) / 10) * 10;
+    let y = 0;
+    let dy = 10;
+    if (n === 2) {
+      y = -10;
+      dy = 20;
+    } else if (n === 3) y = -10;
+    else if (n > 3) y = Math.floor((n - 1) / 2) * -10;
+    const pins: Record<string, { x: number; y: number }> = { out: { x: 40, y: t } };
+    for (let i = 0; i < n; i++) pins[`in${i}`] = { x: 0, y: t + y + i * dy };
+    return { width: 40, height, pins, anchor: { x: 40, y: t } };
+  }
+  const top = { x: 20, y: 0 };
+  const bottom = { x: 20, y: 40 };
+  const pins: Record<string, { x: number; y: number }> = {
+    a: { x: 0, y: 10 },
+    b: { x: 0, y: 30 },
+    dist: { x: 0, y: 30 },
+    in: { x: 0, y: 20 },
+    out: { x: 40, y: 20 },
+    cin: top,
+    bin: top,
+    upper: type === 'exponentiator' ? bottom : top,
+    cout: bottom,
+    bout: bottom,
+    rem: bottom,
+    ovf: bottom,
+    present: bottom,
+    gt: { x: 40, y: 10 },
+    eq: { x: 40, y: 20 },
+    lt: { x: 40, y: 30 },
+    min: { x: 40, y: 10 },
+    max: { x: 40, y: 30 },
+  };
+  return { width: 40, height: 40, pins, anchor: { x: 40, y: 20 } };
+}
+
+// Catalog entry of an arithmetic part with its default settings (8 bits, Logisim's default; exponentiator 32
+// like evolution; bit adder 1 input)
+function arithMeta(type: ComponentType, name: string, ins: [string, string][], outs: [string, string][], description: string): ComponentMetadata {
+  const w = type === 'exponentiator' ? 32 : 8;
+  const g = arithGeometry(type, 1);
+  const pin = ([id, label]: [string, string], kind: 'input' | 'output') => {
+    const width = arithPinWidth(type, id, w, 1);
+    return { id, name: label, type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: 'combinational',
+    width: g.width,
+    height: g.height,
+    inputs: ins.map((p) => pin(p, 'input')),
+    outputs: outs.map((p) => pin(p, 'output')),
+    description,
+  };
+}
+
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   switch: {
     type: 'switch',
@@ -864,6 +972,34 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 60, relY: 90 }],
     description: '1 olan en yüksek numaralı girişin numarasını verir; GS bir giriş aktifken 1, EO hiçbiri aktif değilken 1 (Logisim Priority Encoder, 2-32 giriş)',
   },
+  // Parametric arithmetic (Logisim std/arith). configureArith rebuilds the pins and arithLayout places them
+  // by key with Logisim's geometry (a 40x40 body, the main output in the middle of the right side)
+  adder: arithMeta('adder', 'Toplayıcı (Adder)', [['a', 'A'], ['b', 'B'], ['cin', 'Cin']], [['out', 'S'], ['cout', 'Cout']],
+    'A + B + elde girişi; elde çıkışı toplamın taşan biti. Veri 1-32 bit, açık ya da x elde girişi 0 sayılır (Logisim Adder)'),
+  subtractor: arithMeta('subtractor', 'Çıkarıcı (Subtractor)', [['a', 'A'], ['b', 'B'], ['bin', 'Bin']], [['out', 'D'], ['bout', 'Bout']],
+    'A - B - borç girişi; borç çıkışı sonuç eksiye düştüğünde 1. Veri 1-32 bit (Logisim Subtractor)'),
+  multiplier: arithMeta('multiplier', 'Çarpıcı (Multiplier)', [['a', 'A'], ['b', 'B'], ['cin', 'Cin']], [['out', 'P'], ['cout', 'Cout']],
+    'A × B + elde girişi (veri genişliğinde); alt yarı P, üst yarı Cout. İşaretsiz, işaretli ya da işaretli×işaretsiz (Logisim Multiplier)'),
+  divider: arithMeta('divider', 'Bölücü (Divider)', [['a', 'A'], ['b', 'B'], ['upper', 'Üst']], [['out', 'Q'], ['rem', 'R']],
+    '(Üst:A) / B; bölüm Q, kalan R. Sıfıra bölmede bölen 1 sayılır. İşaretsiz ya da işaretli (Logisim Divider)'),
+  negator: arithMeta('negator', 'Negatif Alıcı (Negator)', [['in', 'X']], [['out', '-X']],
+    'Girişin ikiye tümleyenini (−X) verir; veri 1-32 bit (Logisim Negator)'),
+  absolute: arithMeta('absolute', 'Mutlak Değer (Absolute)', [['in', 'X']], [['out', '|X|'], ['ovf', 'OV']],
+    'İşaretli girişin mutlak değeri; en küçük negatif sayıda taşma (OV) 1 olur (Logisim-evolution Absolute)'),
+  comparator: arithMeta('comparator', 'Karşılaştırıcı (Comparator)', [['a', 'A'], ['b', 'B']], [['gt', '>'], ['eq', '='], ['lt', '<']],
+    'A ile B’yi karşılaştırır: A>B, A=B, A<B. İşaretli (varsayılan) ya da işaretsiz, veri 1-32 bit (Logisim Comparator)'),
+  minMax: arithMeta('minMax', 'En Küçük / En Büyük (Min/Max)', [['a', 'A'], ['b', 'B']], [['min', 'Min'], ['max', 'Max']],
+    'A ve B’den küçüğünü ve büyüğünü verir; işaretsiz ya da işaretli (Logisim-evolution Min/Max)'),
+  shifter: arithMeta('shifter', 'Kaydırıcı (Shifter)', [['a', 'X'], ['dist', 'D']], [['out', 'Y']],
+    'Veriyi D bit kaydırır ya da döndürür: mantıksal sola/sağa, aritmetik sağa, sola/sağa döndürme (Logisim Shifter)'),
+  squareRoot: arithMeta('squareRoot', 'Karekök (Square Root)', [['in', 'X'], ['upper', 'Üst']], [['out', '√'], ['rem', 'R']],
+    '(Üst:X) sayısının tam karekökü ve kalanı (Logisim-evolution Square Root)'),
+  exponentiator: arithMeta('exponentiator', 'Üs Alıcı (Exponentiator)', [['a', 'A'], ['b', 'B']], [['out', 'Alt'], ['upper', 'Üst']],
+    'A üzeri B; sonucun alt yarısı ve üst yarısı. İşaretsiz ya da işaretli (Logisim-evolution Exponentiator)'),
+  bitAdder: arithMeta('bitAdder', 'Bit Sayıcı (Bit Adder)', [['in0', '']], [['out', '#']],
+    'Girişlerdeki 1 bitlerini sayar; 1-32 giriş, her biri 1-32 bit (Logisim Bit Adder)'),
+  bitFinder: arithMeta('bitFinder', 'Bit Bulucu (Bit Finder)', [['in', 'X']], [['out', 'i'], ['present', '?']],
+    'En düşük ya da en yüksek 1 (veya 0) bitinin numarasını verir; bulunduysa ? çıkışı 1 (Logisim Bit Finder)'),
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -1090,6 +1226,7 @@ export function createComponentInstance(
   if (PLEXER_TYPES.has(type)) {
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
   }
+  if (ARITH_TYPES.has(type)) return configureArith(inst, {});
   return inst;
 }
 
@@ -1118,6 +1255,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   if (PLEXER_TYPES.has(comp.type)) {
     const l = plexerLayout(comp);
     return { width: l.width, height: l.height };
+  }
+  if (ARITH_TYPES.has(comp.type)) {
+    const g = arithLayout(comp);
+    return { width: g.width, height: g.height };
   }
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
@@ -1445,6 +1586,318 @@ export function plexerLayout(comp: CircuitComponentInstance): { width: number; h
   return { width, height, pins, n, spacing: sp };
 }
 
+// ---- Parametric arithmetic (Logisim std/arith; Absolute, Min/Max, Square Root, Exponentiator from evolution) --
+
+export const ARITH_TYPES = new Set<ComponentType>([
+  'adder', 'subtractor', 'multiplier', 'divider', 'negator', 'absolute', 'comparator', 'minMax', 'shifter',
+  'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder',
+]);
+export const BIT_ADDER_MAX_INPUTS = 32;
+
+/** Pin keys of each arithmetic part in the order the simulator relies on (bit adder inputs: in0..in(n-1)) */
+const ARITH_PINS: Partial<Record<ComponentType, { inputs: string[]; outputs: string[] }>> = {
+  adder: { inputs: ['a', 'b', 'cin'], outputs: ['out', 'cout'] },
+  subtractor: { inputs: ['a', 'b', 'bin'], outputs: ['out', 'bout'] },
+  multiplier: { inputs: ['a', 'b', 'cin'], outputs: ['out', 'cout'] },
+  divider: { inputs: ['a', 'b', 'upper'], outputs: ['out', 'rem'] },
+  negator: { inputs: ['in'], outputs: ['out'] },
+  absolute: { inputs: ['in'], outputs: ['out', 'ovf'] },
+  comparator: { inputs: ['a', 'b'], outputs: ['gt', 'eq', 'lt'] },
+  minMax: { inputs: ['a', 'b'], outputs: ['min', 'max'] },
+  shifter: { inputs: ['a', 'dist'], outputs: ['out'] },
+  squareRoot: { inputs: ['in', 'upper'], outputs: ['out', 'rem'] },
+  exponentiator: { inputs: ['a', 'b'], outputs: ['out', 'upper'] },
+  bitAdder: { inputs: [], outputs: ['out'] },
+  bitFinder: { inputs: ['in'], outputs: ['out', 'present'] },
+};
+
+export interface ArithConfig {
+  /** Data width (1-32) */
+  width: number;
+  /** Bit adder: number of inputs (1-32); 1 for the others */
+  inputs: number;
+}
+
+export function getArithConfig(comp: CircuitComponentInstance): ArithConfig {
+  return { width: comp.inputs[0]?.width ?? 1, inputs: comp.type === 'bitAdder' ? Math.max(1, comp.inputs.length) : 1 };
+}
+
+/** Operand reading of an arithmetic part (Logisim 'mode'): the comparator is signed unless set, the others unsigned */
+export function getArithMode(comp: CircuitComponentInstance): 'signed' | 'signedUnsigned' | 'unsigned' {
+  const m = comp.state.arithMode;
+  if (m === 'signedUnsigned' && comp.type !== 'multiplier') return 'signed';
+  return m ?? (comp.type === 'comparator' ? 'signed' : 'unsigned');
+}
+
+export function arithLayout(comp: CircuitComponentInstance) {
+  return arithGeometry(comp.type, getArithConfig(comp).inputs);
+}
+
+/** New data width / bit adder input count; pins keep their ids (and wires), widths follow the data width. */
+export function configureArith(comp: CircuitComponentInstance, patch: Partial<ArithConfig>): CircuitComponentInstance {
+  const cur = comp.inputs.length ? getArithConfig(comp) : { width: comp.type === 'exponentiator' ? 32 : 8, inputs: 1 };
+  const w = clampWidth(patch.width ?? cur.width);
+  const n = comp.type === 'bitAdder' ? Math.max(1, Math.min(BIT_ADDER_MAX_INPUTS, Math.round(patch.inputs ?? cur.inputs))) : 1;
+  const spec = ARITH_PINS[comp.type]!;
+  const meta = COMPONENT_CATALOG[comp.type];
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = [...meta.inputs, ...meta.outputs].find((d) => d.id === key)?.name ?? '';
+    return { ...pinWithWidth(old.get(key) ?? newPin(comp, key, name, type), arithPinWidth(comp.type, key, w, n)), name };
+  };
+  const inKeys = comp.type === 'bitAdder' ? Array.from({ length: n }, (_, i) => `in${i}`) : spec.inputs;
+  return updatePinPositions({
+    ...comp,
+    inputs: inKeys.map((k) => pin(k, 'input')),
+    outputs: spec.outputs.map((k) => pin(k, 'output')),
+  });
+}
+
+// BigInt views of fully defined bits (LSB first)
+const bitsToBig = (b: SignalValue[]): bigint => b.reduce<bigint>((acc, v, i) => (v === 1 ? acc | (1n << BigInt(i)) : acc), 0n);
+const bitsToSignedBig = (b: SignalValue[]): bigint => (b[b.length - 1] === 1 ? bitsToBig(b) - (1n << BigInt(b.length)) : bitsToBig(b));
+const bigToBits = (n: bigint, w: number): SignalValue[] => {
+  const m = 1n << BigInt(w);
+  const v = ((n % m) + m) % m;
+  return Array.from({ length: w }, (_, i) => ((v >> BigInt(i)) & 1n ? 1 : 0));
+};
+const isqrtBig = (n: bigint): bigint => {
+  if (n < 2n) return n;
+  let x = BigInt(Math.floor(Math.sqrt(Number(n))));
+  while (x * x > n) x--;
+  while ((x + 1n) * (x + 1n) <= n) x++;
+  return x;
+};
+const powModBig = (base: bigint, exp: bigint, mod: bigint): bigint => {
+  let r = 1n % mod;
+  let b = ((base % mod) + mod) % mod;
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) r = (r * b) % mod;
+    e >>= 1n;
+    if (e > 0n) b = (b * b) % mod;
+  }
+  return r;
+};
+
+/**
+ * Outputs of an arithmetic part (bits LSB first, in ARITH_PINS output order) from its input bits (open or
+ * undriven bits are x). Rules of Logisim 2.7.1 and evolution (std/arith), checked against the 2.7.1 jar;
+ * the multiplier / divider modes and the four extra parts are evolution's.
+ */
+export function computeArith(comp: CircuitComponentInstance, ins: SignalValue[][]): SignalValue[][] {
+  const { width: w } = getArithConfig(comp);
+  const fill = (n: number, v: SignalValue): SignalValue[] => new Array<SignalValue>(n).fill(v);
+  const defined = (b: SignalValue[]) => b.every(isLevel);
+  const allX = (b: SignalValue[]) => b.every((v) => v === 'X');
+  const mode = getArithMode(comp);
+  switch (comp.type) {
+    case 'adder': {
+      // A carry-in that is x or open counts as 0; an E / x bit makes that sum bit E / x and the carry spreads it
+      const { sum, carry } = logisimSum(ins[0], ins[1], ins[2][0]);
+      return [sum, [carry]];
+    }
+    case 'subtractor': {
+      const { diff, borrow } = logisimDiff(ins[0], ins[1], ins[2][0]);
+      return [diff, [borrow]];
+    }
+    case 'multiplier': {
+      // Carry-in x or open (every bit) = 0. Undefined operands: the product bits below the first undefined
+      // operand bit are still known, then x up to the first E bit, then E; the upper half is all x (or E)
+      const [a, b] = ins;
+      const c = allX(ins[2]) ? fill(w, 0) : ins[2];
+      if (defined(a) && defined(b) && defined(c)) {
+        const ua = mode === 'unsigned';
+        const ub = mode !== 'signed';
+        const r = (ua ? bitsToBig(a) : bitsToSignedBig(a)) * (ub ? bitsToBig(b) : bitsToSignedBig(b)) + (ua && ub ? bitsToBig(c) : bitsToSignedBig(c));
+        return [bigToBits(r, w), bigToBits(r >> BigInt(w), w)];
+      }
+      const firstBad = (pred: (v: SignalValue) => boolean) =>
+        Math.min(...[a, b, c].map((v) => {
+          const i = v.findIndex(pred);
+          return i < 0 ? w : i;
+        }));
+      const known = firstBad((v) => !isLevel(v));
+      const err = firstBad((v) => v === 'E');
+      const low = (v: SignalValue[]) => bitsToBig(v.slice(0, known));
+      const r = low(a) * low(b) + low(c);
+      const out = Array.from({ length: w }, (_, i): SignalValue => (i < known ? ((r >> BigInt(i)) & 1n ? 1 : 0) : i < err ? 'X' : 'E'));
+      return [out, fill(w, err < w ? 'E' : 'X')];
+    }
+    case 'divider': {
+      // (upper:A) / B, an open or all-x upper half counts as 0, a divisor of 0 counts as 1; any undefined
+      // operand bit makes both outputs all E (an E bit somewhere) or all x
+      const [a, b] = ins;
+      const hasUpper = !allX(ins[2]);
+      const up = hasUpper ? ins[2] : fill(w, 0);
+      if (defined(a) && defined(b) && defined(up)) {
+        const W = BigInt(w);
+        let q: bigint;
+        let r: bigint;
+        if (mode === 'unsigned') {
+          const den = bitsToBig(b) || 1n;
+          const num = hasUpper ? (bitsToBig(up) << W) | bitsToBig(a) : bitsToBig(a);
+          q = num / den;
+          r = num % den;
+        } else {
+          const bb = bitsToSignedBig(b);
+          const den = bb === 0n ? 1n : bb;
+          const num = hasUpper ? (bitsToSignedBig(up) << W) | bitsToBig(a) : bitsToSignedBig(a);
+          q = num / den;
+          r = num % den;
+        }
+        return [bigToBits(q, w), bigToBits(r, w)];
+      }
+      const bad: SignalValue = [a, b, up].some((v) => v.includes('E')) ? 'E' : 'X';
+      return [fill(w, bad), fill(w, bad)];
+    }
+    case 'negator':
+    case 'absolute': {
+      const x = ins[0];
+      if (defined(x)) {
+        if (comp.type === 'negator') return [bigToBits(-bitsToBig(x), w)];
+        const v = bitsToSignedBig(x);
+        const out = bigToBits(v < 0n ? -v : v, w);
+        return [out, [out[w - 1] === 1 ? 1 : 0]];
+      }
+      // Logisim's bitwise two's complement: low 0 bits stay 0 up to the first 1 (an x / E on the way spreads
+      // to the bits after it), every bit above that first 1 is inverted (x and E stay). Evolution's Absolute
+      // stops after the first phase (no inversion) and reports an E overflow
+      const bits = [...x];
+      let f: SignalValue = 0;
+      let pos = 0;
+      while (pos < w) {
+        const v = bits[pos];
+        if (v === 0) bits[pos] = f;
+        else if (v === 1) {
+          if (f !== 0) bits[pos] = f;
+          pos++;
+          break;
+        } else if (v === 'E') f = 'E';
+        else if (f === 0) f = v;
+        else bits[pos] = f;
+        pos++;
+      }
+      if (comp.type === 'absolute') return [bits, ['E']];
+      for (; pos < w; pos++) {
+        if (bits[pos] === 1) bits[pos] = 0;
+        else if (bits[pos] === 0) bits[pos] = 1;
+      }
+      return [bits];
+    }
+    case 'comparator': {
+      // From the MSB down, the first differing pair decides (signed: the sign bits count the other way
+      // round); an E or undefined bit met first gives E or x on all three outputs
+      let res: SignalValue[] = [0, 1, 0];
+      for (let pos = w - 1; pos >= 0; pos--) {
+        let ab = ins[0][pos];
+        let bb = ins[1][pos];
+        if (pos === w - 1 && ab !== bb && mode !== 'unsigned') [ab, bb] = [bb, ab];
+        if (ab === 'E' || bb === 'E') {
+          res = ['E', 'E', 'E'];
+          break;
+        }
+        if (!isLevel(ab) || !isLevel(bb)) {
+          res = ['X', 'X', 'X'];
+          break;
+        }
+        if (ab !== bb) {
+          res = ab === 1 ? [1, 0, 0] : [0, 0, 1];
+          break;
+        }
+      }
+      return res.map((v) => [v]);
+    }
+    case 'minMax': {
+      const [a, b] = ins;
+      if (!defined(a) || !defined(b)) return [fill(w, 'E'), fill(w, 'E')];
+      const av = mode === 'unsigned' ? bitsToBig(a) : bitsToSignedBig(a);
+      const bv = mode === 'unsigned' ? bitsToBig(b) : bitsToSignedBig(b);
+      return av <= bv ? [a, b] : [b, a];
+    }
+    case 'shifter': {
+      // A distance with any undefined bit gives all E. Logical shifts fill 0, arithmetic right fills the top
+      // bit, rotations move bits round (a distance past the width wraps once); undefined data bits move along
+      const x = ins[0];
+      const dv = bitsToNumber(ins[1]);
+      if (dv === undefined) return [fill(w, 'E')];
+      let d = dv;
+      if (d === 0) return [x];
+      const t = comp.state.shiftType ?? 'll';
+      const y = new Array<SignalValue>(w);
+      if (t === 'lr' || t === 'll' || t === 'ar') {
+        if (d >= w) d = w;
+        for (let i = 0; i < w; i++) {
+          if (t === 'll') y[i] = i < d ? 0 : x[i - d];
+          else y[i] = i < w - d ? x[i + d] : t === 'ar' ? x[w - 1] : 0;
+        }
+      } else {
+        if (d >= w) d -= w;
+        for (let i = 0; i < w; i++) y[i] = t === 'rr' ? x[(i + d) % w] : x[(i - d + w) % w];
+      }
+      return [y];
+    }
+    case 'squareRoot': {
+      const a = ins[0];
+      const up = allX(ins[1]) ? fill(w, 0) : ins[1];
+      if (defined(a) && defined(up)) {
+        const num = (bitsToBig(up) << BigInt(w)) | bitsToBig(a);
+        const root = isqrtBig(num);
+        return [bigToBits(root, w), bigToBits(num - root * root, w)];
+      }
+      const bad: SignalValue = a.includes('E') || up.includes('E') ? 'E' : 'X';
+      return [fill(w, bad), fill(w, bad)];
+    }
+    case 'exponentiator': {
+      // A^B, low half and high half of the (wrapped) result; signed: a negative exponent gives 0. An undefined
+      // operand gives E / x (evolution outputs all ones there, a bug not copied)
+      const [a, b] = ins;
+      if (!defined(a) || !defined(b)) {
+        const bad: SignalValue = a.includes('E') || b.includes('E') ? 'E' : 'X';
+        return [fill(w, bad), fill(w, bad)];
+      }
+      const signed = mode !== 'unsigned';
+      const base = signed ? bitsToSignedBig(a) : bitsToBig(a);
+      const exp = signed ? bitsToSignedBig(b) : bitsToBig(b);
+      const r = bitsToBig(a) === 1n ? 1n : exp < 0n ? 0n : powModBig(base, exp, 1n << BigInt(2 * w));
+      return [bigToBits(r, w), bigToBits(r >> BigInt(w), w)];
+    }
+    case 'bitAdder': {
+      // Counts the 1 bits; every bit that is x or E could be either, so output bits that could differ are E
+      let min = 0;
+      let max = 0;
+      for (const v of ins) {
+        for (const bit of v) {
+          if (bit === 1) min++;
+          if (bit !== 0) max++;
+        }
+      }
+      let mask = 0;
+      for (let i = min + 1; i <= max; i++) mask |= min ^ i;
+      const ow = bitAdderOutBits(w, ins.length);
+      return [Array.from({ length: ow }, (_, i): SignalValue => ((mask >> i) & 1 ? 'E' : (min >> i) & 1 ? 1 : 0))];
+    }
+    case 'bitFinder': {
+      // Scans from the low (or high) end past the bits that are not wanted; the first other bit is the
+      // wanted one (index, present 1), x or E (both outputs E), or none left (index 0, present 0)
+      const x = ins[0];
+      const t = comp.state.findType ?? 'low1';
+      const want: SignalValue = t === 'low1' || t === 'high1' ? 1 : 0;
+      const skip: SignalValue = want === 1 ? 0 : 1;
+      const high = t === 'high1' || t === 'high0';
+      let i = high ? w - 1 : 0;
+      while (i >= 0 && i < w && x[i] === skip) i += high ? -1 : 1;
+      const ow = bitFinderOutBits(w);
+      if (i < 0 || i >= w) return [fill(ow, 0), [0]];
+      if (x[i] === want) return [bigToBits(BigInt(i), ow), [1]];
+      return [fill(ow, 'E'), ['E']];
+    }
+    default:
+      return [];
+  }
+}
+
 /**
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
@@ -1545,6 +1998,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     const l = plexerLayout(comp);
     const place = (pin: CircuitPin) => {
       const at = l.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
+      const p = rotatePoint(at.x, at.y);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
+  }
+
+  if (ARITH_TYPES.has(comp.type)) {
+    const g = arithLayout(comp);
+    const place = (pin: CircuitPin) => {
+      const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
       return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
     };
@@ -2279,6 +2742,21 @@ export function simulateCircuitStep(
         setOut(2, hi < 0 ? 0 : 1);
         break;
       }
+      case 'adder':
+      case 'subtractor':
+      case 'multiplier':
+      case 'divider':
+      case 'negator':
+      case 'absolute':
+      case 'comparator':
+      case 'minMax':
+      case 'shifter':
+      case 'squareRoot':
+      case 'exponentiator':
+      case 'bitAdder':
+      case 'bitFinder':
+        computeArith(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
+        break;
       case 'bitSelector': {
         // Logisim BitSelector: group `select` of the data (bits past the data end are 0); a select
         // with any x/E bit gives all x

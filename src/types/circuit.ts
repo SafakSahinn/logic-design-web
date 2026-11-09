@@ -53,6 +53,19 @@ export type ComponentType =
   | 'demultiplexer'
   | 'decoder'
   | 'priorityEncoder'
+  | 'adder'
+  | 'subtractor'
+  | 'multiplier'
+  | 'divider'
+  | 'negator'
+  | 'absolute'
+  | 'comparator'
+  | 'minMax'
+  | 'shifter'
+  | 'squareRoot'
+  | 'exponentiator'
+  | 'bitAdder'
+  | 'bitFinder'
   | 'comparator4'
   | 'alu4'
   | 'splitter4'
@@ -152,6 +165,12 @@ export interface CircuitComponentInstance {
     plexTristate?: boolean;
     /** Plexers: select (and enable) pins on the bottom/left side or the top/right side (Logisim 'selloc'); unset = bl */
     selectLoc?: 'bl' | 'tr';
+    /** Arithmetic parts: how operands are read (Logisim 'mode'): two's complement, signed A x unsigned B (multiplier), unsigned; unset = signed for the comparator, unsigned otherwise */
+    arithMode?: 'signed' | 'signedUnsigned' | 'unsigned';
+    /** Shifter: logical left/right, arithmetic right, rotate left/right (Logisim 'shift'); unset = ll */
+    shiftType?: 'll' | 'lr' | 'ar' | 'rl' | 'rr';
+    /** Bit finder: which bit it looks for (Logisim 'type'); unset = low1 */
+    findType?: 'low1' | 'high1' | 'low0' | 'high0';
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
