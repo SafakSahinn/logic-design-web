@@ -1598,7 +1598,7 @@ export const ARITH_TYPES = new Set<ComponentType>([
 export const BIT_ADDER_MAX_INPUTS = 32;
 
 /** Pin keys of each arithmetic part in the order the simulator relies on (bit adder inputs: in0..in(n-1)) */
-const ARITH_PINS: Partial<Record<ComponentType, { inputs: string[]; outputs: string[] }>> = {
+export const ARITH_PINS: Partial<Record<ComponentType, { inputs: string[]; outputs: string[] }>> = {
   adder: { inputs: ['a', 'b', 'cin'], outputs: ['out', 'cout'] },
   subtractor: { inputs: ['a', 'b', 'bin'], outputs: ['out', 'bout'] },
   multiplier: { inputs: ['a', 'b', 'cin'], outputs: ['out', 'cout'] },

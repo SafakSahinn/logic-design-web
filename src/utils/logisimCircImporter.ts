@@ -1,6 +1,10 @@
 import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import type { Radix } from '../types/logic';
 import {
+  ARITH_PINS,
+  ARITH_TYPES,
+  arithGeometry,
+  configureArith,
   configureBitExtender,
   configureBitSelector,
   configurePlexer,
@@ -77,14 +81,15 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n.includes('keyboard') || n === 'tty') return 'asciiKeyboard';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch4';
 
+  // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
+  const arith = LOGISIM_ARITH_TYPE[n];
+  if (arith) return arith;
+
   // Combinational
-  if (n === 'adder') return 'fullAdder';
-  if (n === 'subtractor') return 'fullSubtractor';
   if (n === 'multiplexer' || n === 'mux') return 'multiplexer';
   if (n === 'demultiplexer' || n === 'demux') return 'demultiplexer';
   if (n === 'decoder') return 'decoder';
   if (n === 'priority encoder') return 'priorityEncoder';
-  if (n === 'comparator') return 'comparator4';
   if (n === 'alu' || n.includes('arithmetic logic unit')) return 'alu4';
 
   // Sequential
@@ -298,6 +303,86 @@ export function logisimPlexerDefaults(source: string, kind: LogisimPlexer): { en
   if (kind === 'priorityEncoder') return { enable: true, disabled: (v[0] ?? 2) < 3 ? 'Z' : '0' };
   if ((v[0] ?? 2) < 3) return { enable: cmp([2, 6, 3, 220]) >= 0, disabled: 'Z' };
   return { enable: kind === 'decoder' || cmp([3, 6, 1]) <= 0, disabled: '0' };
+}
+
+// Logisim arithmetic element names (std/arith, library "#Arithmetic"); the last four are evolution's
+const LOGISIM_ARITH: Array<[ComponentType, string]> = [
+  ['adder', 'Adder'],
+  ['subtractor', 'Subtractor'],
+  ['multiplier', 'Multiplier'],
+  ['divider', 'Divider'],
+  ['negator', 'Negator'],
+  ['comparator', 'Comparator'],
+  ['shifter', 'Shifter'],
+  ['bitAdder', 'BitAdder'],
+  ['bitFinder', 'BitFinder'],
+  ['absolute', 'Absolute'],
+  ['minMax', 'MinMax'],
+  ['squareRoot', 'SquareRoot'],
+  ['exponentiator', 'Exponentiator'],
+];
+const LOGISIM_ARITH_TYPE: Record<string, ComponentType> = Object.fromEntries(LOGISIM_ARITH.map(([t, n]) => [n.toLowerCase(), t]));
+/** Logisim element name of each arithmetic part */
+export const LOGISIM_ARITH_NAME = Object.fromEntries(LOGISIM_ARITH) as Partial<Record<ComponentType, string>>;
+/** Arithmetic parts Logisim 2.7.1 does not have (evolution only) */
+export const EVO_ONLY_ARITH = new Set<ComponentType>(['absolute', 'minMax', 'squareRoot', 'exponentiator']);
+
+/**
+ * Connection points of a Logisim arithmetic part relative to its loc, each with our pin key (inputs first,
+ * in ARITH_PINS order). Logisim's arithmetic parts have no facing: they always face east.
+ */
+export function logisimArithPorts(type: ComponentType, inputs: number): Array<{ key: string; off: Pt }> {
+  const g = arithGeometry(type, inputs);
+  const spec = ARITH_PINS[type]!;
+  const ins = type === 'bitAdder' ? Array.from({ length: inputs }, (_, i) => `in${i}`) : spec.inputs;
+  return [...ins, ...spec.outputs].map((key) => ({ key, off: { x: g.pins[key].x - g.anchor.x, y: g.pins[key].y - g.anchor.y } }));
+}
+
+type ArithMode = 'signed' | 'signedUnsigned' | 'unsigned';
+const ARITH_MODE_ATTR: Record<string, ArithMode> = { twosComplement: 'signed', signedUnsigned: 'signedUnsigned', unsigned: 'unsigned' };
+/** Logisim 'mode' attribute value of our operand reading */
+export const LOGISIM_ARITH_MODE: Record<ArithMode, string> = { signed: 'twosComplement', signedUnsigned: 'signedUnsigned', unsigned: 'unsigned' };
+/** Parts with a 'mode' attribute (2.7.1: only the comparator) */
+export const ARITH_MODE_PARTS = new Set<ComponentType>(['comparator', 'multiplier', 'divider', 'minMax', 'exponentiator']);
+
+/**
+ * Settings of a Logisim arithmetic part. Logisim leaves attributes at their default out of the file:
+ * width 8 (evolution's exponentiator 32), one bit adder input, shift 'll', find 'low1', and mode
+ * twosComplement for the comparator, unsigned for the others. Logisim 2.7.1 has no multiplier mode, but
+ * its 32-bit multiplier works on Java ints and so multiplies signed: read that one as signed.
+ */
+export function logisimArithSettings(
+  type: ComponentType,
+  attr: Record<string, string>,
+  source: string
+): { width: number; inputs: number; mode?: ArithMode; shiftType?: string; findType?: string; notes: string[] } {
+  const notes: string[] = [];
+  const major = Number((source.match(/\d+/) ?? ['2'])[0]);
+  const int = (v: string | undefined, dflt: number) => {
+    const n = v === undefined ? NaN : parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : dflt;
+  };
+  let width = int(attr.width, type === 'exponentiator' ? 32 : 8);
+  if (width > 32) {
+    notes.push(`${width} bitlik, 32 bit olarak alındı.`);
+    width = 32;
+  }
+  let inputs = type === 'bitAdder' ? int(attr.inputs, 1) : 1;
+  if (inputs > 32) {
+    notes.push(`${inputs} girişli, 32 girişle alındı.`);
+    inputs = 32;
+  }
+  let mode: ArithMode | undefined;
+  if (ARITH_MODE_PARTS.has(type)) {
+    mode = ARITH_MODE_ATTR[attr.mode ?? ''];
+    if (mode === 'signedUnsigned' && type !== 'multiplier') mode = undefined;
+    if (!mode) mode = type === 'comparator' ? 'signed' : type === 'multiplier' && major < 3 && width === 32 ? 'signed' : 'unsigned';
+  }
+  if (type === 'divider' && major < 3 && width === 32 && !attr.mode)
+    notes.push(`Logisim 2.7.1'in 32 bitlik bölücüsü, üst girişin en yüksek biti 1 iken farklı sonuç verebilir (evolution gibi hesaplanıyor).`);
+  const shiftType = type === 'shifter' ? (['ll', 'lr', 'ar', 'rl', 'rr'].includes(attr.shift) ? attr.shift : 'll') : undefined;
+  const findType = type === 'bitFinder' ? (['low1', 'high1', 'low0', 'high0'].includes(attr.type) ? attr.type : 'low1') : undefined;
+  return { width, inputs, mode, shiftType, findType, notes };
 }
 
 /**
@@ -686,7 +771,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1 && !WIDE_IMPORT.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
@@ -705,6 +790,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? BIT_SELECTOR_POINTS[facing] ?? BIT_SELECTOR_POINTS.east
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
+                : ARITH_TYPES.has(nativeType)
+                ? logisimArithPorts(nativeType, logisimArithSettings(nativeType, attr, fileSource).inputs).map((p) => p.off)
                 : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
@@ -884,6 +971,31 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           label,
           keys.map((k, j): [string, Pt | null] => [idOf(k) ?? '', at(loc, st.ports[j])])
         );
+        continue;
+      }
+      if (ARITH_TYPES.has(nativeType)) {
+        // Exact Logisim geometry: the frame's anchor is the Logisim loc, every pin on its connection point
+        const st = logisimArithSettings(nativeType, attr, fileSource);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        let inst = createComponentInstance(nativeType, 0, 0);
+        inst = {
+          ...inst,
+          state: {
+            ...inst.state,
+            ...(st.mode ? { arithMode: st.mode } : {}),
+            ...(st.shiftType ? { shiftType: st.shiftType as 'll' } : {}),
+            ...(st.findType ? { findType: st.findType as 'low1' } : {}),
+          },
+        };
+        inst = configureArith(inst, { width: st.width, inputs: st.inputs });
+        const g = arithGeometry(nativeType, st.inputs);
+        inst = updatePinPositions({ ...inst, x: anchor.x - g.anchor.x, y: anchor.y - g.anchor.y });
+        if (label) inst.label = label;
+        components.push(inst);
+        for (const { key: k, off } of logisimArithPorts(nativeType, st.inputs)) {
+          const pin = [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k);
+          if (pin) attach.push({ at: at(loc, off), compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        }
         continue;
       }
       if (nativeType === 'subcircuit' && part.sub) {

@@ -1,9 +1,31 @@
-import type { CircuitComponentInstance, CircuitWire, CustomSubcircuit } from '../types/circuit';
+import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
-import { HEX_7SEG_MAP, bitSelectorSelectWidth, getGateWidth, getPlexerConfig, getSplitterConfig, pinKey, splitterThreads } from './circuitEngine';
+import {
+  ARITH_TYPES,
+  HEX_7SEG_MAP,
+  bitSelectorSelectWidth,
+  getArithConfig,
+  getArithMode,
+  getGateWidth,
+  getPlexerConfig,
+  getSplitterConfig,
+  pinKey,
+  splitterThreads,
+} from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { solveKMap } from './kmapSolver';
-import { logisimDefaultPortOffsets, logisimPlexerPortKeys, logisimPlexerPorts, logisimSplitterEnds, type LogisimPlexer } from './logisimCircImporter';
+import {
+  ARITH_MODE_PARTS,
+  EVO_ONLY_ARITH,
+  LOGISIM_ARITH_MODE,
+  LOGISIM_ARITH_NAME,
+  logisimArithPorts,
+  logisimDefaultPortOffsets,
+  logisimPlexerPortKeys,
+  logisimPlexerPorts,
+  logisimSplitterEnds,
+  type LogisimPlexer,
+} from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 
 /*
@@ -59,7 +81,9 @@ type Prim =
       nets: string[];
       widths: number[];
       sinks: boolean[];
-    };
+    }
+  // A real Logisim arithmetic part (always east); nets / widths / sinks in logisimArithPorts order
+  | { kind: 'arith'; part: ComponentType; attrs: string; inputs: number; nets: string[]; widths: number[]; sinks: boolean[] };
 
 interface Pt {
   x: number;
@@ -663,6 +687,38 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
+          if (ARITH_TYPES.has(c.type)) {
+            // Logisim has the same part: written as is with every attribute explicit; open inputs stay open
+            const { width, inputs: n } = getArithConfig(c);
+            const mode = getArithMode(c);
+            let attrs = `<a name="width" val="${width}"/>`;
+            if (c.type === 'bitAdder') attrs += `<a name="inputs" val="${n}"/>`;
+            if (ARITH_MODE_PARTS.has(c.type)) attrs += `<a name="mode" val="${LOGISIM_ARITH_MODE[mode]}"/>`;
+            if (c.type === 'shifter') attrs += `<a name="shift" val="${c.state.shiftType ?? 'll'}"/>`;
+            if (c.type === 'bitFinder') attrs += `<a name="type" val="${c.state.findType ?? 'low1'}"/>`;
+            const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+            const nets: string[] = [];
+            const widths: number[] = [];
+            const sinks: boolean[] = [];
+            for (const { key } of logisimArithPorts(c.type, n)) {
+              const p = byKey.get(key);
+              const isIn = !!p && c.inputs.includes(p);
+              nets.push(!p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN);
+              widths.push(p?.width ?? 1);
+              sinks.push(isIn);
+            }
+            P.push({ kind: 'arith', part: c.type, attrs, inputs: n, nets, widths, sinks });
+            // What Logisim 2.7.1 cannot reproduce (Logisim-evolution reads all of it)
+            const name = LOGISIM_ARITH_NAME[c.type];
+            if (EVO_ONLY_ARITH.has(c.type)) warnings.push(`${label}: ${name} yalnız Logisim-evolution'da var; Logisim 2.7.1 bu parçayı tanımaz.`);
+            else if ((c.type === 'multiplier' || c.type === 'divider') && mode !== 'unsigned' && !(c.type === 'multiplier' && width === 32 && mode === 'signed'))
+              warnings.push(`${label}: ${name} modu (${mode === 'signed' ? 'işaretli' : 'işaretli × işaretsiz'}) yalnız Logisim-evolution'da var; Logisim 2.7.1 işaretsiz hesaplar.`);
+            if (c.type === 'multiplier' && width === 32 && mode === 'unsigned')
+              warnings.push(`${label}: Logisim 2.7.1 32 bitlik çarpıcıyı işaretli hesaplar; işaretsiz sonuç Logisim-evolution'da tutar.`);
+            if (c.type === 'divider' && width === 32 && mode === 'unsigned')
+              warnings.push(`${label}: Logisim 2.7.1'in 32 bitlik bölücüsü, üst girişin en yüksek biti 1 iken farklı sonuç verir; Logisim-evolution'da tutar.`);
+            break;
+          }
           warnings.push(`${label}: '${c.type}' Logisim'e aktarılamadı.`);
       }
       if (openInputs)
@@ -835,6 +891,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).forEach((o, k) => tunnel(x + o.x, y + o.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
         }
+        case 'arith':
+          xml.push(`    <comp lib="3" loc="(${x},${y})" name="${LOGISIM_ARITH_NAME[p.part]}">${p.attrs}</comp>`);
+          logisimArithPorts(p.part, p.inputs).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
+          break;
         case 'sub':
           xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
@@ -857,6 +917,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         const ys = logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).map((o) => o.y);
         return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
       }
+      if (p.kind === 'arith') {
+        const ys = logisimArithPorts(p.part, p.inputs).map((o) => o.off.y);
+        return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
+      }
       return 1;
     };
     for (const b of blocks) {
@@ -872,7 +936,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
               ? -Math.min(0, ...logisimSplitterEnds('east', p.appear, p.ends.length).map((o) => o.y))
               : p.kind === 'plexer'
                 ? -Math.min(0, ...logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).map((o) => o.y)) + 10
-                : extraRows * 50;
+                : p.kind === 'arith'
+                  ? -Math.min(0, ...logisimArithPorts(p.part, p.inputs).map((o) => o.off.y)) + 10
+                  : extraRows * 50;
         const x = 200 + (cell % PER_ROW) * CELL_W;
         const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + Math.ceil(up / 10) * 10;
         cell += 1 + extraRows * PER_ROW;
