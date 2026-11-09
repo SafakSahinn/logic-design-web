@@ -55,6 +55,7 @@ import {
   getBitWidth,
   getSplitterConfig,
   getPlexerConfig,
+  arithLayout,
   pinKey as plexerPinKey,
   plexerLayout,
   RETIRED_PALETTE_TYPES,
@@ -292,6 +293,19 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   demultiplexer: { label: 'Çoklayıcı Çözücü (DEMUX)', badge: 'DMX' },
   decoder: { label: 'Kod Çözücü', badge: 'DEC' },
   priorityEncoder: { label: 'Öncelikli Kodlayıcı', badge: 'PRI' },
+  adder: { label: 'Toplayıcı', badge: '+' },
+  subtractor: { label: 'Çıkarıcı', badge: '−' },
+  multiplier: { label: 'Çarpıcı', badge: '×' },
+  divider: { label: 'Bölücü', badge: '÷' },
+  negator: { label: 'Negatif Alıcı', badge: '-x' },
+  absolute: { label: 'Mutlak Değer', badge: 'Abs' },
+  comparator: { label: 'Karşılaştırıcı', badge: '≶' },
+  minMax: { label: 'Min / Max', badge: 'Min' },
+  shifter: { label: 'Kaydırıcı', badge: '<<' },
+  squareRoot: { label: 'Karekök', badge: '√' },
+  exponentiator: { label: 'Üs Alıcı', badge: 'yˣ' },
+  bitAdder: { label: 'Bit Sayıcı', badge: '#1' },
+  bitFinder: { label: 'Bit Bulucu', badge: 'Bul' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -5924,6 +5938,156 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'adder':
+      case 'subtractor':
+      case 'multiplier':
+      case 'divider':
+      case 'negator':
+      case 'absolute':
+      case 'comparator':
+      case 'minMax':
+      case 'shifter':
+      case 'squareRoot':
+      case 'exponentiator':
+      case 'bitAdder':
+      case 'bitFinder': {
+        // Logisim std/arith painters: a plain box, a symbol just left of the location (the main output) and
+        // small port labels just inside their pins. Logisim has no facing for these; here the body turns as a
+        // whole, so text and symbols are turned back around their own point and stay upright
+        const l = arithLayout(comp);
+        const W = l.width;
+        const H = l.height;
+        const grey = cadTheme === 'dark' ? '#94a3b8' : '#64748b';
+        const rot = (((comp.rotation ?? 0) % 360) + 360) % 360;
+        const rad = (rot * Math.PI) / 180;
+        const cos = Math.round(Math.cos(rad));
+        const sin = Math.round(Math.sin(rad));
+        const upright = (x: number, y: number) => (rot ? `rotate(${-rot}, ${x}, ${y})` : undefined);
+        // body frame <-> on-screen frame (the body group turns by `rot` around its centre)
+        const toScreen = (x: number, y: number) => ({ x: W / 2 + (x - W / 2) * cos - (y - H / 2) * sin, y: H / 2 + (x - W / 2) * sin + (y - H / 2) * cos });
+        const toBody = (x: number, y: number) => ({ x: W / 2 + (x - W / 2) * cos + (y - H / 2) * sin, y: H / 2 - (x - W / 2) * sin + (y - H / 2) * cos });
+        const has = (key: string) => [...comp.inputs, ...comp.outputs].some((p) => plexerPinKey(comp, p) === key);
+        // Port label (Logisim drawPort(port, label, dir)): placed on screen just inside the pin's edge
+        const portLabel = (key: string, text: string, secondary: boolean) => {
+          const at = l.pins[key];
+          if (!at || !has(key)) return null;
+          const inward = at.x <= 0 ? { x: 1, y: 0 } : at.x >= W ? { x: -1, y: 0 } : at.y <= 0 ? { x: 0, y: 1 } : { x: 0, y: -1 };
+          const p = toScreen(at.x, at.y);
+          const d = { x: inward.x * cos - inward.y * sin, y: inward.x * sin + inward.y * cos };
+          // A top / bottom label turned onto a side would cross the box: it runs along that side instead
+          const alongSide = inward.y !== 0 && d.x !== 0;
+          const off = d.x !== 0 && !alongSide ? 6 : 7;
+          const q = toBody(p.x + d.x * off, p.y + d.y * off);
+          return (
+            <text
+              key={`lbl-${key}`}
+              x={q.x}
+              y={q.y}
+              transform={alongSide ? `rotate(${-90 - rot}, ${q.x}, ${q.y})` : upright(q.x, q.y)}
+              textAnchor={alongSide ? 'middle' : d.x > 0 ? 'start' : d.x < 0 ? 'end' : 'middle'}
+              dominantBaseline="central"
+              fontSize={7}
+              fontFamily="monospace"
+              fill={secondary ? grey : undefined}
+              className={`${secondary ? '' : gateTextClass} select-none`}
+            >
+              {text}
+            </text>
+          );
+        };
+        // Symbols centre 10px left of the location, like Logisim's (x - 15 .. x - 5)
+        const sx = l.anchor.x - 10;
+        const sy = l.anchor.y;
+        const ln = (x1: number, y1: number, x2: number, y2: number, k: string) => (
+          <line key={k} x1={sx + x1} y1={sy + y1} x2={sx + x2} y2={sy + y2} stroke={strokeColor} strokeWidth={2} strokeLinecap="round" />
+        );
+        let symbol: React.ReactNode = null;
+        const labels: React.ReactNode[] = [];
+        switch (comp.type) {
+          case 'adder':
+            symbol = [ln(-5, 0, 5, 0, 'h'), ln(0, -5, 0, 5, 'v')];
+            labels.push(portLabel('cin', 'c in', true), portLabel('cout', 'c out', true));
+            break;
+          case 'subtractor':
+            symbol = ln(-5, 0, 5, 0, 'h');
+            labels.push(portLabel('bin', 'b in', true), portLabel('bout', 'b out', true));
+            break;
+          case 'multiplier':
+            symbol = [ln(-5, -5, 5, 5, 'a'), ln(-5, 5, 5, -5, 'b')];
+            labels.push(portLabel('cin', 'c in', true), portLabel('cout', 'c out', true));
+            break;
+          case 'divider':
+            symbol = [ln(-5, 0, 5, 0, 'h'), <circle key="d1" cx={sx} cy={sy - 5} r={2} fill={strokeColor} />, <circle key="d2" cx={sx} cy={sy + 5} r={2} fill={strokeColor} />];
+            labels.push(portLabel('upper', 'upper', true), portLabel('rem', 'rem', true));
+            break;
+          case 'squareRoot':
+            symbol = (
+              <polyline
+                points={`${sx - 5},${sy} ${sx - 2},${sy + 5} ${sx + 1},${sy - 5} ${sx + 5},${sy - 5}`}
+                fill="none"
+                stroke={strokeColor}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            );
+            labels.push(portLabel('upper', 'upper', true), portLabel('rem', 'rem', true));
+            break;
+          case 'bitAdder':
+            symbol = [ln(-2, -5, -2, 5, 'a'), ln(2, -5, 2, 5, 'b'), ln(-5, -2, 5, -2, 'c'), ln(-5, 2, 5, 2, 'd')];
+            break;
+          case 'shifter': {
+            // Logisim's shift glyphs, drawn from x0 = location - 15
+            const x0 = sx - 5;
+            const r = (x: number, y: number, w: number, h: number, k: string) => <rect key={k} x={x0 + x} y={sy + y} width={w} height={h} fill={strokeColor} />;
+            const arrow = (x: number, d: number) => <polygon key="arr" points={`${x0 + x + d},${sy + d} ${x0 + x},${sy} ${x0 + x + d},${sy - d}`} fill={strokeColor} />;
+            const t = comp.state.shiftType ?? 'll';
+            if (t === 'lr') symbol = [r(0, -1, 8, 3, 'a'), arrow(10, -4)];
+            else if (t === 'ar') symbol = [r(0, -1, 2, 3, 'a'), r(3, -1, 5, 3, 'b'), arrow(10, -4)];
+            else if (t === 'rr') symbol = [r(0, -1, 5, 3, 'a'), r(8, -7, 2, 8, 'b'), r(0, -7, 2, 8, 'c'), r(0, -7, 10, 2, 'd'), arrow(8, -4)];
+            else if (t === 'rl') symbol = [r(6, -1, 4, 3, 'a'), r(8, -7, 2, 8, 'b'), r(0, -7, 2, 8, 'c'), r(0, -7, 10, 2, 'd'), arrow(3, 4)];
+            else symbol = [r(2, -1, 8, 3, 'a'), arrow(0, 4)];
+            break;
+          }
+          case 'negator':
+            labels.push(portLabel('out', '-x', false));
+            break;
+          case 'absolute':
+            labels.push(portLabel('out', 'Abs', false));
+            break;
+          case 'comparator':
+            labels.push(portLabel('gt', '>', false), portLabel('eq', '=', false), portLabel('lt', '<', false));
+            break;
+          case 'minMax':
+            labels.push(portLabel('min', 'Min', false), portLabel('max', 'Max', false));
+            break;
+          case 'exponentiator':
+            labels.push(portLabel('out', 'yˣ', false), portLabel('upper', 'upper', true));
+            break;
+          case 'bitFinder': {
+            const t = comp.state.findType ?? 'low1';
+            const lines = ['find', t.startsWith('high') ? 'high' : 'low', t.endsWith('0') ? '0' : '1'];
+            symbol = (
+              <g transform={upright(W / 2, H / 2)}>
+                {lines.map((s, i) => (
+                  <text key={i} x={W / 2} y={H / 2 - 12 + i * 12} textAnchor="middle" dominantBaseline="central" fontSize={8} fontFamily="monospace" className={`${gateTextClass} select-none`}>
+                    {s}
+                  </text>
+                ))}
+              </g>
+            );
+            break;
+          }
+        }
+        return (
+          <g>
+            <rect x={0} y={0} width={W} height={H} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+            {comp.type === 'bitFinder' ? symbol : symbol && <g transform={upright(sx, sy)}>{symbol}</g>}
+            {labels}
+          </g>
+        );
+      }
+
       case 'bitSelector': {
         // Logisim BitSelector painter: a trapezoid narrowing towards the output, "Sel" inside; the select
         // input meets the slanted bottom edge
@@ -6225,7 +6389,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'arithmetic',
       title: 'Aritmetik Devreler',
       icon: '➕',
-      types: ['halfAdder', 'fullAdder', 'halfSubtractor', 'fullSubtractor', 'comparator4', 'alu4'] as ComponentType[],
+      types: [
+        'adder', 'subtractor', 'multiplier', 'divider', 'negator', 'absolute', 'comparator', 'minMax', 'shifter',
+        'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder', 'halfAdder', 'fullAdder', 'halfSubtractor', 'fullSubtractor',
+      ] as ComponentType[],
     },
     {
       id: 'memory',
@@ -8425,6 +8592,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     { id: 'inputs' as const, label: 'Girişler' },
                     { id: 'outputs' as const, label: 'Göstergeler' },
                     { id: 'combinational' as const, label: 'Kombinasyonel' },
+                    { id: 'arithmetic' as const, label: 'Aritmetik' },
                     { id: 'sequential' as const, label: 'Ardışıl Mantık (FF)' },
                     { id: 'custom' as const, label: `Özel Entegreler (${customSubcircuits.length})` },
                   ].map((cat) => (

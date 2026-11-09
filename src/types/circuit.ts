@@ -1,6 +1,6 @@
 import type { Radix, SignalValue } from './logic';
 
-export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'sequential' | 'custom';
+export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'arithmetic' | 'sequential' | 'custom';
 
 export type ComponentType =
   // Inputs

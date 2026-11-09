@@ -6,20 +6,26 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType } from '../types/circuit';
 import { MAX_BIT_WIDTH, type Radix } from '../types/logic';
 import {
+  ARITH_TYPES,
+  BIT_ADDER_MAX_INPUTS,
   GATE_WIDTH_TYPES,
   MULTI_INPUT_GATE_TYPES,
   OUTPUT_MODE_TYPES,
   PLEXER_MAX_SELECT,
   SPLITTER_MAX_FANOUT,
+  configureArith,
   configureBitExtender,
   configureBitSelector,
   configurePlexer,
   configureSplitter,
+  getArithConfig,
+  getArithMode,
   getBitWidth,
   getGateWidth,
   getPlexerConfig,
   getSplitterConfig,
   pinKey,
+  type ArithConfig,
   type PlexerConfig,
   setBitWidth,
   setGateWidth,
@@ -549,6 +555,99 @@ const plexerSelectLocAttr: AttrDef = {
   set: (c, v) => ((c.state.selectLoc ?? 'bl') === v ? null : reconfigurePlexer(c, {}, { selectLoc: v as 'bl' | 'tr' })),
 };
 
+// ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
+// with more inputs grows around it
+function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
+  const anchor = c.outputs.find((p) => pinKey(c, p) === 'out');
+  let next = configureArith(c, patch);
+  const moved = next.outputs.find((p) => pinKey(next, p) === 'out');
+  if (anchor && moved && (anchor.x !== moved.x || anchor.y !== moved.y)) {
+    next = updatePinPositions({ ...next, x: next.x + anchor.x - moved.x, y: next.y + anchor.y - moved.y });
+  }
+  // Pins keep their ids (and wires); a removed bit adder input is named null so its wires stay as open ends
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.inputs, ...c.outputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const arithWidthAttr: AttrDef = {
+  key: 'arithWidth',
+  label: 'Veri bit',
+  kind: 'select',
+  title: 'Veri girişlerinin ve çıkışlarının genişliği (1-32)',
+  options: WIDTH_OPTIONS,
+  get: (c) => getArithConfig(c).width,
+  set: (c, v) => (getArithConfig(c).width === Number(v) ? null : reconfigureArith(c, { width: Number(v) })),
+};
+
+const bitAdderInputsAttr: AttrDef = {
+  key: 'arithInputs',
+  label: 'Giriş sayısı',
+  kind: 'select',
+  title: 'Bitleri sayılan giriş sayısı (1-32); çıkış, en büyük toplamı tutacak kadar geniştir',
+  options: numberOptions(1, BIT_ADDER_MAX_INPUTS),
+  get: (c) => getArithConfig(c).inputs,
+  set: (c, v) => (getArithConfig(c).inputs === Number(v) ? null : reconfigureArith(c, { inputs: Number(v) })),
+};
+
+const SIGNED_OPTION: AttrOption = { value: 'signed', label: 'İşaretli', title: 'İkiye tümleyen (Logisim "2\'s Complement")' };
+const UNSIGNED_OPTION: AttrOption = { value: 'unsigned', label: 'İşaretsiz', title: 'İşaretsiz sayı (Logisim "Unsigned")' };
+
+const arithModeAttr: AttrDef = {
+  key: 'arithMode',
+  label: 'Sayı türü',
+  kind: 'buttons',
+  title: 'Girişlerin nasıl okunduğu (Logisim "Numeric Type")',
+  options: [SIGNED_OPTION, UNSIGNED_OPTION],
+  get: (c) => getArithMode(c),
+  set: (c, v) => (getArithMode(c) === v ? null : withState(c, { arithMode: v as 'signed' | 'unsigned' })),
+};
+
+const multiplierModeAttr: AttrDef = {
+  ...arithModeAttr,
+  options: [
+    SIGNED_OPTION,
+    { value: 'signedUnsigned', label: 'İşaretli × işaretsiz', title: 'A işaretli, B işaretsiz okunur (Logisim-evolution)' },
+    UNSIGNED_OPTION,
+  ],
+  set: (c, v) => (getArithMode(c) === v ? null : withState(c, { arithMode: v as 'signed' | 'signedUnsigned' | 'unsigned' })),
+};
+
+const shiftTypeAttr: AttrDef = {
+  key: 'shiftType',
+  label: 'Kaydırma',
+  kind: 'select',
+  title: 'Kaydırma türü (Logisim "Shift Type")',
+  options: [
+    { value: 'll', label: 'Mantıksal sola' },
+    { value: 'lr', label: 'Mantıksal sağa' },
+    { value: 'ar', label: 'Aritmetik sağa' },
+    { value: 'rl', label: 'Sola döndür' },
+    { value: 'rr', label: 'Sağa döndür' },
+  ],
+  get: (c) => c.state.shiftType ?? 'll',
+  set: (c, v) => ((c.state.shiftType ?? 'll') === v ? null : withState(c, { shiftType: v as 'll' | 'lr' | 'ar' | 'rl' | 'rr' })),
+};
+
+const findTypeAttr: AttrDef = {
+  key: 'findType',
+  label: 'Aranan',
+  kind: 'select',
+  title: 'Hangi bitin numarası verilir (Logisim "Type")',
+  options: [
+    { value: 'low1', label: 'En düşük 1' },
+    { value: 'high1', label: 'En yüksek 1' },
+    { value: 'low0', label: 'En düşük 0' },
+    { value: 'high0', label: 'En yüksek 0' },
+  ],
+  get: (c) => c.state.findType ?? 'low1',
+  set: (c, v) => ((c.state.findType ?? 'low1') === v ? null : withState(c, { findType: v as 'low1' | 'high1' | 'low0' | 'high0' })),
+};
+
 const pullAttr: AttrDef = {
   key: 'pullValue',
   label: 'Çekilen değer',
@@ -651,6 +750,24 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'priorityEncoder':
       list.push(priorityInputsAttr, plexerDisabledAttr);
       break;
+    case 'comparator':
+    case 'divider':
+    case 'minMax':
+    case 'exponentiator':
+      list.push(arithWidthAttr, arithModeAttr);
+      break;
+    case 'multiplier':
+      list.push(arithWidthAttr, multiplierModeAttr);
+      break;
+    case 'shifter':
+      list.push(arithWidthAttr, shiftTypeAttr);
+      break;
+    case 'bitFinder':
+      list.push(arithWidthAttr, findTypeAttr);
+      break;
+    case 'bitAdder':
+      list.push(arithWidthAttr, bitAdderInputsAttr);
+      break;
     case 'pullResistor':
       list.push(pullAttr);
       break;
@@ -658,6 +775,8 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       list.push(clockRateAttr);
       break;
   }
+  // Adder, subtractor, negator, absolute, square root: data width only
+  if (ARITH_TYPES.has(type) && !list.includes(arithWidthAttr)) list.push(arithWidthAttr);
   if (type === 'led') list.push(ledColorAttr);
   if (type !== 'textLabel') list.push(labelPosAttr);
   return list;

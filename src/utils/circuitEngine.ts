@@ -111,7 +111,7 @@ function arithMeta(type: ComponentType, name: string, ins: [string, string][], o
   return {
     type,
     name,
-    category: 'combinational',
+    category: 'arithmetic',
     width: g.width,
     height: g.height,
     inputs: ins.map((p) => pin(p, 'input')),
@@ -560,7 +560,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   halfAdder: {
     type: 'halfAdder',
     name: '1-Bit Yarım Toplayıcı (HA)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 90,
     height: 64,
     inputs: [
@@ -576,7 +576,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   fullAdder: {
     type: 'fullAdder',
     name: '1-Bit Tam Toplayıcı (FA)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 96,
     height: 76,
     inputs: [
@@ -593,7 +593,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   halfSubtractor: {
     type: 'halfSubtractor',
     name: '1-Bit Yarım Çıkarıcı (HS)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 90,
     height: 64,
     inputs: [
@@ -609,7 +609,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   fullSubtractor: {
     type: 'fullSubtractor',
     name: '1-Bit Tam Çıkarıcı (FS)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 96,
     height: 76,
     inputs: [
@@ -802,7 +802,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   comparator4: {
     type: 'comparator4',
     name: '4-Bit Karşılaştırıcı (CMP)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 96,
     height: 90,
     inputs: [
@@ -825,7 +825,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   alu4: {
     type: 'alu4',
     name: '4-Bit Aritmetik Mantık Birimi (4 İşlem ALU)',
-    category: 'combinational',
+    category: 'arithmetic',
     width: 104,
     height: 98,
     inputs: [
@@ -1468,7 +1468,10 @@ export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexe
  * Fixed-size parts replaced by parametric ones (Aşama 3). They still load and simulate (built-in example
  * circuits use them until they are rebuilt) but are no longer offered in the palettes.
  */
-export const RETIRED_PALETTE_TYPES = new Set<ComponentType>(['mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'priorityEncoder4to2']);
+export const RETIRED_PALETTE_TYPES = new Set<ComponentType>([
+  'mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'priorityEncoder4to2',
+  'comparator4', 'alu4',
+]);
 export const PLEXER_MAX_SELECT = 5;
 
 /** Key of a pin inside its part ('in3', 'sel', 'out', ...): the pin id without the part id prefix */
