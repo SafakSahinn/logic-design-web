@@ -21,6 +21,11 @@ import {
   configureBitSelector,
   configureMem,
   configurePlexer,
+  configureRam,
+  getRamConfig,
+  RAM_ADDR_MAX,
+  RAM_ADDR_MIN,
+  type RamConfig,
   configureSplitter,
   getArithConfig,
   getArithMode,
@@ -73,6 +78,7 @@ export type AttrKind =
   | 'select' // drop-down list
   | 'buttons' // row of toggle buttons
   | 'hex' // hexadecimal text field
+  | 'int' // decimal integer text field (32-bit signed)
   | 'info' // read-only value
   | 'bitMap' // splitter: one drop-down per incoming bit
   | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
@@ -90,6 +96,8 @@ export interface AttrDef {
   canonicalWires?: boolean;
   /** Only offered when exactly one part is selected */
   singleOnly?: boolean;
+  /** Shown only for parts where this holds (e.g. settings of one rule set); every selected part must pass */
+  visible?: (comp: CircuitComponentInstance) => boolean;
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -792,6 +800,15 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'shiftRegister':
       list.push(memWidthAttr, shiftLengthAttr, shiftParallelAttr, triggerAttr);
       break;
+    case 'ram':
+      list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr, ramBusAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
+      break;
+    case 'rom':
+      list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr);
+      break;
+    case 'random':
+      list.push(randomWidthAttr, randomSeedAttr, triggerAttr);
+      break;
   }
   if (MEM_TYPES.has(type) && !list.includes(triggerAttr)) list.push(triggerAttr);
   // Adder, subtractor, negator, absolute, square root: data width only
@@ -898,7 +915,198 @@ const shiftParallelAttr: AttrDef = {
   set: (c, v) => ((getMemConfig(c).parallel ? 'on' : 'off') === v ? null : reconfigureMem(c, { parallel: v === 'on' })),
 };
 
-export const resolveAttrOptions = (def: AttrDef, comp: CircuitComponentInstance, ctx: AttrContext): AttrOption[] =>
+// ---- RAM / ROM / random generator (Logisim std/memory Ram, Rom, Random). The box never changes size, so pins keep
+// their places; pins a setting removes are named null (their wires stay as open ends)
+function reconfigureRam(c: CircuitComponentInstance, patch: Partial<RamConfig>): AttrEdit | null {
+  const cur = getRamConfig(c);
+  if ((Object.keys(patch) as (keyof RamConfig)[]).every((k) => cur[k] === patch[k])) return null;
+  const next = configureRam(c, patch);
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.outputs, ...c.inputs]) {
+    const sp = snapPt10(p);
+    // 'd' and 'dio' share a point: the output's id names the point when it stays
+    const key = `${sp.x},${sp.y}`;
+    if (remap.get(key)) continue;
+    remap.set(key, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const isEvo = (c: CircuitComponentInstance) => (c.state.memFlavor ?? 'logisim') === 'evolution';
+const isEdge = (c: CircuitComponentInstance) => {
+  const t = c.state.trigger ?? 'rising';
+  return t === 'rising' || t === 'falling';
+};
+
+const ramAddrAttr: AttrDef = {
+  key: 'ramAddr',
+  label: 'Adres bit',
+  kind: 'select',
+  title: `Adres girişinin genişliği (${RAM_ADDR_MIN}-${RAM_ADDR_MAX}); bellek 2^n kelimedir. Küçülünce aralık dışındaki kelimeler silinir`,
+  options: range(RAM_ADDR_MIN, RAM_ADDR_MAX).map((n) => ({ value: n, label: `${n}  (${memSizeText(n)})` })),
+  get: (c) => getRamConfig(c).addrWidth,
+  set: (c, v) => reconfigureRam(c, { addrWidth: Number(v) }),
+};
+
+const ramDataAttr: AttrDef = {
+  key: 'ramData',
+  label: 'Veri bit',
+  kind: 'select',
+  title: 'Kelime genişliği (1-32); küçülünce saklanan kelimelerin üst bitleri atılır',
+  options: WIDTH_OPTIONS,
+  get: (c) => getRamConfig(c).dataWidth,
+  set: (c, v) => reconfigureRam(c, { dataWidth: Number(v) }),
+};
+
+const ramFlavorAttr: AttrDef = {
+  key: 'memFlavor',
+  label: 'Kurallar',
+  kind: 'buttons',
+  title: 'Parçanın hangi Logisim sürümünün kurallarıyla çalıştığı; bacaklar buna göre değişir',
+  options: [
+    { value: 'logisim', label: '2.7.1', title: 'Logisim 2.7.1: sel (seçme) bacağı, yükselen kenarda yazma, okuma hep anında' },
+    { value: 'evolution', label: 'evolution', title: 'Logisim-evolution: sel yok; RAM\'de WE bacağı, tetikleme seçimi, saatli ya da anında okuma' },
+  ],
+  get: (c) => getRamConfig(c).flavor,
+  set: (c, v) => reconfigureRam(c, { flavor: v as RamConfig['flavor'] }),
+};
+
+const ramBusAttr: AttrDef = {
+  key: 'ramBus',
+  label: 'Veri yolu',
+  kind: 'select',
+  title: 'Logisim 2.7.1 "Data Interface"',
+  options: [
+    { value: 'combined', label: 'Ortak (tek D)', title: 'Okuma ve yazma aynı D bacağından; ld = 0 iken kenarda D\'deki değer yazılır' },
+    { value: 'asynch', label: 'Asenkron (saatsiz)', title: 'Ortak D, saat bacağı yok: ld = 0 olduğu sürece yazılır' },
+    { value: 'separate', label: 'Ayrı (D + DIN)', title: 'Yazma ayrı DIN bacağından, str (WE) = 1 iken kenarda' },
+  ],
+  visible: (c) => !isEvo(c),
+  get: (c) => getRamConfig(c).bus,
+  set: (c, v) => reconfigureRam(c, { bus: v as RamConfig['bus'] }),
+};
+
+const ramDataBusAttr: AttrDef = {
+  key: 'ramDataBus',
+  label: 'Veri yolu',
+  kind: 'select',
+  title: 'Logisim-evolution "Data Interface"',
+  options: [
+    { value: 'separate', label: 'Ayrı (D + DIN)', title: 'Okuma D\'den, yazma DIN\'den; OE = 0 iken D son değerini korur' },
+    { value: 'controlled', label: 'Ayrı, kontrollü', title: 'Ayrı D ve DIN; OE = 0 iken D yüzer' },
+    { value: 'bidir', label: 'Çift yönlü (tek D)', title: 'Okuma ve yazma aynı D bacağından; OE = 0 iken D yüzer' },
+  ],
+  visible: isEvo,
+  get: (c) => getRamConfig(c).dataBus,
+  set: (c, v) => reconfigureRam(c, { dataBus: v as RamConfig['dataBus'] }),
+};
+
+const ramTriggerAttr: AttrDef = {
+  key: 'ramTrigger',
+  label: 'Tetikleme',
+  kind: 'select',
+  title: 'Yazmanın ne zaman olduğu (Logisim-evolution "Trigger"); seviyede saat bacağı yoktur, WE seviyesi yazar',
+  options: TRIGGER_OPTIONS,
+  visible: isEvo,
+  get: (c) => getRamConfig(c).trigger,
+  set: (c, v) => reconfigureRam(c, { trigger: v as RamConfig['trigger'] }),
+};
+
+const ramAsyncReadAttr: AttrDef = {
+  key: 'ramAsyncRead',
+  label: 'Okuma',
+  kind: 'buttons',
+  title: 'Logisim-evolution "Asynchronous Read"; seviye tetiklemede okuma hep anındadır',
+  options: [
+    { value: 'off', label: 'Saatli', title: 'D yalnız saat kenarında güncellenir (evolution varsayılanı)' },
+    { value: 'on', label: 'Anında', title: 'D, adres değişince hemen güncellenir' },
+  ],
+  visible: (c) => isEvo(c) && isEdge(c),
+  get: (c) => (c.state.ramAsyncRead ? 'on' : 'off'),
+  set: (c, v) => ((c.state.ramAsyncRead ? 'on' : 'off') === v ? null : withState(c, { ramAsyncRead: v === 'on' })),
+};
+
+const ramReadBehaviorAttr: AttrDef = {
+  key: 'ramReadBehavior',
+  label: 'Aynı kenarda',
+  kind: 'buttons',
+  title: 'Saatli okumada, aynı adrese yazılan kenarda D\'ye çıkan değer (Logisim-evolution "Read Behavior")',
+  options: [
+    { value: 'raw', label: 'Yeni değer', title: 'Read after write: yazılan değer okunur' },
+    { value: 'war', label: 'Eski değer', title: 'Write after read: yazmadan önceki değer okunur' },
+  ],
+  visible: (c) => isEvo(c) && isEdge(c) && !c.state.ramAsyncRead,
+  get: (c) => c.state.ramReadBehavior ?? 'raw',
+  set: (c, v) => ((c.state.ramReadBehavior ?? 'raw') === v ? null : withState(c, { ramReadBehavior: v as 'raw' | 'war' })),
+};
+
+const ramByteEnablesAttr: AttrDef = {
+  key: 'ramByteEnables',
+  label: 'Bayt seçme',
+  kind: 'buttons',
+  title: 'Her 8 veri biti için bir BE bacağı; yalnız 1 olan baytlar yazılır (Logisim-evolution "Byte Enables"). Veri 8 bitten geniş ve tetikleme kenar olmalı',
+  options: [
+    { value: 'on', label: 'Açık' },
+    { value: 'off', label: 'Kapalı' },
+  ],
+  visible: (c) => isEvo(c) && isEdge(c) && getRamConfig(c).dataWidth > 8,
+  get: (c) => (getRamConfig(c).byteEnables ? 'on' : 'off'),
+  set: (c, v) => reconfigureRam(c, { byteEnables: v === 'on' }),
+};
+
+const ramClearPinAttr: AttrDef = {
+  key: 'ramClearPin',
+  label: 'CLR bacağı',
+  kind: 'buttons',
+  title: 'CLR = 1 iken bütün kelimeler 0 olur (Logisim-evolution "Clear Pin")',
+  options: [
+    { value: 'on', label: 'Var' },
+    { value: 'off', label: 'Yok' },
+  ],
+  visible: isEvo,
+  get: (c) => (getRamConfig(c).clearPin ? 'on' : 'off'),
+  set: (c, v) => reconfigureRam(c, { clearPin: v === 'on' }),
+};
+
+const randomWidthAttr: AttrDef = {
+  key: 'randomWidth',
+  label: 'Bit genişliği',
+  kind: 'select',
+  title: 'Çıkışın genişliği (1-32): üretilen 32 bitlik sayının düşük bitleri',
+  options: WIDTH_OPTIONS,
+  get: (c) => getRamConfig(c).dataWidth,
+  set: (c, v) => reconfigureRam(c, { dataWidth: Number(v) }),
+};
+
+const randomSeedAttr: AttrDef = {
+  key: 'randomSeed',
+  label: 'Tohum',
+  kind: 'int',
+  title: 'Dizinin başlangıcı (Logisim "Seed"); 0 = her başlangıçta zamandan. Yeni tohum, bir sonraki RST = 1\'de geçerli olur',
+  get: (c) => c.state.randomSeed ?? 0,
+  set: (c, v) => {
+    const n = Number(v) | 0;
+    return n === (c.state.randomSeed ?? 0) ? null : withState(c, { randomSeed: n });
+  },
+};
+
+/** Memory size text: 256, 1K, 64K, 16M words */
+export function memSizeText(addrBits: number): string {
+  if (addrBits >= 20) return `${2 ** (addrBits - 20)}M`;
+  if (addrBits >= 10) return `${2 ** (addrBits - 10)}K`;
+  return String(2 ** addrBits);
+}
+
+/** Parse a decimal integer field (32-bit signed); undefined when it isn't one */
+export function parseIntAttr(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^-?\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return n >= -(2 ** 31) && n < 2 ** 31 ? n : undefined;
+}
+
+export const resolveAttrOptions =(def: AttrDef, comp: CircuitComponentInstance, ctx: AttrContext): AttrOption[] =>
   typeof def.options === 'function' ? def.options(comp, ctx) : def.options ?? [];
 
 /** Parse a hex text field; undefined when it isn't a hex number */

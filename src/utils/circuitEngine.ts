@@ -1276,7 +1276,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
   ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. Logisim 2.7.1 kuralları (sel seçme bacağı; ortak, asenkron ya da ayrı veri yolu; yükselen kenarda yazma) ya da Logisim-evolution kuralları (WE bacağı; tetikleme seçimi; saatli ya da asenkron okuma; bayt etkinleştirme; CLR bacağı)'),
   rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir. Logisim 2.7.1 kurallarında sel = 0 iken çıkış yüzer'),
-  random: ramMeta('random', 'Rastgele Sayı Üreteci (Random)', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
+  random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   counter4: {
     type: 'counter4',
@@ -1761,6 +1761,8 @@ export const RETIRED_PALETTE_TYPES = new Set<ComponentType>([
   'comparator4', 'alu4',
   // Aşama 3e: parametric flip-flops / register / counter / shift register (srLatch stays: no Logisim counterpart)
   'dFlipFlop', 'tFlipFlop', 'jkFlipFlop', 'register4', 'counter4', 'shiftRegister4',
+  // Aşama 3f: parametric RAM / ROM (old circuits keep opening until 3h)
+  'ram16x4', 'rom16x4',
 ]);
 export const PLEXER_MAX_SELECT = 5;
 

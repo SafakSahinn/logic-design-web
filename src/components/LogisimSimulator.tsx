@@ -61,6 +61,10 @@ import {
   getTrigger,
   FLIP_FLOP_TYPES,
   MEM_TYPES,
+  RAM_TYPES,
+  getRamConfig,
+  ramGeometry,
+  memRead,
   pinKey as plexerPinKey,
   plexerLayout,
   RETIRED_PALETTE_TYPES,
@@ -136,6 +140,8 @@ import {
   applyAttribute,
   getComponentAttributes,
   parseHexAttr,
+  parseIntAttr,
+  memSizeText,
   resolveAttrOptions,
   type AttrDef,
   type AttrValue,
@@ -155,6 +161,10 @@ import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circui
 import { bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/vcdGenerator';
+import MemoryHexEditor from './MemoryHexEditor';
+
+/** Parts whose contents the hex editor opens: parametric RAM / ROM and the old 16x4 ones */
+const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'ram16x4', 'rom16x4']);
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
@@ -326,6 +336,9 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   register4: { label: '4-Bit Yazmaç', badge: 'D-REG' },
   counter4: { label: '4-Bit Sayaç', badge: '0-15' },
   shiftRegister4: { label: 'Kaydırmalı Yazmaç', badge: '~74HC194' },
+  ram: { label: 'RAM', badge: 'RAM' },
+  rom: { label: 'ROM', badge: 'ROM' },
+  random: { label: 'Rastgele Sayı', badge: 'RND' },
   ram16x4: { label: '16x4 RAM', badge: 'Bellek' },
   rom16x4: { label: '16x4 ROM', badge: 'Bellek' },
 };
@@ -645,6 +658,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [showHexModal, setShowHexModal] = useState<boolean>(false);
   const [hexTargetCompId, setHexTargetCompId] = useState<string | null>(null);
   const [hexDataBuffer, setHexDataBuffer] = useState<number[]>([]);
+  // Hex editor of a parametric RAM / ROM (paged contents)
+  const [memEditorCompId, setMemEditorCompId] = useState<string | null>(null);
 
   // Automated Test Vector / Testbench Runner state
   const [showTestbenchModal, setShowTestbenchModal] = useState<boolean>(false);
@@ -2029,11 +2044,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const handleOpenHexEditor = (compId?: string) => {
     const target = compId
       ? components.find((c) => c.id === compId)
-      : components.find((c) => selectedCompIds.includes(c.id) && (c.type === 'ram16x4' || c.type === 'rom16x4')) ||
-        components.find((c) => c.type === 'ram16x4' || c.type === 'rom16x4');
+      : components.find((c) => selectedCompIds.includes(c.id) && HEX_EDITABLE_TYPES.has(c.type)) ||
+        components.find((c) => HEX_EDITABLE_TYPES.has(c.type));
 
     if (!target) {
       showToast('Tuvalde RAM veya ROM bileşeni bulunamadı.');
+      return;
+    }
+    if (target.type === 'ram' || target.type === 'rom') {
+      setMemEditorCompId(target.id);
       return;
     }
 
@@ -2044,6 +2063,20 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const initial = Array.isArray(rawData) && rawData.length === 16 ? [...rawData] : fallback;
     setHexDataBuffer(initial);
     setShowHexModal(true);
+  };
+
+  // Save a parametric RAM / ROM's edited contents (all-zero pages are left out)
+  const handleSaveMemEditor = (pages: Record<string, number[]>) => {
+    if (!memEditorCompId) return;
+    recordHistory();
+    const kept: Record<string, number[]> = {};
+    for (const [k, page] of Object.entries(pages)) if (page.some((v) => v !== 0)) kept[k] = page;
+    const updated = components.map((c) => (c.id === memEditorCompId ? { ...c, state: { ...c.state, memPages: kept } } : c));
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    setMemEditorCompId(null);
+    showToast('Bellek içeriği güncellendi.');
   };
 
   // Save Hex Memory Editor Data
@@ -3346,10 +3379,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         list.push({ key: c.id, name: `${name}${w > 1 ? `[${w}]` : ''} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output', width: w });
       } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
         list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
-      } else if (MEM_TYPES.has(c.type)) {
-        // Register / counter: Q; shift register: OUT (the first output)
+      } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
+        // Register / counter / random generator: Q; shift register: OUT (the first output); RAM / ROM: D
         const w = c.outputs[0]?.width ?? 1;
-        list.push({ key: `${c.id}_q`, name: `${name} ${c.type === 'shiftRegister' ? 'OUT' : 'Q'}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
+        const port = c.type === 'shiftRegister' ? 'OUT' : c.type === 'ram' || c.type === 'rom' ? 'D' : 'Q';
+        list.push({ key: `${c.id}_q`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
       } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
         list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'state' });
@@ -3407,7 +3441,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[c.id] = c.outputs[0]?.value ?? 0;
         } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
           values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
-        } else if (MEM_TYPES.has(c.type)) {
+        } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
           const o = c.outputs[0];
           const w = o?.width ?? 1;
           values[`${c.id}_q`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
@@ -6132,13 +6166,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'flipFlopSR':
       case 'register':
       case 'counter':
-      case 'shiftRegister': {
+      case 'shiftRegister':
+      case 'ram':
+      case 'rom':
+      case 'random': {
         // Logisim std/memory classic painters: a plain box, the clock as a triangle on its pin (Logisim draws it
         // for every trigger; here edges get the triangle, levels none, falling / low a bubble too), port labels
         // just inside the pins (reset "0", preset "1", enable "en" in grey) and the stored value in the box.
         // The body turns as a whole; text is turned back around its own point and stays upright
-        const l = memLayout(comp);
-        const { width: w, length: len, parallel } = getMemConfig(comp);
+        const ramCfg = RAM_TYPES.has(comp.type) ? getRamConfig(comp) : null;
+        const l = ramCfg ? ramGeometry(comp.type, ramCfg) : memLayout(comp);
+        const { width: w, length: len, parallel } = ramCfg ? { width: ramCfg.dataWidth, length: 1, parallel: false } : getMemConfig(comp);
         const W = l.width;
         const H = l.height;
         const grey = cadTheme === 'dark' ? '#94a3b8' : '#64748b';
@@ -6178,14 +6216,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             </text>
           );
         };
-        // Clock mark in the body frame (it turns with the body)
-        const trig = getTrigger(comp);
-        const clk = l.pins.clk;
+        // Clock mark in the body frame (it turns with the body). A 2.7.1 RAM stores on the rising edge; an
+        // evolution RAM with a level trigger (and a 2.7.1 asynch one) has no clock pin
+        const clkKey = comp.type === 'random' ? 'ck' : 'clk';
+        const trig = comp.type === 'ram' && ramCfg!.flavor === 'logisim' ? 'rising' : comp.type === 'ram' ? ramCfg!.trigger : getTrigger(comp);
+        const clk = l.pins[clkKey] ?? { x: 0, y: 0 };
         const ci = inwardOf(clk);
         const along = { x: -ci.y, y: ci.x };
         const edge = trig === 'rising' || trig === 'falling';
         const negated = trig === 'falling' || trig === 'low';
-        const clockMark = (
+        const clockMark = !has(clkKey) ? null : (
           <g key="clk">
             {edge && (
               <polyline
@@ -6216,7 +6256,104 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {t}
           </text>
         );
-        if (FLIP_FLOP_TYPES.has(comp.type)) {
+        // Text drawn in the screen frame (the group turns back the body's rotation)
+        const screenText = (x: number, y: number, t: string, size: number, k: string, extra: React.SVGProps<SVGTextElement> = {}) => (
+          <text key={k} x={x} y={y} textAnchor="middle" dominantBaseline="central" fontSize={size} fontFamily="monospace" className={`${gateTextClass} select-none`} {...extra}>
+            {t}
+          </text>
+        );
+        const unturn = rot ? `rotate(${-rot}, ${W / 2}, ${H / 2})` : undefined;
+        // Screen-frame size of the body (a quarter turn swaps the sides)
+        const quarter = rot === 90 || rot === 270;
+        const SW = quarter ? H : W;
+        const SH = quarter ? W : H;
+        const sx0 = (W - SW) / 2;
+        const sy0 = (H - SH) / 2;
+        if (comp.type === 'random') {
+          // Logisim Random: Q at the output, the value in hex (two lines past 4 digits), here kept upright in the
+          // middle so no turn puts it on the clock mark
+          labels.push(portLabel('out', 'Q', false));
+          const s = (comp.state.randomValue ?? 0) % 2 ** w;
+          const t = s.toString(16).toUpperCase().padStart(Math.ceil(w / 4), '0');
+          inside = (
+            <g key="v" transform={unturn}>
+              {t.length <= 4
+                ? screenText(W / 2, H / 2, t, 7, 'v')
+                : [screenText(W / 2, H / 2 - 5, t.slice(0, t.length - 4), 7, 'v1'), screenText(W / 2, H / 2 + 5, t.slice(-4), 7, 'v2')]}
+            </g>
+          );
+        } else if (ramCfg) {
+          // Logisim Mem / MemState: port labels (2.7.1 names: sel, ld, clr, str; evolution: OE, WE, CLR, BE)
+          // and, as Logisim shows a running memory, four rows of words with the current address highlighted.
+          // Logisim memories never turn; here the table stays upright, and a quarter-turned (tall) body shows a
+          // short summary instead
+          const evo = ramCfg.flavor === 'evolution';
+          labels.push(portLabel('a', 'A', false), portLabel('d', 'D', false), portLabel('din', evo ? 'DIN' : 'D', false));
+          labels.push(
+            portLabel('cs', 'sel', true),
+            portLabel('oe', evo ? 'OE' : 'ld', false),
+            portLabel('clr', evo ? 'CLR' : 'clr', false),
+            portLabel('we', evo ? 'WE' : 'str', false)
+          );
+          for (let i = 0; i < 4; i++) labels.push(portLabel(`be${i}`, `BE${i}`, true));
+          if (!edge && comp.type === 'ram' && evo) labels.push(<g key="lvl">{textAt(70, 72, trig === 'high' ? 'C=1' : 'C=0', 5.5, 'lv')}</g>);
+          const addrBits = ramCfg.addrWidth;
+          const words = 2 ** addrBits;
+          const cur = comp.state.memCurrent ?? -1;
+          const hexDigits = (n: number, bits: number) => (n >>> 0).toString(16).toUpperCase().padStart(Math.ceil(bits / 4), '0');
+          const mask = w >= 32 ? 0xffffffff : 2 ** w - 1;
+          const kind = comp.type === 'rom' ? 'ROM' : 'RAM';
+          const cells: React.ReactNode[] = [];
+          if (quarter) {
+            const cx = sx0 + SW / 2;
+            const cy = sy0 + SH / 2;
+            cells.push(screenText(cx, cy - 20, kind, 8, 'k', { fontWeight: 'bold' }), screenText(cx, cy - 8, `${memSizeText(addrBits)}×${w}`, 6.5, 's', { fill: grey, className: 'select-none' }));
+            if (cur >= 0 && cur < words) {
+              cells.push(screenText(cx, cy + 8, `@${hexDigits(cur, addrBits)}`, 6.5, 'ca', { fill: grey, className: 'select-none' }));
+              cells.push(screenText(cx, cy + 19, hexDigits((memRead(comp, cur) & mask) >>> 0, w), 7.5, 'cv', { fontWeight: 'bold' }));
+            }
+          } else {
+            const cols = addrBits <= 12 ? (w <= 4 ? 8 : w <= 8 ? 4 : w <= 16 ? 2 : 1) : w <= 8 ? 2 : 1;
+            const boxX = addrBits <= 12 ? 40 : 60;
+            const boxW = addrBits <= 12 ? 80 : 65;
+            // Port labels on the screen's top / bottom edge push the table; both there make it shorter
+            const sideHas = (keys: string[]) => keys.some((k) => has(k));
+            const controls = sideHas(['we', 'cs', 'clk', 'oe', 'clr']) || (!edge && comp.type === 'ram' && evo);
+            const bytes = sideHas(['be0']);
+            const topBusy = rot === 180 ? controls : bytes;
+            const bottomBusy = rot === 180 ? bytes : controls;
+            const rowH = topBusy && bottomBusy ? 12 : 15;
+            const boxY = topBusy ? 13 : 5;
+            const rows = Math.ceil(words / cols);
+            // Logisim keeps the current word in view; walking forward it sits on the bottom row
+            const top = cur < 0 ? 0 : Math.max(0, Math.min(Math.floor(cur / cols) - 3, rows - 4));
+            const entryW = boxW / cols;
+            cells.push(<rect key="tbl" x={boxX} y={boxY} width={boxW} height={rowH * 4} fill="none" stroke={strokeColor} strokeWidth={0.8} />);
+            for (let r = 0; r < 4 && top + r < rows; r++) {
+              const rowAddr = (top + r) * cols;
+              const y = boxY + rowH * r + rowH / 2;
+              cells.push(screenText(boxX - 2, y, hexDigits(rowAddr, addrBits), 6, `a${r}`, { textAnchor: 'end', fill: grey, className: 'select-none' }));
+              for (let c = 0; c < cols && rowAddr + c < words; c++) {
+                const addr = rowAddr + c;
+                const x = boxX + entryW * c;
+                const isCur = addr === cur;
+                if (isCur) cells.push(<rect key={`h${addr}`} x={x} y={boxY + rowH * r} width={entryW} height={rowH} fill={cadTheme === 'dark' ? '#e2e8f0' : '#1e293b'} />);
+                cells.push(
+                  screenText(x + entryW / 2, y, hexDigits((memRead(comp, addr) & mask) >>> 0, w), w > 24 && cols === 1 ? 6.5 : 7, `v${addr}`, {
+                    fill: isCur ? (cadTheme === 'dark' ? '#0f172a' : '#ffffff') : undefined,
+                    className: `${isCur ? '' : gateTextClass} select-none`,
+                  })
+                );
+              }
+            }
+          }
+          inside = (
+            <g key="mem" transform={unturn}>
+              {cells}
+              <title>{`${comp.type === 'rom' ? 'ROM' : 'RAM'} ${memSizeText(addrBits)} × ${w} bit (${evo ? 'Logisim-evolution' : 'Logisim 2.7.1'} kuralları)`}</title>
+            </g>
+          );
+        } else if (FLIP_FLOP_TYPES.has(comp.type)) {
           const [a, b] = comp.type === 'flipFlopD' ? ['d'] : comp.type === 'flipFlopT' ? ['t'] : comp.type === 'flipFlopJK' ? ['j', 'k'] : ['s', 'r'];
           labels.push(portLabel(a, a.toUpperCase(), false));
           if (b) labels.push(portLabel(b, b.toUpperCase(), false));
@@ -6564,7 +6701,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'memory',
       title: 'Bellek & Sıralı Devreler',
       icon: '💾',
-      types: ['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR', 'srLatch', 'register', 'counter', 'shiftRegister', 'ram16x4', 'rom16x4'] as ComponentType[],
+      types: ['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR', 'srLatch', 'register', 'counter', 'shiftRegister', 'ram', 'rom', 'random'] as ComponentType[],
     },
     {
       id: 'displays',
@@ -10090,6 +10227,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
                   {/* Input Pins */}
                   {comp.inputs.map((pin, pinIdx) => {
+                    // A memory's bus input reads back its data pin on the same point: one pin is drawn there
+                    if (RAM_TYPES.has(comp.type) && plexerPinKey(comp, pin) === 'dio') return null;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     // Clamped hit radius ensures neighboring pins (e.g. 10px apart on 5-input gates) never overlap
@@ -10386,7 +10525,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const single = targets.length === 1;
             const ids = targets.map((c) => c.id);
             const ctx = { clockHz };
-            const defs = getComponentAttributes(first.type).filter((d) => single || !d.singleOnly);
+            const defs = getComponentAttributes(first.type).filter((d) => (single || !d.singleOnly) && (!d.visible || targets.every((c) => d.visible!(c))));
             const dark = cadTheme === 'dark';
             const rowLabel = dark ? 'text-slate-400' : 'text-slate-500';
             const fieldCls = `w-full text-[11px] font-mono rounded-md px-1.5 py-1 border outline-none ${
@@ -10467,6 +10606,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         if (n === undefined) {
                           e.target.value = shown;
                           showToast('Geçersiz onaltılı değer.');
+                          return;
+                        }
+                        handleApplyAttribute(def, n, ids);
+                      }}
+                      className={fieldCls}
+                      title={def.title}
+                    />
+                  );
+                }
+                case 'int': {
+                  const shown = common === undefined ? '' : String(common);
+                  return (
+                    <input
+                      key={`${ids.join('|')}:${shown}`}
+                      defaultValue={shown}
+                      inputMode="numeric"
+                      placeholder={common === undefined ? '—' : undefined}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') {
+                          (e.target as HTMLInputElement).value = shown;
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                      onBlur={(e) => {
+                        if (e.target.value.trim() === '' && common === undefined) return;
+                        const n = parseIntAttr(e.target.value);
+                        if (n === undefined) {
+                          e.target.value = shown;
+                          showToast('Geçersiz tam sayı.');
                           return;
                         }
                         handleApplyAttribute(def, n, ids);
@@ -10559,6 +10728,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               }
             };
 
+            const contentsRow = single && (first.type === 'ram' || first.type === 'rom') && (
+              <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                <span className={`text-[11px] font-semibold ${rowLabel}`}>İçerik</span>
+                <button onClick={() => handleOpenHexEditor(first.id)} className={btnCls(false)} title="Kelimeleri onaltılı düzenleyicide aç">
+                  Düzenle…
+                </button>
+              </div>
+            );
+
             return (
               <div
                 className={`absolute top-16 right-4 z-30 w-72 max-w-[calc(100%-2rem)] max-h-[calc(100%-9rem)] flex flex-col rounded-2xl border shadow-xl backdrop-blur-md text-xs animate-in fade-in duration-150 ${
@@ -10610,13 +10788,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       </div>
                     )}
                     {defs.map((def) => (
-                      <div
-                        key={def.key}
-                        className={def.kind === 'bitMap' ? 'space-y-1' : 'grid grid-cols-[5.5rem_1fr] items-center gap-2'}
-                      >
-                        <span className={`text-[11px] font-semibold ${rowLabel}`} title={def.title}>{def.label}</span>
-                        {renderValue(def)}
-                      </div>
+                      <React.Fragment key={def.key}>
+                        {/* RAM / ROM contents: just above the label placement row */}
+                        {def.key === 'labelPos' && contentsRow}
+                        <div className={def.kind === 'bitMap' ? 'space-y-1' : 'grid grid-cols-[5.5rem_1fr] items-center gap-2'}>
+                          <span className={`text-[11px] font-semibold ${rowLabel}`} title={def.title}>{def.label}</span>
+                          {renderValue(def)}
+                        </div>
+                      </React.Fragment>
                     ))}
                     {defs.length === 0 && !single && (
                       <p className={`text-[11px] ${rowLabel}`}>Bu parçanın ortak ayarı yok.</p>
@@ -12809,7 +12988,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       )}
 
 
-      {/* Hex Memory Matrix Editor Modal (RAM & ROM) */}
+      {/* Hex editor of a parametric RAM / ROM */}
+      {memEditorCompId &&
+        (() => {
+          const target = components.find((c) => c.id === memEditorCompId);
+          return target ? (
+            <MemoryHexEditor
+              key={target.id}
+              comp={target}
+              dark={cadTheme === 'dark'}
+              onSave={handleSaveMemEditor}
+              onClose={() => setMemEditorCompId(null)}
+              onToast={showToast}
+            />
+          ) : null;
+        })()}
+
+      {/* Hex Memory Matrix Editor Modal (16x4 RAM & ROM) */}
       {showHexModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-xl w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
