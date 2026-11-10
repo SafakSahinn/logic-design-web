@@ -145,6 +145,117 @@ function arithMeta(type: ComponentType, name: string, ins: [string, string][], o
   };
 }
 
+// ---- Memory geometry (Logisim std/memory, classic appearance). Function declarations: the catalog uses them ----
+
+/** Data inputs of a flip-flop, in Logisim's port order */
+export function flipFlopDataKeys(type: ComponentType): string[] {
+  return type === 'flipFlopD' ? ['d'] : type === 'flipFlopT' ? ['t'] : type === 'flipFlopJK' ? ['j', 'k'] : ['s', 'r'];
+}
+
+/** Pin keys of a memory part in the order the simulator relies on (shift register: stage pins d0.. / q0.. while parallel) */
+export function memPinKeys(type: ComponentType, len: number, parallel: boolean): { inputs: string[]; outputs: string[] } {
+  if (type === 'register') return { inputs: ['d', 'clk', 'clr', 'en'], outputs: ['q'] };
+  if (type === 'counter') return { inputs: ['d', 'clk', 'clr', 'ld', 'ct', 'ud'], outputs: ['q', 'carry'] };
+  if (type === 'shiftRegister') {
+    const stages = (p: string) => (parallel ? Array.from({ length: len }, (_, i) => `${p}${i}`) : []);
+    return { inputs: ['sh', 'in', 'clk', 'clr', ...(parallel ? ['ld'] : []), ...stages('d')], outputs: ['out', ...stages('q')] };
+  }
+  return { inputs: [...flipFlopDataKeys(type), 'clk', 'clr', 'pre', 'en'], outputs: ['q', 'qn'] };
+}
+
+/** Width of a memory part's pin for data width w: the data pins are w bits, controls 1 bit */
+export function memPinWidth(type: ComponentType, key: string, w: number): number {
+  if (type === 'register' || type === 'counter') return key === 'd' || key === 'q' ? w : 1;
+  if (type === 'shiftRegister') return key === 'in' || key === 'out' || /^[dq]\d+$/.test(key) ? w : 1;
+  return 1;
+}
+
+/**
+ * Unrotated layout of a memory part, origin at the body's top-left corner. Pins sit where Logisim's classic
+ * appearance has them (flip-flop: data and clock on the left, Q / Q' on the right, reset 0 / preset 1 /
+ * enable along the bottom; register / counter: data, enable, load on the left, clock and clear along the
+ * bottom, up/down on top; shift register: shift, data, clock on the left, load and parallel inputs on top,
+ * clear and parallel outputs along the bottom). Logisim's 30px wide register / counter and the shift register
+ * are made 10px wider on the right where needed, so a quarter turn around the body centre keeps every pin on
+ * the 10px grid (width minus height must be a multiple of 20). `anchor` is Logisim's location in this frame.
+ */
+export function memGeometry(type: ComponentType, len: number, parallel: boolean): {
+  width: number;
+  height: number;
+  pins: Record<string, { x: number; y: number }>;
+  anchor: { x: number; y: number };
+} {
+  if (type === 'register' || type === 'counter') {
+    const pins: Record<string, { x: number; y: number }> = {
+      d: { x: 0, y: 20 },
+      clk: { x: 10, y: 40 },
+      clr: { x: 20, y: 40 },
+      q: { x: 40, y: 20 },
+    };
+    if (type === 'register') pins.en = { x: 0, y: 30 };
+    else Object.assign(pins, { ld: { x: 0, y: 10 }, ct: { x: 0, y: 30 }, ud: { x: 10, y: 0 }, carry: { x: 40, y: 30 } });
+    return { width: 40, height: 40, pins, anchor: { x: 40, y: 20 } };
+  }
+  if (type === 'shiftRegister') {
+    const width = parallel ? Math.ceil((20 + 10 * len) / 20) * 20 : 40;
+    const pins: Record<string, { x: number; y: number }> = {
+      sh: { x: 0, y: 10 },
+      in: { x: 0, y: 20 },
+      clk: { x: 0, y: 30 },
+      clr: { x: 10, y: 40 },
+      out: { x: width, y: 20 },
+    };
+    if (parallel) {
+      pins.ld = { x: 10, y: 0 };
+      for (let i = 0; i < len; i++) {
+        pins[`d${i}`] = { x: 20 + 10 * i, y: 0 };
+        pins[`q${i}`] = { x: 20 + 10 * i, y: 40 };
+      }
+    }
+    return { width, height: 40, pins, anchor: { x: 0, y: 20 } };
+  }
+  const two = type === 'flipFlopJK' || type === 'flipFlopSR';
+  const [a, b] = flipFlopDataKeys(type);
+  const pins: Record<string, { x: number; y: number }> = two
+    ? { [a]: { x: 0, y: 10 }, [b]: { x: 0, y: 30 }, clk: { x: 0, y: 20 } }
+    : { [a]: { x: 0, y: 30 }, clk: { x: 0, y: 10 } };
+  Object.assign(pins, { q: { x: 40, y: 10 }, qn: { x: 40, y: 30 }, clr: { x: 30, y: 40 }, pre: { x: 10, y: 40 }, en: { x: 20, y: 40 } });
+  return { width: 40, height: 40, pins, anchor: { x: 40, y: 10 } };
+}
+
+const MEM_PIN_LABELS: Record<string, string> = {
+  d: 'D', t: 'T', j: 'J', k: 'K', s: 'S', r: 'R', clk: 'CLK', clr: 'CLR', pre: 'PRE', en: 'EN', q: 'Q', qn: "Q'",
+  ld: 'LD', ct: 'CT', ud: 'UD', carry: 'C', sh: 'SH', in: 'IN', out: 'OUT',
+};
+/** Label of a memory part's pin (stage pins: D0.. / Q0..) */
+export function memPinLabel(key: string): string {
+  return MEM_PIN_LABELS[key] ?? key.toUpperCase();
+}
+
+// Catalog entry of a memory part with Logisim's defaults (register / counter 8 bits; shift register 1 bit,
+// 8 stages, parallel load)
+function memMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const isShift = type === 'shiftRegister';
+  const w = type === 'register' || type === 'counter' ? 8 : 1;
+  const len = isShift ? 8 : 1;
+  const g = memGeometry(type, len, true);
+  const keys = memPinKeys(type, len, true);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = memPinWidth(type, id, w);
+    return { id, name: memPinLabel(id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: 'sequential',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   switch: {
     type: 'switch',
@@ -1028,6 +1139,13 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   alu: arithMeta('alu', 'Aritmetik Mantık Birimi (ALU)', [['a', 'A'], ['b', 'B'], ['op', 'OP'], ['cin', 'Cin']],
     [['out', 'Y'], ['z', 'Z'], ['n', 'N'], ['c', 'C'], ['v', 'V']],
     '3 bitlik OP ile 8 işlem: 000 ADD (A+B+Cin), 001 SUB (A−B−Cin), 010 AND, 011 OR, 100 XOR, 101 NOR, 110 SLT (işaretli A<B), 111 PASS-B. Bayraklar: Z sıfır, N işaret, C elde/borç, V işaretli taşma (C ve V yalnız ADD/SUB). Veri 1-32 bit'),
+  flipFlopD: memMeta('flipFlopD', 'D Flip-Flop', 'Saat tetiklendiğinde D girişini saklar. Tetikleme: yükselen / düşen kenar ya da yüksek / düşük seviye (seviyede D mandalı gibi saydamdır). CLR (0) ve PRE (1) asenkron, yalnız 1 iken etkili; EN yalnız 0 iken engeller'),
+  flipFlopT: memMeta('flipFlopT', 'T Flip-Flop', 'Saat kenarında T = 1 ise durumunu tersler, aksi halde korur. Yükselen veya düşen kenar; CLR / PRE asenkron, EN yalnız 0 iken engeller'),
+  flipFlopJK: memMeta('flipFlopJK', 'J-K Flip-Flop', 'Saat kenarında J=1 K=0 kurar, J=0 K=1 sıfırlar, J=K=1 tersler, J=K=0 korur. Yükselen veya düşen kenar; CLR / PRE asenkron, EN yalnız 0 iken engeller'),
+  flipFlopSR: memMeta('flipFlopSR', 'S-R Flip-Flop', 'Saat tetiklendiğinde S=1 R=0 kurar, S=0 R=1 sıfırlar; S=R=1 ya da tanımsız giriş durumu değiştirmez. Kenar veya seviye tetikleme; CLR / PRE asenkron, EN yalnız 0 iken engeller'),
+  register: memMeta('register', 'Yazmaç (Register)', 'Saat tetiklendiğinde ve EN 0 değilken D verisini saklar (x / E bitleri de saklanır). CLR asenkron sıfırlar. Genişlik 1-32 bit, kenar veya seviye tetikleme'),
+  counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
+  shiftRegister: memMeta('shiftRegister', 'Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -1214,7 +1332,7 @@ export function createComponentInstance(
     type: 'output',
     // Q' starts at 1 like the flip-flop state (q = 0, qBar = 1); a 0 there rose to 1 on the first step and
     // clocked whatever it drives
-    value: POWER_UP_X_TYPES.has(type) ? 'X' : type === 'vcc' || pin.id === 'outQBar' ? 1 : 0,
+    value: POWER_UP_X_TYPES.has(type) ? 'X' : type === 'vcc' || pin.id === 'outQBar' || pin.id === 'qn' ? 1 : 0,
     ...(pin.width && pin.width > 1 ? { width: pin.width } : {}),
     x: x + pin.relX,
     y: y + pin.relY,
@@ -1255,6 +1373,7 @@ export function createComponentInstance(
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
   }
   if (ARITH_TYPES.has(type)) return configureArith(inst, {});
+  if (MEM_TYPES.has(type)) return configureMem(inst, {});
   return inst;
 }
 
@@ -1286,6 +1405,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (ARITH_TYPES.has(comp.type)) {
     const g = arithLayout(comp);
+    return { width: g.width, height: g.height };
+  }
+  if (MEM_TYPES.has(comp.type)) {
+    const g = memLayout(comp);
     return { width: g.width, height: g.height };
   }
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
@@ -1999,6 +2122,215 @@ export function computeArith(comp: CircuitComponentInstance, ins: SignalValue[][
   }
 }
 
+// ---- Parametric memory (Logisim std/memory: flip-flops, register, counter, shift register) ------------------
+
+export const FLIP_FLOP_TYPES = new Set<ComponentType>(['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR']);
+export const MEM_TYPES = new Set<ComponentType>([...FLIP_FLOP_TYPES, 'register', 'counter', 'shiftRegister']);
+/** Parts whose clock can also act on a level (Logisim StdAttr.TRIGGER); the others take edges only */
+export const LEVEL_TRIGGER_TYPES = new Set<ComponentType>(['flipFlopD', 'flipFlopSR', 'register']);
+export const SHIFT_REGISTER_MAX_LENGTH = 32;
+export type TriggerMode = 'rising' | 'falling' | 'high' | 'low';
+
+export interface MemConfig {
+  /** Data width (1-32; flip-flops 1) */
+  width: number;
+  /** Shift register stages (1-32); 1 for the others */
+  length: number;
+  /** Shift register parallel load / outputs; true for the others */
+  parallel: boolean;
+}
+
+export function getMemConfig(comp: CircuitComponentInstance): MemConfig {
+  const find = (key: string) => [...comp.inputs, ...comp.outputs].find((p) => pinKey(comp, p) === key);
+  if (comp.type === 'shiftRegister') {
+    const parallel = comp.state.shiftParallel ?? true;
+    const length = parallel
+      ? Math.max(1, comp.outputs.length - 1)
+      : Math.max(1, comp.state.shiftLength ?? comp.state.shiftStages?.length ?? 8);
+    return { width: find('in')?.width ?? 1, length, parallel };
+  }
+  return { width: comp.type === 'register' || comp.type === 'counter' ? find('d')?.width ?? 1 : 1, length: 1, parallel: true };
+}
+
+export function memLayout(comp: CircuitComponentInstance) {
+  const { length, parallel } = getMemConfig(comp);
+  return memGeometry(comp.type, length, parallel);
+}
+
+/** A part's trigger, limited to what it supports (edge-only parts read a level setting as rising) */
+export function getTrigger(comp: CircuitComponentInstance): TriggerMode {
+  const t = comp.state.trigger ?? 'rising';
+  if (!LEVEL_TRIGGER_TYPES.has(comp.type) && (t === 'high' || t === 'low')) return 'rising';
+  return t;
+}
+
+const memMask = (w: number): number => (w >= 32 ? 0xffffffff : 2 ** w - 1);
+
+/** Counter's largest value (unset = all bits 1), kept within the width */
+export function getCounterMax(comp: CircuitComponentInstance): number {
+  const w = getMemConfig(comp).width;
+  const m = comp.state.counterMax;
+  return m === undefined ? memMask(w) : (m >>> 0) % 2 ** w;
+}
+
+// Stored value at a new width: extra high bits 0, cut ones dropped (Logisim Value.extendWidth with 0)
+const fitBits = (bits: SignalValue[] | undefined, w: number): SignalValue[] =>
+  Array.from({ length: w }, (_, i) => bits?.[i] ?? 0);
+
+/**
+ * New data width / shift register length / parallel setting; pins keep their ids (and wires), widths follow
+ * the data width. The stored value follows like Logisim: bits cut or 0-extended; a counter growing wider
+ * goes back to the full maximum, narrower keeps its maximum's low bits (CounterAttributes); a shift register
+ * keeps the stages nearest its output (ShiftRegisterData.setDimensions).
+ */
+export function configureMem(comp: CircuitComponentInstance, patch: Partial<MemConfig>): CircuitComponentInstance {
+  const isShift = comp.type === 'shiftRegister';
+  const wide = comp.type === 'register' || comp.type === 'counter' || isShift;
+  const cur = comp.inputs.length ? getMemConfig(comp) : { width: isShift ? 1 : wide ? 8 : 1, length: isShift ? 8 : 1, parallel: true };
+  const w = wide ? clampWidth(patch.width ?? cur.width) : 1;
+  const len = isShift ? Math.max(1, Math.min(SHIFT_REGISTER_MAX_LENGTH, Math.round(patch.length ?? cur.length))) : 1;
+  const parallel = isShift ? patch.parallel ?? cur.parallel : true;
+  const keys = memPinKeys(comp.type, len, parallel);
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = memPinLabel(key);
+    return { ...pinWithWidth(old.get(key) ?? newPin(comp, key, name, type), memPinWidth(comp.type, key, w)), name };
+  };
+  const state = { ...comp.state };
+  if (comp.type === 'register' || comp.type === 'counter') {
+    if (state.seqBits) state.seqBits = fitBits(state.seqBits, w);
+    if (comp.type === 'counter' && w !== cur.width && state.counterMax !== undefined) {
+      if (w > cur.width) delete state.counterMax;
+      else state.counterMax = (state.counterMax >>> 0) % 2 ** w;
+    }
+  }
+  if (isShift) {
+    const s = state.shiftStages ?? [];
+    const oldLen = s.length;
+    state.shiftStages = Array.from({ length: len }, (_, i) => {
+      const from = oldLen - len + i; // aligned on the output end
+      return fitBits(from >= 0 ? s[from] : undefined, w);
+    });
+    state.shiftParallel = parallel;
+    state.shiftLength = len;
+  }
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+/** Whether the clock acts now (Logisim ClockState.updateClock); edges need a clean 0/1 step, the first evaluation has no previous level */
+const clockActs = (comp: CircuitComponentInstance, clk: SignalValue, mode: TriggerMode): boolean => {
+  const prev = comp.state.lastClk ?? clk;
+  comp.state.lastClk = clk;
+  if (mode === 'falling') return prev === 1 && clk === 0;
+  if (mode === 'high') return clk === 1;
+  if (mode === 'low') return clk === 0;
+  return prev === 0 && clk === 1;
+};
+
+const bitsBig = (b: SignalValue[]): number => b.reduce<number>((acc, v, i) => (v === 1 ? acc + 2 ** i : acc), 0);
+const numBits = (n: number, w: number): SignalValue[] => {
+  const m = 2 ** w;
+  const v = ((n % m) + m) % m;
+  return Array.from({ length: w }, (_, i) => (Math.floor(v / 2 ** i) % 2 === 1 ? 1 : 0));
+};
+const defined = (b: SignalValue[]): boolean => b.every((v) => v === 0 || v === 1);
+
+/**
+ * One evaluation of a memory part: reads its inputs (bits LSB first, in memPinKeys order; open bits x), updates
+ * its stored state and returns its outputs. Rules of Logisim 2.7.1 and evolution (std/memory):
+ * - clear (reset 0) and preset (1) act only at 1, at any time, clear first; enable / count / shift block only at 0
+ * - flip-flops store only a 0/1 next value (J-K or S-R inputs that are not 0/1, S = R = 1: no change); the enable
+ *   pin is 2.7.1's (evolution dropped it)
+ * - register stores D as it is, x / E bits included (evolution; 2.7.1 skips an undefined D)
+ * - counter: evolution's up/down pin (open = up) and load before count (2.7.1 counts down on load + count);
+ *   loading an undefined D stores it as it is (evolution would store the maximum), counting from an undefined
+ *   value gives E, carry = value at the goal (max up, 0 down), E while the value is undefined
+ * - shift register: stage values move as they are (x included); load needs 1, shift is on unless 0
+ */
+export function stepMem(comp: CircuitComponentInstance, ins: SignalValue[][]): SignalValue[][] {
+  const { width: w, length: len, parallel } = getMemConfig(comp);
+  const trig = getTrigger(comp);
+  const one = (i: number): SignalValue => ins[i]?.[0] ?? 'X';
+  if (FLIP_FLOP_TYPES.has(comp.type)) {
+    const n = flipFlopDataKeys(comp.type).length;
+    const acts = clockActs(comp, one(n), trig);
+    let q: SignalValue = comp.state.q === 1 ? 1 : 0;
+    if (one(n + 1) === 1) q = 0;
+    else if (one(n + 2) === 1) q = 1;
+    else if (acts && one(n + 3) !== 0) {
+      const a = one(0);
+      const b = one(1);
+      let next: SignalValue = 'X';
+      if (comp.type === 'flipFlopD') next = a;
+      else if (comp.type === 'flipFlopT') next = a === 1 ? (q === 1 ? 0 : 1) : q;
+      else if (a === 0 && b === 0) next = q;
+      else if (a === 0 && b === 1) next = 0;
+      else if (a === 1 && b === 0) next = 1;
+      else if (a === 1 && b === 1 && comp.type === 'flipFlopJK') next = q === 1 ? 0 : 1;
+      if (next === 0 || next === 1) q = next;
+    }
+    comp.state.q = q;
+    comp.state.qBar = q === 1 ? 0 : 1;
+    return [[q], [q === 1 ? 0 : 1]];
+  }
+  if (comp.type === 'register') {
+    const acts = clockActs(comp, one(1), trig);
+    let v = fitBits(comp.state.seqBits, w);
+    if (one(2) === 1) v = fitBits(undefined, w);
+    else if (acts && one(3) !== 0) v = fitBits(ins[0], w);
+    comp.state.seqBits = v;
+    return [v];
+  }
+  if (comp.type === 'counter') {
+    const acts = clockActs(comp, one(1), trig);
+    const max = getCounterMax(comp);
+    const up = one(5) !== 0;
+    const old = fitBits(comp.state.seqBits, w);
+    let v = old;
+    if (one(2) === 1) {
+      comp.state.seqBits = fitBits(undefined, w);
+      return [comp.state.seqBits, [0]];
+    }
+    const load = (): SignalValue[] => {
+      const d = fitBits(ins[0], w);
+      if (!defined(d)) return d;
+      const n = bitsBig(d);
+      return numBits(n > max ? (n & max) >>> 0 : n, w);
+    };
+    if (acts) {
+      if (one(3) === 1) v = load();
+      else if (!defined(old)) v = new Array<SignalValue>(w).fill('E');
+      else if (one(4) !== 0) {
+        const o = bitsBig(old);
+        const step = (): SignalValue[] => numBits(up ? o + 1 : o - 1, w);
+        if (o === (up ? max : 0)) {
+          const goal = comp.state.counterGoal ?? 'wrap';
+          v = goal === 'wrap' ? numBits(up ? 0 : max, w) : goal === 'stay' ? old : goal === 'load' ? load() : step();
+        } else v = step();
+      }
+    }
+    comp.state.seqBits = v;
+    const carry: SignalValue = defined(v) ? (bitsBig(v) === (up ? max : 0) ? 1 : 0) : 'E';
+    return [v, [carry]];
+  }
+  // shift register
+  const acts = clockActs(comp, one(2), trig);
+  let s = Array.from({ length: len }, (_, i) => fitBits(comp.state.shiftStages?.[i], w));
+  if (one(3) === 1) s = s.map(() => fitBits(undefined, w));
+  else if (acts) {
+    if (parallel && one(4) === 1) s = s.map((_, i) => fitBits(ins[5 + i], w));
+    else if (one(0) !== 0) s = [fitBits(ins[1], w), ...s.slice(0, len - 1)];
+  }
+  comp.state.shiftStages = s;
+  return [s[len - 1], ...(parallel ? s : [])];
+}
+
 /**
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
@@ -2107,6 +2439,15 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
 
   if (ARITH_TYPES.has(comp.type)) {
     const g = arithLayout(comp);
+    const place = (pin: CircuitPin) => {
+      const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
+      const p = rotatePoint(at.x, at.y);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
+  }
+  if (MEM_TYPES.has(comp.type)) {
+    const g = memLayout(comp);
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -2858,6 +3199,15 @@ export function simulateCircuitStep(
       case 'bitFinder':
       case 'alu':
         computeArith(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
+        break;
+      case 'flipFlopD':
+      case 'flipFlopT':
+      case 'flipFlopJK':
+      case 'flipFlopSR':
+      case 'register':
+      case 'counter':
+      case 'shiftRegister':
+        stepMem(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
         break;
       case 'bitSelector': {
         // Logisim BitSelector: group `select` of the data (bits past the data end are 0); a select

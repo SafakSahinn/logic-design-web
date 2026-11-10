@@ -81,6 +81,14 @@ export type ComponentType =
   | 'counter4'
   | 'register4'
   | 'shiftRegister4'
+  // Parametric memory (Logisim std/memory, Aşama 3e)
+  | 'flipFlopD'
+  | 'flipFlopT'
+  | 'flipFlopJK'
+  | 'flipFlopSR'
+  | 'register'
+  | 'counter'
+  | 'shiftRegister'
   | 'ram16x4'
   | 'rom16x4'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
@@ -172,6 +180,20 @@ export interface CircuitComponentInstance {
     shiftType?: 'll' | 'lr' | 'ar' | 'rl' | 'rr';
     /** Bit finder: which bit it looks for (Logisim 'type'); unset = low1 */
     findType?: 'low1' | 'high1' | 'low0' | 'high0';
+    /** Flip-flops / register: when the clock acts (Logisim 'trigger'): edges or levels (D, S-R, register); T, J-K, counter and shift register edges only; unset = rising */
+    trigger?: 'rising' | 'falling' | 'high' | 'low';
+    /** Counter: largest value (Logisim 'max'), unsigned; unset = all bits 1 */
+    counterMax?: number;
+    /** Counter: what a count past the goal does (Logisim 'ongoal'); unset = wrap */
+    counterGoal?: 'wrap' | 'stay' | 'continue' | 'load';
+    /** Shift register: parallel load and stage outputs (Logisim 'parallel'); unset = true */
+    shiftParallel?: boolean;
+    /** Shift register: number of stages (Logisim 'length', 1-32); unset = 8 */
+    shiftLength?: number;
+    /** Register / counter: stored value, LSB first (x / E bits kept, evolution) */
+    seqBits?: SignalValue[];
+    /** Shift register: stage values, stage 0 = the one the serial input enters, last = OUT; each LSB first */
+    shiftStages?: SignalValue[][];
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
