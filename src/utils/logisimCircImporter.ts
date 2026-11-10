@@ -9,11 +9,18 @@ import {
   configureBitSelector,
   configureMem,
   configurePlexer,
+  configureRam,
   configureSplitter,
   createComponentInstance,
+  defaultRamConfig,
   flipFlopDataKeys,
   MEM_TYPES,
   PLEXER_TYPES,
+  RAM_ADDR_MAX,
+  RAM_ADDR_MIN,
+  RAM_TYPES,
+  ramByteEnableCount,
+  type RamConfig,
   pinKey,
   getComponentSize,
   setBitWidth,
@@ -21,6 +28,7 @@ import {
   splitterDistribution,
   updatePinPositions,
 } from './circuitEngine';
+import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance } from './subcircuitManager';
 import { repairWires } from './wiringEngine';
 
@@ -98,8 +106,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // Memory (Logisim std/memory)
   const mem = LOGISIM_MEM_TYPE[n];
   if (mem) return mem;
-  if (n === 'ram') return 'ram16x4';
-  if (n === 'rom') return 'rom16x4';
+  if (n === 'ram') return 'ram';
+  if (n === 'rom') return 'rom';
+  if (n === 'random') return 'random';
 
   return null;
 }
@@ -526,6 +535,142 @@ export function logisimMemSettings(
   return { width, fileWidth, length, fileLength, parallel, trigger, max, goal, appearance, notes };
 }
 
+/** Logisim element names of the RAM, ROM and random generator (std/memory, library "#Memory") */
+export const LOGISIM_RAM_NAME: Partial<Record<ComponentType, string>> = { ram: 'RAM', rom: 'ROM', random: 'Random' };
+
+/**
+ * Which Logisim draws a RAM / ROM / random generator: 'logisim' = Logisim 2.7.1 (loc on the data pin, box to its
+ * left), 'classic' / 'evolution' = Logisim-evolution's two appearances (loc at the top-left corner).
+ */
+export type LogisimRamLook = 'logisim' | 'classic' | 'evolution';
+
+/**
+ * Connection points of a RAM / ROM / random generator relative to its loc, with our pin keys. A bidirectional
+ * data bus is 'd' and 'dio' on the same point. Logisim 2.7.1: Mem (D 0,0; A -140,0; CS -90,40), Ram (OE -50,40,
+ * CLR -30,40, CLK -70,40 unless asynch, WE -110,40 and DIN -140,20 when separate), Random (Q 0,0, CK -30,-10,
+ * NXT -30,10, RST -20,20). Logisim-evolution RamAppearance in byte-enable mode: A (0,10), WE (0,50), OE (0,60),
+ * byte enables from (0,70) down to the first, clock below them, CLR (40,0); the data pins sit at the control
+ * block's height (60, +20 for the trigger, +10 with a clock, +10 per byte enable; +10 more for one bit in the
+ * evolution look), DIN on the left, D on the right edge (240, the evolution look: 240 separate / 250 bidir).
+ * Its ROM has only A and D (control block 60); Random: classic Q (40,20) CK (10,40) NXT (0,30) RST (30,40),
+ * evolution Q (80,80) CK (0,50) NXT (0,40) RST (0,30).
+ */
+export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: LogisimRamLook): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  if (type === 'random') {
+    if (look === 'logisim') return [P('out', 0, 0), P('ck', -30, -10), P('nxt', -30, 10), P('rst', -20, 20)];
+    if (look === 'classic') return [P('out', 40, 20), P('ck', 10, 40), P('nxt', 0, 30), P('rst', 30, 40)];
+    return [P('out', 80, 80), P('ck', 0, 50), P('nxt', 0, 40), P('rst', 0, 30)];
+  }
+  if (look === 'logisim') {
+    const ps = [P('a', -140, 0), P('d', 0, 0), P('cs', -90, 40)];
+    if (type === 'rom') return ps;
+    ps.push(P('oe', -50, 40), P('clr', -30, 40));
+    if (cfg.bus !== 'asynch') ps.push(P('clk', -70, 40));
+    if (cfg.bus === 'separate') ps.push(P('we', -110, 40), P('din', -140, 20));
+    else ps.push(P('dio', 0, 0));
+    return ps;
+  }
+  const oneBit = look === 'evolution' && cfg.dataWidth === 1 ? 10 : 0;
+  if (type === 'rom') return [P('a', 0, 10), P('d', 240, 60 + oneBit)];
+  const evoCfg: RamConfig = { ...cfg, flavor: 'evolution' };
+  const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+  const nBE = ramByteEnableCount(evoCfg);
+  const dataY = 80 + (edge ? 10 : 0) + nBE * 10 + oneBit;
+  const sep = cfg.dataBus !== 'bidir';
+  const right = look === 'classic' ? 240 : sep ? 240 : 250;
+  const ps = [P('a', 0, 10), P('d', right, dataY), sep ? P('din', 0, dataY) : P('dio', right, dataY), P('oe', 0, 60), P('we', 0, 50)];
+  if (edge) ps.push(P('clk', 0, 70 + nBE * 10));
+  for (let i = 0; i < nBE; i++) ps.push(P(`be${i}`, 0, 70 + (nBE - i - 1) * 10));
+  if (cfg.clearPin) ps.push(P('clr', 40, 0));
+  return ps;
+}
+
+// RAM attributes only Logisim-evolution writes (a 2.7.1 RAM has only addrWidth, dataWidth and bus)
+const EVO_RAM_ATTRS = ['appearance', 'databus', 'enables', 'trigger', 'clearpin', 'asyncread', 'readbehav', 'byteenables', 'type', 'line'];
+
+/**
+ * Settings of a Logisim RAM / ROM / random generator. Rules: a memory of a Logisim-evolution file is an evolution
+ * one; in a 2.7.1 file it is too when it carries an attribute only evolution has (our export writes the
+ * appearance with every evolution memory), else it follows 2.7.1. A missing appearance is evolution's own look
+ * (XmlReader). Defaults left out of the file: 8 address / 8 data bits; 2.7.1 bus combined; evolution separate
+ * data bus, rising trigger, clocked read, read after write, no byte enables, no clear pin; random 8 bits, seed 0.
+ * ROM contents: "addr/data: A D" then the words in hex, runs written "count*value".
+ */
+export function logisimRamSettings(
+  type: ComponentType,
+  attr: Record<string, string>,
+  evolutionFile: boolean
+): {
+  cfg: RamConfig;
+  look: LogisimRamLook;
+  asyncRead: boolean;
+  readBehavior: 'raw' | 'war';
+  seed: number;
+  pages?: Record<string, number[]>;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  const cfg = defaultRamConfig();
+  const int = (v: string | undefined, dflt: number) => {
+    const n = v === undefined ? NaN : parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : dflt;
+  };
+  const evoAppearance: LogisimRamLook = attr.appearance === 'classic' ? 'classic' : 'evolution';
+  if (type === 'random') {
+    let w = int(attr.width, 8);
+    if (w > 32) {
+      notes.push(`${w} bitlik, 32 bit olarak alındı.`);
+      w = 32;
+    }
+    cfg.dataWidth = w;
+    cfg.trigger = attr.trigger === 'falling' ? 'falling' : 'rising';
+    const seed = parseInt(attr.seed ?? '0', 10);
+    const look = evolutionFile || attr.appearance !== undefined ? evoAppearance : 'logisim';
+    if (evolutionFile) notes.push(`Logisim-evolution'ın üreteci başka bir dizi verir (Xoshiro256++); burada Logisim 2.7.1'in dizisi kullanılıyor.`);
+    return { cfg, look, asyncRead: false, readBehavior: 'raw', seed: Number.isFinite(seed) ? seed | 0 : 0, notes };
+  }
+  const evo = evolutionFile || (type === 'rom' ? attr.appearance !== undefined : EVO_RAM_ATTRS.some((k) => attr[k] !== undefined));
+  cfg.flavor = evo ? 'evolution' : 'logisim';
+  cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, int(attr.addrWidth, 8)));
+  cfg.dataWidth = int(attr.dataWidth, 8);
+  if (cfg.dataWidth > 32) {
+    notes.push(`${cfg.dataWidth} bitlik veri, 32 bit olarak alındı.`);
+    cfg.dataWidth = 32;
+  }
+  let asyncRead = false;
+  let readBehavior: 'raw' | 'war' = 'raw';
+  if (type === 'ram') {
+    if (!evo) cfg.bus = attr.bus === 'asynch' || attr.bus === 'separate' ? attr.bus : 'combined';
+    else {
+      cfg.dataBus = attr.databus === 'bidir' ? 'bidir' : attr.databus === 'bibusControlled' ? 'controlled' : 'separate';
+      cfg.trigger = (['rising', 'falling', 'high', 'low'] as const).find((t) => t === attr.trigger) ?? 'rising';
+      cfg.byteEnables = attr.byteenables === 'byteEnables';
+      cfg.clearPin = attr.clearpin === 'true';
+      asyncRead = attr.asyncread === 'true';
+      readBehavior = attr.readbehav === 'war' ? 'war' : 'raw';
+      if (attr.enables === 'line')
+        notes.push(`satır kipi (line enables${attr.line ? `, ${attr.line}` : ''}) desteklenmiyor; bayt etkinleştirmeli RAM olarak alındı, bağlantıları kontrol edin.`);
+    }
+  } else if (attr.line && attr.line !== 'single') {
+    notes.push(`çok kelimelik satır (${attr.line}) desteklenmiyor; tek kelimelik ROM olarak alındı, bağlantıları kontrol edin.`);
+  }
+  let pages: Record<string, number[]> | undefined;
+  if (type === 'rom' && attr.contents !== undefined) {
+    const text = attr.contents.replace(/\r/g, '');
+    const nl = text.indexOf('\n');
+    const head = (nl < 0 ? text : text.slice(0, nl)).trim();
+    if (!/^addr\/data:\s+\d+\s+\d+$/.test(head)) notes.push('ROM içeriği okunamadı (addr/data başlığı yok), boş alındı.');
+    else {
+      const mask = cfg.dataWidth >= 32 ? 0xffffffff : 2 ** cfg.dataWidth - 1;
+      const r = rawTextToMem(nl < 0 ? '' : text.slice(nl + 1), 2 ** cfg.addrWidth, mask);
+      if (typeof r === 'string') notes.push(`ROM içeriği okunamadı (${r}), boş alındı.`);
+      else pages = r.pages;
+    }
+  }
+  return { cfg, look: evo ? evoAppearance : 'logisim', asyncRead, readBehavior, seed: 0, pages, notes };
+}
+
 /**
  * Logisim 2.7.1 DefaultAppearance: where each Pin of a circuit appears on its subcircuit box, relative to
  * the anchor (the instance's loc). A pin facing east sits on the west edge and so on; pins of an edge are
@@ -882,6 +1027,11 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       }
       return { ...st, appearance, ports: portsFor(appearance) };
     };
+    // RAM / ROM / random generator settings and connection points (relative to loc)
+    const ramSettings = (type: ComponentType, attr: Record<string, string>) => {
+      const st = logisimRamSettings(type, attr, evolutionFile);
+      return { ...st, ports: logisimRamPorts(type, st.cfg, st.look) };
+    };
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -892,7 +1042,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       const attr: Record<string, string> = {};
       for (let a = 0; a < attrs.length; a++) {
         const aName = attrs[a].getAttribute('name');
-        if (aName) attr[aName] = attrs[a].getAttribute('val') ?? attrs[a].textContent ?? '';
+        // A long value (ROM contents) is the element's text instead of 'val'
+        if (aName) attr[aName] = attrs[a].hasAttribute('val') ? attrs[a].getAttribute('val') ?? '' : attrs[a].textContent ?? '';
       }
       sig.push(`c${compNode.getAttribute('lib') ?? ''}:${compName}${compNode.getAttribute('loc')}${Object.entries(attr).map(([k, v]) => `${k}=${v}`).join(',')}`);
       const isOutput = attr.output === 'true';
@@ -934,12 +1085,13 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType))
+        warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -956,6 +1108,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? logisimArithPorts(nativeType, logisimArithSettings(nativeType, attr, fileSource).inputs).map((p) => p.off)
                 : MEM_TYPES.has(nativeType)
                 ? memSettings(nativeType, attr, loc).ports.map((p) => p.off)
+                : RAM_TYPES.has(nativeType)
+                ? ramSettings(nativeType, attr).ports.map((p) => p.off)
                 : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
@@ -1197,6 +1351,37 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
         if (nativeType === 'counter' && !evolutionFile && wired('ud'))
           warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
+        continue;
+      }
+      if (RAM_TYPES.has(nativeType)) {
+        // Every pin on its Logisim connection point (2.7.1 or evolution layout); ours keeps its own drawing
+        const st = ramSettings(nativeType, attr);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        let inst = configureRam(createComponentInstance(nativeType, 0, 0), st.cfg);
+        const state = { ...inst.state };
+        if (nativeType === 'random') {
+          state.trigger = st.cfg.trigger;
+          if (st.seed) state.randomSeed = st.seed;
+        }
+        if (nativeType === 'ram' && st.cfg.flavor === 'evolution') {
+          state.ramAsyncRead = st.asyncRead;
+          state.ramReadBehavior = st.readBehavior;
+        }
+        if (st.pages && Object.keys(st.pages).length) state.memPages = st.pages;
+        inst = { ...inst, state };
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const anchorKey = nativeType === 'random' ? 'out' : 'd';
+        const anchorOff = st.ports.find((p) => p.key === anchorKey)!.off;
+        place(
+          inst,
+          idOf(anchorKey)!,
+          at(loc, anchorOff),
+          label,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
         continue;
       }
       if (nativeType === 'subcircuit' && part.sub) {

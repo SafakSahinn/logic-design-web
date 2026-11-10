@@ -43,9 +43,13 @@ export function rawTextToMem(text: string, words: number, mask: number): { pages
       const m = /^(?:(\d+)\*)?([0-9a-f]+)$/i.exec(tok);
       if (!m) return `Okunamayan değer: "${tok}"`;
       const n = m[1] ? Number(m[1]) : 1;
-      const v = (parseInt(m[2], 16) & mask) >>> 0;
+      // Only the low 32 bits count (Logisim-evolution writes up to 64 bit words)
+      const v = (parseInt(m[2].slice(-8), 16) & mask) >>> 0;
+      if (!v) {
+        addr = Math.min(words, addr + n);
+        continue;
+      }
       for (let i = 0; i < n && addr < words; i++, addr++) {
-        if (!v) continue;
         const k = String(Math.floor(addr / MEM_PAGE_SIZE));
         (pages[k] ??= new Array<number>(MEM_PAGE_SIZE).fill(0))[addr % MEM_PAGE_SIZE] = v;
       }

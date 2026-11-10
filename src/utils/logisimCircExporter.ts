@@ -7,6 +7,7 @@ import {
   FLIP_FLOP_TYPES,
   HEX_7SEG_MAP,
   MEM_TYPES,
+  RAM_TYPES,
   bitSelectorSelectWidth,
   getArithConfig,
   getArithMode,
@@ -14,26 +15,32 @@ import {
   getGateWidth,
   getMemConfig,
   getPlexerConfig,
+  getRamConfig,
   getSplitterConfig,
   getTrigger,
   pinKey,
+  ramPinWidth,
   splitterThreads,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { solveKMap } from './kmapSolver';
+import { memToRawText } from './memImage';
 import {
   ARITH_MODE_PARTS,
   EVO_ONLY_ARITH,
   LOGISIM_ARITH_MODE,
   LOGISIM_ARITH_NAME,
   LOGISIM_MEM_NAME,
+  LOGISIM_RAM_NAME,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
   logisimPlexerPortKeys,
   logisimPlexerPorts,
+  logisimRamPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
+  type LogisimRamLook,
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 
@@ -94,7 +101,9 @@ type Prim =
   // A real Logisim arithmetic part (always east); nets / widths / sinks in logisimArithPorts order
   | { kind: 'arith'; part: ComponentType; attrs: string; inputs: number; nets: string[]; widths: number[]; sinks: boolean[] }
   // A real Logisim memory part (classic look); nets / widths / sinks in memPorts order
-  | { kind: 'mem'; part: ComponentType; attrs: string; length: number; parallel: boolean; nets: string[]; widths: number[]; sinks: boolean[] };
+  | { kind: 'mem'; part: ComponentType; attrs: string; length: number; parallel: boolean; nets: string[]; widths: number[]; sinks: boolean[] }
+  // A real Logisim RAM / ROM / random generator; its connection points relative to loc
+  | { kind: 'ram'; part: ComponentType; attrs: string; ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> };
 
 interface Pt {
   x: number;
@@ -798,6 +807,62 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
+          if (RAM_TYPES.has(c.type)) {
+            // Logisim has the same part. A 2.7.1-rule RAM / ROM is written in the 2.7.1 layout; a ROM and the
+            // random generator get tunnels on evolution's points too (evolution opens a file without an
+            // appearance in its own look and reads them alike). An evolution-rule memory is written with its
+            // evolution attributes and the classic appearance, on evolution's points only.
+            const cfg = getRamConfig(c);
+            const evo = c.type !== 'random' && cfg.flavor === 'evolution';
+            const a = (name: string, val: string | number | boolean) => `<a name="${name}" val="${val}"/>`;
+            let attrs = '';
+            let looks: LogisimRamLook[];
+            if (c.type === 'random') {
+              attrs = a('width', cfg.dataWidth) + a('seed', c.state.randomSeed ?? 0) + a('trigger', getTrigger(c) === 'falling' ? 'falling' : 'rising');
+              looks = ['logisim', 'evolution'];
+            } else {
+              attrs = a('addrWidth', cfg.addrWidth) + a('dataWidth', cfg.dataWidth);
+              if (c.type === 'ram' && !evo) attrs += a('bus', cfg.bus);
+              if (c.type === 'ram' && evo) {
+                const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+                attrs += a('enables', 'byte') + a('databus', { bidir: 'bidir', separate: 'bibus', controlled: 'bibusControlled' }[cfg.dataBus]);
+                attrs += a('trigger', cfg.trigger) + a('clearpin', cfg.clearPin);
+                if (edge) attrs += a('asyncread', !!c.state.ramAsyncRead) + a('readbehav', c.state.ramReadBehavior ?? 'raw');
+                if (edge && cfg.dataWidth > 8) attrs += a('byteenables', cfg.byteEnables ? 'byteEnables' : 'NobyteEnables');
+              }
+              if (evo) attrs += a('appearance', 'classic');
+              if (c.type === 'rom') {
+                const body = memToRawText(c.state.memPages ?? {}, 2 ** cfg.addrWidth).replace(/^v2\.0 raw\n/, '');
+                attrs += `<a name="contents">addr/data: ${cfg.addrWidth} ${cfg.dataWidth}\n${body}</a>`;
+              }
+              looks = evo ? ['classic'] : c.type === 'rom' ? ['logisim', 'evolution'] : ['logisim'];
+            }
+            const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+            const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+            for (const look of looks) {
+              for (const { key, off } of logisimRamPorts(c.type, cfg, look)) {
+                // The bus read-back 'dio' shares the data point (and net) with 'd'
+                if (key === 'dio') continue;
+                const p = byKey.get(key);
+                const isIn = !!p && c.inputs.includes(p);
+                const net = !p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN;
+                ports.push({ off, net, width: ramPinWidth(c.type, key, cfg), sink: isIn });
+              }
+            }
+            P.push({ kind: 'ram', part: c.type, attrs, ports });
+            const wired = (k: string) => isConn(byKey.get(k)?.id);
+            if (c.type === 'ram' && Object.values(c.state.memPages ?? {}).some((pg) => pg.some((v) => v)))
+              warnings.push(`${label}: RAM içeriği dosyaya yazılmadı (Logisim RAM içeriğini .circ'te saklamaz); gerekiyorsa içerik düzenleyicisinden v2.0 raw dosyası olarak kaydedin.`);
+            if (evo)
+              warnings.push(`${label}: Logisim-evolution kurallı ${c.type === 'ram' ? 'RAM' : 'ROM'} olarak yazıldı; Logisim 2.7.1 bu parçayı kendi düzeniyle açar, bağlantıları tutmaz.`);
+            else if (c.type === 'ram')
+              warnings.push(`${label}: Logisim 2.7.1 RAM'i olarak yazıldı; Logisim-evolution bu RAM'i kendi düzenine çevirir (veri yolu ayarını okumaz), bağlantıları tutmaz.`);
+            else if (c.type === 'rom' && wired('cs'))
+              warnings.push(`${label}: Logisim-evolution'ın ROM'unda seçim (sel) girişi yok; orada ROM hep seçilidir.`);
+            if (c.type === 'random')
+              warnings.push(`${label}: Logisim-evolution aynı bağlantılarla açar ama başka bir sayı dizisi üretir (Xoshiro256++); dizi Logisim 2.7.1'de tutar.`);
+            break;
+          }
           if (MEM_TYPES.has(c.type)) {
             // Logisim has the same part: written with every attribute explicit (the defaults differ between
             // versions and parts) and the classic look; open inputs stay open (read alike by both)
@@ -1043,6 +1108,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_MEM_NAME[p.part]}">${p.attrs}</comp>`);
           memPorts(p.part, p.length, p.parallel).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
+        case 'ram':
+          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_RAM_NAME[p.part]}">${p.attrs}</comp>`);
+          for (const q of p.ports) tunnel(x + q.off.x, y + q.off.y, q.net, q.sink, q.width);
+          break;
         case 'sub':
           xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
@@ -1069,12 +1138,27 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         const ys = logisimArithPorts(p.part, p.inputs).map((o) => o.off.y);
         return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
       }
+      if (p.kind === 'ram') {
+        const ys = p.ports.map((q) => q.off.y);
+        return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
+      }
       return 1;
+    };
+    // A RAM / ROM / random generator: its rightmost point goes on the x of its last cell, as many cells as its
+    // width needs (an ordinary part reaches up to 150 left of its cell's x)
+    const ramSpan = (p: Prim) => {
+      if (p.kind !== 'ram') return { cols: 1, shift: 0 };
+      const xs = p.ports.map((q) => q.off.x);
+      const right = Math.max(...xs, 0);
+      const span = right - Math.min(...xs, 0);
+      const cols = 1 + Math.ceil(Math.max(0, span - 150) / CELL_W);
+      return { cols, shift: (cols - 1) * CELL_W - right };
     };
     // A shift register reaches right of its loc: it starts SHIFT_LEFT before its cell and takes as many cells
     // as its length needs, so no tunnel lands on another part's pin
     const SHIFT_LEFT = 150;
     const colsOf = (p: Prim) => {
+      if (p.kind === 'ram') return ramSpan(p).cols;
       if (p.kind !== 'mem' || p.part !== 'shiftRegister') return 1;
       const w = Math.max(...memPorts(p.part, p.length, p.parallel).map((o) => o.off.x));
       return Math.max(1, Math.ceil((w - 50 + 1) / CELL_W));
@@ -1096,10 +1180,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
                   ? -Math.min(0, ...logisimArithPorts(p.part, p.inputs).map((o) => o.off.y)) + 10
                   : p.kind === 'mem'
                     ? -Math.min(0, ...memPorts(p.part, p.length, p.parallel).map((o) => o.off.y)) + 10
-                    : extraRows * 50;
+                    : p.kind === 'ram'
+                      ? -Math.min(0, ...p.ports.map((q) => q.off.y)) + 10
+                      : extraRows * 50;
         const cols = colsOf(p);
         if (cols > 1 && (cell % PER_ROW) + cols > PER_ROW) cell += PER_ROW - (cell % PER_ROW);
-        const x = 200 + (cell % PER_ROW) * CELL_W - (p.kind === 'mem' && p.part === 'shiftRegister' ? SHIFT_LEFT : 0);
+        const x = 200 + (cell % PER_ROW) * CELL_W - (p.kind === 'mem' && p.part === 'shiftRegister' ? SHIFT_LEFT : 0) + ramSpan(p).shift;
         const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + Math.ceil(up / 10) * 10;
         cell += cols + extraRows * PER_ROW;
         emit(p, x, y);
