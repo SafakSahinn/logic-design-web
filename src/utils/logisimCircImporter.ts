@@ -7,9 +7,12 @@ import {
   configureArith,
   configureBitExtender,
   configureBitSelector,
+  configureMem,
   configurePlexer,
   configureSplitter,
   createComponentInstance,
+  flipFlopDataKeys,
+  MEM_TYPES,
   PLEXER_TYPES,
   pinKey,
   getComponentSize,
@@ -92,14 +95,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'priority encoder') return 'priorityEncoder';
   if (n === 'alu' || n.includes('arithmetic logic unit')) return 'alu4';
 
-  // Sequential
-  if (n.includes('d flip-flop') || n === 'd flip flop') return 'dFlipFlop';
-  if (n.includes('j-k flip-flop') || n === 'jk flip flop') return 'jkFlipFlop';
-  if (n.includes('t flip-flop') || n === 't flip flop') return 'tFlipFlop';
-  if (n === 's-r flip-flop' || n === 'sr latch') return 'srLatch';
-  if (n === 'register') return 'register4';
-  if (n === 'counter') return 'counter4';
-  if (n.includes('shift register')) return 'shiftRegister4';
+  // Memory (Logisim std/memory)
+  const mem = LOGISIM_MEM_TYPE[n];
+  if (mem) return mem;
   if (n === 'ram') return 'ram16x4';
   if (n === 'rom') return 'rom16x4';
 
@@ -385,6 +383,149 @@ export function logisimArithSettings(
   return { width, inputs, mode, shiftType, findType, notes };
 }
 
+// Logisim memory element names (std/memory, library "#Memory")
+const LOGISIM_MEM: Array<[ComponentType, string]> = [
+  ['flipFlopD', 'D Flip-Flop'],
+  ['flipFlopT', 'T Flip-Flop'],
+  ['flipFlopJK', 'J-K Flip-Flop'],
+  ['flipFlopSR', 'S-R Flip-Flop'],
+  ['register', 'Register'],
+  ['counter', 'Counter'],
+  ['shiftRegister', 'Shift Register'],
+];
+const LOGISIM_MEM_TYPE: Record<string, ComponentType> = Object.fromEntries(LOGISIM_MEM.map(([t, n]) => [n.toLowerCase(), t]));
+/** Logisim element name of each memory part */
+export const LOGISIM_MEM_NAME = Object.fromEntries(LOGISIM_MEM) as Partial<Record<ComponentType, string>>;
+
+/**
+ * Connection points of a Logisim memory part relative to its loc, each with our pin key. Memory parts have no
+ * facing. 'classic' is Logisim 2.7.1's look (and evolution's classic appearance); 'evolution' is the look
+ * Logisim-evolution gives them otherwise ('evolution' / 'logisim_evolution'), with other pin places
+ * (std/memory updatePorts). Logisim 2.7.1's flip-flop enable (evolution has none) and evolution's counter
+ * up/down pin (2.7.1 has none) are listed on request (`hasEnable` / `hasUpDown`); evolution's look has no last stage output
+ * (OUT is that stage), so q{len-1} is left out there.
+ */
+export function logisimMemPorts(
+  type: ComponentType,
+  o: { width: number; length: number; parallel: boolean; appearance: 'classic' | 'evolution'; hasEnable: boolean; hasUpDown: boolean }
+): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  const evo = o.appearance === 'evolution';
+  if (type === 'register') {
+    return evo
+      ? [P('d', 0, 30), P('clk', 0, 70), P('clr', 30, 90), P('en', 0, 50), P('q', 60, 30)]
+      : [P('d', -30, 0), P('clk', -20, 20), P('clr', -10, 20), P('en', -30, 10), P('q', 0, 0)];
+  }
+  if (type === 'counter') {
+    let ps;
+    if (evo) {
+      // Counter.getSymbolWidth (Java int division truncates toward 0)
+      const sw = 150 + Math.trunc((o.width - 8) / 5) * 10;
+      const y = o.width === 1 ? 120 : 110;
+      ps = [P('d', 0, y), P('clk', 0, 80), P('clr', 0, 20), P('ld', 0, 30), P('ct', 0, 70), P('ud', 0, 50), P('q', sw + 40, y), P('carry', sw + 40, 50)];
+    } else {
+      ps = [P('d', -30, 0), P('clk', -20, 20), P('clr', -10, 20), P('ld', -30, -10), P('ct', -30, 10), P('ud', -20, -20), P('q', 0, 0), P('carry', 0, 10)];
+    }
+    return o.hasUpDown ? ps : ps.filter((p) => p.key !== 'ud');
+  }
+  if (type === 'shiftRegister') {
+    const len = o.length;
+    if (evo) {
+      const ps = [P('sh', 0, 40), P('in', 0, 80), P('clk', 0, 50), P('clr', 0, 20), P('out', 120, 70 + 20 * len)];
+      if (o.parallel) {
+        ps.push(P('ld', 0, 30));
+        for (let i = 0; i < len; i++) ps.push(P(`d${i}`, 0, 90 + 20 * i));
+        for (let i = 0; i < len - 1; i++) ps.push(P(`q${i}`, 120, 90 + 20 * i));
+      }
+      return ps;
+    }
+    const ps = [P('sh', 0, -10), P('in', 0, 0), P('clk', 0, 10), P('clr', 10, 20), P('out', o.parallel ? 20 + 10 * len : 30, 0)];
+    if (o.parallel) {
+      ps.push(P('ld', 10, -20));
+      for (let i = 0; i < len; i++) ps.push(P(`d${i}`, 20 + 10 * i, -20));
+      for (let i = 0; i < len; i++) ps.push(P(`q${i}`, 20 + 10 * i, 20));
+    }
+    return ps;
+  }
+  const two = type === 'flipFlopJK' || type === 'flipFlopSR';
+  const [a, b = ''] = flipFlopDataKeys(type);
+  if (evo) {
+    return [
+      ...(two ? [P(a, -10, 10), P(b, -10, 30)] : [P(a, -10, 10)]),
+      P('clk', -10, 50),
+      P('clr', 20, 60),
+      P('pre', 20, 0),
+      P('q', 50, 10),
+      P('qn', 50, 50),
+    ];
+  }
+  return [
+    ...(two ? [P(a, -40, 0), P(b, -40, 20), P('clk', -40, 10)] : [P(a, -40, 20), P('clk', -40, 0)]),
+    P('clr', -10, 30),
+    P('pre', -30, 30),
+    ...(o.hasEnable ? [P('en', -20, 30)] : []),
+    P('q', 0, 0),
+    P('qn', 0, 20),
+  ];
+}
+
+/**
+ * Settings of a Logisim memory part. Logisim leaves attributes at their default out of the file: register /
+ * counter 8 bits, shift register 1 bit with 8 stages and parallel load, counter maximum 0xFF (the stored
+ * default at any width; a width change writes the new maximum out) and goal 'wrap', trigger rising. A missing
+ * appearance is classic in a Logisim 2.7.1 file and evolution's own look in an evolution file (XmlReader).
+ */
+export function logisimMemSettings(
+  type: ComponentType,
+  attr: Record<string, string>
+): {
+  width: number;
+  /** Width as written (evolution's counter places its pins by it) */
+  fileWidth: number;
+  length: number;
+  /** Stages as written (the pin places follow it) */
+  fileLength: number;
+  parallel: boolean;
+  trigger: 'rising' | 'falling' | 'high' | 'low';
+  max?: number;
+  goal?: 'wrap' | 'stay' | 'continue' | 'load';
+  appearance: 'classic' | 'evolution' | undefined;
+  notes: string[];
+} {
+  const notes: string[] = [];
+  const int = (v: string | undefined, dflt: number) => {
+    const n = v === undefined ? NaN : parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : dflt;
+  };
+  const wide = type === 'register' || type === 'counter' || type === 'shiftRegister';
+  const fileWidth = wide ? int(attr.width, type === 'shiftRegister' ? 1 : 8) : 1;
+  let width = fileWidth;
+  if (width > 32) {
+    notes.push(`${width} bitlik, 32 bit olarak alındı.`);
+    width = 32;
+  }
+  const fileLength = type === 'shiftRegister' ? int(attr.length, 8) : 1;
+  let length = fileLength;
+  if (length > 32) {
+    notes.push(`${length} aşamalı, 32 aşama olarak alındı.`);
+    length = 32;
+  }
+  const parallel = type === 'shiftRegister' ? attr.parallel !== 'false' : true;
+  const trigger = (['rising', 'falling', 'high', 'low'] as const).find((t) => t === attr.trigger) ?? 'rising';
+  let max: number | undefined;
+  let goal: 'wrap' | 'stay' | 'continue' | 'load' | undefined;
+  if (type === 'counter') {
+    const mask = width >= 32 ? 0xffffffff : 2 ** width - 1;
+    // Only the low 32 bits count (evolution writes up to 64 bit maxima, beyond a double's precision)
+    const raw = attr.max === undefined ? 0xff : /^0x/i.test(attr.max) ? parseInt(attr.max.slice(2).slice(-8), 16) : parseInt(attr.max, 10);
+    max = (Number.isFinite(raw) ? raw : 0xff) % 2 ** width;
+    if (max === mask) max = undefined;
+    goal = (['wrap', 'stay', 'continue', 'load'] as const).find((g) => g === attr.ongoal) ?? 'wrap';
+  }
+  const appearance = attr.appearance === undefined ? undefined : attr.appearance === 'classic' ? 'classic' : 'evolution';
+  return { width, fileWidth, length, fileLength, parallel, trigger, max, goal, appearance, notes };
+}
+
 /**
  * Logisim 2.7.1 DefaultAppearance: where each Pin of a circuit appears on its subcircuit box, relative to
  * the anchor (the instance's loc). A pin facing east sits on the west edge and so on; pins of an edge are
@@ -448,14 +589,6 @@ const gateInputOffsets = (inputs: number, size: number): number[] => {
     inputs % 2 ? ss * (inputs - 1) + sd * i : ss * inputs + sd * i + (i >= inputs / 2 ? sl : 0)
   );
 };
-// Flip-flop connection points relative to loc (Q at loc), measured in Logisim 2.7.1
-const FF_POINTS: Record<string, { inputs: Pt[]; outputs: Pt[] }> = {
-  dFlipFlop: { inputs: [{ x: -40, y: 20 }, { x: -40, y: 0 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // D, CLK
-  tFlipFlop: { inputs: [{ x: -40, y: 20 }, { x: -40, y: 0 }, { x: -10, y: 30 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // T, CLK, reset
-  jkFlipFlop: { inputs: [{ x: -40, y: 0 }, { x: -40, y: 10 }, { x: -40, y: 20 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // J, CLK, K
-  srLatch: { inputs: [{ x: -40, y: 0 }, { x: -40, y: 20 }], outputs: [{ x: 0, y: 0 }, { x: 0, y: 20 }] }, // S, R (clock dropped)
-};
-
 // Logisim 2.7.1 BitSelector: data and select inputs per facing (output at loc); not a plain rotation
 const BIT_SELECTOR_POINTS: Record<string, [Pt, Pt]> = {
   east: [{ x: -30, y: 0 }, { x: -10, y: 10 }],
@@ -509,6 +642,13 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
   const circuits = Array.from(xmlDoc.getElementsByTagName('circuit'));
   // Version of the program that wrote the file (its attribute defaults are not written out)
   const fileSource = xmlDoc.documentElement?.getAttribute('source') ?? '2.7.1';
+  // Written by Logisim-evolution (any version after 2.7.1)
+  const evolutionFile = (() => {
+    const v = (fileSource.match(/\d+/g) ?? ['2', '7', '1']).map(Number);
+    const ref = [2, 7, 1];
+    for (let k = 0; k < Math.max(v.length, ref.length); k++) if ((v[k] ?? 0) !== (ref[k] ?? 0)) return (v[k] ?? 0) > (ref[k] ?? 0);
+    return false;
+  })();
   if (circuits.length === 0) {
     throw new Error('Geçerli bir .circ devre dosyası bulunamadı (circuit etiketi yok).');
   }
@@ -719,6 +859,29 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         ports: logisimPlexerPorts(kind, attr.facing || 'east', attr.selloc || 'bl', select, enable),
       };
     };
+    // Memory part settings and its connection points (relative to loc). Without an appearance attribute the
+    // writing program's default is taken, unless the other look's pins clearly meet more wires
+    const memSettings = (type: ComponentType, attr: Record<string, string>, loc: Pt) => {
+      const st = logisimMemSettings(type, attr);
+      const portsFor = (appearance: 'classic' | 'evolution') =>
+        logisimMemPorts(type, {
+          width: st.fileWidth,
+          length: st.fileLength,
+          parallel: st.parallel,
+          appearance,
+          // Evolution ignores a flip-flop's enable point, so do we; an up/down wire in a 2.7.1 file can only
+          // come from a program that knows the pin (this one's export), so it is taken
+          hasEnable: !evolutionFile,
+          hasUpDown: true,
+        });
+      let appearance = st.appearance ?? (evolutionFile ? 'evolution' : 'classic');
+      if (!st.appearance) {
+        const wired = (a: 'classic' | 'evolution') => portsFor(a).filter((p) => netAt({ x: loc.x + p.off.x, y: loc.y + p.off.y }) !== null).length;
+        const other = appearance === 'classic' ? 'evolution' : 'classic';
+        if (wired(other) > wired(appearance)) appearance = other;
+      }
+      return { ...st, appearance, ports: portsFor(appearance) };
+    };
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -771,13 +934,12 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType)) warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
-      occupied.add(key(loc)); // every Logisim part has a connection at loc (gate output, pin, Q ...)
-      const ff = FF_POINTS[nativeType];
-      if (ff) for (const off of [...ff.inputs, ...ff.outputs]) occupied.add(key(local(loc, off, rot)));
+      // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
+      if (!MEM_TYPES.has(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -792,6 +954,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
                 ? logisimArithPorts(nativeType, logisimArithSettings(nativeType, attr, fileSource).inputs).map((p) => p.off)
+                : MEM_TYPES.has(nativeType)
+                ? memSettings(nativeType, attr, loc).ports.map((p) => p.off)
                 : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
@@ -998,6 +1162,43 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         }
         continue;
       }
+      if (MEM_TYPES.has(nativeType)) {
+        // Every pin on its Logisim connection point (classic or evolution look); ours is drawn classic
+        const st = memSettings(nativeType, attr, loc);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        let inst = createComponentInstance(nativeType, 0, 0);
+        inst = configureMem(inst, { width: st.width, length: st.length, parallel: st.parallel });
+        const state = { ...inst.state, trigger: st.trigger };
+        if (nativeType === 'counter') {
+          if (st.max === undefined) delete state.counterMax;
+          else state.counterMax = st.max;
+          state.counterGoal = st.goal;
+        }
+        inst = { ...inst, state };
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const offOf = new Map(st.ports.map((p) => [p.key, p.off]));
+        const anchorKey = nativeType === 'shiftRegister' ? 'in' : 'q';
+        place(
+          inst,
+          idOf(anchorKey)!,
+          at(loc, offOf.get(anchorKey) ?? { x: 0, y: 0 }),
+          label,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
+        const wired = (k: string) => {
+          const off = offOf.get(k);
+          return !!off && netAt(at(loc, off)) !== null;
+        };
+        // Logisim 2.7.1 counts down while LD = 1 and CT is not 0; ours loads first, like evolution
+        if (nativeType === 'counter' && !evolutionFile && wired('ld'))
+          warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
+        if (nativeType === 'counter' && !evolutionFile && wired('ud'))
+          warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
+        continue;
+      }
       if (nativeType === 'subcircuit' && part.sub) {
         const { def, inOffsets, outOffsets } = part.sub;
         const inst = createSubcircuitInstance(def, 0, 0, label || def.name);
@@ -1044,20 +1245,6 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         if (part.compName.trim().toLowerCase() === 'pin') {
           pins.push({ loc, facing: part.facing, isOutput: part.isOutput, label: label || '', width, compId: inst.id, pinId: pin.id });
         }
-        continue;
-      }
-
-      const ff = FF_POINTS[nativeType];
-      if (ff) {
-        // Flip-flops: exact Logisim points (Q at loc)
-        inst = updatePinPositions({ ...inst, x: anchor.x - inst.outputs[0].x, y: anchor.y - inst.outputs[0].y });
-        if (label) inst.label = label;
-        components.push(inst);
-        ff.inputs.forEach((off, k) => inst.inputs[k] && attach.push({ at: local(loc, off, rot), compId: inst.id, pinId: inst.inputs[k].id, isOutput: false }));
-        ff.outputs.forEach((off, k) => inst.outputs[k] && attach.push({ at: local(loc, off, rot), compId: inst.id, pinId: inst.outputs[k].id, isOutput: true }));
-        if (nativeType === 'srLatch') warnings.push(`${where}: Logisim'deki saatli S-R flip-flop, saatsiz SR mandal olarak alındı.`);
-        const extra = nativeType === 'tFlipFlop' ? [{ x: -30, y: 30 }] : [{ x: -10, y: 30 }, { x: -30, y: 30 }];
-        if (extra.some((off) => netAt(local(loc, off, rot)) !== null)) warnings.push(`${where}: preset / reset girişleri alınmadı.`);
         continue;
       }
 

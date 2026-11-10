@@ -4,13 +4,18 @@ import {
   ALU_OP_BITS,
   ARITH_PINS,
   ARITH_TYPES,
+  FLIP_FLOP_TYPES,
   HEX_7SEG_MAP,
+  MEM_TYPES,
   bitSelectorSelectWidth,
   getArithConfig,
   getArithMode,
+  getCounterMax,
   getGateWidth,
+  getMemConfig,
   getPlexerConfig,
   getSplitterConfig,
+  getTrigger,
   pinKey,
   splitterThreads,
 } from './circuitEngine';
@@ -21,7 +26,9 @@ import {
   EVO_ONLY_ARITH,
   LOGISIM_ARITH_MODE,
   LOGISIM_ARITH_NAME,
+  LOGISIM_MEM_NAME,
   logisimArithPorts,
+  logisimMemPorts,
   logisimDefaultPortOffsets,
   logisimPlexerPortKeys,
   logisimPlexerPorts,
@@ -85,7 +92,9 @@ type Prim =
       sinks: boolean[];
     }
   // A real Logisim arithmetic part (always east); nets / widths / sinks in logisimArithPorts order
-  | { kind: 'arith'; part: ComponentType; attrs: string; inputs: number; nets: string[]; widths: number[]; sinks: boolean[] };
+  | { kind: 'arith'; part: ComponentType; attrs: string; inputs: number; nets: string[]; widths: number[]; sinks: boolean[] }
+  // A real Logisim memory part (classic look); nets / widths / sinks in memPorts order
+  | { kind: 'mem'; part: ComponentType; attrs: string; length: number; parallel: boolean; nets: string[]; widths: number[]; sinks: boolean[] };
 
 interface Pt {
   x: number;
@@ -99,6 +108,11 @@ export interface CircExportResult {
   inputs: { label: string; compId: string; pinIndex: number }[];
   outputs: { label: string; compId: string; pinId: string }[];
 }
+
+// Logisim 2.7.1 memory pins (classic look); the counter's up/down pin is evolution's, written too so evolution
+// connects it (Logisim 2.7.1 has no pin there and leaves the tunnel alone)
+const memPorts = (part: ComponentType, length: number, parallel: boolean) =>
+  logisimMemPorts(part, { width: 1, length, parallel, appearance: 'classic', hasEnable: true, hasUpDown: true });
 
 const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -784,6 +798,39 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
+          if (MEM_TYPES.has(c.type)) {
+            // Logisim has the same part: written with every attribute explicit (the defaults differ between
+            // versions and parts) and the classic look; open inputs stay open (read alike by both)
+            const { width, length, parallel } = getMemConfig(c);
+            const trigger = getTrigger(c);
+            let attrs = '';
+            if (!FLIP_FLOP_TYPES.has(c.type)) attrs += `<a name="width" val="${width}"/>`;
+            if (c.type === 'counter') attrs += `<a name="max" val="0x${getCounterMax(c).toString(16)}"/><a name="ongoal" val="${c.state.counterGoal ?? 'wrap'}"/>`;
+            if (c.type === 'shiftRegister') attrs += `<a name="length" val="${length}"/><a name="parallel" val="${parallel}"/>`;
+            attrs += `<a name="trigger" val="${trigger}"/><a name="appearance" val="classic"/>`;
+            const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+            const ports = memPorts(c.type, length, parallel);
+            const nets: string[] = [];
+            const widths: number[] = [];
+            const sinks: boolean[] = [];
+            for (const { key } of ports) {
+              const p = byKey.get(key);
+              const isIn = !!p && c.inputs.includes(p);
+              nets.push(!p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN);
+              widths.push(p?.width ?? 1);
+              sinks.push(isIn);
+            }
+            P.push({ kind: 'mem', part: c.type, attrs, length, parallel, nets, widths, sinks });
+            // What one of the two Logisim versions reads differently
+            const wired = (k: string) => isConn(byKey.get(k)?.id);
+            if (FLIP_FLOP_TYPES.has(c.type) && wired('en'))
+              warnings.push(`${label}: flip-flop'un EN girişi yalnız Logisim 2.7.1'de var; Logisim-evolution bu bağlantıyı yok sayar (hep etkin).`);
+            if (c.type === 'counter' && wired('ud'))
+              warnings.push(`${label}: sayacın yukarı/aşağı (UD) girişi yalnız Logisim-evolution'da var; Logisim 2.7.1 hep yukarı sayar.`);
+            if (c.type === 'counter' && wired('ld'))
+              warnings.push(`${label}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç yüklemek yerine geri sayar; Logisim-evolution burada olduğu gibi yükler.`);
+            break;
+          }
           if (ARITH_TYPES.has(c.type)) {
             // Logisim has the same part: written as is with every attribute explicit; open inputs stay open
             const { width, inputs: n } = getArithConfig(c);
@@ -992,6 +1039,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           xml.push(`    <comp lib="3" loc="(${x},${y})" name="${LOGISIM_ARITH_NAME[p.part]}">${p.attrs}</comp>`);
           logisimArithPorts(p.part, p.inputs).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
+        case 'mem':
+          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_MEM_NAME[p.part]}">${p.attrs}</comp>`);
+          memPorts(p.part, p.length, p.parallel).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
+          break;
         case 'sub':
           xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
@@ -1020,6 +1071,14 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       }
       return 1;
     };
+    // A shift register reaches right of its loc: it starts SHIFT_LEFT before its cell and takes as many cells
+    // as its length needs, so no tunnel lands on another part's pin
+    const SHIFT_LEFT = 150;
+    const colsOf = (p: Prim) => {
+      if (p.kind !== 'mem' || p.part !== 'shiftRegister') return 1;
+      const w = Math.max(...memPorts(p.part, p.length, p.parallel).map((o) => o.off.x));
+      return Math.max(1, Math.ceil((w - 50 + 1) / CELL_W));
+    };
     for (const b of blocks) {
       // each block starts on a fresh row when it would not fit, so its parts stay together
       if (cell % PER_ROW !== 0 && (cell % PER_ROW) + b.prims.length > PER_ROW && b.prims.length <= PER_ROW) cell += PER_ROW - (cell % PER_ROW);
@@ -1035,10 +1094,14 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
                 ? -Math.min(0, ...logisimPlexerPorts(p.part, 'east', 'bl', p.select, p.enable).map((o) => o.y)) + 10
                 : p.kind === 'arith'
                   ? -Math.min(0, ...logisimArithPorts(p.part, p.inputs).map((o) => o.off.y)) + 10
-                  : extraRows * 50;
-        const x = 200 + (cell % PER_ROW) * CELL_W;
+                  : p.kind === 'mem'
+                    ? -Math.min(0, ...memPorts(p.part, p.length, p.parallel).map((o) => o.off.y)) + 10
+                    : extraRows * 50;
+        const cols = colsOf(p);
+        if (cols > 1 && (cell % PER_ROW) + cols > PER_ROW) cell += PER_ROW - (cell % PER_ROW);
+        const x = 200 + (cell % PER_ROW) * CELL_W - (p.kind === 'mem' && p.part === 'shiftRegister' ? SHIFT_LEFT : 0);
         const y = 120 + Math.floor(cell / PER_ROW) * CELL_H + Math.ceil(up / 10) * 10;
-        cell += 1 + extraRows * PER_ROW;
+        cell += cols + extraRows * PER_ROW;
         emit(p, x, y);
       }
     }
