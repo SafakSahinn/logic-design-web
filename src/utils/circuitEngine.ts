@@ -1622,6 +1622,8 @@ export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexe
 export const RETIRED_PALETTE_TYPES = new Set<ComponentType>([
   'mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'priorityEncoder4to2',
   'comparator4', 'alu4',
+  // Aşama 3e: parametric flip-flops / register / counter / shift register (srLatch stays: no Logisim counterpart)
+  'dFlipFlop', 'tFlipFlop', 'jkFlipFlop', 'register4', 'counter4', 'shiftRegister4',
 ]);
 export const PLEXER_MAX_SELECT = 5;
 

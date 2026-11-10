@@ -56,6 +56,11 @@ import {
   getSplitterConfig,
   getPlexerConfig,
   arithLayout,
+  memLayout,
+  getMemConfig,
+  getTrigger,
+  FLIP_FLOP_TYPES,
+  MEM_TYPES,
   pinKey as plexerPinKey,
   plexerLayout,
   RETIRED_PALETTE_TYPES,
@@ -307,6 +312,13 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   bitAdder: { label: 'Bit Sayıcı', badge: '#1' },
   bitFinder: { label: 'Bit Bulucu', badge: 'Bul' },
   alu: { label: 'ALU', badge: 'ALU' },
+  flipFlopD: { label: 'D Flip-Flop', badge: 'D' },
+  flipFlopT: { label: 'T Flip-Flop', badge: 'T' },
+  flipFlopJK: { label: 'J-K Flip-Flop', badge: 'JK' },
+  flipFlopSR: { label: 'S-R Flip-Flop', badge: 'SR' },
+  register: { label: 'Yazmaç', badge: 'REG' },
+  counter: { label: 'Sayaç', badge: 'CTR' },
+  shiftRegister: { label: 'Kaydırmalı Yazmaç', badge: 'SHR' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -3332,8 +3344,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
         const w = c.inputs[0]?.width ?? 1;
         list.push({ key: c.id, name: `${name}${w > 1 ? `[${w}]` : ''} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output', width: w });
-      } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
+      } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
         list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
+      } else if (MEM_TYPES.has(c.type)) {
+        // Register / counter: Q; shift register: OUT (the first output)
+        const w = c.outputs[0]?.width ?? 1;
+        list.push({ key: `${c.id}_q`, name: `${name} ${c.type === 'shiftRegister' ? 'OUT' : 'Q'}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
       } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
         list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'state' });
@@ -3389,8 +3405,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[c.id] = c.inputs[0]?.value ?? 0;
         } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
           values[c.id] = c.outputs[0]?.value ?? 0;
-        } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop') {
+        } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
           values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
+        } else if (MEM_TYPES.has(c.type)) {
+          const o = c.outputs[0];
+          const w = o?.width ?? 1;
+          values[`${c.id}_q`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
         } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
           values[`${c.id}_q0`] = c.outputs[0]?.value ?? 0;
           values[`${c.id}_q1`] = c.outputs[1]?.value ?? 0;
@@ -6106,6 +6126,134 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'flipFlopD':
+      case 'flipFlopT':
+      case 'flipFlopJK':
+      case 'flipFlopSR':
+      case 'register':
+      case 'counter':
+      case 'shiftRegister': {
+        // Logisim std/memory classic painters: a plain box, the clock as a triangle on its pin (Logisim draws it
+        // for every trigger; here edges get the triangle, levels none, falling / low a bubble too), port labels
+        // just inside the pins (reset "0", preset "1", enable "en" in grey) and the stored value in the box.
+        // The body turns as a whole; text is turned back around its own point and stays upright
+        const l = memLayout(comp);
+        const { width: w, length: len, parallel } = getMemConfig(comp);
+        const W = l.width;
+        const H = l.height;
+        const grey = cadTheme === 'dark' ? '#94a3b8' : '#64748b';
+        const rot = (((comp.rotation ?? 0) % 360) + 360) % 360;
+        const rad = (rot * Math.PI) / 180;
+        const cos = Math.round(Math.cos(rad));
+        const sin = Math.round(Math.sin(rad));
+        const upright = (x: number, y: number) => (rot ? `rotate(${-rot}, ${x}, ${y})` : undefined);
+        const toScreen = (x: number, y: number) => ({ x: W / 2 + (x - W / 2) * cos - (y - H / 2) * sin, y: H / 2 + (x - W / 2) * sin + (y - H / 2) * cos });
+        const toBody = (x: number, y: number) => ({ x: W / 2 + (x - W / 2) * cos + (y - H / 2) * sin, y: H / 2 - (x - W / 2) * sin + (y - H / 2) * cos });
+        const has = (key: string) => [...comp.inputs, ...comp.outputs].some((p) => plexerPinKey(comp, p) === key);
+        const inwardOf = (at: { x: number; y: number }) => (at.x <= 0 ? { x: 1, y: 0 } : at.x >= W ? { x: -1, y: 0 } : at.y <= 0 ? { x: 0, y: 1 } : { x: 0, y: -1 });
+        // `slide` moves a label along its side (body frame) where two labels would meet at a corner
+        const portLabel = (key: string, text: string, secondary: boolean, extra = 0, slide = 0) => {
+          const at = l.pins[key];
+          if (!at || !has(key)) return null;
+          const inward = inwardOf(at);
+          const p = toScreen(at.x + (inward.x === 0 ? slide : 0), at.y + (inward.y === 0 ? slide : 0));
+          const d = { x: inward.x * cos - inward.y * sin, y: inward.x * sin + inward.y * cos };
+          const alongSide = inward.y !== 0 && d.x !== 0;
+          const off = (d.x !== 0 && !alongSide ? 6 : secondary ? 8.5 : 7) + extra;
+          const q = toBody(p.x + d.x * off, p.y + d.y * off);
+          return (
+            <text
+              key={`lbl-${key}`}
+              x={q.x}
+              y={q.y}
+              transform={alongSide ? `rotate(${-90 - rot}, ${q.x}, ${q.y})` : upright(q.x, q.y)}
+              textAnchor={alongSide ? 'middle' : d.x > 0 ? 'start' : d.x < 0 ? 'end' : 'middle'}
+              dominantBaseline="central"
+              fontSize={secondary ? 5.5 : 7}
+              fontFamily="monospace"
+              fill={secondary ? grey : undefined}
+              className={`${secondary ? '' : gateTextClass} select-none`}
+            >
+              {text}
+            </text>
+          );
+        };
+        // Clock mark in the body frame (it turns with the body)
+        const trig = getTrigger(comp);
+        const clk = l.pins.clk;
+        const ci = inwardOf(clk);
+        const along = { x: -ci.y, y: ci.x };
+        const edge = trig === 'rising' || trig === 'falling';
+        const negated = trig === 'falling' || trig === 'low';
+        const clockMark = (
+          <g key="clk">
+            {edge && (
+              <polyline
+                points={`${clk.x + along.x * 4},${clk.y + along.y * 4} ${clk.x + ci.x * 8},${clk.y + ci.y * 8} ${clk.x - along.x * 4},${clk.y - along.y * 4}`}
+                fill="none"
+                stroke={strokeColor}
+                strokeWidth={1.2}
+              />
+            )}
+            {negated && <circle cx={clk.x + ci.x * (edge ? 10.5 : 7)} cy={clk.y + ci.y * (edge ? 10.5 : 7)} r={2.2} fill="none" stroke={strokeColor} strokeWidth={1.2} />}
+            {!edge && portLabel('clk', 'C', false, negated ? 5 : 0)}
+          </g>
+        );
+        // Stored value as Logisim shows it: hex digits; an undefined nibble shows x (E if it has an E bit)
+        const hexOf = (bits: SignalValue[] | undefined, width: number) => {
+          const b = Array.from({ length: width }, (_, i) => bits?.[i] ?? 0);
+          let s = '';
+          for (let i = 0; i < width; i += 4) {
+            const nib = b.slice(i, i + 4);
+            s = (nib.includes('E') ? 'E' : nib.some((v) => v !== 0 && v !== 1) ? 'x' : nib.reduce<number>((a, v, k) => a + (v === 1 ? 1 << k : 0), 0).toString(16).toUpperCase()) + s;
+          }
+          return s;
+        };
+        const labels: React.ReactNode[] = [];
+        let inside: React.ReactNode = null;
+        const textAt = (x: number, y: number, t: string, size: number, k: string, bold = false) => (
+          <text key={k} x={x} y={y} transform={upright(x, y)} textAnchor="middle" dominantBaseline="central" fontSize={size} fontWeight={bold ? 'bold' : undefined} fontFamily="monospace" className={`${gateTextClass} select-none`}>
+            {t}
+          </text>
+        );
+        if (FLIP_FLOP_TYPES.has(comp.type)) {
+          const [a, b] = comp.type === 'flipFlopD' ? ['d'] : comp.type === 'flipFlopT' ? ['t'] : comp.type === 'flipFlopJK' ? ['j', 'k'] : ['s', 'r'];
+          labels.push(portLabel(a, a.toUpperCase(), false));
+          if (b) labels.push(portLabel(b, b.toUpperCase(), false));
+          labels.push(portLabel('q', 'Q', false), portLabel('clr', '0', true), portLabel('pre', '1', true), portLabel('en', 'en', true));
+          const q = comp.state.q === 1 ? 1 : 0;
+          inside = (
+            <g key="state">
+              <circle cx={W / 2} cy={H / 2} r={6.5} fill={q ? '#16a34a' : cadTheme === 'dark' ? '#334155' : '#1e3a5f'} />
+              {textAt(W / 2, H / 2, String(q), 8, 'sv', true)}
+            </g>
+          );
+        } else if (comp.type === 'shiftRegister') {
+          labels.push(portLabel('sh', 'sh', true), portLabel('clr', '0', true), portLabel('ld', 'ld', true, 0, 6));
+          const st = comp.state.shiftStages;
+          if (parallel && w <= 4) {
+            inside = <g key="stages">{Array.from({ length: len }, (_, i) => textAt(20 + 10 * i, H / 2, hexOf(st?.[i], w), 7, `s${i}`))}</g>;
+          } else {
+            inside = <g key="dims">{textAt(W / 2 + 4, H / 2 - 5, 'Shift', 7, 'a')}{textAt(W / 2 + 4, H / 2 + 5, `${len}×${w}`, 7, 'b')}</g>;
+          }
+        } else {
+          labels.push(portLabel('d', 'D', false), portLabel('q', 'Q', false), portLabel('clr', '0', true));
+          // enable / count sit next to the clock mark: nudged up; up/down slides right of the load label
+          if (comp.type === 'register') labels.push(portLabel('en', 'en', true, 0, -2));
+          else labels.push(portLabel('ld', 'ld', true), portLabel('ct', 'ct', true, 0, -2), portLabel('ud', 'ud', true, 0, 6), portLabel('carry', 'C', true));
+          const s = hexOf(comp.state.seqBits, w);
+          inside = s.length <= 4 ? textAt(W / 2, H / 2, s, 8, 'v', true) : <g key="v">{textAt(W / 2, H / 2 - 5, s.slice(0, s.length - 4), 8, 'v1', true)}{textAt(W / 2, H / 2 + 5, s.slice(-4), 8, 'v2', true)}</g>;
+        }
+        return (
+          <g>
+            <rect x={0} y={0} width={W} height={H} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+            {clockMark}
+            {inside}
+            {labels}
+          </g>
+        );
+      }
+
       case 'bitSelector': {
         // Logisim BitSelector painter: a trapezoid narrowing towards the output, "Sel" inside; the select
         // input meets the slanted bottom edge
@@ -6416,7 +6564,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'memory',
       title: 'Bellek & Sıralı Devreler',
       icon: '💾',
-      types: ['srLatch', 'dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'register4', 'counter4', 'shiftRegister4', 'ram16x4', 'rom16x4'] as ComponentType[],
+      types: ['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR', 'srLatch', 'register', 'counter', 'shiftRegister', 'ram16x4', 'rom16x4'] as ComponentType[],
     },
     {
       id: 'displays',

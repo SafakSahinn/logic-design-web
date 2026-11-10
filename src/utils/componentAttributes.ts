@@ -8,6 +8,9 @@ import { MAX_BIT_WIDTH, type Radix } from '../types/logic';
 import {
   ARITH_TYPES,
   BIT_ADDER_MAX_INPUTS,
+  LEVEL_TRIGGER_TYPES,
+  MEM_TYPES,
+  SHIFT_REGISTER_MAX_LENGTH,
   GATE_WIDTH_TYPES,
   MULTI_INPUT_GATE_TYPES,
   OUTPUT_MODE_TYPES,
@@ -16,16 +19,22 @@ import {
   configureArith,
   configureBitExtender,
   configureBitSelector,
+  configureMem,
   configurePlexer,
   configureSplitter,
   getArithConfig,
   getArithMode,
   getBitWidth,
   getGateWidth,
+  getCounterMax,
+  getMemConfig,
+  getTrigger,
   getPlexerConfig,
   getSplitterConfig,
   pinKey,
   type ArithConfig,
+  type MemConfig,
+  type TriggerMode,
   type PlexerConfig,
   setBitWidth,
   setGateWidth,
@@ -774,13 +783,120 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'clock':
       list.push(clockRateAttr);
       break;
+    case 'register':
+      list.push(memWidthAttr, triggerAttr);
+      break;
+    case 'counter':
+      list.push(memWidthAttr, counterMaxAttr, counterGoalAttr, triggerAttr);
+      break;
+    case 'shiftRegister':
+      list.push(memWidthAttr, shiftLengthAttr, shiftParallelAttr, triggerAttr);
+      break;
   }
+  if (MEM_TYPES.has(type) && !list.includes(triggerAttr)) list.push(triggerAttr);
   // Adder, subtractor, negator, absolute, square root: data width only
   if (ARITH_TYPES.has(type) && !list.includes(arithWidthAttr)) list.push(arithWidthAttr);
   if (type === 'led') list.push(ledColorAttr);
   if (type !== 'textLabel') list.push(labelPosAttr);
   return list;
 }
+
+// ---- Memory (Logisim std/memory): like Logisim the part keeps its location (register / counter: Q; shift
+// register: the serial input); stage pins of a shorter shift register vanish and their wires stay as open ends
+function reconfigureMem(c: CircuitComponentInstance, patch: Partial<MemConfig>): AttrEdit {
+  const key = c.type === 'shiftRegister' ? 'in' : 'q';
+  const find = (x: CircuitComponentInstance) => [...x.inputs, ...x.outputs].find((p) => pinKey(x, p) === key);
+  const anchor = find(c);
+  let next = configureMem(c, patch);
+  const moved = find(next);
+  if (anchor && moved && (anchor.x !== moved.x || anchor.y !== moved.y)) {
+    next = updatePinPositions({ ...next, x: next.x + anchor.x - moved.x, y: next.y + anchor.y - moved.y });
+  }
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.inputs, ...c.outputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const TRIGGER_OPTIONS: AttrOption[] = [
+  { value: 'rising', label: 'Yükselen kenar', title: '0 → 1 geçişinde (Logisim "Rising Edge")' },
+  { value: 'falling', label: 'Düşen kenar', title: '1 → 0 geçişinde (Logisim "Falling Edge")' },
+  { value: 'high', label: 'Yüksek seviye', title: 'Saat 1 olduğu sürece; mandal gibi saydamdır (Logisim "High Level")' },
+  { value: 'low', label: 'Düşük seviye', title: 'Saat 0 olduğu sürece; mandal gibi saydamdır (Logisim "Low Level")' },
+];
+
+const triggerAttr: AttrDef = {
+  key: 'trigger',
+  label: 'Tetikleme',
+  kind: 'select',
+  title: 'Saatin ne zaman etki ettiği (Logisim "Trigger"); T, J-K, sayaç ve kaydırmalı yazmaç yalnız kenarla tetiklenir',
+  options: (c) => (LEVEL_TRIGGER_TYPES.has(c.type) ? TRIGGER_OPTIONS : TRIGGER_OPTIONS.slice(0, 2)),
+  get: (c) => getTrigger(c),
+  set: (c, v) => (getTrigger(c) === v ? null : withState(c, { trigger: v as TriggerMode })),
+};
+
+const memWidthAttr: AttrDef = {
+  key: 'memWidth',
+  label: 'Veri bit',
+  kind: 'select',
+  title: 'Saklanan değerin ve veri pinlerinin genişliği (1-32)',
+  options: WIDTH_OPTIONS,
+  get: (c) => getMemConfig(c).width,
+  set: (c, v) => (getMemConfig(c).width === Number(v) ? null : reconfigureMem(c, { width: Number(v) })),
+};
+
+const counterMaxAttr: AttrDef = {
+  key: 'counterMax',
+  label: 'Üst sınır (hex)',
+  kind: 'hex',
+  title: 'Sayacın en büyük değeri (Logisim "Maximum Value"); genişliğe sığmayan üst bitler atılır',
+  get: (c) => getCounterMax(c),
+  set: (c, v) => {
+    const n = Number(v) % 2 ** getMemConfig(c).width;
+    return n === getCounterMax(c) ? null : withState(c, { counterMax: n });
+  },
+};
+
+const counterGoalAttr: AttrDef = {
+  key: 'counterGoal',
+  label: 'Sınırda',
+  kind: 'select',
+  title: 'Sayaç hedefe (yukarı: üst sınır, aşağı: 0) ulaşmışken gelen sayma darbesi (Logisim "Action On Overflow")',
+  options: [
+    { value: 'wrap', label: 'Başa dön', title: "Yukarı sayarken 0'a, aşağı sayarken üst sınıra geçer" },
+    { value: 'stay', label: 'Dur', title: 'Değer hedefte kalır' },
+    { value: 'continue', label: 'Devam et', title: 'Sınırı aşıp saymaya devam eder (genişlik dolunca başa döner)' },
+    { value: 'load', label: 'Yükle', title: 'D girişindeki değeri yükler' },
+  ],
+  get: (c) => c.state.counterGoal ?? 'wrap',
+  set: (c, v) => ((c.state.counterGoal ?? 'wrap') === v ? null : withState(c, { counterGoal: v as 'wrap' | 'stay' | 'continue' | 'load' })),
+};
+
+const shiftLengthAttr: AttrDef = {
+  key: 'shiftLength',
+  label: 'Aşama sayısı',
+  kind: 'select',
+  title: 'Kaydırmalı yazmacın aşama sayısı (Logisim "Number of Stages", 1-32)',
+  options: numberOptions(1, SHIFT_REGISTER_MAX_LENGTH),
+  get: (c) => getMemConfig(c).length,
+  set: (c, v) => (getMemConfig(c).length === Number(v) ? null : reconfigureMem(c, { length: Number(v) })),
+};
+
+const shiftParallelAttr: AttrDef = {
+  key: 'shiftParallel',
+  label: 'Paralel yükleme',
+  kind: 'buttons',
+  title: 'Üstte paralel girişler + LD, altta aşama çıkışları (Logisim "Parallel Load")',
+  options: [
+    { value: 'on', label: 'Açık' },
+    { value: 'off', label: 'Kapalı' },
+  ],
+  get: (c) => (getMemConfig(c).parallel ? 'on' : 'off'),
+  set: (c, v) => ((getMemConfig(c).parallel ? 'on' : 'off') === v ? null : reconfigureMem(c, { parallel: v === 'on' })),
+};
 
 export const resolveAttrOptions = (def: AttrDef, comp: CircuitComponentInstance, ctx: AttrContext): AttrOption[] =>
   typeof def.options === 'function' ? def.options(comp, ctx) : def.options ?? [];
