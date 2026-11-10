@@ -1,6 +1,8 @@
 import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import {
+  ALU_OP_BITS,
+  ARITH_PINS,
   ARITH_TYPES,
   HEX_7SEG_MAP,
   bitSelectorSelectWidth,
@@ -684,6 +686,101 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             inOff: info.inOff,
             outOff: info.outOff,
           });
+          break;
+        }
+        case 'alu': {
+          // No Logisim counterpart: built from Logisim's own parts, so the file opens in 2.7.1 too. Adder and
+          // Subtractor (A, B, carry-in) give ADD / SUB with C, wide gates the logic operations, a signed
+          // Comparator's A<B zero-extended SLT, and an 8-way Multiplexer on op picks Y; the flags come from gates
+          const { width: w } = getArithConfig(c);
+          const [a, b, op] = [ins(0), ins(1), ins(2)];
+          const cin = ins(3, 0); // open carry-in = 0, like Logisim's adder
+          const arith = (part: ComponentType, net: Record<string, string>, width: (k: string) => number, attrs = '') => {
+            const ports = logisimArithPorts(part, 1);
+            const inKeys = new Set(ARITH_PINS[part]!.inputs);
+            P.push({
+              kind: 'arith',
+              part,
+              attrs: `<a name="width" val="${w}"/>${attrs}`,
+              inputs: 1,
+              nets: ports.map(({ key }) => net[key] ?? OPEN),
+              widths: ports.map(({ key }) => width(key)),
+              sinks: ports.map(({ key }) => inKeys.has(key)),
+            });
+          };
+          const dataW = (k: string) => (k === 'a' || k === 'b' || k === 'out' ? w : 1);
+          const [sum, cout, diff, bout, lt] = [newNet(), newNet(), newNet(), newNet(), newNet()];
+          arith('adder', { a, b, cin, out: sum, cout }, dataW);
+          arith('subtractor', { a, b, bin: cin, out: diff, bout }, dataW);
+          arith('comparator', { a, b, lt }, dataW, `<a name="mode" val="${LOGISIM_ARITH_MODE.signed}"/>`);
+          const wide = (type: GateKind, x: string, y: string) => {
+            const o = newNet();
+            P.push({ kind: 'gate', type, ins: [x, y], out: o, width: w });
+            return o;
+          };
+          let slt = lt;
+          if (w > 1) {
+            slt = newNet();
+            P.push({ kind: 'extender', in: lt, ext: null, out: slt, inW: 1, outW: w, type: 'zero' });
+          }
+          const y = out(0);
+          const data = [sum, diff, wide('AND', a, b), wide('OR', a, b), wide('XOR', a, b), wide('NOR', a, b), slt, b];
+          const muxKeys = logisimPlexerPortKeys('multiplexer', ALU_OP_BITS, false);
+          const muxNet: Record<string, string> = { sel: op, out: y };
+          data.forEach((d, k) => (muxNet[`in${k}`] = d));
+          P.push({
+            kind: 'plexer',
+            part: 'multiplexer',
+            select: ALU_OP_BITS,
+            width: w,
+            enable: false,
+            disabled: '0',
+            tristate: false,
+            nets: muxKeys.map((k) => muxNet[k]),
+            widths: muxKeys.map((k) => (k === 'sel' ? ALU_OP_BITS : w)),
+            sinks: muxKeys.map((k) => k !== 'out'),
+          });
+          // Bits of a bus: every bit, or just the top one
+          const split = (bus: string, n: number) => {
+            const ends = Array.from({ length: n }, () => newNet());
+            P.push({ kind: 'splitter', combined: bus, ends, bitEnd: ends.map((_, i) => i + 1), appear: 'left', endWidth: ends.map(() => 1) });
+            return ends;
+          };
+          const msb = (bus: string) => {
+            if (w === 1) return bus;
+            const top = newNet();
+            P.push({
+              kind: 'splitter',
+              combined: bus,
+              ends: [OPEN, top],
+              bitEnd: Array.from({ length: w }, (_, i) => (i === w - 1 ? 2 : 1)),
+              appear: 'left',
+              endWidth: [w - 1, 1],
+            });
+            return top;
+          };
+          const yBits = w === 1 ? [y] : split(y, w);
+          if (c.outputs[1]) {
+            if (w === 1) not(y, out(1));
+            else g('NOR', yBits, out(1));
+          }
+          if (c.outputs[2]) union(out(2), yBits[w - 1]);
+          if (c.outputs[3] || c.outputs[4]) {
+            const [o0, o1, o2] = split(op, ALU_OP_BITS);
+            const [n1, n2] = [not(o1), not(o2)];
+            const isAdd = g('AND', [not(o0), n1, n2]);
+            const isSub = g('AND', [o0, n1, n2]);
+            if (c.outputs[3]) g('OR', [g('AND', [isAdd, cout]), g('AND', [isSub, bout])], out(3));
+            if (c.outputs[4]) {
+              const [sa, sb] = [msb(a), msb(b)];
+              const vAdd = g('AND', [g('XNOR', [sa, sb]), g('XOR', [msb(sum), sa])]);
+              const vSub = g('AND', [g('XOR', [sa, sb]), g('XOR', [msb(diff), sa])]);
+              g('OR', [g('AND', [isAdd, vAdd]), g('AND', [isSub, vSub])], out(4));
+            }
+          }
+          warnings.push(
+            `${label}: ALU'nun Logisim'de karşılığı yok; toplayıcı, çıkarıcı, karşılaştırıcı, kapılar ve çoklayıcıdan kurulmuş bir devre olarak aktarıldı (geri içe aktarılınca tek ALU değil, bu parçalar gelir).`
+          );
           break;
         }
         default:

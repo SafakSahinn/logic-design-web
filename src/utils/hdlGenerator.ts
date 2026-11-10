@@ -2,6 +2,7 @@ import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircui
 import { numberToBits } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
 import {
+  ALU_OP_BITS,
   ARITH_PINS,
   GATE_WIDTH_TYPES,
   HEX_7SEG_MAP,
@@ -1251,7 +1252,8 @@ function buildModule(
       case 'squareRoot':
       case 'exponentiator':
       case 'bitAdder':
-      case 'bitFinder': {
+      case 'bitFinder':
+      case 'alu': {
         // Data inputs read like any multi-bit reader (open bits 0, noted); an open carry / borrow in, the
         // multiplier's carry in and an open upper half count as 0 in the simulator too, so no note for them
         const keys = c.type === 'bitAdder' ? c.inputs.map((_, i) => `in${i}`) : ARITH_PINS[c.type]!.inputs;
@@ -1737,6 +1739,51 @@ function arithModel(lang: Lang, c: CircuitComponentInstance, hasUpper: boolean):
           `  if p0(i) = '${want}' then k := to_unsigned(i, ${ow}); f := '1'; end if;`,
           'end loop;',
           'return f & std_logic_vector(k);',
+        ]
+      );
+    }
+    case 'alu': {
+      // p0 = A, p1 = B, p2 = op, p3 = carry-in; packed {V, C, N, Z, Y}. ADD / SUB over w+1 bits (the top bit
+      // is the carry, or the borrow of A - B - Cin), V from the sign bits; C and V are 0 for the other operations
+      const t = w - 1;
+      const r = (p: string) => `resize(unsigned(${p}), ${w + 1})`;
+      const vOvf = (eq: string) => `v = (p0[${t}] ${eq} p1[${t}]) && (y[${t}] != p0[${t}]);`;
+      const hOvf = (eq: string) => `if p0(${t}) ${eq} p1(${t}) and y(${t}) /= p0(${t}) then v := '1'; end if;`;
+      return make(
+        [w, w, ALU_OP_BITS, 1],
+        [w, 1, 1, 1, 1],
+        [`reg [${w}:0] s`, `reg [${t}:0] y`, 'reg c, v'],
+        [
+          'c = 0;',
+          'v = 0;',
+          'case (p2)',
+          `  3'd0: begin s = p0 + p1 + p3; y = s[${t}:0]; c = s[${w}]; ${vOvf('==')} end`,
+          `  3'd1: begin s = p0 - p1 - p3; y = s[${t}:0]; c = s[${w}]; ${vOvf('!=')} end`,
+          "  3'd2: y = p0 & p1;",
+          "  3'd3: y = p0 | p1;",
+          "  3'd4: y = p0 ^ p1;",
+          "  3'd5: y = ~(p0 | p1);",
+          "  3'd6: y = ($signed(p0) < $signed(p1)) ? 1 : 0;",
+          '  default: y = p1;',
+          'endcase',
+          `$R = {v, c, y[${t}], y == 0, y};`,
+        ],
+        [`s : ${vec(w + 1)}`, `y : ${vec(w)}`, 'c, v, z : std_logic'],
+        [
+          "c := '0';",
+          "v := '0';",
+          'case p2 is',
+          `  when "000" => s := ${r('p0')} + ${r('p1')} + ${r('p3')}; y := s(${t} downto 0); c := s(${w}); ${hOvf('=')}`,
+          `  when "001" => s := ${r('p0')} - ${r('p1')} - ${r('p3')}; y := s(${t} downto 0); c := s(${w}); ${hOvf('/=')}`,
+          '  when "010" => y := unsigned(p0 and p1);',
+          '  when "011" => y := unsigned(p0 or p1);',
+          '  when "100" => y := unsigned(p0 xor p1);',
+          '  when "101" => y := unsigned(p0 nor p1);',
+          `  when "110" => y := (others => '0'); if signed(p0) < signed(p1) then y(0) := '1'; end if;`,
+          '  when others => y := unsigned(p1);',
+          'end case;',
+          "if y = 0 then z := '1'; else z := '0'; end if;",
+          `return v & c & y(${t}) & z & std_logic_vector(y);`,
         ]
       );
     }

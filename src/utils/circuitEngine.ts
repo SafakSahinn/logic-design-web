@@ -35,8 +35,12 @@ export function bitFinderOutBits(w: number): number {
   return o;
 }
 
+/** ALU operation select width (declared before the catalog, which needs it) */
+export const ALU_OP_BITS = 3;
+
 /** Width of an arithmetic part's pin for data width w (bit adder: n inputs). */
 export function arithPinWidth(type: ComponentType, key: string, w: number, n: number): number {
+  if (type === 'alu') return key === 'a' || key === 'b' || key === 'out' ? w : key === 'op' ? ALU_OP_BITS : 1;
   if (key === 'gt' || key === 'eq' || key === 'lt' || key === 'ovf' || key === 'present') return 1;
   if (key === 'cin' || key === 'cout' || key === 'bin' || key === 'bout') return type === 'multiplier' ? w : 1;
   if (key === 'dist') return shifterDistBits(w);
@@ -58,6 +62,27 @@ export function arithGeometry(type: ComponentType, n: number): {
   pins: Record<string, { x: number; y: number }>;
   anchor: { x: number; y: number };
 } {
+  if (type === 'alu') {
+    // No Logisim counterpart: A and B on the left, Y in the middle of the right side (the location, like
+    // the other arithmetic parts), operation select and carry-in on top, the four flags along the bottom.
+    // Square, so a turned body keeps its pins on the 10px grid
+    return {
+      width: 60,
+      height: 60,
+      pins: {
+        a: { x: 0, y: 20 },
+        b: { x: 0, y: 40 },
+        op: { x: 20, y: 0 },
+        cin: { x: 40, y: 0 },
+        out: { x: 60, y: 30 },
+        z: { x: 10, y: 60 },
+        n: { x: 20, y: 60 },
+        c: { x: 40, y: 60 },
+        v: { x: 50, y: 60 },
+      },
+      anchor: { x: 60, y: 30 },
+    };
+  }
   if (type === 'bitAdder') {
     const top = n < 4 ? 20 : Math.floor((n - 1) / 2) * 10 + 5;
     const h = Math.max(40, 10 * n);
@@ -1000,6 +1025,9 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     'Girişlerdeki 1 bitlerini sayar; 1-32 giriş, her biri 1-32 bit (Logisim Bit Adder)'),
   bitFinder: arithMeta('bitFinder', 'Bit Bulucu (Bit Finder)', [['in', 'X']], [['out', 'i'], ['present', '?']],
     'En düşük ya da en yüksek 1 (veya 0) bitinin numarasını verir; bulunduysa ? çıkışı 1 (Logisim Bit Finder)'),
+  alu: arithMeta('alu', 'Aritmetik Mantık Birimi (ALU)', [['a', 'A'], ['b', 'B'], ['op', 'OP'], ['cin', 'Cin']],
+    [['out', 'Y'], ['z', 'Z'], ['n', 'N'], ['c', 'C'], ['v', 'V']],
+    '3 bitlik OP ile 8 işlem: 000 ADD (A+B+Cin), 001 SUB (A−B−Cin), 010 AND, 011 OR, 100 XOR, 101 NOR, 110 SLT (işaretli A<B), 111 PASS-B. Bayraklar: Z sıfır, N işaret, C elde/borç, V işaretli taşma (C ve V yalnız ADD/SUB). Veri 1-32 bit'),
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -1593,9 +1621,11 @@ export function plexerLayout(comp: CircuitComponentInstance): { width: number; h
 
 export const ARITH_TYPES = new Set<ComponentType>([
   'adder', 'subtractor', 'multiplier', 'divider', 'negator', 'absolute', 'comparator', 'minMax', 'shifter',
-  'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder',
+  'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder', 'alu',
 ]);
 export const BIT_ADDER_MAX_INPUTS = 32;
+/** ALU operation codes (op value -> operation) */
+export const ALU_OPS = ['ADD', 'SUB', 'AND', 'OR', 'XOR', 'NOR', 'SLT', 'PASS-B'] as const;
 
 /** Pin keys of each arithmetic part in the order the simulator relies on (bit adder inputs: in0..in(n-1)) */
 export const ARITH_PINS: Partial<Record<ComponentType, { inputs: string[]; outputs: string[] }>> = {
@@ -1612,6 +1642,7 @@ export const ARITH_PINS: Partial<Record<ComponentType, { inputs: string[]; outpu
   exponentiator: { inputs: ['a', 'b'], outputs: ['out', 'upper'] },
   bitAdder: { inputs: [], outputs: ['out'] },
   bitFinder: { inputs: ['in'], outputs: ['out', 'present'] },
+  alu: { inputs: ['a', 'b', 'op', 'cin'], outputs: ['out', 'z', 'n', 'c', 'v'] },
 };
 
 export interface ArithConfig {
@@ -1895,6 +1926,73 @@ export function computeArith(comp: CircuitComponentInstance, ins: SignalValue[][
       if (i < 0 || i >= w) return [fill(ow, 0), [0]];
       if (x[i] === want) return [bigToBits(BigInt(i), ow), [1]];
       return [fill(ow, 'E'), ['E']];
+    }
+    case 'alu': {
+      // No Logisim counterpart. An E bit in the operation select makes every output E, an x / open bit x.
+      // ADD / SUB follow Logisim's adder / subtractor (an open or x carry-in is 0, C = carry / borrow), the
+      // logic operations go bit by bit like the gates (0 AND x = 0), SLT is a signed A < B (any undefined
+      // operand bit leaves its bit 0 undefined), PASS-B copies B. Z and N always describe Y; C and V are 0
+      // outside ADD / SUB
+      const [a, b, opBits, cinBits] = ins;
+      const op = bitsToNumber(opBits);
+      if (op === undefined) {
+        const bad: SignalValue = opBits.includes('E') ? 'E' : 'X';
+        return [fill(w, bad), [bad], [bad], [bad], [bad]];
+      }
+      const lvl = (v: SignalValue): SignalValue => (v === 'Z' ? 'X' : v);
+      let y: SignalValue[];
+      let c: SignalValue = 0;
+      let v: SignalValue = 0;
+      // Signed overflow from the sign bits: ADD when A and B agree and Y differs, SUB when A and B differ
+      // and Y differs from A
+      const overflow = (sub: boolean): SignalValue => {
+        const sa = a[w - 1];
+        const sb = b[w - 1];
+        const sy = y[w - 1];
+        if ([sa, sb, sy].includes('E')) return 'E';
+        if (!isLevel(sa) || !isLevel(sb) || !isLevel(sy)) return 'X';
+        return (sub ? sa !== sb : sa === sb) && sy !== sa ? 1 : 0;
+      };
+      switch (op) {
+        case 0: {
+          const r = logisimSum(a, b, cinBits[0]);
+          y = r.sum;
+          c = r.carry;
+          v = overflow(false);
+          break;
+        }
+        case 1: {
+          const r = logisimDiff(a, b, cinBits[0]);
+          y = r.diff;
+          c = r.borrow;
+          v = overflow(true);
+          break;
+        }
+        case 2:
+          y = a.map((ai, i) => sigAnd(ai, b[i]));
+          break;
+        case 3:
+          y = a.map((ai, i) => sigOr(ai, b[i]));
+          break;
+        case 4:
+          y = a.map((ai, i) => sigXor(ai, b[i]));
+          break;
+        case 5:
+          y = a.map((ai, i) => sigNot(sigOr(ai, b[i])));
+          break;
+        case 6: {
+          y = fill(w, 0);
+          if (defined(a) && defined(b)) y[0] = bitsToSignedBig(a) < bitsToSignedBig(b) ? 1 : 0;
+          else y[0] = a.includes('E') || b.includes('E') ? 'E' : 'X';
+          break;
+        }
+        default:
+          y = b.map(lvl);
+          break;
+      }
+      y = y.map(lvl);
+      const z: SignalValue = y.includes(1) ? 0 : y.every((bit) => bit === 0) ? 1 : y.includes('E') ? 'E' : 'X';
+      return [y, [z], [y[w - 1]], [lvl(c)], [lvl(v)]];
     }
     default:
       return [];
@@ -2758,6 +2856,7 @@ export function simulateCircuitStep(
       case 'exponentiator':
       case 'bitAdder':
       case 'bitFinder':
+      case 'alu':
         computeArith(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
         break;
       case 'bitSelector': {

@@ -187,7 +187,8 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
     case 'squareRoot':
     case 'exponentiator':
     case 'bitAdder':
-    case 'bitFinder': {
+    case 'bitFinder':
+    case 'alu': {
       // Same scale as the fixed parts (full adder 28, full subtractor 32, 2:1 MUX 14, 4-bit comparator 64):
       // ripple adder / subtractor, invert + increment, array multiplier (w^2 AND + FA cells), restoring array
       // divider (w^2 subtract + select cells), barrel shifter, square-and-multiply exponentiator
@@ -218,6 +219,11 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
           return 68 * w * w * w;
         case 'bitAdder':
           return 28 * n * w;
+        case 'alu':
+          // One ripple adder shared by ADD / SUB with an XOR inverting B (28w + 8w), AND 6w, XOR 8w, NOR 4w with
+          // OR as NOR + inverter (2w), an 8:1 MUX per bit (7 x 14), the w-input NOR for Z (2w); V, SLT, the
+          // C select and the op decoder about 40
+          return 156 * w + 40;
         default: {
           const t = c.state.findType ?? 'low1';
           return 12 * w + (t === 'low0' || t === 'high0' ? 2 * w : 0);

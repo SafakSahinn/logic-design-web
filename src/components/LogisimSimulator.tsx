@@ -306,6 +306,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   exponentiator: { label: 'Üs Alıcı', badge: 'yˣ' },
   bitAdder: { label: 'Bit Sayıcı', badge: '#1' },
   bitFinder: { label: 'Bit Bulucu', badge: 'Bul' },
+  alu: { label: 'ALU', badge: 'ALU' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
   dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
   jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
@@ -5950,7 +5951,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'squareRoot':
       case 'exponentiator':
       case 'bitAdder':
-      case 'bitFinder': {
+      case 'bitFinder':
+      case 'alu': {
         // Logisim std/arith painters: a plain box, a symbol just left of the location (the main output) and
         // small port labels just inside their pins. Logisim has no facing for these; here the body turns as a
         // whole, so text and symbols are turned back around their own point and stay upright
@@ -6064,6 +6066,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           case 'exponentiator':
             labels.push(portLabel('out', 'yˣ', false), portLabel('upper', 'upper', true));
             break;
+          case 'alu':
+            // No Logisim counterpart: "ALU" in the middle, the select / carry-in and flag pins labelled
+            symbol = (
+              <text x={W / 2} y={H / 2} transform={upright(W / 2, H / 2)} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold" fontFamily="monospace" className={`${gateTextClass} select-none`}>
+                ALU
+              </text>
+            );
+            labels.push(
+              portLabel('op', 'op', true),
+              portLabel('cin', 'c in', true),
+              portLabel('z', 'Z', false),
+              portLabel('n', 'N', false),
+              portLabel('c', 'C', false),
+              portLabel('v', 'V', false),
+            );
+            break;
           case 'bitFinder': {
             const t = comp.state.findType ?? 'low1';
             const lines = ['find', t.startsWith('high') ? 'high' : 'low', t.endsWith('0') ? '0' : '1'];
@@ -6082,7 +6100,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return (
           <g>
             <rect x={0} y={0} width={W} height={H} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
-            {comp.type === 'bitFinder' ? symbol : symbol && <g transform={upright(sx, sy)}>{symbol}</g>}
+            {comp.type === 'bitFinder' || comp.type === 'alu' ? symbol : symbol && <g transform={upright(sx, sy)}>{symbol}</g>}
             {labels}
           </g>
         );
@@ -6391,7 +6409,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       icon: '➕',
       types: [
         'adder', 'subtractor', 'multiplier', 'divider', 'negator', 'absolute', 'comparator', 'minMax', 'shifter',
-        'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder', 'halfAdder', 'fullAdder', 'halfSubtractor', 'fullSubtractor',
+        'squareRoot', 'exponentiator', 'bitAdder', 'bitFinder', 'alu', 'halfAdder', 'fullAdder', 'halfSubtractor', 'fullSubtractor',
       ] as ComponentType[],
     },
     {

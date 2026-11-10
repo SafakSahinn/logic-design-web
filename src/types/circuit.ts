@@ -66,6 +66,7 @@ export type ComponentType =
   | 'exponentiator'
   | 'bitAdder'
   | 'bitFinder'
+  | 'alu'
   | 'comparator4'
   | 'alu4'
   | 'splitter4'
