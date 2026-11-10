@@ -1,7 +1,7 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import { getSubcircuitDefinition } from './subcircuitManager';
-import { getPlexerConfig } from './circuitEngine';
+import { ARITH_TYPES, PLEXER_TYPES, getArithConfig, getArithMode, getPlexerConfig, shifterDistBits } from './circuitEngine';
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
@@ -131,6 +131,20 @@ function calculateCriticalPath(components: CircuitComponentInstance[], wires: Ci
   return maxDepth;
 }
 
+// Breakdown row detail of a parametric part: its count depends on these settings
+function arithGroupDetail(c: CircuitComponentInstance): string {
+  const { width, inputs } = getArithConfig(c);
+  const parts = [`${width} bit`];
+  if (c.type === 'bitAdder') parts.push(`${inputs} giriş`);
+  if (c.type === 'divider' && getArithMode(c) !== 'unsigned') parts.push('işaretli');
+  if (c.type === 'bitFinder') parts.push(c.state.findType ?? 'low1');
+  return parts.join(', ');
+}
+function plexerGroupDetail(c: CircuitComponentInstance): string {
+  const { select, width } = getPlexerConfig(c);
+  return c.type === 'multiplexer' || c.type === 'demultiplexer' ? `${select} seçme, ${width} bit` : `${select} seçme`;
+}
+
 // Transistor count of one part: n-input gates scale with n, custom ICs count their contents
 function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set()): number {
   const n = Math.max(1, c.inputs.length);
@@ -160,6 +174,55 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
       if (c.type === 'demultiplexer') return width * (8 * k - 4);
       if (c.type === 'decoder') return 7 * k - 4;
       return 12 * k;
+    }
+    case 'adder':
+    case 'subtractor':
+    case 'multiplier':
+    case 'divider':
+    case 'negator':
+    case 'absolute':
+    case 'comparator':
+    case 'minMax':
+    case 'shifter':
+    case 'squareRoot':
+    case 'exponentiator':
+    case 'bitAdder':
+    case 'bitFinder': {
+      // Same scale as the fixed parts (full adder 28, full subtractor 32, 2:1 MUX 14, 4-bit comparator 64):
+      // ripple adder / subtractor, invert + increment, array multiplier (w^2 AND + FA cells), restoring array
+      // divider (w^2 subtract + select cells), barrel shifter, square-and-multiply exponentiator
+      const { width: w, inputs: n } = getArithConfig(c);
+      const signed = getArithMode(c) !== 'unsigned';
+      switch (c.type) {
+        case 'adder':
+          return 28 * w;
+        case 'subtractor':
+          return 32 * w;
+        case 'negator':
+          return 14 * w;
+        case 'absolute':
+          return 20 * w;
+        case 'comparator':
+          return 16 * w;
+        case 'minMax':
+          return 44 * w;
+        case 'shifter':
+          return 14 * w * shifterDistBits(w);
+        case 'multiplier':
+          return 34 * w * w;
+        case 'divider':
+          return 46 * w * w + (signed ? 80 * w : 0); // signed: conditional negation of 2 inputs + 2 outputs
+        case 'squareRoot':
+          return 23 * w * w;
+        case 'exponentiator':
+          return 68 * w * w * w;
+        case 'bitAdder':
+          return 28 * n * w;
+        default: {
+          const t = c.state.findType ?? 'low1';
+          return 12 * w + (t === 'low0' || t === 'high0' ? 2 * w : 0);
+        }
+      }
     }
     case 'subcircuit': {
       const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
@@ -214,7 +277,11 @@ export function analyzeCircuit(
         ? `IC: ${c.state.subcircuitName || c.label || 'Alt devre'}`
         : GATE_TYPES.includes(c.type) && c.type !== 'not' && c.type !== 'buffer' && c.type !== 'triState' && c.type !== 'controlledInverter'
           ? `${c.type.toUpperCase()} (${c.inputs.length} giriş)`
-          : c.type.toUpperCase();
+          : ARITH_TYPES.has(c.type)
+            ? `${c.type.toUpperCase()} (${arithGroupDetail(c)})`
+            : PLEXER_TYPES.has(c.type)
+              ? `${c.type.toUpperCase()} (${plexerGroupDetail(c)})`
+              : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
     g.count++;
     g.totalTransistors += t;

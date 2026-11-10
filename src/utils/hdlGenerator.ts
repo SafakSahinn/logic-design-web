@@ -1,7 +1,22 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { numberToBits } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
-import { GATE_WIDTH_TYPES, HEX_7SEG_MAP, OUTPUT_MODE_TYPES, PLEXER_TYPES, getGateWidth, getPlexerConfig, getSplitterConfig, splitterThreads } from './circuitEngine';
+import {
+  ARITH_PINS,
+  GATE_WIDTH_TYPES,
+  HEX_7SEG_MAP,
+  OUTPUT_MODE_TYPES,
+  PLEXER_TYPES,
+  bitAdderOutBits,
+  bitFinderOutBits,
+  getArithConfig,
+  getArithMode,
+  getGateWidth,
+  getPlexerConfig,
+  getSplitterConfig,
+  shifterDistBits,
+  splitterThreads,
+} from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 
 /*
@@ -1224,6 +1239,57 @@ function buildModule(
         if (out[2]) emit(out[2], L.and([en, any])); // GS
         break;
       }
+      case 'adder':
+      case 'subtractor':
+      case 'multiplier':
+      case 'divider':
+      case 'negator':
+      case 'absolute':
+      case 'comparator':
+      case 'minMax':
+      case 'shifter':
+      case 'squareRoot':
+      case 'exponentiator':
+      case 'bitAdder':
+      case 'bitFinder': {
+        // Data inputs read like any multi-bit reader (open bits 0, noted); an open carry / borrow in, the
+        // multiplier's carry in and an open upper half count as 0 in the simulator too, so no note for them
+        const keys = c.type === 'bitAdder' ? c.inputs.map((_, i) => `in${i}`) : ARITH_PINS[c.type]!.inputs;
+        const quietBits = (i: number): { bits: Bit[]; floating: boolean } => {
+          const pin = c.inputs[i];
+          if (!pin) return { bits: [{ k: 'lit', v: 0 }], floating: true };
+          const r = readBits(pin.id, pin.width ?? 1);
+          return r.mismatch ? { bits: wideBits(i), floating: false } : r;
+        };
+        const upperIdx = keys.indexOf('upper');
+        const hasUpper = upperIdx >= 0 && !quietBits(upperIdx).floating;
+        const m = arithModel(lang, c, hasUpper);
+        const fname = names.make(`${nm}_f`, 'f');
+        extraDecls.push(...m.decl(fname));
+        const args = m.params.map((pw, i) => {
+          const quiet = keys[i] === 'cin' || keys[i] === 'bin' || keys[i] === 'upper';
+          const e = compose(quiet ? quietBits(i).bits : wideBits(i));
+          return lang === 'vhdl' && pw === 1 ? `(0 => ${e})` : e;
+        });
+        if (c.type === 'divider') body.push(L.comment('bölen 0 ise 1 ile bölünür (simülatördeki gibi)'));
+        const R = m.outWidths.reduce((a, b) => a + b, 0);
+        const res = names.make(`${nm}_res`, 'res');
+        declare(res, R);
+        const call = `${fname}(${args.join(', ')})`;
+        emit(res, lang === 'vhdl' && R === 1 ? `${call}(0)` : call);
+        let lo = 0;
+        m.outWidths.forEach((ow, k) => {
+          if (out[k]) {
+            const hi = lo + ow - 1;
+            emit(
+              out[k],
+              R === 1 ? res : ow === 1 ? vecIndex(res, lo) : lang === 'verilog' ? `${res}[${hi}:${lo}]` : `${res}(${hi} downto ${lo})`
+            );
+          }
+          lo += ow;
+        });
+        break;
+      }
       case 'bitSelector': {
         // Group k of the data (bits k*g .. k*g+g-1); bits past the data read 0, as in the simulator
         if (!out[0]) break;
@@ -1381,6 +1447,302 @@ function seqBlock(
     lines.push('    end if;', '  end process;');
   }
   return lines;
+}
+
+// ---- Parametric arithmetic parts -------------------------------------------
+// One function per part computes all of its outputs packed LSB first (in ARITH_PINS output order). The
+// operands are read in the part's mode with plain unsigned arithmetic on sign- or zero-extended values (and
+// magnitudes for the signed divider), so Verilog and VHDL give the bits computeArith gives for defined inputs.
+interface ArithModel {
+  params: number[]; // widths of the function's inputs p0, p1, ...
+  outWidths: number[]; // packed outputs, LSB first
+  decl: (fname: string) => string[];
+}
+
+function arithModel(lang: Lang, c: CircuitComponentInstance, hasUpper: boolean): ArithModel {
+  const { width: w, inputs: nIn } = getArithConfig(c);
+  const W2 = 2 * w;
+  const mode = getArithMode(c);
+  const v = lang === 'verilog';
+  const zx = (p: string, pw: number, n: number) =>
+    v ? (n === pw ? p : `{${n - pw}'b0, ${p}}`) : `resize(unsigned(${p}), ${n})`;
+  const sx = (p: string, pw: number, n: number) =>
+    v ? (n === pw ? p : `{{${n - pw}{${p}[${pw - 1}]}}, ${p}}`) : `unsigned(resize(signed(${p}), ${n}))`;
+  const ext = (signed: boolean, p: string, n: number) => (signed ? sx(p, w, n) : zx(p, w, n));
+  const vec = (n: number) => `unsigned(${n - 1} downto 0)`;
+  // Verilog: '$R = x;' assigns the function's result; VHDL: 'return x;'
+  const make = (params: number[], outWidths: number[], vLocals: string[], vBody: string[], hLocals: string[], hBody: string[]): ArithModel => ({
+    params,
+    outWidths,
+    decl: (f) => {
+      const R = outWidths.reduce((a, b) => a + b, 0);
+      if (v) {
+        return [
+          `  function [${R - 1}:0] ${f};`,
+          ...params.map((pw, i) => `    input [${pw - 1}:0] p${i};`),
+          ...vLocals.map((l) => `    ${l};`),
+          '    begin',
+          ...vBody.map((l) => `      ${l.replace('$R', f)}`),
+          '    end',
+          '  endfunction',
+        ];
+      }
+      return [
+        `  function ${f}(${params.map((pw, i) => `p${i} : std_logic_vector(${pw - 1} downto 0)`).join('; ')}) return std_logic_vector is`,
+        ...hLocals.map((l) => `    variable ${l};`),
+        '  begin',
+        ...hBody.map((l) => `    ${l}`),
+        `  end function ${f};`,
+      ];
+    },
+  });
+  const sg = mode !== 'unsigned';
+  switch (c.type) {
+    case 'adder':
+    case 'subtractor': {
+      // w+1 bits: the top one is the carry, or the borrow (A - B - Bin below zero)
+      const op = c.type === 'adder' ? '+' : '-';
+      const r = (p: string) => `resize(unsigned(${p}), ${w + 1})`;
+      return make(
+        [w, w, 1],
+        [w, 1],
+        [`reg [${w}:0] s`],
+        [`s = p0 ${op} p1 ${op} p2;`, '$R = s;'],
+        [`s : ${vec(w + 1)}`],
+        [`s := ${r('p0')} ${op} ${r('p1')} ${op} ${r('p2')};`, 'return std_logic_vector(s);']
+      );
+    }
+    case 'multiplier': {
+      // A * B + Cin over 2w bits (low half = product, high half = carry out); signed operands sign-extended
+      const ua = mode === 'unsigned';
+      const ub = mode !== 'signed';
+      const [ea, eb, ec] = [ext(!ua, 'p0', W2), ext(!ub, 'p1', W2), ext(!(ua && ub), 'p2', W2)];
+      return make(
+        [w, w, w],
+        [w, w],
+        [`reg [${W2 - 1}:0] p`],
+        [`p = ${ea} * ${eb} + ${ec};`, '$R = p;'],
+        [`p : ${vec(W2)}`],
+        [`p := resize(${ea} * ${eb}, ${W2}) + ${ec};`, 'return std_logic_vector(p);']
+      );
+    }
+    case 'divider': {
+      // (upper:A) / B and its remainder, a divisor of 0 counts as 1. Signed: divide the magnitudes, the
+      // quotient negative when the signs differ, the remainder takes the dividend's sign (both truncate
+      // toward zero like the simulator); an open upper half sign-extends A
+      const num = v ? (sg && !hasUpper ? sx('p0', w, W2) : '{p2, p0}') : sg && !hasUpper ? sx('p0', w, W2) : 'unsigned(p2 & p0)';
+      const den = ext(sg, 'p1', W2);
+      const vSign = sg
+        ? ['sn = n[' + (W2 - 1) + '];', `sd = d[${W2 - 1}];`, 'if (sn) n = -n;', 'if (sd) d = -d;']
+        : [];
+      const vFix = sg ? ['if (sn ^ sd) q = -q;', 'if (sn) r = -r;'] : [];
+      const hSign = sg
+        ? [`sn := n(${W2 - 1});`, `sd := d(${W2 - 1});`, "if sn = '1' then n := 0 - n; end if;", "if sd = '1' then d := 0 - d; end if;"]
+        : [];
+      const hFix = sg ? ["if (sn xor sd) = '1' then q := 0 - q; end if;", "if sn = '1' then r := 0 - r; end if;"] : [];
+      return make(
+        [w, w, w],
+        [w, w],
+        [`reg [${W2 - 1}:0] n, d, q, r`, ...(sg ? ['reg sn, sd'] : [])],
+        [`n = ${num};`, `d = ${den};`, 'if (d == 0) d = 1;', ...vSign, 'q = n / d;', 'r = n % d;', ...vFix, `$R = {r[${w - 1}:0], q[${w - 1}:0]};`],
+        [`n, d, q, r : ${vec(W2)}`, ...(sg ? ['sn, sd : std_logic'] : [])],
+        [
+          `n := ${num};`,
+          `d := ${den};`,
+          `if d = 0 then d := to_unsigned(1, ${W2}); end if;`,
+          ...hSign,
+          'q := n / d;',
+          'r := n rem d;',
+          ...hFix,
+          `return std_logic_vector(r(${w - 1} downto 0)) & std_logic_vector(q(${w - 1} downto 0));`,
+        ]
+      );
+    }
+    case 'negator':
+      return make([w], [w], [], ['$R = -p0;'], [], ['return std_logic_vector(0 - unsigned(p0));']);
+    case 'absolute':
+      // |A| (the most negative value stays itself); overflow = the result's top bit
+      return make(
+        [w],
+        [w, 1],
+        [`reg [${w - 1}:0] a`],
+        [`a = p0[${w - 1}] ? -p0 : p0;`, `$R = {a[${w - 1}], a};`],
+        [`a : ${vec(w)}`],
+        ['a := unsigned(p0);', `if a(${w - 1}) = '1' then a := 0 - a; end if;`, `return a(${w - 1}) & std_logic_vector(a);`]
+      );
+    case 'comparator':
+    case 'minMax': {
+      // Signed: inverting both sign bits turns the signed order into the unsigned one
+      const vFlip = sg ? [`x[${w - 1}] = ~x[${w - 1}];`, `y[${w - 1}] = ~y[${w - 1}];`] : [];
+      const hFlip = sg ? [`x(${w - 1}) := not x(${w - 1});`, `y(${w - 1}) := not y(${w - 1});`] : [];
+      if (c.type === 'comparator') {
+        return make(
+          [w, w],
+          [1, 1, 1],
+          [`reg [${w - 1}:0] x, y`],
+          ['x = p0;', 'y = p1;', ...vFlip, '$R = {x < y, x == y, x > y};'],
+          [`x, y : ${vec(w)}`, 'r : std_logic_vector(2 downto 0)'],
+          [
+            'x := unsigned(p0);',
+            'y := unsigned(p1);',
+            ...hFlip,
+            'r := "000";',
+            "if x > y then r(0) := '1'; elsif x = y then r(1) := '1'; else r(2) := '1'; end if;",
+            'return r;',
+          ]
+        );
+      }
+      // Min (low part) = A when A <= B
+      return make(
+        [w, w],
+        [w, w],
+        [`reg [${w - 1}:0] x, y`],
+        ['x = p0;', 'y = p1;', ...vFlip, '$R = (x <= y) ? {p1, p0} : {p0, p1};'],
+        [`x, y : ${vec(w)}`],
+        ['x := unsigned(p0);', 'y := unsigned(p1);', ...hFlip, 'if x <= y then return p1 & p0; else return p0 & p1; end if;']
+      );
+    }
+    case 'shifter': {
+      // Logical shifts past the width give 0, arithmetic right fills the top bit; rotations wrap a distance
+      // past the width once (the distance is below 2w), numeric_std rotates modulo the length
+      const s = shifterDistBits(w);
+      const t = c.state.shiftType ?? 'll';
+      const vBody: Record<string, string[]> = {
+        ll: ['$R = p0 << p1;'],
+        lr: ['$R = p0 >> p1;'],
+        ar: [`k = (p1 >= ${w}) ? ${w} : p1;`, `t = {{${w}{p0[${w - 1}]}}, p0} >> k;`, `$R = t[${w - 1}:0];`],
+        rl: [`k = (p1 >= ${w}) ? p1 - ${w} : p1;`, 't = {p0, p0} << k;', `$R = t[${W2 - 1}:${w}];`],
+        rr: [`k = (p1 >= ${w}) ? p1 - ${w} : p1;`, 't = {p0, p0} >> k;', `$R = t[${w - 1}:0];`],
+      };
+      const hCall: Record<string, string> = {
+        ll: 'shift_left(unsigned(p0), n)',
+        lr: 'shift_right(unsigned(p0), n)',
+        ar: 'shift_right(signed(p0), n)',
+        rl: 'rotate_left(unsigned(p0), n)',
+        rr: 'rotate_right(unsigned(p0), n)',
+      };
+      return make(
+        [w, s],
+        [w],
+        t === 'll' || t === 'lr' ? [] : [`reg [${W2 - 1}:0] t`, `reg [${s}:0] k`],
+        vBody[t] ?? vBody.ll,
+        ['n : natural'],
+        ['n := to_integer(unsigned(p1));', `return std_logic_vector(${hCall[t] ?? hCall.ll});`]
+      );
+    }
+    case 'squareRoot':
+      // Bit by bit from the top: keep each root bit whose square still fits; remainder = (upper:A) - root^2
+      return make(
+        [w, w],
+        [w, w],
+        [`reg [${W2 - 1}:0] n, r, t`, 'integer i'],
+        [
+          'n = {p1, p0};',
+          'r = 0;',
+          `for (i = ${w - 1}; i >= 0; i = i - 1) begin`,
+          '  t = r | (1 << i);',
+          '  if (t * t <= n) r = t;',
+          'end',
+          't = n - r * r;',
+          `$R = {t[${w - 1}:0], r[${w - 1}:0]};`,
+        ],
+        [`n, r, t : ${vec(W2)}`],
+        [
+          'n := unsigned(p1 & p0);',
+          "r := (others => '0');",
+          `for i in ${w - 1} downto 0 loop`,
+          '  t := r;',
+          "  t(i) := '1';",
+          `  if resize(t * t, ${W2}) <= n then r := t; end if;`,
+          'end loop;',
+          `t := n - resize(r * r, ${W2});`,
+          `return std_logic_vector(t(${w - 1} downto 0)) & std_logic_vector(r(${w - 1} downto 0));`,
+        ]
+      );
+    case 'exponentiator': {
+      // Square and multiply over 2w bits (low half = result, high half = upper). Signed: A = 1 gives 1,
+      // otherwise a negative exponent gives 0
+      const vSpecial = sg ? [`if (p0 == 1) r = 1; else if (p1[${w - 1}]) r = 0;`] : [];
+      const hSpecial = sg
+        ? [`if unsigned(p0) = 1 then r := to_unsigned(1, ${W2}); elsif p1(${w - 1}) = '1' then r := (others => '0'); end if;`]
+        : [];
+      return make(
+        [w, w],
+        [w, w],
+        [`reg [${W2 - 1}:0] r, b`, 'integer i'],
+        [
+          `b = ${ext(sg, 'p0', W2)};`,
+          'r = 1;',
+          `for (i = 0; i < ${w}; i = i + 1) begin`,
+          '  if (p1[i]) r = r * b;',
+          '  b = b * b;',
+          'end',
+          ...vSpecial,
+          '$R = r;',
+        ],
+        [`r, b : ${vec(W2)}`],
+        [
+          `b := ${ext(sg, 'p0', W2)};`,
+          `r := to_unsigned(1, ${W2});`,
+          `for i in 0 to ${w - 1} loop`,
+          `  if p1(i) = '1' then r := resize(r * b, ${W2}); end if;`,
+          `  b := resize(b * b, ${W2});`,
+          'end loop;',
+          ...hSpecial,
+          'return std_logic_vector(r);',
+        ]
+      );
+    }
+    case 'bitAdder': {
+      // Number of 1 bits over every input
+      const ow = bitAdderOutBits(w, nIn);
+      const ins = Array.from({ length: nIn }, (_, j) => j);
+      return make(
+        ins.map(() => w),
+        [ow],
+        [`reg [${ow - 1}:0] s`, 'integer i'],
+        ['s = 0;', `for (i = 0; i < ${w}; i = i + 1) s = s + ${ins.map((j) => `p${j}[i]`).join(' + ')};`, '$R = s;'],
+        [`s : ${vec(ow)}`],
+        [
+          "s := (others => '0');",
+          `for i in 0 to ${w - 1} loop`,
+          ...ins.map((j) => `  if p${j}(i) = '1' then s := s + 1; end if;`),
+          'end loop;',
+          'return std_logic_vector(s);',
+        ]
+      );
+    }
+    case 'bitFinder': {
+      // Index of the lowest / highest bit at the wanted value (the last match of the scan wins); none: 0, present 0
+      const ow = bitFinderOutBits(w);
+      const t = c.state.findType ?? 'low1';
+      const want = t === 'low1' || t === 'high1' ? 1 : 0;
+      const high = t === 'high1' || t === 'high0';
+      return make(
+        [w],
+        [ow, 1],
+        [`reg [${ow - 1}:0] k`, 'reg f', 'integer i'],
+        [
+          'k = 0;',
+          'f = 0;',
+          high ? `for (i = 0; i < ${w}; i = i + 1)` : `for (i = ${w - 1}; i >= 0; i = i - 1)`,
+          `  if (p0[i] == 1'b${want}) begin k = i; f = 1; end`,
+          '$R = {f, k};',
+        ],
+        [`k : ${vec(ow)}`, 'f : std_logic'],
+        [
+          "k := (others => '0');",
+          "f := '0';",
+          `for i in ${high ? `0 to ${w - 1}` : `${w - 1} downto 0`} loop`,
+          `  if p0(i) = '${want}' then k := to_unsigned(i, ${ow}); f := '1'; end if;`,
+          'end loop;',
+          'return f & std_logic_vector(k);',
+        ]
+      );
+    }
+    default:
+      return make([], [], [], [], [], []);
+  }
 }
 
 // ---- VHDL expression helpers (VHDL-93 has no ?: operator) -----------------
