@@ -1,13 +1,29 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import { getSubcircuitDefinition } from './subcircuitManager';
-import { ARITH_TYPES, PLEXER_TYPES, getArithConfig, getArithMode, getPlexerConfig, shifterDistBits } from './circuitEngine';
+import {
+  ARITH_TYPES,
+  FLIP_FLOP_TYPES,
+  MEM_TYPES,
+  PLEXER_TYPES,
+  getArithConfig,
+  getArithMode,
+  getMemConfig,
+  getPlexerConfig,
+  getTrigger,
+  pinKey,
+  shifterDistBits,
+} from './circuitEngine';
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
-const SEQUENTIAL_TYPES = ['dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit', 'ram16x4'];
+const SEQUENTIAL_TYPES: string[] = [
+  'dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit',
+  ...MEM_TYPES,
+  'ram16x4',
+];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
 const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4');
 // Parts that are only wiring / display and add no logic level
@@ -140,13 +156,26 @@ function arithGroupDetail(c: CircuitComponentInstance): string {
   if (c.type === 'bitFinder') parts.push(c.state.findType ?? 'low1');
   return parts.join(', ');
 }
+// Memory parts: width / stages, a level trigger (latches) and a wired flip-flop enable change the count
+const withDetail = (name: string, detail: string) => (detail ? `${name} (${detail})` : name);
+function memGroupDetail(c: CircuitComponentInstance, enWired: boolean): string {
+  const { width, length, parallel } = getMemConfig(c);
+  const t = getTrigger(c);
+  const parts: string[] = [];
+  if (c.type === 'register' || c.type === 'counter' || c.type === 'shiftRegister') parts.push(`${width} bit`);
+  if (c.type === 'shiftRegister') parts.push(`${length} aşama`, parallel ? 'paralel' : 'seri');
+  if (t === 'high' || t === 'low') parts.push('mandal');
+  else if (t === 'falling') parts.push('düşen kenar');
+  if (FLIP_FLOP_TYPES.has(c.type) && enWired) parts.push('EN');
+  return parts.join(', ');
+}
 function plexerGroupDetail(c: CircuitComponentInstance): string {
   const { select, width } = getPlexerConfig(c);
   return c.type === 'multiplexer' || c.type === 'demultiplexer' ? `${select} seçme, ${width} bit` : `${select} seçme`;
 }
 
 // Transistor count of one part: n-input gates scale with n, custom ICs count their contents
-function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set()): number {
+function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Set<string> = new Set()): number {
   const n = Math.max(1, c.inputs.length);
   switch (c.type) {
     case 'not':
@@ -230,15 +259,55 @@ function transistorsOf(c: CircuitComponentInstance, seen: Set<string> = new Set(
         }
       }
     }
+    case 'flipFlopD':
+    case 'flipFlopT':
+    case 'flipFlopJK':
+    case 'flipFlopSR':
+    case 'register':
+    case 'counter':
+    case 'shiftRegister': {
+      // Same scale (2:1 MUX 14): a transmission-gate D latch is 14, an edge-triggered master-slave D flip-flop
+      // 28 (asynchronous clear / preset included); T = D + XOR feedback + clock gating 40, J-K = D + J·Q' + K'·Q
+      // 42, S-R edge = D + next-state logic 40, gated S-R latch (4 NAND) 16; a wired enable adds a hold MUX 14.
+      // Register = D flip-flop + enable MUX per bit (latches when level-triggered); counter = flip-flop + load
+      // MUX + up/down half adder + goal compare per bit + 20 control; shift register stage = flip-flop + shift
+      // hold MUX, + load MUX when parallel
+      const { width: w, length: len, parallel } = getMemConfig(c);
+      const t = getTrigger(c);
+      const level = t === 'high' || t === 'low';
+      if (c.type === 'register') return (level ? 28 : 42) * w;
+      if (c.type === 'counter') return 82 * w + 20;
+      if (c.type === 'shiftRegister') return (parallel ? 56 : 42) * w * len;
+      const enCost = flipFlopEnableWired(c, wired) ? 14 : 0;
+      if (c.type === 'flipFlopD') return (level ? 14 : 28) + enCost;
+      if (c.type === 'flipFlopSR') return (level ? 16 : 40) + enCost;
+      return (c.type === 'flipFlopT' ? 40 : 42) + enCost;
+    }
     case 'subcircuit': {
       const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
       if (!def || seen.has(def.id)) return 0;
       const inner = new Set(seen).add(def.id);
-      return def.components.reduce((sum, ic) => sum + transistorsOf(ic, inner), 0);
+      const innerWired = wiredPins(getLogicalConnections(def.components, def.wires));
+      return def.components.reduce((sum, ic) => sum + transistorsOf(ic, innerWired, inner), 0);
     }
     default:
       return CMOS_TRANSISTOR_TABLE[c.type] || 0;
   }
+}
+
+function flipFlopEnableWired(c: CircuitComponentInstance, wired: Set<string>): boolean {
+  const en = c.inputs.find((p) => pinKey(c, p) === 'en');
+  return !!en && wired.has(en.id);
+}
+
+// Pins that sit on a net with a driver (an open input reads x: a flip-flop's open enable costs nothing)
+function wiredPins(conns: CircuitWire[]): Set<string> {
+  const s = new Set<string>();
+  for (const w of conns) {
+    s.add(w.fromPinId);
+    s.add(w.toPinId);
+  }
+  return s;
 }
 
 /**
@@ -274,8 +343,10 @@ export function analyzeCircuit(
 
   // Group by what the transistor count depends on: gate type + input count, IC definition, or type
   const groups = new Map<string, CMOSGateStats>();
+  const conns = getLogicalConnections(components, wires);
+  const wired = wiredPins(conns);
   for (const c of components) {
-    const t = transistorsOf(c);
+    const t = transistorsOf(c, wired);
     if (t <= 0) continue;
     totalCMOSTransistors += t;
     const name =
@@ -287,7 +358,9 @@ export function analyzeCircuit(
             ? `${c.type.toUpperCase()} (${arithGroupDetail(c)})`
             : PLEXER_TYPES.has(c.type)
               ? `${c.type.toUpperCase()} (${plexerGroupDetail(c)})`
-              : c.type.toUpperCase();
+              : MEM_TYPES.has(c.type)
+                ? withDetail(c.type.toUpperCase(), memGroupDetail(c, flipFlopEnableWired(c, wired)))
+                : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
     g.count++;
     g.totalTransistors += t;
@@ -298,7 +371,7 @@ export function analyzeCircuit(
   breakdown.sort((a, b) => b.totalTransistors - a.totalTransistors);
 
   // Dependency graph from the electrical nets (canvas wires are positional segments, not pin-to-pin)
-  const criticalPathDepth = calculateCriticalPath(components, getLogicalConnections(components, wires));
+  const criticalPathDepth = calculateCriticalPath(components, conns);
 
   return {
     totalComponents: components.length,

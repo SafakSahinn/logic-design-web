@@ -14,7 +14,13 @@ import {
   getArithMode,
   getGateWidth,
   getPlexerConfig,
+  FLIP_FLOP_TYPES,
+  flipFlopDataKeys,
+  getCounterMax,
+  getMemConfig,
   getSplitterConfig,
+  getTrigger,
+  memPinKeys,
   shifterDistBits,
   splitterThreads,
 } from './circuitEngine';
@@ -34,6 +40,9 @@ import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManage
  *    RAM / ROM with an open address bit keeps its power-up output 0 and never writes, as there.
  *  - several drivers on one net share a signal (tri-state buses resolve through 'z')
  *  - registers start at the simulator's reset state (Q=0, RAM = 0..15, ROM = its contents)
+ *  - flip-flops, register, counter, shift register follow stepMem: asynchronous clear / preset, rising /
+ *    falling edge (posedge / negedge, rising_edge / falling_edge) or a level trigger as a latch; open
+ *    enable / count / shift / up-down count as on, open load / clear / preset as off
  *  - custom ICs (subcircuits) are emitted as their own module / entity
  *  - multi-bit nets become vectors; like the simulator (and Logisim-evolution's netlist) every bit of
  *    a net is traced through splitters to its driver, so a splitter emits no code and needs no inout.
@@ -1120,6 +1129,196 @@ function buildModule(
           body.push(`  ${rd} <= ${mem}(to_integer(unsigned(${addrSig})));`);
           for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${rd}(${i});`);
         }
+        break;
+      }
+      case 'flipFlopD':
+      case 'flipFlopT':
+      case 'flipFlopJK':
+      case 'flipFlopSR':
+      case 'register':
+      case 'counter':
+      case 'shiftRegister': {
+        // As stepMem: clear (0) / preset (1) act at once while 1, clear first; the clock acts on its edge
+        // (falling: negedge) or, for a level trigger, while high / low (a latch); enable / count / shift block
+        // only at 0, so open ones count as on; load needs 1. Open data bits read 0 here (x in the simulator)
+        const v = lang === 'verilog';
+        const { width: w, length: len, parallel } = getMemConfig(c);
+        const keys = memPinKeys(c.type, len, parallel).inputs;
+        const at = (k: string) => keys.indexOf(k);
+        const isFF = FLIP_FLOP_TYPES.has(c.type);
+        const trig = getTrigger(c);
+        const level = trig === 'high' || trig === 'low';
+        const reads: string[] = [];
+        // 1-bit control: a constant, or a plain signal (edge lists and VHDL sensitivity lists need names)
+        const ctl = (k: string, open: string): string => {
+          const i = at(k);
+          if (i < 0) return open;
+          const e = inp(i, open);
+          if (e === L.one || e === L.zero) return e;
+          const n = asName(e, 1, `${nm}_${k}`);
+          reads.push(n);
+          return n;
+        };
+        const data = (k: string): string => {
+          const i = at(k);
+          const pw = c.inputs[i]?.width ?? 1;
+          const e = pw > 1 ? compose(wideBits(i)) : inp(i);
+          if (e === L.one || e === L.zero) return e;
+          const n = asName(e, pw, `${nm}_${k}`);
+          reads.push(n);
+          return n;
+        };
+        const W = c.type === 'shiftRegister' ? w * len : isFF ? 1 : w;
+        const lit = (n: number, k: number) =>
+          bitLiteral(Array.from({ length: k }, (_, i) => (Math.floor(n / 2 ** i) % 2 === 1 ? 1 : 0)) as (0 | 1)[]);
+        const zeros = lit(0, W);
+        // Conditions: 'true' / 'false' fold away
+        const c1 = (x: string) => (x === L.one ? 'true' : x === L.zero ? 'false' : v ? x : `${x} = '1'`);
+        // Enable-like pins: open ones are tied on above; a driven one acts at 1 (x / U never enable, as Verilog's if)
+        const cnz = c1;
+        const cAnd = (a: string, b: string) => (a === 'false' || b === 'false' ? 'false' : a === 'true' ? b : b === 'true' ? a : v ? `(${a}) && (${b})` : `(${a}) and (${b})`);
+        const ind = (ls: string[]) => ls.map((l) => `  ${l}`);
+        const ifs = (cond: string, then: string[], els: string[] = []): string[] => {
+          if (cond === 'true') return then;
+          if (cond === 'false') return els;
+          // An else branch that is itself one if chain continues it (else if / elsif)
+          const chained = els.length > 0 && els[0].startsWith('if ');
+          if (v) {
+            if (!els.length) return [`if (${cond}) begin`, ...ind(then), 'end'];
+            return [`if (${cond}) begin`, ...ind(then), ...(chained ? [`end else ${els[0]}`, ...els.slice(1)] : ['end else begin', ...ind(els), 'end'])];
+          }
+          if (chained) return [`if ${cond} then`, ...ind(then), `els${els[0]}`, ...els.slice(1)];
+          return [`if ${cond} then`, ...ind(then), ...(els.length ? ['else', ...ind(els)] : []), 'end if;'];
+        };
+        const r = names.make(`${nm}_q_reg`, 'q_reg');
+        const set = (rhs: string) => `${r} <= ${rhs};`;
+        const clkPin = c.inputs[at('clk')];
+        const clkOpen = !clkPin || isFloating(clkPin.id);
+        const clk = clkOpen ? L.zero : ctl('clk', L.zero);
+        const clr = ctl('clr', L.zero);
+        const pre = isFF ? ctl('pre', L.zero) : L.zero;
+        const notes: string[] = [];
+
+        // Next value when the clock acts (and the enable allows it)
+        let act: string[] = [];
+        let en = isFF || c.type === 'register' ? ctl('en', L.one) : L.one;
+        if (isFF) {
+          const dataKeys = flipFlopDataKeys(c.type);
+          const openData = dataKeys.filter((k) => c.type !== 'flipFlopT' && isFloating(c.inputs[at(k)].id));
+          if (openData.length) {
+            // An undefined next value is never stored
+            notes.push(`boştaki ${openData.map((k) => k.toUpperCase()).join(', ')}: simülatörde x, flip-flop hiç yüklenmez; burada da yüklenmez`);
+            en = L.zero;
+          } else if (c.type === 'flipFlopD') act = [set(data('d'))];
+          else if (c.type === 'flipFlopT') act = ifs(c1(ctl('t', L.zero)), [set(L.not(r))]);
+          else {
+            const [a, b] = dataKeys.map((k) => ctl(k, L.zero));
+            const na = c1(a) === 'true' ? 'false' : c1(a) === 'false' ? 'true' : v ? `!${a}` : `${a} = '0'`;
+            const nb = c1(b) === 'true' ? 'false' : c1(b) === 'false' ? 'true' : v ? `!${b}` : `${b} = '0'`;
+            act = ifs(cAnd(c1(a), nb), [set(L.one)], ifs(cAnd(na, c1(b)), [set(L.zero)], c.type === 'flipFlopJK' ? ifs(cAnd(c1(a), c1(b)), [set(L.not(r))]) : []));
+          }
+        } else if (c.type === 'register') {
+          act = [set(data('d'))];
+        } else if (c.type === 'counter') {
+          // evolution's rules: load first, up unless U/D is 0; at the goal (max up, 0 down) wrap / stay / step on / load
+          const max = getCounterMax(c);
+          const mask = w >= 32 ? 0xffffffff : 2 ** w - 1;
+          const MAX = lit(max, w);
+          const ld = ctl('ld', L.zero);
+          const ct = ctl('ct', L.one);
+          const ud = ctl('ud', L.one);
+          const goal = c.state.counterGoal ?? 'wrap';
+          const needD = ld !== L.zero || goal === 'load';
+          const d = needD ? data('d') : zeros;
+          const loadVal = (): string[] => {
+            if (max === mask) return [set(d)];
+            if (w === 1) return [set(L.zero)]; // max 0: every value above it masks to 0
+            const gt = v ? `${d} > ${MAX}` : `unsigned(${d}) > unsigned'(${MAX})`;
+            return ifs(gt, [set(v ? `${d} & ${MAX}` : `${d} and ${MAX}`)], [set(d)]);
+          };
+          const inc = w === 1 ? L.not(r) : v ? `${r} + 1'b1` : `std_logic_vector(unsigned(${r}) + 1)`;
+          const dec = w === 1 ? L.not(r) : v ? `${r} - 1'b1` : `std_logic_vector(unsigned(${r}) - 1)`;
+          const eq = (k: string) => (v ? `${r} == ${k}` : `${r} = ${k}`);
+          const dir = (up: string[], down: string[]) => ifs(c1(ud), up, down);
+          const atGoal =
+            goal === 'wrap' ? dir([set(zeros)], [set(MAX)]) : goal === 'stay' ? [] : goal === 'load' ? loadVal() : dir([set(inc)], [set(dec)]);
+          act = ifs(c1(ld), loadVal(), ifs(cnz(ct), dir(ifs(eq(MAX), atGoal, [set(inc)]), ifs(eq(zeros), atGoal, [set(dec)]))));
+          // Carry: the value sits at the goal of the current direction; 0 while cleared
+          if (out[1]) {
+            const upC = v ? `(${r} == ${MAX})` : `${r} = ${MAX}`;
+            const dnC = v ? `(${r} == ${zeros})` : `${r} = ${zeros}`;
+            const sel = ud === L.one ? upC : ud === L.zero ? dnC : v ? `(${ud} ? ${upC} : ${dnC})` : `((${ud} = '1' and ${upC}) or (${ud} = '0' and ${dnC}))`;
+            if (clr === L.one) emit(out[1], L.zero);
+            else if (v) emit(out[1], clr === L.zero ? sel : `~${clr} & ${sel}`);
+            else body.push(`  ${out[1]} <= '1' when ${clr === L.zero ? sel : `${clr} = '0' and ${sel}`} else '0';`);
+          }
+        } else {
+          // Shift register: stage i in bits i*w .. i*w+w-1, stage 0 takes the serial input, the last one is OUT
+          const ld = parallel ? ctl('ld', L.zero) : L.zero;
+          const sh = ctl('sh', L.one);
+          const din = data('in');
+          const lowStages = len === 1 ? '' : (len - 1) * w === 1 ? vecIndex(r, 0) : v ? `${r}[${(len - 1) * w - 1}:0]` : `${r}(${(len - 1) * w - 1} downto 0)`;
+          const shifted = len === 1 ? din : v ? `{${lowStages}, ${din}}` : `${lowStages} & ${din}`;
+          const shiftAct = ifs(cnz(sh), [set(shifted)]);
+          if (ld !== L.zero) {
+            const ds = Array.from({ length: len }, (_, i) => data(`d${i}`)).reverse();
+            act = ifs(c1(ld), [set(len === 1 ? ds[0] : v ? `{${ds.join(', ')}}` : ds.join(' & '))], shiftAct);
+          } else act = shiftAct;
+        }
+
+        // Stored value forced by a clear / preset tied to 1: no storage at all
+        const held = clr === L.one ? (isFF ? L.zero : zeros) : pre === L.one ? (clr === L.zero ? L.one : L.not(clr)) : null;
+        const state = held ?? r;
+        if (held === null) {
+          declare(r, W, '0'.repeat(W));
+          const acts = clkOpen ? 'false' : level ? c1(trig === 'high' ? clk : clk === L.one ? L.zero : clk === L.zero ? L.one : L.not(clk)) : null;
+          const asyncs: [string, string][] = [];
+          if (clr !== L.zero) asyncs.push([clr, zeros]);
+          if (pre !== L.zero) asyncs.push([pre, L.one]);
+          const actBody = ifs(cnz(en), act);
+          if (acts === null && isSignalName(clk)) {
+            // Edge-triggered with asynchronous clear / preset
+            if (v) {
+              const edges = [`${trig === 'falling' ? 'negedge' : 'posedge'} ${clk}`, ...asyncs.map(([s]) => `posedge ${s}`)];
+              let chain = actBody;
+              for (const [s, val] of [...asyncs].reverse()) chain = ifs(s, [set(val)], chain);
+              body.push(`  always @(${edges.join(' or ')}) begin`, ...ind(ind(chain)), '  end');
+              if (asyncs.length === 2) notes.push('CLR 1 iken PRE de 1 ise, CLR bırakılınca simülatör hemen 1 olur; Verilog bunu bir sonraki saat kenarında yapar');
+            } else {
+              const sens = [clk, ...asyncs.map(([s]) => s)].map((s) => s.replace(/\(.*$/, ''));
+              const lines = [`  process (${[...new Set(sens)].join(', ')})`, '  begin'];
+              const arms = asyncs.map(([s, val], i) => `    ${i ? 'elsif' : 'if'} ${s} = '1' then\n      ${set(val)}`);
+              const edge = `${trig === 'falling' ? 'falling_edge' : 'rising_edge'}(${clk})`;
+              lines.push(...arms.flatMap((a) => a.split('\n')), `    ${asyncs.length ? 'elsif' : 'if'} ${edge} then`, ...ind(ind(ind(actBody))), '    end if;', '  end process;');
+              body.push(...lines);
+            }
+          } else {
+            // Level trigger (a latch), or a clock that never acts: only clear / preset change the value
+            const actsCond = acts ?? 'false';
+            let chain = ifs(actsCond, actBody);
+            for (const [s, val] of [...asyncs].reverse()) chain = ifs(c1(s), [set(val)], chain);
+            const sens = [...new Set(reads.map((s) => s.replace(/[[(].*$/, '')))];
+            if (chain.length === 0 || sens.length === 0) {
+              body.push(L.comment(clkOpen ? 'saat girişi boşta: değer hiç değişmez' : 'değer hiç değişmez'));
+            } else if (v) {
+              body.push('  always @(*) begin', ...ind(ind(chain)), '  end');
+            } else {
+              body.push(`  process (${sens.join(', ')})`, '  begin', ...ind(ind(chain)), '  end process;');
+            }
+          }
+        }
+        for (const n of notes) body.push(L.comment(n));
+
+        // Outputs
+        const stage = (i: number) => (W === 1 ? state : w === 1 ? vecIndex(state, i) : v ? `${state}[${i * w + w - 1}:${i * w}]` : `${state}(${i * w + w - 1} downto ${i * w})`);
+        if (isFF) {
+          if (out[0]) emit(out[0], state);
+          if (out[1]) emit(out[1], L.not(state));
+        } else if (c.type === 'shiftRegister') {
+          const sv = held !== null ? null : state;
+          if (out[0]) emit(out[0], sv === null ? lit(0, w) : stage(len - 1));
+          if (parallel) for (let i = 0; i < len; i++) if (out[1 + i]) emit(out[1 + i], sv === null ? lit(0, w) : stage(i));
+        } else if (out[0]) emit(out[0], state);
         break;
       }
       case 'subcircuit': {
