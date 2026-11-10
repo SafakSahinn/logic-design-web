@@ -256,6 +256,135 @@ function memMeta(type: ComponentType, name: string, description: string): Compon
   };
 }
 
+// ---- RAM / ROM / random geometry (Logisim std/memory Mem, Random). Function declarations: the catalog uses them ----
+
+export interface RamConfig {
+  /** Address bits (2-24) */
+  addrWidth: number;
+  /** Data bits (1-32; random generator: its output width) */
+  dataWidth: number;
+  flavor: 'logisim' | 'evolution';
+  /** Logisim 2.7.1 RAM bus */
+  bus: 'combined' | 'asynch' | 'separate';
+  /** evolution RAM data bus */
+  dataBus: 'bidir' | 'separate' | 'controlled';
+  /** evolution RAM trigger */
+  trigger: 'rising' | 'falling' | 'high' | 'low';
+  /** evolution RAM: byte enable pins wanted (they exist only above 8 data bits with an edge trigger) */
+  byteEnables: boolean;
+  /** evolution RAM: clear pin */
+  clearPin: boolean;
+}
+
+/** Default settings: Logisim's 8 address and 8 data bits, 2.7.1 rules (random generator: 8 bits) */
+export function defaultRamConfig(): RamConfig {
+  return { addrWidth: 8, dataWidth: 8, flavor: 'logisim', bus: 'combined', dataBus: 'separate', trigger: 'rising', byteEnables: false, clearPin: false };
+}
+
+/** Byte enable pins of an evolution RAM (RamAppearance.getNrBEPorts) */
+export function ramByteEnableCount(cfg: RamConfig): number {
+  const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+  return cfg.flavor === 'evolution' && cfg.byteEnables && edge && cfg.dataWidth > 8 ? Math.ceil(cfg.dataWidth / 8) : 0;
+}
+
+/**
+ * Pin keys of a RAM / ROM / random generator in the order the simulator relies on. A bidirectional data bus
+ * (2.7.1 combined / asynch, evolution bidir) is the output 'd' plus the input 'dio' on the same point, which
+ * reads the bus back.
+ */
+export function ramPinKeys(type: ComponentType, cfg: RamConfig): { inputs: string[]; outputs: string[] } {
+  if (type === 'random') return { inputs: ['ck', 'nxt', 'rst'], outputs: ['out'] };
+  const evo = cfg.flavor === 'evolution';
+  if (type === 'rom') return { inputs: evo ? ['a'] : ['a', 'cs'], outputs: ['d'] };
+  if (!evo) {
+    const sep = cfg.bus === 'separate';
+    return {
+      inputs: ['a', 'cs', 'oe', 'clr', ...(cfg.bus === 'asynch' ? [] : ['clk']), ...(sep ? ['we', 'din'] : ['dio'])],
+      outputs: ['d'],
+    };
+  }
+  const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+  const bidir = cfg.dataBus === 'bidir';
+  return {
+    inputs: [
+      'a',
+      ...(bidir ? [] : ['din']),
+      'oe',
+      'we',
+      ...(edge ? ['clk'] : []),
+      ...Array.from({ length: ramByteEnableCount(cfg) }, (_, i) => `be${i}`),
+      ...(cfg.clearPin ? ['clr'] : []),
+      ...(bidir ? ['dio'] : []),
+    ],
+    outputs: ['d'],
+  };
+}
+
+/** Width of a RAM / ROM / random generator pin */
+export function ramPinWidth(type: ComponentType, key: string, cfg: RamConfig): number {
+  if (type === 'random') return key === 'out' ? cfg.dataWidth : 1;
+  if (key === 'a') return cfg.addrWidth;
+  return key === 'd' || key === 'dio' || key === 'din' ? cfg.dataWidth : 1;
+}
+
+/**
+ * Unrotated layout, origin at the body's top-left corner. RAM / ROM: Logisim's 140 x 80 box (Mem bounds -140,-40):
+ * address on the left, data on the right (its location), separate data input below the address, controls along
+ * the bottom (2.7.1: WE 'str', CS 'sel', CLK, OE 'ld', CLR); an evolution RAM keeps those spots and puts byte
+ * enables on top. Random generator: Logisim's 30 x 40 box made 10px wider on the right (a quarter turn about the
+ * centre keeps the pins on the grid), clock and next on the left, reset at the bottom.
+ */
+export function ramGeometry(type: ComponentType, _cfg: RamConfig): {
+  width: number;
+  height: number;
+  pins: Record<string, { x: number; y: number }>;
+  anchor: { x: number; y: number };
+} {
+  if (type === 'random') {
+    return { width: 40, height: 40, pins: { out: { x: 40, y: 20 }, ck: { x: 0, y: 10 }, nxt: { x: 0, y: 30 }, rst: { x: 10, y: 40 } }, anchor: { x: 40, y: 20 } };
+  }
+  const pins: Record<string, { x: number; y: number }> = {
+    a: { x: 0, y: 40 },
+    d: { x: 140, y: 40 },
+    dio: { x: 140, y: 40 },
+    din: { x: 0, y: 60 },
+    we: { x: 30, y: 80 },
+    cs: { x: 50, y: 80 },
+    clk: { x: 70, y: 80 },
+    oe: { x: 90, y: 80 },
+    clr: { x: 110, y: 80 },
+  };
+  for (let i = 0; i < 4; i++) pins[`be${i}`] = { x: 30 + 20 * i, y: 0 };
+  return { width: 140, height: 80, pins, anchor: { x: 140, y: 40 } };
+}
+
+const RAM_PIN_LABELS: Record<string, string> = {
+  a: 'A', d: 'D', dio: 'D', din: 'DIN', cs: 'sel', oe: 'OE', clr: 'CLR', clk: 'CLK', we: 'WE', ck: 'CK', nxt: 'NXT', rst: 'RST', out: 'Q',
+};
+export function ramPinLabel(key: string): string {
+  return RAM_PIN_LABELS[key] ?? key.toUpperCase();
+}
+
+function ramMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const cfg = defaultRamConfig();
+  const g = ramGeometry(type, cfg);
+  const keys = ramPinKeys(type, cfg);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = ramPinWidth(type, id, cfg);
+    return { id, name: ramPinLabel(id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: 'sequential',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   switch: {
     type: 'switch',
@@ -1145,7 +1274,10 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   flipFlopSR: memMeta('flipFlopSR', 'S-R Flip-Flop', 'Saat tetiklendiğinde S=1 R=0 kurar, S=0 R=1 sıfırlar; S=R=1 ya da tanımsız giriş durumu değiştirmez. Kenar veya seviye tetikleme; CLR / PRE asenkron, EN yalnız 0 iken engeller'),
   register: memMeta('register', 'Yazmaç (Register)', 'Saat tetiklendiğinde ve EN 0 değilken D verisini saklar (x / E bitleri de saklanır). CLR asenkron sıfırlar. Genişlik 1-32 bit, kenar veya seviye tetikleme'),
   counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
-  shiftRegister: memMeta('shiftRegister', 'Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
+  ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. Logisim 2.7.1 kuralları (sel seçme bacağı; ortak, asenkron ya da ayrı veri yolu; yükselen kenarda yazma) ya da Logisim-evolution kuralları (WE bacağı; tetikleme seçimi; saatli ya da asenkron okuma; bayt etkinleştirme; CLR bacağı)'),
+  rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir. Logisim 2.7.1 kurallarında sel = 0 iken çıkış yüzer'),
+  random: ramMeta('random', 'Rastgele Sayı Üreteci (Random)', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
+  shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   counter4: {
     type: 'counter4',
     name: '4-Bit İkili Sayaç (0-15 Counter)',
@@ -1374,6 +1506,7 @@ export function createComponentInstance(
   }
   if (ARITH_TYPES.has(type)) return configureArith(inst, {});
   if (MEM_TYPES.has(type)) return configureMem(inst, {});
+  if (RAM_TYPES.has(type)) return configureRam(inst, {});
   return inst;
 }
 
@@ -1409,6 +1542,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (MEM_TYPES.has(comp.type)) {
     const g = memLayout(comp);
+    return { width: g.width, height: g.height };
+  }
+  if (RAM_TYPES.has(comp.type)) {
+    const g = ramGeometry(comp.type, getRamConfig(comp));
     return { width: g.width, height: g.height };
   }
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
@@ -2333,6 +2470,252 @@ export function stepMem(comp: CircuitComponentInstance, ins: SignalValue[][]): S
   return [s[len - 1], ...(parallel ? s : [])];
 }
 
+// ---- Parametric RAM / ROM / random generator (Logisim std/memory Ram, Rom, Random) --------------------------
+
+export const RAM_TYPES = new Set<ComponentType>(['ram', 'rom', 'random']);
+export const RAM_ADDR_MIN = 2;
+export const RAM_ADDR_MAX = 24;
+/** Words per contents page (memPages) */
+export const MEM_PAGE_SIZE = 256;
+
+export function getRamConfig(comp: CircuitComponentInstance): RamConfig {
+  const d = defaultRamConfig();
+  const find = (key: string) => [...comp.inputs, ...comp.outputs].find((p) => pinKey(comp, p) === key);
+  const st = comp.state;
+  if (comp.type === 'random') return { ...d, dataWidth: find('out')?.width ?? 1 };
+  return {
+    addrWidth: find('a')?.width ?? d.addrWidth,
+    dataWidth: find('d')?.width ?? 1,
+    flavor: st.memFlavor ?? 'logisim',
+    bus: st.ramBus ?? 'combined',
+    dataBus: st.ramDataBus ?? 'separate',
+    trigger: st.trigger ?? 'rising',
+    byteEnables: st.ramByteEnables ?? false,
+    clearPin: st.ramClearPin ?? false,
+  };
+}
+
+/** Stored word (0 where nothing was written) */
+export function memRead(comp: CircuitComponentInstance, addr: number): number {
+  if (addr < 0) return 0;
+  return comp.state.memPages?.[Math.floor(addr / MEM_PAGE_SIZE)]?.[addr % MEM_PAGE_SIZE] ?? 0;
+}
+
+/** Store a word; copy on write (the pages are shared with earlier steps' states and with undo history) */
+export function memWrite(comp: CircuitComponentInstance, addr: number, value: number): void {
+  const k = String(Math.floor(addr / MEM_PAGE_SIZE));
+  const pages = { ...(comp.state.memPages ?? {}) };
+  const page = pages[k] ? [...pages[k]] : new Array<number>(MEM_PAGE_SIZE).fill(0);
+  page[addr % MEM_PAGE_SIZE] = value;
+  pages[k] = page;
+  comp.state.memPages = pages;
+}
+
+/**
+ * New RAM / ROM / random generator settings; pins keep their ids (and wires), widths follow the settings. Like
+ * Logisim's MemContents.setDimensions, words past a smaller address range go and stored words keep only the
+ * bits that still exist.
+ */
+export function configureRam(comp: CircuitComponentInstance, patch: Partial<RamConfig>): CircuitComponentInstance {
+  const cur = comp.inputs.length ? getRamConfig(comp) : defaultRamConfig();
+  const cfg: RamConfig = { ...cur, ...patch };
+  cfg.dataWidth = clampWidth(cfg.dataWidth);
+  cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, Math.round(cfg.addrWidth)));
+  const keys = ramPinKeys(comp.type, cfg);
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = ramPinLabel(key);
+    return { ...pinWithWidth(old.get(key) ?? newPin(comp, key, name, type), ramPinWidth(comp.type, key, cfg)), name };
+  };
+  const state = { ...comp.state };
+  if (comp.type !== 'random') {
+    state.memFlavor = cfg.flavor;
+    if (comp.type === 'ram') {
+      state.ramBus = cfg.bus;
+      state.ramDataBus = cfg.dataBus;
+      state.trigger = cfg.trigger;
+      state.ramByteEnables = cfg.byteEnables;
+      state.ramClearPin = cfg.clearPin;
+    }
+    if (state.memPages && (cfg.addrWidth < cur.addrWidth || cfg.dataWidth < cur.dataWidth)) {
+      const size = 2 ** cfg.addrWidth;
+      const mask = memMask(cfg.dataWidth);
+      const pages: Record<string, number[]> = {};
+      for (const [k, page] of Object.entries(state.memPages)) {
+        const base = Number(k) * MEM_PAGE_SIZE;
+        if (base >= size) continue;
+        pages[k] = page.map((v, i) => (base + i < size ? (v & mask) >>> 0 : 0));
+      }
+      state.memPages = pages;
+    }
+    delete state.memOut;
+  } else if (state.randomValue !== undefined) {
+    delete state.memOut;
+  }
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+// Logisim 2.7.1 Random: java.util.Random's 48-bit linear congruential generator
+const RND_MULT = 0x5deece66dn;
+const RND_ADD = 0xbn;
+const RND_MASK = (1n << 48n) - 1n;
+
+/** Start (or restart) the random generator from its seed (Random.StateData.reset; seed 0 = from the time) */
+function randomReset(comp: CircuitComponentInstance): void {
+  const st = comp.state;
+  let start = BigInt((st.randomSeed ?? 0) | 0);
+  if (start === 0n) {
+    start = (BigInt(Date.now()) ^ RND_MULT) & RND_MASK;
+    if (st.randomInit !== undefined && start === BigInt(st.randomInit)) start = (start + RND_MULT) & RND_MASK;
+  }
+  st.randomInit = start.toString();
+  st.randomCur = start.toString();
+  st.randomValue = Number(BigInt.asUintN(32, start));
+}
+
+function randomStep(comp: CircuitComponentInstance): void {
+  const v = (BigInt(comp.state.randomCur ?? '0') * RND_MULT + RND_ADD) & RND_MASK;
+  comp.state.randomCur = v.toString();
+  comp.state.randomValue = Number(BigInt.asUintN(32, v >> 12n));
+}
+
+const fillBits = (w: number, v: SignalValue): SignalValue[] => new Array<SignalValue>(w).fill(v);
+
+/**
+ * One evaluation of a RAM / ROM / random generator: reads its inputs (bits LSB first, in ramPinKeys order) and
+ * returns its outputs; an output it does not drive this time keeps its last value, like a Logisim port nobody
+ * sets. A floating output (Logisim's unknown value) is Z.
+ *
+ * Logisim 2.7.1 (Ram / Rom.propagate): CLR = 1 clears (any time); sel = 0 floats the data; an address that is not
+ * fully defined changes nothing; otherwise a rising edge (2.7.1 asynch bus: always) stores when OE = 0
+ * (combined / asynch, from the bus) or WE is not 0 (separate, from DIN), not while clearing; the data shows the
+ * word unless OE = 0 (floats). Clock, select and OE act unless 0, open counts as 1.
+ *
+ * evolution (Ram.propagateByteEnables, Rom.propagate): CLR pin = 1 clears and drives 0 (separate) or floats (bidir),
+ * without looking at the clock; the write needs WE = 1 at the edge, or WE at the level of a high / low trigger
+ * (no clock then); byte enables at 1 pick the bytes written. Reading: OE = 0 floats a bidir / controlled bus and
+ * leaves a plain separate one as it is; an address with an E bit gives E, an undefined one x; asynchronous read
+ * (or a level trigger) shows the word at once, a clocked read only at the edge (the word after the write, or
+ * before it with 'war'). ROM: E address -> E, undefined -> x.
+ *
+ * An undefined data word is stored as all ones in both (Value.toIntValue / toLongValue = -1).
+ *
+ * Random (2.7.1): RST = 1 restarts from the seed, else the clock edge with NXT not 0 steps the generator; the
+ * output is the low bits of the 32-bit value.
+ */
+export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): SignalValue[][] {
+  const cfg = getRamConfig(comp);
+  const keys = ramPinKeys(comp.type, cfg).inputs;
+  const st = comp.state;
+  const at = (k: string): SignalValue[] | undefined => {
+    const i = keys.indexOf(k);
+    return i < 0 ? undefined : ins[i];
+  };
+  const one = (k: string): SignalValue => at(k)?.[0] ?? 'X';
+  if (comp.type === 'random') {
+    if (st.randomCur === undefined) randomReset(comp);
+    const acts = clockActs(comp, one('ck'), getTrigger(comp));
+    if (one('rst') === 1) randomReset(comp);
+    else if (acts && one('nxt') !== 0) randomStep(comp);
+    return [numBits(st.randomValue ?? 0, cfg.dataWidth)];
+  }
+  const w = cfg.dataWidth;
+  const mask = memMask(w);
+  const evo = cfg.flavor === 'evolution';
+  let out: SignalValue[] = st.memOut?.[0]?.length === w ? st.memOut[0] : fillBits(w, 'Z');
+  const finish = (bits: SignalValue[]): SignalValue[][] => {
+    st.memOut = [bits];
+    return [bits];
+  };
+  const word = (k: string): number => {
+    const b = fitBits(at(k), w);
+    return defined(b) ? bitsBig(b) : mask;
+  };
+  const aBits = fitBits(at('a'), cfg.addrWidth);
+  const addr = defined(aBits) ? bitsBig(aBits) : -1;
+  const show = (n: number): SignalValue[] => numBits(n, w);
+
+  if (comp.type === 'rom') {
+    if (!evo) {
+      if (one('cs') === 0) {
+        st.memCurrent = -1;
+        return finish(fillBits(w, 'Z'));
+      }
+      if (addr < 0) return finish(out);
+      st.memCurrent = addr;
+      return finish(show(memRead(comp, addr)));
+    }
+    if (aBits.includes('E')) return finish(fillBits(w, 'E'));
+    if (addr < 0) return finish(fillBits(w, 'Z'));
+    st.memCurrent = addr;
+    return finish(show(memRead(comp, addr)));
+  }
+
+  if (!evo) {
+    const triggered = cfg.bus === 'asynch' || clockActs(comp, one('clk'), 'rising');
+    const oe = one('oe') !== 0;
+    const clear = one('clr') === 1;
+    if (clear) st.memPages = {};
+    if (one('cs') === 0) {
+      st.memCurrent = -1;
+      return finish(fillBits(w, 'Z'));
+    }
+    if (addr < 0) return finish(out);
+    st.memCurrent = addr;
+    if (!clear && triggered) {
+      const sep = cfg.bus === 'separate';
+      if (sep ? one('we') !== 0 : !oe) memWrite(comp, addr, word(sep ? 'din' : 'dio'));
+    }
+    return finish(oe ? show(memRead(comp, addr)) : fillBits(w, 'Z'));
+  }
+
+  // evolution RAM
+  const sep = cfg.dataBus !== 'bidir';
+  if (cfg.clearPin && one('clr') === 1) {
+    st.memPages = {};
+    return finish(sep ? show(0) : fillBits(w, 'Z'));
+  }
+  if (addr >= 0) st.memCurrent = addr;
+  const cur = st.memCurrent ?? -1;
+  const oldVal = memRead(comp, cur);
+  let newVal = oldVal;
+  const trig = cfg.trigger;
+  const async = trig === 'high' || trig === 'low';
+  const edge = !async && clockActs(comp, one('clk'), trig);
+  const we = one('we');
+  const weTriggered = (async && ((trig === 'high' && we === 1) || (trig === 'low' && we === 0))) || (edge && we === 1);
+  if (addr >= 0 && weTriggered) {
+    const din = word(sep ? 'din' : 'dio');
+    const nBE = ramByteEnableCount(cfg);
+    if (nBE === 0) newVal = din;
+    else {
+      for (let i = 0; i < nBE; i++) {
+        if (one(`be${i}`) !== 1) continue;
+        const unit = 2 ** (8 * i);
+        const byteOf = (n: number) => Math.floor(n / unit) % 256;
+        newVal += (byteOf(din) - byteOf(newVal)) * unit;
+      }
+      newVal = newVal % 2 ** w;
+    }
+    memWrite(comp, addr, newVal);
+  }
+  if (one('oe') === 0) {
+    if (!sep || cfg.dataBus === 'controlled') out = fillBits(w, 'Z');
+    return finish(out);
+  }
+  if (aBits.includes('E')) return finish(fillBits(w, 'E'));
+  if (addr < 0) return finish(fillBits(w, 'Z'));
+  if (async || st.ramAsyncRead) return finish(show(newVal));
+  if (edge) return finish(show(st.ramReadBehavior === 'war' ? oldVal : newVal));
+  return finish(out);
+}
+
 /**
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
@@ -2448,8 +2831,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type)) {
-    const g = memLayout(comp);
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type)) {
+    const g = MEM_TYPES.has(comp.type) ? memLayout(comp) : ramGeometry(comp.type, getRamConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -3210,6 +3593,11 @@ export function simulateCircuitStep(
       case 'counter':
       case 'shiftRegister':
         stepMem(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
+        break;
+      case 'ram':
+      case 'rom':
+      case 'random':
+        stepRam(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
         break;
       case 'bitSelector': {
         // Logisim BitSelector: group `select` of the data (bits past the data end are 0); a select

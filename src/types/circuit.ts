@@ -89,6 +89,10 @@ export type ComponentType =
   | 'register'
   | 'counter'
   | 'shiftRegister'
+  // Parametric RAM / ROM / random generator (Logisim std/memory, Aşama 3f)
+  | 'ram'
+  | 'rom'
+  | 'random'
   | 'ram16x4'
   | 'rom16x4'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
@@ -194,6 +198,37 @@ export interface CircuitComponentInstance {
     seqBits?: SignalValue[];
     /** Shift register: stage values, stage 0 = the one the serial input enters, last = OUT; each LSB first */
     shiftStages?: SignalValue[][];
+    /**
+     * RAM / ROM: whose rules the part follows. 'logisim' = Logisim 2.7.1 (chip select pin; RAM bus modes
+     * combined / asynch / separate, rising edge); 'evolution' = Logisim-evolution (no chip select; RAM write
+     * enable pin, trigger, clocked or asynchronous read, byte enables, optional clear pin). Unset = logisim
+     */
+    memFlavor?: 'logisim' | 'evolution';
+    /** RAM, Logisim 2.7.1 flavor: data bus (Logisim 'bus'); unset = combined */
+    ramBus?: 'combined' | 'asynch' | 'separate';
+    /** RAM, evolution flavor: data bus (evolution 'databus': bidir / bibus / bibusControlled); unset = separate */
+    ramDataBus?: 'bidir' | 'separate' | 'controlled';
+    /** RAM, evolution flavor: read without the clock (evolution 'asyncread'); unset = false */
+    ramAsyncRead?: boolean;
+    /** RAM, evolution flavor, clocked read: the value read at the edge is the one after the write ('raw') or before it ('war'); unset = raw */
+    ramReadBehavior?: 'raw' | 'war';
+    /** RAM, evolution flavor: one byte enable pin per 8 data bits when wider than 8 (evolution 'byteenables'); unset = false */
+    ramByteEnables?: boolean;
+    /** RAM, evolution flavor: clear pin (evolution 'clearpin'); unset = false */
+    ramClearPin?: boolean;
+    /** RAM / ROM contents: pages of MEM_PAGE_SIZE words (missing page or word = 0), shared copy-on-write */
+    memPages?: Record<string, number[]>;
+    /** RAM / ROM: last address shown (Logisim MemState current), -1 = none */
+    memCurrent?: number;
+    /** RAM / ROM: outputs as last driven (a memory that does not drive keeps them, like Logisim) */
+    memOut?: SignalValue[][];
+    /** Random generator: seed (Logisim 'seed', 0 = from the time) */
+    randomSeed?: number;
+    /** Random generator: 48-bit generator state and the seed it started from, as decimal strings */
+    randomCur?: string;
+    randomInit?: string;
+    /** Random generator: current output value (unsigned 32-bit) */
+    randomValue?: number;
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
