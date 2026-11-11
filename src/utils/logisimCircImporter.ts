@@ -109,6 +109,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'ram') return 'ram';
   if (n === 'rom') return 'rom';
   if (n === 'random') return 'random';
+  if (n === 'dualram') return 'dualRam';
 
   return null;
 }
@@ -536,7 +537,7 @@ export function logisimMemSettings(
 }
 
 /** Logisim element names of the RAM, ROM and random generator (std/memory, library "#Memory") */
-export const LOGISIM_RAM_NAME: Partial<Record<ComponentType, string>> = { ram: 'RAM', rom: 'ROM', random: 'Random' };
+export const LOGISIM_RAM_NAME: Partial<Record<ComponentType, string>> = { ram: 'RAM', rom: 'ROM', random: 'Random', dualRam: 'DualRAM' };
 
 /**
  * Which Logisim draws a RAM / ROM / random generator: 'logisim' = Logisim 2.7.1 (loc on the data pin, box to its
@@ -557,6 +558,7 @@ export type LogisimRamLook = 'logisim' | 'classic' | 'evolution';
  */
 export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: LogisimRamLook): Array<{ key: string; off: Pt }> {
   const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  if (type === 'dualRam') return dualRamPorts(cfg, look);
   if (type === 'random') {
     if (look === 'logisim') return [P('out', 0, 0), P('ck', -30, -10), P('nxt', -30, 10), P('rst', -20, 20)];
     if (look === 'classic') return [P('out', 40, 20), P('ck', 10, 40), P('nxt', 0, 30), P('rst', 30, 40)];
@@ -582,6 +584,46 @@ export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: Logis
   const ps = [P('a', 0, 10), P('d', right, dataY), sep ? P('din', 0, dataY) : P('dio', right, dataY), P('oe', 0, 60), P('we', 0, 50)];
   if (edge) ps.push(P('clk', 0, 70 + nBE * 10));
   for (let i = 0; i < nBE; i++) ps.push(P(`be${i}`, 0, 70 + (nBE - i - 1) * 10));
+  if (cfg.clearPin) ps.push(P('clr', 40, 0));
+  return ps;
+}
+
+/**
+ * Logisim-evolution 5 DualRamAppearance in byte-enable mode (loc at the top-left corner). The control block is
+ * twice the single RAM's (C = 2 x (80, +10 with a clock, +10 per byte enable of a port)). Classic look: port 0
+ * A (0,10), WE (0,50), OE (0,60), CLK (0,70), byte enables from (0,80) down to the first, DIN / D at C/2 on the
+ * left / right edge (240); port 1 the same moved down by B = C/2 + 35 rounded to 10. Evolution look: port 0
+ * A (0,20), WE (0,60), OE (0,70), byte enables from (0,80), CLK below them; port 1's controls C/2 - 10 lower;
+ * data at C (+10 for one bit), port 1's 20 x min(8, bits) lower, D on the right edge (240, bidir 250).
+ * CLR (40,0) in both.
+ */
+function dualRamPorts(cfg: RamConfig, look: LogisimRamLook): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+  const nBE = ramByteEnableCount({ ...cfg, flavor: 'evolution' });
+  const ctrl = (80 + (edge ? 10 : 0) + nBE * 10) * 2;
+  const sep = cfg.dataBus !== 'bidir';
+  const classic = look === 'classic';
+  const ps: Array<{ key: string; off: Pt }> = [];
+  for (const p of [0, 1]) {
+    const sfx = p ? '1' : '';
+    let addrY: number, ctlShift: number, dataY: number;
+    if (classic) {
+      const boff = Math.floor((Math.floor((ctrl + 70) / 2) + 5) / 10) * 10;
+      addrY = 10 + p * boff;
+      ctlShift = p * boff;
+      dataY = ctrl / 2 + p * boff;
+    } else {
+      ctlShift = p * (ctrl / 2 - 10);
+      addrY = 20 + ctlShift;
+      dataY = ctrl + (cfg.dataWidth === 1 ? 10 : 0) + p * Math.min(8, cfg.dataWidth) * 20;
+    }
+    const right = classic || sep ? 240 : 250;
+    ps.push(P('a' + sfx, 0, addrY), P('d' + sfx, right, dataY), sep ? P('din' + sfx, 0, dataY) : P('dio' + sfx, right, dataY));
+    ps.push(P('we' + sfx, 0, (classic ? 50 : 60) + ctlShift), P('oe' + sfx, 0, (classic ? 60 : 70) + ctlShift));
+    if (edge) ps.push(P('clk' + sfx, 0, (classic ? 70 : 80 + nBE * 10) + ctlShift));
+    for (let i = 0; i < nBE; i++) ps.push(P(`be${p * nBE + i}`, 0, 80 + (nBE - i - 1) * 10 + ctlShift));
+  }
   if (cfg.clearPin) ps.push(P('clr', 40, 0));
   return ps;
 }
@@ -630,7 +672,8 @@ export function logisimRamSettings(
     if (evolutionFile) notes.push(`Logisim-evolution'ın üreteci başka bir dizi verir (Xoshiro256++); burada Logisim 2.7.1'in dizisi kullanılıyor.`);
     return { cfg, look, asyncRead: false, readBehavior: 'raw', seed: Number.isFinite(seed) ? seed | 0 : 0, notes };
   }
-  const evo = evolutionFile || (type === 'rom' ? attr.appearance !== undefined : EVO_RAM_ATTRS.some((k) => attr[k] !== undefined));
+  // the dual-port RAM exists only in evolution
+  const evo = type === 'dualRam' || evolutionFile || (type === 'rom' ? attr.appearance !== undefined : EVO_RAM_ATTRS.some((k) => attr[k] !== undefined));
   cfg.flavor = evo ? 'evolution' : 'logisim';
   cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, int(attr.addrWidth, 8)));
   cfg.dataWidth = int(attr.dataWidth, 8);
@@ -640,7 +683,7 @@ export function logisimRamSettings(
   }
   let asyncRead = false;
   let readBehavior: 'raw' | 'war' = 'raw';
-  if (type === 'ram') {
+  if (type === 'ram' || type === 'dualRam') {
     if (!evo) cfg.bus = attr.bus === 'asynch' || attr.bus === 'separate' ? attr.bus : 'combined';
     else {
       cfg.dataBus = attr.databus === 'bidir' ? 'bidir' : attr.databus === 'bibusControlled' ? 'controlled' : 'separate';
@@ -1363,7 +1406,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           state.trigger = st.cfg.trigger;
           if (st.seed) state.randomSeed = st.seed;
         }
-        if (nativeType === 'ram' && st.cfg.flavor === 'evolution') {
+        if ((nativeType === 'ram' || nativeType === 'dualRam') && st.cfg.flavor === 'evolution') {
           state.ramAsyncRead = st.asyncRead;
           state.ramReadBehavior = st.readBehavior;
         }

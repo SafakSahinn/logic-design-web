@@ -823,7 +823,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             } else {
               attrs = a('addrWidth', cfg.addrWidth) + a('dataWidth', cfg.dataWidth);
               if (c.type === 'ram' && !evo) attrs += a('bus', cfg.bus);
-              if (c.type === 'ram' && evo) {
+              if ((c.type === 'ram' || c.type === 'dualRam') && evo) {
                 const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
                 attrs += a('enables', 'byte') + a('databus', { bidir: 'bidir', separate: 'bibus', controlled: 'bibusControlled' }[cfg.dataBus]);
                 attrs += a('trigger', cfg.trigger) + a('clearpin', cfg.clearPin);
@@ -851,9 +851,11 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             }
             P.push({ kind: 'ram', part: c.type, attrs, ports });
             const wired = (k: string) => isConn(byKey.get(k)?.id);
-            if (c.type === 'ram' && Object.values(c.state.memPages ?? {}).some((pg) => pg.some((v) => v)))
+            if ((c.type === 'ram' || c.type === 'dualRam') && Object.values(c.state.memPages ?? {}).some((pg) => pg.some((v) => v)))
               warnings.push(`${label}: RAM içeriği dosyaya yazılmadı (Logisim RAM içeriğini .circ'te saklamaz); gerekiyorsa içerik düzenleyicisinden v2.0 raw dosyası olarak kaydedin.`);
-            if (evo)
+            if (c.type === 'dualRam')
+              warnings.push(`${label}: Logisim-evolution 5'in çift portlu RAM'i (DualRAM) olarak yazıldı; Logisim 2.7.1'de ve evolution'ın 5'ten eski sürümlerinde bu parça yok.`);
+            else if (evo)
               warnings.push(`${label}: Logisim-evolution kurallı ${c.type === 'ram' ? 'RAM' : 'ROM'} olarak yazıldı; Logisim 2.7.1 bu parçayı kendi düzeniyle açar, bağlantıları tutmaz.`);
             else if (c.type === 'ram')
               warnings.push(`${label}: Logisim 2.7.1 RAM'i olarak yazıldı; Logisim-evolution bu RAM'i kendi düzenine çevirir (veri yolu ayarını okumaz), bağlantıları tutmaz.`);
