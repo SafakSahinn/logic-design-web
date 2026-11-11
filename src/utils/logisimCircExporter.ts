@@ -18,6 +18,7 @@ import {
   getRamConfig,
   getSplitterConfig,
   getTrigger,
+  getIoConfig,
   pinKey,
   ramPinWidth,
   splitterThreads,
@@ -32,6 +33,8 @@ import {
   LOGISIM_ARITH_NAME,
   LOGISIM_MEM_NAME,
   LOGISIM_RAM_NAME,
+  LOGISIM_IO_NAME,
+  logisimIoPorts,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
@@ -103,7 +106,7 @@ type Prim =
   // A real Logisim memory part (classic look); nets / widths / sinks in memPorts order
   | { kind: 'mem'; part: ComponentType; attrs: string; length: number; parallel: boolean; nets: string[]; widths: number[]; sinks: boolean[] }
   // A real Logisim RAM / ROM / random generator; its connection points relative to loc
-  | { kind: 'ram'; part: ComponentType; attrs: string; ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> };
+  | { kind: 'ram'; part: ComponentType; attrs: string; ports: Array<{ off: Pt; net: string; width: number; sink: boolean }>; lib?: number; name?: string };
 
 interface Pt {
   x: number;
@@ -344,7 +347,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'led':
         case 'probe':
         case 'buzzer':
-        case 'sevenSegment':
         case 'hexDisplay':
         case 'ledBar4':
         case 'dotMatrix8x8':
@@ -360,6 +362,57 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'tunnel':
         case 'textLabel':
           break;
+        case 'sevenSegment':
+        case 'hexDigit':
+        case 'dotMatrix':
+        case 'ledBar':
+        case 'dipSwitch': {
+          // The same Logisim part (lib 5 I/O) on its own connection points. Matrices / LED bars go with their
+          // inputs bottom-left (the side is only a drawing choice here, and 2.7.1 knows no other); a hex digit's
+          // DP gets a tunnel on 2.7.1's point and on evolution's
+          const cfg = getIoConfig(c);
+          const a = (name: string, val: string | number | boolean) => `<a name="${name}" val="${val}"/>`;
+          let attrs = '';
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          if (c.type === 'sevenSegment' || c.type === 'hexDigit') {
+            if (c.type === 'sevenSegment' && c.state.ioActiveLow) attrs += a('active', false);
+            if (!cfg.dp) attrs += a('decimalPoint', false);
+          } else if (c.type === 'dipSwitch') {
+            attrs += a('facing', facing) + a('number', cfg.size);
+          } else if (c.type === 'ledBar') {
+            attrs += a('matrixcols', cfg.size) + a('inputtype', cfg.ledBarMode === 'oneWire' ? 'row' : 'column');
+          } else {
+            const shape = { square: 'square', circle: 'circle', padded: 'clusterSegment' }[c.state.dotShape ?? 'square'];
+            attrs += a('inputtype', cfg.matrixInput) + a('matrixcols', cfg.cols) + a('matrixrows', cfg.rows) + a('dotshape', shape);
+            if (c.state.ioPersist) attrs += a('persist', c.state.ioPersist);
+          }
+          if (c.state.ioOnColor) attrs += a('color', c.state.ioOnColor);
+          const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+          const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+          const flat = { ...cfg, selectLoc: 'bl' as const };
+          const sets =
+            c.type === 'hexDigit'
+              ? [logisimIoPorts(c.type, flat, { evolution: false }), logisimIoPorts(c.type, flat, { evolution: true }).filter((q) => q.key === 'dp')]
+              : [logisimIoPorts(c.type, flat, { evolution: true, facing })];
+          for (const set of sets) {
+            for (const { key, off } of set) {
+              const p = byKey.get(key);
+              const isIn = !!p && c.inputs.includes(p);
+              const net = !p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN;
+              ports.push({ off, net, width: p?.width ?? 1, sink: isIn });
+            }
+          }
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: 5, name: LOGISIM_IO_NAME[c.type] });
+          if (c.type === 'dipSwitch' || c.type === 'ledBar')
+            warnings.push(`${label}: Logisim-evolution parçası (${LOGISIM_IO_NAME[c.type]}); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          if (c.type === 'dipSwitch' && (c.state.dipBits ?? 0) !== 0)
+            warnings.push(`${label}: anahtar konumları dosyaya yazılmadı (Logisim saklamaz), dosya açılınca hepsi kapalı.`);
+          if (c.type === 'dotMatrix' && c.state.dotShape === 'padded')
+            warnings.push(`${label}: boşluklu kare nokta şekli yalnız Logisim-evolution'da var; Logisim 2.7.1 bu dosyayı açamaz.`);
+          if (c.type === 'dotMatrix' && cfg.matrixInput === 'select' && (cfg.rows === 1 || cfg.cols === 1))
+            warnings.push(`${label}: tek satırlı / tek sütunlu seçim girişli matris Logisim-evolution düzeninde yazıldı; Logisim 2.7.1'de tek girişi var.`);
+          break;
+        }
         case 'and':
         case 'or':
         case 'nand':
@@ -1111,7 +1164,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           memPorts(p.part, p.length, p.parallel).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
         case 'ram':
-          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_RAM_NAME[p.part]}">${p.attrs}</comp>`);
+          xml.push(`    <comp lib="${p.lib ?? 4}" loc="(${x},${y})" name="${xmlEsc(p.name ?? LOGISIM_RAM_NAME[p.part] ?? '')}">${p.attrs}</comp>`);
           for (const q of p.ports) tunnel(x + q.off.x, y + q.off.y, q.net, q.sink, q.width);
           break;
         case 'sub':

@@ -10,6 +10,10 @@ import {
   configureMem,
   configurePlexer,
   configureRam,
+  configureIo,
+  defaultIoConfig,
+  IO_TYPES,
+  type IoConfig,
   configureSplitter,
   createComponentInstance,
   defaultRamConfig,
@@ -85,12 +89,13 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'bit extender') return 'bitExtender';
   if (n === 'bitselector') return 'bitSelector';
   if (n.includes('7-segment') || n === 'seven segment') return 'sevenSegment';
-  if (n.includes('hex digit') || n === 'hex display') return 'hexDisplay';
+  if (n.includes('hex digit') || n === 'hex display') return 'hexDigit';
   if (n.includes('buzzer') || n === 'speaker') return 'buzzer';
-  if (n.includes('dot matrix') || n === 'dotmatrix') return 'dotMatrix8x8';
+  if (n.includes('dot matrix') || n === 'dotmatrix') return 'dotMatrix';
+  if (n === 'ledbar' || n === 'led bar') return 'ledBar';
   if (n.includes('rgb') || n.includes('video') || n.includes('screen')) return 'rgbMatrix16x16';
   if (n.includes('keyboard') || n === 'tty') return 'asciiKeyboard';
-  if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch4';
+  if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
 
   // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
   const arith = LOGISIM_ARITH_TYPE[n];
@@ -113,6 +118,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
 
   return null;
 }
+
+// I/O parts placed on their exact Logisim connection points (Aşama 3g)
+const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment']);
 
 // Parts whose width is taken over from the file; any other Logisim part wider than 1 bit becomes 1 bit
 const WIDE_IMPORT = new Set<ComponentType>([
@@ -720,6 +728,119 @@ export function logisimRamSettings(
  * ordered by y (west / east) or x (north / south), 10 apart. The anchor is the first east port, else the
  * first north, west, south one.
  */
+// ---- I/O parts (Logisim std/io 7-Segment Display, Hex Digit Display, DotMatrix; evolution DipSwitch, LedBar) ----
+
+/** Logisim part name of each of our I/O parts */
+export const LOGISIM_IO_NAME: Partial<Record<ComponentType, string>> = {
+  sevenSegment: '7-Segment Display',
+  hexDigit: 'Hex Digit Display',
+  dotMatrix: 'DotMatrix',
+  dipSwitch: 'DipSwitch',
+  ledBar: 'LedBar',
+};
+
+/**
+ * Connection points of an I/O part relative to its Logisim loc, with our pin keys:
+ * - 7-segment: G (0,0) F (10,0) A (20,0) B (30,0) on top, E (0,60) D (10,60) C (20,60) DP (30,60) below
+ * - hex digit: the 4-bit input at loc, DP at (10,0) in 2.7.1 and (20,0) in evolution
+ * - dot matrix / LED bar (DotMatrixBase, LED bar 3 dots tall): column input i at (10i, 0), with evolution's
+ *   select location top-right at (10i, -10*rows*scaleY); row input i at (0, 10i) or (10*cols, 10i); select:
+ *   column vector at loc and row vector 10 below (evolution top-right: both 10*cols to the right); one row:
+ *   evolution puts the row bit at (10*cols, 0), 2.7.1 has the column vector only (one column: the row vector)
+ * - DIP switch: switch i+1 at (10(i+1), 0) facing north, (0, 10(i+1)) east, (0, -10(i+1)) west,
+ *   (10(i-n), 0) south
+ */
+export function logisimIoPorts(
+  type: ComponentType,
+  cfg: IoConfig,
+  opts: { evolution: boolean; facing?: string }
+): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  if (type === 'sevenSegment') {
+    const ports = [P('inA', 20, 0), P('inB', 30, 0), P('inC', 20, 60), P('inD', 10, 60), P('inE', 0, 60), P('inF', 10, 0), P('inG', 0, 0)];
+    if (cfg.dp) ports.push(P('inDP', 30, 60));
+    return ports;
+  }
+  if (type === 'hexDigit') return cfg.dp ? [P('in', 0, 0), P('dp', opts.evolution ? 20 : 10, 0)] : [P('in', 0, 0)];
+  if (type === 'dipSwitch') {
+    const n = cfg.size;
+    const f = opts.facing ?? 'north';
+    return Array.from({ length: n }, (_, i) =>
+      f === 'east' ? P(`out${i}`, 0, 10 * (i + 1)) : f === 'west' ? P(`out${i}`, 0, -10 * (i + 1)) : f === 'south' ? P(`out${i}`, 10 * (i - n), 0) : P(`out${i}`, 10 * (i + 1), 0)
+    );
+  }
+  const bar = type === 'ledBar';
+  const cols = bar ? cfg.size : cfg.cols;
+  const rows = bar ? 1 : cfg.rows;
+  const scaleY = bar ? 3 : 1;
+  const tr = opts.evolution && cfg.selectLoc === 'tr';
+  const mode = bar ? (cfg.ledBarMode === 'oneWire' ? 'row' : 'column') : cfg.matrixInput;
+  if (mode === 'column') return Array.from({ length: cols }, (_, i) => P(bar ? `in${i}` : `c${i}`, 10 * i, tr ? -10 * rows * scaleY : 0));
+  if (mode === 'row') return Array.from({ length: rows }, (_, i) => P(bar ? 'in' : `r${i}`, tr ? 10 * cols : 0, 10 * i));
+  if (!opts.evolution) {
+    if (rows <= 1) return [P('col', 0, 0)];
+    if (cols <= 1) return [P('row', 0, 0)];
+    return [P('col', 0, 0), P('row', 0, 10)];
+  }
+  if (rows <= 1) return [P('col', 0, 0), P('row', 10 * cols, 0)];
+  const dx = tr ? 10 * cols : 0;
+  return [P('col', dx, 0), P('row', dx, 10)];
+}
+
+const IO_SHAPE: Record<string, 'circle' | 'square' | 'padded'> = { circle: 'circle', square: 'square', clusterSegment: 'padded' };
+
+/**
+ * Settings of an I/O part from its Logisim attributes (missing = the writing program's default: 7-segment
+ * active high with DP, hex digit with DP, dot matrix 5 x 7 column input square dots, LED bar 8 separated, DIP
+ * switch 8 facing north; lit colour red for the 7-segment / hex digit, green otherwise).
+ */
+export function logisimIoSettings(
+  type: ComponentType,
+  attr: Record<string, string>,
+  evolution: boolean
+): { cfg: Partial<IoConfig>; state: Partial<CircuitComponentInstance['state']>; ports: Array<{ key: string; off: Pt }>; rot: 0 | 90 | 180 | 270; notes: string[] } {
+  const notes: string[] = [];
+  const int = (v: string | undefined, d: number) => {
+    const n = parseInt(v ?? '', 10);
+    return Number.isFinite(n) ? Math.max(1, Math.min(32, n)) : d;
+  };
+  const cfg: Partial<IoConfig> = {};
+  const state: Partial<CircuitComponentInstance['state']> = {};
+  const color = /^#[0-9a-f]{6}$/i.test(attr.color ?? '') ? attr.color.toLowerCase() : undefined;
+  if (color) state.ioOnColor = color;
+  let facing: string | undefined;
+  if (type === 'sevenSegment' || type === 'hexDigit') {
+    cfg.dp = attr.decimalPoint !== 'false';
+    if (type === 'sevenSegment' && attr.active === 'false') state.ioActiveLow = true;
+  } else if (type === 'dipSwitch') {
+    cfg.size = int(attr.number, 8);
+    facing = attr.facing ?? 'north';
+  } else {
+    const bar = type === 'ledBar';
+    if (bar) {
+      cfg.size = int(attr.matrixcols, 8);
+      cfg.ledBarMode = attr.inputtype === 'row' ? 'oneWire' : 'separated';
+    } else {
+      cfg.cols = int(attr.matrixcols, 5);
+      cfg.rows = int(attr.matrixrows, 7);
+      cfg.matrixInput = attr.inputtype === 'row' || attr.inputtype === 'select' ? attr.inputtype : 'column';
+      const shape = IO_SHAPE[attr.dotshape ?? 'square'];
+      if (shape && shape !== 'square') state.dotShape = shape;
+      if (!evolution && cfg.matrixInput === 'select' && (cfg.rows === 1 || cfg.cols === 1))
+        notes.push(`seçim girişli ${cfg.cols}x${cfg.rows} matrisin Logisim 2.7.1'de tek girişi var; buradaki satır/sütun vektörünün diğeri açık kaldı.`);
+    }
+    cfg.selectLoc = evolution && attr.selloc === 'tr' ? 'tr' : 'bl';
+    const persist = parseInt(attr.persist ?? '0', 10);
+    if (persist > 0) {
+      state.ioPersist = persist;
+      notes.push(`kalıcılık (persist ${persist}) saklandı, simülatörde tik sayacı olmadığından 0 gibi gösterilir.`);
+    }
+  }
+  const full: IoConfig = { ...defaultIoConfig(), ...cfg };
+  const rot = type === 'dipSwitch' ? FACING_ROTATION[facing ?? 'north'] ?? 270 : 0;
+  return { cfg, state, ports: logisimIoPorts(type, full, { evolution, facing }), rot, notes };
+}
+
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
   const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
   const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
@@ -1134,7 +1255,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1153,6 +1274,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? memSettings(nativeType, attr, loc).ports.map((p) => p.off)
                 : RAM_TYPES.has(nativeType)
                 ? ramSettings(nativeType, attr).ports.map((p) => p.off)
+                : IO_IMPORT.has(nativeType)
+                ? logisimIoSettings(nativeType, attr, evolutionFile).ports.map((p) => p.off)
                 : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
@@ -1419,6 +1542,26 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           inst,
           idOf(anchorKey)!,
           at(loc, anchorOff),
+          label,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
+        continue;
+      }
+      if (IO_IMPORT.has(nativeType)) {
+        // Every pin on its Logisim connection point; ours keeps its own drawing (a DIP switch turned like its facing)
+        const st = logisimIoSettings(nativeType, attr, evolutionFile);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        let inst = createComponentInstance(nativeType, 0, 0);
+        inst = configureIo({ ...inst, rotation: st.rot || undefined, state: { ...inst.state, ...st.state } }, st.cfg);
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const first = st.ports[0];
+        place(
+          inst,
+          idOf(first.key)!,
+          at(loc, first.off),
           label,
           st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
             const id = idOf(k);
