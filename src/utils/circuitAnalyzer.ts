@@ -6,11 +6,14 @@ import {
   FLIP_FLOP_TYPES,
   MEM_TYPES,
   PLEXER_TYPES,
+  RAM_TYPES,
   getArithConfig,
   getArithMode,
   getMemConfig,
   getPlexerConfig,
+  getRamConfig,
   getTrigger,
+  ramByteEnableCount,
   pinKey,
   shifterDistBits,
 } from './circuitEngine';
@@ -23,9 +26,18 @@ const SEQUENTIAL_TYPES: string[] = [
   'dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit',
   ...MEM_TYPES,
   'ram16x4',
+  'ram',
+  'random',
 ];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
-const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4');
+const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4' && t !== 'ram');
+/** evolution RAM with a clocked read: its output changes only at the clock edge, so it starts a new path */
+function ramSyncRead(c: CircuitComponentInstance): boolean {
+  if (c.type !== 'ram') return false;
+  const cfg = getRamConfig(c);
+  return cfg.flavor === 'evolution' && (cfg.trigger === 'rising' || cfg.trigger === 'falling') && !c.state.ramAsyncRead;
+}
+const breaksPath = (c: CircuitComponentInstance) => PATH_BREAK_TYPES.includes(c.type) || ramSyncRead(c);
 // Parts that are only wiring / display and add no logic level
 const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'splitter4', 'busSplitter', 'splitter', 'bitExtender'];
 
@@ -115,7 +127,7 @@ function calculateCriticalPath(components: CircuitComponentInstance[], wires: Ci
     if (w.fromCompId && w.toCompId && w.fromCompId !== w.toCompId) preds.get(w.toCompId)?.add(w.fromCompId);
   }
 
-  const weight = (c: CircuitComponentInstance) => (NO_DELAY_TYPES.includes(c.type) || PATH_BREAK_TYPES.includes(c.type) ? 0 : 1);
+  const weight = (c: CircuitComponentInstance) => (NO_DELAY_TYPES.includes(c.type) || breaksPath(c) ? 0 : 1);
   // Arrival = logic levels up to and including this part's output
   const arrival = new Map<string, number>();
   const onStack = new Set<string>();
@@ -124,7 +136,7 @@ function calculateCriticalPath(components: CircuitComponentInstance[], wires: Ci
     const c = byId.get(id);
     if (!c) return 0;
     // A register's output is the start of a new path
-    if (PATH_BREAK_TYPES.includes(c.type)) {
+    if (breaksPath(c)) {
       arrival.set(id, 0);
       return 0;
     }
@@ -168,6 +180,28 @@ function memGroupDetail(c: CircuitComponentInstance, enWired: boolean): string {
   else if (t === 'falling') parts.push('düşen kenar');
   if (FLIP_FLOP_TYPES.has(c.type) && enWired) parts.push('EN');
   return parts.join(', ');
+}
+// RAM / ROM: size and the settings the count depends on
+function ramGroupDetail(c: CircuitComponentInstance, wired: Set<string>): string {
+  if (c.type === 'random') return '';
+  const cfg = getRamConfig(c);
+  const parts = [`${2 ** cfg.addrWidth}×${cfg.dataWidth}`, cfg.flavor === 'evolution' ? 'evo' : '2.7.1'];
+  if (ramTriState(c)) parts.push('üç durumlu');
+  if (ramSyncRead(c)) parts.push('eşzamanlı okuma');
+  if (c.type === 'ram' && ramClearWired(c, wired)) parts.push('CLR');
+  const nBE = c.type === 'ram' ? ramByteEnableCount(cfg) : 0;
+  if (nBE) parts.push(`${nBE} bayt`);
+  return parts.join(', ');
+}
+// The data output can float: 2.7.1 select (RAM and ROM), an evolution bidirectional or OE-controlled RAM bus
+function ramTriState(c: CircuitComponentInstance): boolean {
+  const cfg = getRamConfig(c);
+  if (cfg.flavor !== 'evolution') return true;
+  return c.type === 'ram' && cfg.dataBus !== 'separate';
+}
+function ramClearWired(c: CircuitComponentInstance, wired: Set<string>): boolean {
+  const clr = c.inputs.find((p) => pinKey(c, p) === 'clr');
+  return !!clr && wired.has(clr.id);
 }
 function plexerGroupDetail(c: CircuitComponentInstance): string {
   const { select, width } = getPlexerConfig(c);
@@ -283,6 +317,28 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       if (c.type === 'flipFlopSR') return (level ? 16 : 40) + enCost;
       return (c.type === 'flipFlopT' ? 40 : 42) + enCost;
     }
+    case 'ram':
+    case 'rom': {
+      // N = 2^n words of w bits. RAM: 6T SRAM cell per bit, n -> 2^n row decoder (7N - 4, as the decoder part),
+      // sense amplifier + write driver + precharge per bit 14, control 20; a floating output adds a three-state
+      // buffer per bit (6), an evolution clocked read an output register (28 per bit), a wired clear a reset
+      // transistor per cell, byte enables a write gate (AND, 6) each. ROM: NOR ROM, one transistor per bit
+      // position, decoder, pull-up + inverter per bit 3
+      const cfg = getRamConfig(c);
+      const N = 2 ** cfg.addrWidth;
+      const w = cfg.dataWidth;
+      const tri = ramTriState(c) ? 6 * w : 0;
+      if (c.type === 'rom') return N * w + 7 * N - 4 + 3 * w + tri;
+      return (
+        6 * N * w + 7 * N - 4 + 14 * w + 20 + tri + (ramSyncRead(c) ? 28 * w : 0) +
+        (ramClearWired(c, wired) ? N * w : 0) + 6 * ramByteEnableCount(cfg)
+      );
+    }
+    case 'random':
+      // Logisim 2.7.1's 48-bit LCG: state register 48 x 28, seed load + next hold MUXes 2 x 48 x 14, the
+      // constant multiply (0x5DEECE66D has 23 one bits: an adder of 48 - k bits per shifted copy, 18004) and
+      // + 0xB (48 half adders, 672); the output is bits of the state, whatever its width
+      return 48 * 28 + 2 * 48 * 14 + 18004 + 48 * 14;
     case 'subcircuit': {
       const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
       if (!def || seen.has(def.id)) return 0;
@@ -360,7 +416,9 @@ export function analyzeCircuit(
               ? `${c.type.toUpperCase()} (${plexerGroupDetail(c)})`
               : MEM_TYPES.has(c.type)
                 ? withDetail(c.type.toUpperCase(), memGroupDetail(c, flipFlopEnableWired(c, wired)))
-                : c.type.toUpperCase();
+                : RAM_TYPES.has(c.type)
+                  ? withDetail(c.type.toUpperCase(), ramGroupDetail(c, wired))
+                  : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
     g.count++;
     g.totalTransistors += t;

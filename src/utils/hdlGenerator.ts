@@ -18,9 +18,13 @@ import {
   flipFlopDataKeys,
   getCounterMax,
   getMemConfig,
+  getRamConfig,
   getSplitterConfig,
   getTrigger,
   memPinKeys,
+  MEM_PAGE_SIZE,
+  ramByteEnableCount,
+  ramPinKeys,
   shifterDistBits,
   splitterThreads,
 } from './circuitEngine';
@@ -179,7 +183,7 @@ const plexerFloats = (c: CircuitComponentInstance) =>
 // Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers
 const canFloat = (c?: CircuitComponentInstance) =>
   !!c &&
-  (TRI_TYPES.includes(c.type) || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
+  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
 
 export interface PortDecl {
   name: string;
@@ -1129,6 +1133,349 @@ function buildModule(
           body.push(`  ${rd} <= ${mem}(to_integer(unsigned(${addrSig})));`);
           for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${rd}(${i});`);
         }
+        break;
+      }
+      case 'ram':
+      case 'rom':
+      case 'random': {
+        // As stepRam. Controls read like the simulator: open select / OE / 2.7.1 WE / NXT count as on, open
+        // clear / reset / evolution WE / byte enables as off. An open address bit never addresses a word (the
+        // output floats, nothing is written); open data bits make the stored word all ones, as there
+        const v = lang === 'verilog';
+        const cfg = getRamConfig(c);
+        const keys = ramPinKeys(c.type, cfg).inputs;
+        const at = (k: string) => keys.indexOf(k);
+        const w = cfg.dataWidth;
+        const notes: string[] = [];
+        const T = 'true';
+        const F = 'false';
+        const lit = (n: number | bigint, k: number) =>
+          bitLiteral(Array.from({ length: k }, (_, i) => ((BigInt(n) >> BigInt(i)) & 1n ? 1 : 0)) as (0 | 1)[]);
+        const zeros = lit(0, w);
+        const ones = lit(2 ** w - 1, w);
+        const allZ = w > 1 ? (v ? `${w}'bz` : "(others => 'Z')") : L.hiZ;
+        const ind = (ls: string[]) => ls.map((l) => `  ${l}`);
+        const pinOf = (k: string) => (at(k) < 0 ? undefined : c.inputs[at(k)]);
+        const isOpen = (k: string) => {
+          const p = pinOf(k);
+          return !p || isFloating(p.id);
+        };
+        // 1-bit control: a constant, or a plain signal (edge lists and VHDL sensitivity lists need names)
+        const ctl = (k: string, open: string): string => {
+          const i = at(k);
+          if (i < 0) return open;
+          const e = inp(i, open);
+          if (e === L.one || e === L.zero) return e;
+          return asName(e, 1, `${nm}_${k}`);
+        };
+        const vec = (k: string, width: number): string => {
+          const e = width > 1 ? compose(wideBits(at(k))) : inp(at(k));
+          return e === L.one || e === L.zero ? e : asName(e, width, `${nm}_${k}`);
+        };
+        // Conditions ('true' / 'false' fold away)
+        const is1c = (x: string) => (x === L.one ? T : x === L.zero ? F : v ? x : `${x} = '1'`);
+        const is0c = (x: string) => (x === L.zero ? T : x === L.one ? F : v ? `!${x}` : `${x} = '0'`);
+        const cJoin = (op: 'and' | 'or', xs: string[]) => {
+          const unit = op === 'and' ? T : F;
+          const absorb = op === 'and' ? F : T;
+          const ys = xs.filter((x) => x !== unit);
+          if (ys.includes(absorb)) return absorb;
+          if (ys.length === 0) return unit;
+          if (ys.length === 1) return ys[0];
+          return ys.map((y) => `(${y})`).join(v ? (op === 'and' ? ' && ' : ' || ') : ` ${op} `);
+        };
+        const cAnd = (...xs: string[]) => cJoin('and', xs);
+        const cOr = (...xs: string[]) => cJoin('or', xs);
+        const ifs = (cond: string, then: string[], els: string[] = []): string[] => {
+          if (cond === T) return then;
+          if (cond === F) return els;
+          const chained = els.length > 0 && els[0].startsWith('if ');
+          if (v) {
+            if (!els.length) return [`if (${cond}) begin`, ...ind(then), 'end'];
+            return [`if (${cond}) begin`, ...ind(then), ...(chained ? [`end else ${els[0]}`, ...els.slice(1)] : ['end else begin', ...ind(els), 'end'])];
+          }
+          if (chained) return [`if ${cond} then`, ...ind(then), `els${els[0]}`, ...els.slice(1)];
+          return [`if ${cond} then`, ...ind(then), ...(els.length ? ['else', ...ind(els)] : []), 'end if;'];
+        };
+        // Output by priority: the first arm whose condition holds, else the last value
+        const select = (lhs: string, arms: [string, string][], last: string) => {
+          const live: [string, string][] = [];
+          for (const [cond, val] of arms) {
+            if (cond === F) continue;
+            if (cond === T) {
+              last = val;
+              break;
+            }
+            live.push([cond, val]);
+          }
+          if (v) emit(lhs, live.reduceRight((acc, [cond, val]) => `${wrap(cond)} ? ${wrap(val)} : ${wrap(acc)}`, last));
+          else body.push(`  ${lhs} <= ${live.map(([cond, val]) => `${val} when ${cond} else `).join('')}${last};`);
+        };
+        // A clocked / level process: Verilog always block, VHDL process with its sensitivity list
+        const proc = (sens: string[], lines: string[], vEvents?: string) => {
+          if (!lines.length) return;
+          if (v) body.push(`  always @(${vEvents ?? '*'}) begin`, ...ind(ind(lines)), '  end');
+          else body.push(`  process (${[...new Set(sens.map((s) => s.replace(/[[(].*$/, '')))].join(', ')})`, '  begin', ...ind(ind(lines)), '  end process;');
+        };
+        const sigs = (...xs: string[]) => xs.filter((x) => x !== L.one && x !== L.zero && x !== T && x !== F && /^[a-z]/.test(x));
+        const d = out[0];
+
+        if (c.type === 'random') {
+          // Logisim 2.7.1: java.util.Random's 48-bit LCG; after a reset the output is the low bits of the seed,
+          // after a step bits 12 .. of the new state
+          const trig = getTrigger(c);
+          const clkPin = pinOf('ck');
+          const clk = !clkPin || isFloating(clkPin.id) ? L.zero : ctl('ck', L.zero);
+          const nxt = ctl('nxt', L.one);
+          const rst = ctl('rst', L.zero);
+          const seed = c.state.randomSeed ?? 0;
+          if (seed === 0) notes.push('tohum 0: simülatör saate göre rastgele bir başlangıç seçer, burada 0 ile başlar');
+          const start = BigInt.asUintN(48, BigInt(seed | 0));
+          const cur = names.make(`${nm}_state`, 'state');
+          const fresh = names.make(`${nm}_fresh`, 'fresh');
+          declare(cur, 48, start.toString(2).padStart(48, '0'));
+          declare(fresh, 1, '1');
+          const startLit = lit(start, 48);
+          const next = v ? `${cur} * 48'h5deece66d + 48'hb` : `std_logic_vector(resize(unsigned(${cur}) * unsigned'(x"5DEECE66D"), 48) + 11)`;
+          const reset = [`${cur} <= ${startLit};`, `${fresh} <= ${L.one};`];
+          const step = ifs(is1c(nxt), [`${cur} <= ${next};`, `${fresh} <= ${L.zero};`]);
+          if (trig === 'high' || trig === 'low') notes.push('seviye tetikleme: simülatör saat etkin seviyedeyken her değerlendirmede adım atar, burada seviyeye geçişte bir adım');
+          const falling = trig === 'falling' || trig === 'low';
+          if (rst === L.one) notes.push('RST hep 1: değer hep tohumda kalır');
+          else if (isSignalName(clk)) {
+            const edge = `${falling ? 'negedge' : 'posedge'} ${clk}`;
+            if (v) proc([], ifs(is1c(rst), reset, step), rst === L.zero ? edge : `${edge} or posedge ${rst}`);
+            else {
+              const ev = `${falling ? 'falling_edge' : 'rising_edge'}(${clk})`;
+              const lines = rst === L.zero ? [`if ${ev} then`, ...ind(step), 'end if;'] : [`if ${rst} = '1' then`, ...ind(reset), `elsif ${ev} then`, ...ind(step), 'end if;'];
+              proc(sigs(clk, rst), lines);
+            }
+          } else if (rst !== L.zero) {
+            notes.push('saat girişi boşta: yalnız RST değeri tohuma döndürür');
+            if (v) proc([], reset, `posedge ${rst}`);
+            else proc([rst], ifs(is1c(rst), reset));
+          } else notes.push('saat girişi boşta: değer hiç değişmez');
+          const hi = (lo: number) => (w === 1 ? vecIndex(cur, lo) : v ? `${cur}[${lo + w - 1}:${lo}]` : `${cur}(${lo + w - 1} downto ${lo})`);
+          select(d, [[is1c(fresh), hi(0)]], hi(12));
+          for (const n of notes) body.push(L.comment(n));
+          break;
+        }
+
+        const evo = cfg.flavor === 'evolution';
+        const N = 2 ** cfg.addrWidth;
+        const aOpen = (() => {
+          const p = pinOf('a');
+          return !p || readBits(p.id, cfg.addrWidth).floating || readBits(p.id, cfg.addrWidth).mismatch;
+        })();
+        const cs = !evo ? ctl('cs', L.one) : L.one;
+        // Stored words (RAM: its current contents, the simulator's starting point)
+        const words: [number, number][] = [];
+        for (const [k, page] of Object.entries(c.state.memPages ?? {})) {
+          page.forEach((val, i) => {
+            const addr = Number(k) * MEM_PAGE_SIZE + i;
+            if (val && addr < N) words.push([addr, val]);
+          });
+        }
+        words.sort((x, y) => x[0] - y[0]);
+        if (aOpen) {
+          body.push(L.comment('adres girişinin bir kısmı boşta: simülatörde hiçbir kelime seçilmez, çıkış tanımsız (x), yazma olmaz; burada çıkış Z'));
+          emit(d, allZ);
+          break;
+        }
+        const a = vec('a', cfg.addrWidth);
+        const idx = (m: string) => (v ? `${m}[${a}]` : `${m}(to_integer(unsigned(${a})))`);
+        const rd = names.make(`${nm}_rdata`, 'rdata');
+
+        if (c.type === 'rom') {
+          // Contents as a case table (only the words that are not 0)
+          if (!words.length) {
+            declare(rd, w);
+            emit(rd, zeros);
+          }
+          else if (v) {
+            declare(rd, w, '0'.repeat(w));
+            body.push(
+              '  always @(*) begin',
+              `    case (${a})`,
+              ...words.map(([k, val]) => `      ${cfg.addrWidth}'d${k}: ${rd} = ${lit(val, w)};`),
+              `      default: ${rd} = ${zeros};`,
+              '    endcase',
+              '  end'
+            );
+          } else {
+            declare(rd, w);
+            body.push(`  with ${a} select ${rd} <=`, ...words.map(([k, val]) => `    ${lit(val, w)} when ${lit(k, cfg.addrWidth)},`), `    ${zeros} when others;`);
+          }
+          if (!declared.has(rd)) declare(rd, w);
+          select(d, [[is0c(cs), allZ]], rd);
+          break;
+        }
+
+        // RAM: memory array starting at the contents
+        const mem = names.make(`${nm}_mem`, 'mem');
+        const ii = v ? names.make(`${nm}_i`, 'i') : '';
+        if (v) {
+          extraDecls.push(
+            `  reg ${w > 1 ? `[${w - 1}:0] ` : ''}${mem} [0:${N - 1}];`,
+            `  integer ${ii};`,
+            '  initial begin',
+            `    for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] = ${zeros};`,
+            ...words.map(([k, val]) => `    ${mem}[${k}] = ${lit(val, w)};`),
+            '  end'
+          );
+        } else {
+          const typ = names.make(`${nm}_mem_t`, 'mem_t');
+          const el = w > 1 ? `std_logic_vector(${w - 1} downto 0)` : 'std_logic';
+          const zero = w > 1 ? "(others => '0')" : "'0'";
+          extraDecls.push(
+            `  type ${typ} is array (0 to ${N - 1}) of ${el};`,
+            `  signal ${mem} : ${typ} := (${[...words.map(([k, val]) => `${k} => ${lit(val, w)}`), `others => ${zero}`].join(', ')});`
+          );
+        }
+        const clearAll = v
+          ? (blocking: boolean) => {
+              return [`for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] ${blocking ? '=' : '<='} ${zeros};`];
+            }
+          : () => [`${mem} <= (others => ${w > 1 ? "(others => '0')" : "'0'"});`];
+        declare(rd, w);
+        if (v) emit(rd, idx(mem));
+        else body.push(`  ${rd} <= ${idx(mem)};`);
+        // Data to store: a separate input with open bits stores all ones; a bus word with an undefined bit too
+        const sepData = evo ? cfg.dataBus !== 'bidir' : cfg.bus === 'separate';
+        let din: string;
+        if (sepData) {
+          if (isOpen('din') || readBits(pinOf('din')!.id, w).floating) {
+            notes.push('veri girişinin bir kısmı boşta: simülatör tanımsız kelimeyi hepsi 1 olarak yazar; burada da öyle');
+            din = ones;
+          } else din = vec('din', w);
+        } else {
+          const bus = vec('dio', w);
+          din = names.make(`${nm}_wdata`, 'wdata');
+          declare(din, w);
+          if (v) emit(din, `(^${wrap(bus)} === 1'bx) ? ${ones} : ${bus}`);
+          else body.push(`  ${din} <= ${ones} when is_x(${bus}) else ${bus};`);
+          notes.push('veri yolunda tanımsız bit varken yazılan kelime hepsi 1 olur (simülatördeki gibi; sentezde bu denetim yok sayılır)');
+        }
+        const store = (blocking: boolean, value: string) => `${idx(mem)} ${blocking && v ? '=' : '<='} ${value};`;
+
+        if (!evo) {
+          // 2.7.1: CLR = 1 clears at once; with the part selected a rising edge (asynch bus: any time) stores
+          // when OE = 0 (combined / asynch bus) or WE is not 0 (separate); the data shows unless select / OE is 0
+          const clr = ctl('clr', L.zero);
+          const oe = ctl('oe', L.one);
+          const asynch = cfg.bus === 'asynch';
+          const clkPin = pinOf('clk');
+          const clk = asynch || !clkPin || isFloating(clkPin.id) ? L.zero : ctl('clk', L.zero);
+          const we = cfg.bus === 'separate' ? ctl('we', L.one) : L.one;
+          const wcond = cAnd(is1c(cs), cfg.bus === 'separate' ? is1c(we) : is0c(oe));
+          if (clr === L.one) notes.push('CLR hep 1: bellek hep sıfır, yazılmaz');
+          else if (asynch) {
+            proc(sigs(clr, cs, oe, a, din), ifs(is1c(clr), clearAll(true), ifs(wcond, [store(true, din)])));
+          } else if (isSignalName(clk) && wcond !== F) {
+            const body2 = ifs(is1c(clr), clearAll(false), ifs(wcond, [store(false, din)]));
+            if (v) proc([], body2, clr === L.zero ? `posedge ${clk}` : `posedge ${clk} or posedge ${clr}`);
+            else {
+              const lines = clr === L.zero
+                ? [`if rising_edge(${clk}) then`, ...ind(ifs(wcond, [store(false, din)])), 'end if;']
+                : [`if ${clr} = '1' then`, ...ind(clearAll(false)), `elsif rising_edge(${clk}) then`, ...ind(ifs(wcond, [store(false, din)])), 'end if;'];
+              proc(sigs(clk, clr), lines);
+            }
+          } else if (clr !== L.zero) {
+            if (v) proc([], clearAll(false), `posedge ${clr}`);
+            else proc([clr], ifs(is1c(clr), clearAll(false)));
+          }
+          if (clr === L.one) select(d, [[cOr(is0c(cs), is0c(oe)), allZ]], zeros);
+          else select(d, [[cOr(is0c(cs), is0c(oe)), allZ]], rd);
+          for (const n of notes) body.push(L.comment(n));
+          break;
+        }
+
+        // evolution: the clear pin (1) clears and drives 0 (separate) or floats (bidir); a write needs WE = 1 at
+        // the clock edge, or WE at the trigger level (high: 1, low: 0); byte enables pick the bytes. OE = 0 floats
+        // a bidir / controlled bus and keeps a plain separate one; an asynchronous read (or a level trigger)
+        // shows the word at once, a clocked read takes it at the edge (after the write, or before it with 'war')
+        const trig = cfg.trigger;
+        const level = trig === 'high' || trig === 'low';
+        const falling = trig === 'falling';
+        const clr = cfg.clearPin ? ctl('clr', L.zero) : L.zero;
+        const oe = ctl('oe', L.one);
+        const we = ctl('we', L.zero);
+        const floatsOff = cfg.dataBus !== 'separate';
+        const clrVal = sepData ? zeros : allZ;
+        const clkPin = pinOf('clk');
+        const clk = level || !clkPin || isFloating(clkPin.id) ? L.zero : ctl('clk', L.zero);
+        // Clocked processes read the stored word by its address (not through rdata, which follows a delta later)
+        const word = idx(mem);
+        const nBE = ramByteEnableCount(cfg);
+        const bytes = Array.from({ length: nBE }, (_, i) => {
+          const lo = 8 * i;
+          const hi = Math.min(w - 1, lo + 7);
+          const sl = (x: string) => (hi === lo ? (v ? `${x}[${lo}]` : `${x}(${lo})`) : v ? `${x}[${hi}:${lo}]` : `${x}(${hi} downto ${lo})`);
+          const src = din === ones ? lit(2 ** (hi - lo + 1) - 1, hi - lo + 1) : sl(din);
+          return { sl, src, be: is1c(ctl(`be${i}`, L.zero)) };
+        });
+        // Write at the edge: the whole word, or each enabled byte
+        const writeLines = (): string[] => (nBE === 0 ? [store(false, din)] : bytes.flatMap((b) => ifs(b.be, [`${b.sl(word)} <= ${b.src};`])));
+        const weOn = level ? (trig === 'high' ? is1c(we) : isOpen('we') ? F : is0c(we)) : is1c(we);
+        if (cfg.clearPin && clr !== L.zero && !level) notes.push('CLR 1 iken saat değişir ve CLR bırakıldığında saat başka seviyedeyse simülatör (evolution gibi) bunu bir kenar sayıp yazar; HDL saymaz');
+        if (level && !sepData) notes.push('çift yönlü yolda OE ve yazma aynı anda etkinse RAM kendi çıkışını geri yazar (kombinasyonel döngü); HDL simülasyonu salınabilir');
+        if (clr === L.one) notes.push('CLR hep 1: bellek hep sıfır, yazılmaz');
+        else if (level) {
+          proc(sigs(clr, we, a, din), ifs(is1c(clr), clearAll(true), ifs(weOn, [store(true, din)])));
+        } else if (isSignalName(clk) && weOn !== F) {
+          if (v) proc([], ifs(is1c(clr), clearAll(false), ifs(weOn, writeLines())), `${falling ? 'negedge' : 'posedge'} ${clk}${clr === L.zero ? '' : ` or posedge ${clr}`}`);
+          else {
+            const ev = `${falling ? 'falling_edge' : 'rising_edge'}(${clk})`;
+            const lines = clr === L.zero
+              ? [`if ${ev} then`, ...ind(ifs(weOn, writeLines())), 'end if;']
+              : [`if ${clr} = '1' then`, ...ind(clearAll(false)), `elsif ${ev} then`, ...ind(ifs(weOn, writeLines())), 'end if;'];
+            proc(sigs(clk, clr), lines);
+          }
+        } else if (clr !== L.zero) {
+          if (v) proc([], clearAll(false), `posedge ${clr}`);
+          else proc([clr], ifs(is1c(clr), clearAll(false)));
+        }
+        // Output: q holds what the simulator's output shows (starts floating)
+        const q = names.make(`${nm}_dout`, 'dout');
+        declare(q, w, 'Z'.repeat(w));
+        const oeArm = (blocking: boolean, capture: string[]): string[] => {
+          const set = (x: string) => `${q} ${blocking && v ? '=' : '<='} ${x};`;
+          return ifs(is1c(clr), [set(clrVal)], ifs(is0c(oe), floatsOff ? [set(allZ)] : v ? [] : ['null;'], capture.map((x) => set(x))));
+        };
+        if (clr === L.one) {
+          emit(d, clrVal);
+        } else if (level || c.state.ramAsyncRead) {
+          // The output follows the word at once while OE allows it
+          proc(sigs(clr, oe, rd), oeArm(true, [rd]));
+          emit(d, q);
+        } else {
+          // Captured at the edge: the stored word, after this edge's write ('raw') or before it ('war')
+          const capIf = (_blocking: boolean): string[] => {
+            const keep = [`${q} <= ${word};`];
+            if (c.state.ramReadBehavior === 'war') return keep;
+            const written = nBE === 0 ? [`${q} <= ${din};`] : bytes.flatMap((b) => ifs(b.be, [`${b.sl(q)} <= ${b.src};`], [`${b.sl(q)} <= ${b.sl(word)};`]));
+            return ifs(weOn, written, keep);
+          };
+          if (v) {
+            const evs = [
+              ...(isSignalName(clk) ? [`${falling ? 'negedge' : 'posedge'} ${clk}`] : []),
+              ...(clr !== L.zero ? [`posedge ${clr}`] : []),
+              ...(floatsOff && isSignalName(oe) ? [`negedge ${oe}`] : []),
+            ];
+            if (evs.length) {
+              const chain = ifs(is1c(clr), [`${q} <= ${clrVal};`], ifs(is0c(oe), floatsOff ? [`${q} <= ${allZ};`] : [], isSignalName(clk) ? capIf(false) : []));
+              // a negedge-only event list never reaches the capture branch; an 'else' with nothing to do drops out
+              proc([], chain, evs.join(' or '));
+              if (cfg.clearPin && floatsOff) notes.push('CLR, OE 0 iken bırakılırsa simülatör çıkışı Z tutar; Verilog bir sonraki saat kenarına kadar 0 gösterebilir');
+            }
+          } else {
+            const ev = `${falling ? 'falling_edge' : 'rising_edge'}(${clk})`;
+            const chain = ifs(is1c(clr), [`${q} <= ${clrVal};`], ifs(is0c(oe), [floatsOff ? `${q} <= ${allZ};` : 'null;'], isSignalName(clk) ? ifs(ev, capIf(false)) : []));
+            if (isSignalName(clk) || clr !== L.zero || (floatsOff && isSignalName(oe))) proc(sigs(clk, clr, oe), chain);
+          }
+          emit(d, q);
+        }
+        for (const n of notes) body.push(L.comment(n));
         break;
       }
       case 'flipFlopD':
