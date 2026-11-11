@@ -520,7 +520,8 @@ export function ioGeometry(type: ComponentType, cfg: IoConfig): { width: number;
     return { width: 3 * U, height: U * (n + 1), pins };
   }
   if (type === 'hexDigit') {
-    return { width: 60, height: 90, pins: { in: { x: 0, y: 30 }, dp: { x: 0, y: 60 } } };
+    // width - height a multiple of 20: rotated about its centre the pins stay on the 10px grid and on the body edge
+    return { width: 60, height: 100, pins: { in: { x: 0, y: 30 }, dp: { x: 0, y: 60 } } };
   }
   // LED bar = a 1-row dot matrix (evolution LedBar: segments 3 dots tall, 'separated' = column input, 'one wire' = row input)
   const bar = type === 'ledBar';
@@ -918,8 +919,9 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     type: 'sevenSegment',
     name: '7-Segment LED Ekran',
     category: 'outputs',
-    width: 72,
-    height: 96,
+    // 80 x 100 (drawing 72 x 96): rotated about its centre the pins stay on the 10px grid and on the body edge
+    width: 80,
+    height: 100,
     inputs: [
       { id: 'inA', name: 'A', type: 'input', relX: 0, relY: 10 },
       { id: 'inB', name: 'B', type: 'input', relX: 0, relY: 20 },
@@ -1959,6 +1961,8 @@ export const RETIRED_PALETTE_TYPES = new Set<ComponentType>([
   'dFlipFlop', 'tFlipFlop', 'jkFlipFlop', 'register4', 'counter4', 'shiftRegister4',
   // Aşama 3f: parametric RAM / ROM (old circuits keep opening until 3h)
   'ram16x4', 'rom16x4',
+  // Aşama 3g: parametric DIP switch / LED bar / dot matrix, hex digit with a 4-bit input
+  'dipSwitch4', 'ledBar4', 'dotMatrix8x8', 'hexDisplay',
 ]);
 export const PLEXER_MAX_SELECT = 5;
 

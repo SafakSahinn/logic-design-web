@@ -70,6 +70,10 @@ import {
   pinKey as plexerPinKey,
   plexerLayout,
   RETIRED_PALETTE_TYPES,
+  getIoConfig,
+  matrixDots,
+  segmentsLit,
+  toggleDipSwitch,
   splitterDistribution,
   splitterEndLabels,
   splitterThreads,
@@ -271,6 +275,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
   dipSwitch4: { label: '4-Bit DIP SW', badge: 'DIP' },
+  dipSwitch: { label: 'DIP Anahtar', badge: 'DIP' },
   clock: { label: 'Saat Sinyali', badge: 'CLK' },
   vcc: { label: 'Sabit 1 (High)', badge: 'VCC' },
   gnd: { label: 'Sabit 0 (Low)', badge: 'GND' },
@@ -281,6 +286,9 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   sevenSegment: { label: '7-Segment', badge: 'LED' },
   sevenSeg: { label: '7-Segment', badge: 'LED' },
   hexDisplay: { label: 'Hex Gösterge', badge: '4-Bit' },
+  hexDigit: { label: 'Hex Gösterge', badge: 'HEX' },
+  ledBar: { label: 'LED Çubuk', badge: 'Bar' },
+  dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
   dotMatrix8x8: { label: '8x8 Matris', badge: 'GPU' },
@@ -1177,6 +1185,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     setComponents((prev) => {
       let toggledTo = false;
       const updated = prev.map((c) => {
+        if (c.id === compId && c.type === 'dipSwitch') {
+          const next = toggleDipSwitch(c, switchIdx);
+          toggledTo = (((next.state.dipBits ?? 0) >>> switchIdx) & 1) === 1;
+          return next;
+        }
         if (c.id === compId) {
           const switches = [...(c.state.dipSwitches || [false, false, false, false])];
           switches[switchIdx] = !switches[switchIdx];
@@ -3228,7 +3241,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         }
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch4', 'clock', 'asciiKeyboard'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch4', 'dipSwitch', 'clock', 'asciiKeyboard'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -3399,6 +3412,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         list.push({ key: `${c.id}_f2`, name: `${name} F2`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_f3`, name: `${name} F3`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_z`, name: `${name} Z`, color: colors[cIdx++ % colors.length], type: 'state' });
+      } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
+        // one bus trace: the switches (bit i = switch i+1), the LED bar inputs (D0.. or D) or the hex digit's D
+        const w = c.type === 'hexDigit' ? 4 : getIoConfig(c).size;
+        const port = c.type === 'dipSwitch' ? 'Q' : 'D';
+        list.push({ key: `${c.id}_io`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: c.type === 'dipSwitch' ? 'input' : 'output', width: w });
       } else if (c.type === 'dipSwitch4') {
         list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'input' });
         list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'input' });
@@ -3462,6 +3480,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[`${c.id}_f2`] = c.outputs[2]?.value ?? 0;
           values[`${c.id}_f3`] = c.outputs[3]?.value ?? 0;
           values[`${c.id}_z`] = c.outputs[5]?.value ?? 0;
+        } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
+          const bits: SignalValue[] =
+            c.type === 'dipSwitch'
+              ? c.outputs.map((p) => p.value)
+              : c.type === 'ledBar' && getIoConfig(c).ledBarMode === 'separated'
+                ? c.inputs.map((p) => p.value)
+                : c.inputs[0]?.bits
+                  ? [...c.inputs[0].bits]
+                  : Array<SignalValue>(c.inputs[0]?.width ?? 1).fill('X');
+          values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 0;
         } else if (c.type === 'dipSwitch4') {
           const switches = c.state.dipSwitches || [false, false, false, false];
           values[`${c.id}_q0`] = switches[0] ? 1 : 0;
@@ -4907,143 +4935,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'sevenSegment': {
-        const segA = comp.inputs[0]?.value === 1;
-        const segB = comp.inputs[1]?.value === 1;
-        const segC = comp.inputs[2]?.value === 1;
-        const segD = comp.inputs[3]?.value === 1;
-        const segE = comp.inputs[4]?.value === 1;
-        const segF = comp.inputs[5]?.value === 1;
-        const segG = comp.inputs[6]?.value === 1;
-        const segDP = comp.inputs[7]?.value === 1;
-
-        const onColor = '#ef4444';
-        const offColor = '#241215';
-        const onGlow = 'drop-shadow(0 0 5px #ef4444)';
-
-        return (
-          <g filter="url(#gateShadow)">
-            {/* Display Enclosure */}
-            <rect
-              x={14}
-              y={2}
-              width={56}
-              height={92}
-              rx={6}
-              fill="#090d16"
-              stroke={isSelected ? '#3b82f6' : '#1e293b'}
-              strokeWidth={isSelected ? 2 : 1.5}
-            />
-
-            {/* Recessed Screen Area */}
-            <rect
-              x={18}
-              y={6}
-              width={48}
-              height={84}
-              rx={4}
-              fill="#020617"
-              stroke="#0f172a"
-              strokeWidth={1}
-            />
-
-            {/* Pin Labels along the left edge */}
-            {['A', 'B', 'C', 'D', 'E', 'F', 'G', '.'].map((lbl, idx) => (
-              <text
-                key={lbl}
-                x={8}
-                y={16 + idx * 10}
-                textAnchor="middle"
-                className="text-[7.5px] font-mono font-bold fill-slate-400 select-none"
-              >
-                {lbl}
-              </text>
-            ))}
-
-            {/* 7 Segments (A, B, C, D, E, F, G) + DP */}
-            <rect
-              x={28}
-              y={14}
-              width={26}
-              height={5}
-              rx={2}
-              fill={segA ? onColor : offColor}
-              filter={segA ? onGlow : undefined}
-            />
-            <rect
-              x={50}
-              y={19}
-              width={5}
-              height={22}
-              rx={2}
-              fill={segB ? onColor : offColor}
-              filter={segB ? onGlow : undefined}
-            />
-            <rect
-              x={50}
-              y={47}
-              width={5}
-              height={22}
-              rx={2}
-              fill={segC ? onColor : offColor}
-              filter={segC ? onGlow : undefined}
-            />
-            <rect
-              x={28}
-              y={69}
-              width={26}
-              height={5}
-              rx={2}
-              fill={segD ? onColor : offColor}
-              filter={segD ? onGlow : undefined}
-            />
-            <rect
-              x={27}
-              y={47}
-              width={5}
-              height={22}
-              rx={2}
-              fill={segE ? onColor : offColor}
-              filter={segE ? onGlow : undefined}
-            />
-            <rect
-              x={27}
-              y={19}
-              width={5}
-              height={22}
-              rx={2}
-              fill={segF ? onColor : offColor}
-              filter={segF ? onGlow : undefined}
-            />
-            <rect
-              x={28}
-              y={42}
-              width={26}
-              height={5}
-              rx={2}
-              fill={segG ? onColor : offColor}
-              filter={segG ? onGlow : undefined}
-            />
-            <circle
-              cx={59}
-              cy={71}
-              r={3}
-              fill={segDP ? onColor : offColor}
-              filter={segDP ? onGlow : undefined}
-            />
-
-            <text
-              x={42}
-              y={86}
-              textAnchor="middle"
-              className="text-[7.5px] font-mono font-bold fill-slate-500 select-none"
-            >
-              7-SEG
-            </text>
-          </g>
-        );
-      }
-
       case 'hexDisplay': {
         const val = comp.state.hexVal ?? 0;
         const segs = val < 0 ? HEX_7SEG_DASH : HEX_7SEG_MAP[val] || HEX_7SEG_MAP[0];
@@ -5506,6 +5397,124 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={48} y={60} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">
               BCD={num % 16}
             </text>
+          </g>
+        );
+      }
+
+      case 'dipSwitch': {
+        // Logisim-evolution DipSwitch facing east: switch i+1 on row i, its output on the right
+        const n = getIoConfig(comp).size;
+        const bits = comp.state.dipBits ?? 0;
+        const h = 20 * (n + 1);
+        return (
+          <g filter="url(#gateShadow)">
+            <rect x={0} y={0} width={60} height={h} rx={4} fill="#b91c1c" stroke={isSelected ? '#3b82f6' : '#7f1d1d'} strokeWidth={strokeWidth} />
+            <text x={30} y={11} textAnchor="middle" className="text-[7px] font-mono font-bold fill-amber-300 select-none tracking-widest">
+              ON →
+            </text>
+            {Array.from({ length: n }, (_, i) => {
+              const on = ((bits >>> i) & 1) === 1;
+              const cy = 20 * (i + 1);
+              return (
+                <g key={i} onClick={(e) => handleToggleDipSwitch(e, comp.id, i)} className="cursor-pointer">
+                  <rect x={0} y={cy - 10} width={60} height={20} fill="transparent" />
+                  <text x={8} y={cy + 3} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-white select-none">
+                    {i + 1}
+                  </text>
+                  <rect x={16} y={cy - 6} width={28} height={12} rx={2} fill="#0f172a" stroke="#450a0a" strokeWidth={1} />
+                  <rect x={on ? 30 : 18} y={cy - 4} width={12} height={8} rx={1.5} fill={on ? '#f8fafc' : '#94a3b8'} stroke="#475569" strokeWidth={0.8} />
+                  <circle cx={52} cy={cy} r={2.5} fill={on ? '#22c55e' : '#7f1d1d'} />
+                </g>
+              );
+            })}
+          </g>
+        );
+      }
+
+      case 'hexDigit':
+      case 'sevenSegment': {
+        // Logisim SevenSegment.drawBase: segment a..g + DP, lit colour per settings
+        const lit = segmentsLit(comp);
+        const hex = comp.type === 'hexDigit';
+        const hasDp = comp.state.ioDp ?? true;
+        const onColor = comp.state.ioOnColor ?? (hex || comp.type === 'sevenSegment' ? '#f00000' : '#00ff00');
+        const offColor = '#2a1518';
+        const W = hex ? 60 : 72;
+        const H = hex ? 100 : 96;
+        // segments as the 7-segment part always drew them (hex digit: the same, 3px left and 3px down)
+        const dx = hex ? -3 : 0;
+        const dy = hex ? 3 : 0;
+        const segs: Array<[number, number, number, number]> = [
+          [28, 14, 26, 5], // a
+          [50, 19, 5, 22], // b
+          [50, 47, 5, 22], // c
+          [28, 69, 26, 5], // d
+          [27, 47, 5, 22], // e
+          [27, 19, 5, 22], // f
+          [28, 42, 26, 5], // g
+        ].map(([x, y, w, h]) => [x + dx, y + dy, w, h] as [number, number, number, number]);
+        const labels = hex ? (hasDp ? ['D', 'DP'] : ['D']) : ['A', 'B', 'C', 'D', 'E', 'F', 'G', ...(hasDp ? ['.'] : [])];
+        const labelY = (i: number) => (hex ? 30 + 30 * i : 10 + 10 * i);
+        return (
+          <g filter="url(#gateShadow)">
+            <rect x={hex ? 0 : 14} y={2} width={hex ? W : 56} height={H - 4} rx={6} fill="#090d16" stroke={isSelected ? '#3b82f6' : '#1e293b'} strokeWidth={isSelected ? 2 : 1.5} />
+            {labels.map((lbl, i) => (
+              <text key={lbl} x={hex ? 6 : 8} y={labelY(i) + 3} textAnchor={hex ? 'start' : 'middle'} className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
+                {lbl}
+              </text>
+            ))}
+            {segs.map(([x, y, w, h], i) => (
+              <rect key={i} x={x} y={y} width={w} height={h} rx={1.5} fill={lit[i] ? onColor : offColor} filter={lit[i] ? `drop-shadow(0 0 4px ${onColor})` : undefined} />
+            ))}
+            {hasDp && (
+              <circle cx={59 + dx} cy={71 + dy} r={3} fill={lit[7] ? onColor : offColor} filter={lit[7] ? `drop-shadow(0 0 4px ${onColor})` : undefined} />
+            )}
+            <text x={hex ? W / 2 + 6 : 42} y={H - 8} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-500 select-none">
+              {hex ? 'HEX' : comp.state.ioActiveLow ? '7-SEG CA' : '7-SEG'}
+            </text>
+          </g>
+        );
+      }
+
+      case 'ledBar':
+      case 'dotMatrix': {
+        // Logisim DotMatrixBase.paintInstance: dark field, one dot per cell (LED bar: 1 row of padded segments 3 dots tall)
+        const cfg = getIoConfig(comp);
+        const bar = comp.type === 'ledBar';
+        const cols = bar ? cfg.size : cfg.cols;
+        const rows = bar ? 1 : cfg.rows;
+        const cellH = bar ? 60 : 20;
+        const dots = matrixDots(comp);
+        const onColor = comp.state.ioOnColor ?? '#00ff00';
+        const offColor = '#4b5563';
+        const errColor = '#c00000';
+        const shape = bar ? 'padded' : comp.state.dotShape ?? 'square';
+        const cells: React.ReactNode[] = [];
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const v = dots[r * cols + c];
+            const fill = v === 1 ? onColor : v === 0 ? offColor : errColor;
+            const x = 20 * c;
+            const y = cellH * r;
+            const key = r * cols + c;
+            if (shape === 'circle') cells.push(<circle key={key} cx={x + 10} cy={y + 10} r={8} fill={fill} />);
+            else if (shape === 'padded') cells.push(<rect key={key} x={x + 4} y={y + cellH / 5} width={12} height={(cellH * 3) / 5} fill={fill} />);
+            else cells.push(<rect key={key} x={x} y={y} width={20} height={20} fill={fill} />);
+          }
+        }
+        return (
+          <g>
+            <rect x={0} y={0} width={20 * cols} height={cellH * rows} fill="#262b33" />
+            {cells}
+            <rect
+              x={0}
+              y={0}
+              width={20 * cols}
+              height={cellH * rows}
+              fill="none"
+              stroke={isSelected ? '#3b82f6' : bar ? 'none' : '#3f3f46'}
+              strokeWidth={isSelected ? 2.5 : 2}
+            />
           </g>
         );
       }
@@ -6752,7 +6761,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch4', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -6785,7 +6794,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'ledBar4', 'sevenSegment', 'hexDisplay', 'dotMatrix8x8', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
+      types: ['led', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
     },
     {
       id: 'audio',

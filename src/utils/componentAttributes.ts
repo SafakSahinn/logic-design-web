@@ -22,6 +22,10 @@ import {
   configureMem,
   configurePlexer,
   configureRam,
+  configureIo,
+  getIoConfig,
+  IO_MAX_SIZE,
+  type IoConfig,
   getRamConfig,
   RAM_ADDR_MAX,
   RAM_ADDR_MIN,
@@ -813,6 +817,21 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'random':
       list.push(randomWidthAttr, randomSeedAttr, triggerAttr);
       break;
+    case 'dipSwitch':
+      list.push(dipSizeAttr);
+      break;
+    case 'ledBar':
+      list.push(ledBarSizeAttr, ledBarModeAttr, ioSelectLocAttr, ioColorAttr);
+      break;
+    case 'dotMatrix':
+      list.push(matrixColsAttr, matrixRowsAttr, matrixInputAttr, ioSelectLocAttr, dotShapeAttr, ioColorAttr);
+      break;
+    case 'hexDigit':
+      list.push(ioDpAttr, ioColorAttr);
+      break;
+    case 'sevenSegment':
+      list.push(ioActiveAttr, ioDpAttr, ioColorAttr);
+      break;
   }
   if (MEM_TYPES.has(type) && !list.includes(triggerAttr)) list.push(triggerAttr);
   // Adder, subtractor, negator, absolute, square root: data width only
@@ -936,6 +955,175 @@ function reconfigureRam(c: CircuitComponentInstance, patch: Partial<RamConfig>):
   }
   return { comp: next, remap };
 }
+
+// ---- I/O parts (Logisim std/io, Aşama 3g): the part keeps its top-left corner; pins a smaller size removes are
+// named null (their wires stay as open ends), the other pins keep their ids and their wires follow them
+function reconfigureIo(c: CircuitComponentInstance, patch: Partial<IoConfig>): AttrEdit | null {
+  const cur = getIoConfig(c);
+  if ((Object.keys(patch) as (keyof IoConfig)[]).every((k) => cur[k] === patch[k])) return null;
+  const next = configureIo(c, patch);
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.outputs, ...c.inputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const IO_SIZE_OPTIONS = numberOptions(1, IO_MAX_SIZE);
+
+const dipSizeAttr: AttrDef = {
+  key: 'dipSize',
+  label: 'Anahtar sayısı',
+  kind: 'select',
+  title: 'Paketteki anahtar sayısı (1-32, Logisim-evolution "Number of switches"); her anahtarın kendi çıkışı var',
+  options: IO_SIZE_OPTIONS,
+  get: (c) => getIoConfig(c).size,
+  set: (c, v) => reconfigureIo(c, { size: Number(v) }),
+};
+
+const ledBarSizeAttr: AttrDef = {
+  key: 'ledBarSize',
+  label: 'Segment sayısı',
+  kind: 'select',
+  title: 'LED çubuktaki segment sayısı (1-32, Logisim-evolution "Number of segments")',
+  options: IO_SIZE_OPTIONS,
+  get: (c) => getIoConfig(c).size,
+  set: (c, v) => reconfigureIo(c, { size: Number(v) }),
+};
+
+const ledBarModeAttr: AttrDef = {
+  key: 'ledBarMode',
+  label: 'Giriş',
+  kind: 'buttons',
+  title: 'Ayrı: her segmente bir 1 bitlik giriş (D0 en soldaki). Tek tel: tek n bitlik giriş, bit 0 en sağdaki segment (Logisim-evolution "Input type")',
+  options: [
+    { value: 'separated', label: 'Ayrı' },
+    { value: 'oneWire', label: 'Tek tel' },
+  ],
+  get: (c) => getIoConfig(c).ledBarMode,
+  set: (c, v) => reconfigureIo(c, { ledBarMode: v as IoConfig['ledBarMode'] }),
+};
+
+const matrixColsAttr: AttrDef = {
+  key: 'matrixCols',
+  label: 'Sütun',
+  kind: 'select',
+  title: 'Sütun sayısı (1-32, Logisim "Matrix Columns")',
+  options: IO_SIZE_OPTIONS,
+  get: (c) => getIoConfig(c).cols,
+  set: (c, v) => reconfigureIo(c, { cols: Number(v) }),
+};
+
+const matrixRowsAttr: AttrDef = {
+  key: 'matrixRows',
+  label: 'Satır',
+  kind: 'select',
+  title: 'Satır sayısı (1-32, Logisim "Matrix Rows")',
+  options: IO_SIZE_OPTIONS,
+  get: (c) => getIoConfig(c).rows,
+  set: (c, v) => reconfigureIo(c, { rows: Number(v) }),
+};
+
+const matrixInputAttr: AttrDef = {
+  key: 'matrixInput',
+  label: 'Giriş',
+  kind: 'buttons',
+  title:
+    'Sütun: her sütuna satır sayısı kadar bitlik bir giriş, bit 0 en alttaki nokta. Satır: her satıra sütun sayısı kadar bitlik bir giriş, bit 0 en sağdaki nokta. ' +
+    'Seçim: C (sütun vektörü, bit 0 en sol) ve R (satır vektörü, en üst satır en yüksek bit); R biti 1 olan satırlar C\'yi gösterir (Logisim "Input Type")',
+  options: [
+    { value: 'column', label: 'Sütun' },
+    { value: 'row', label: 'Satır' },
+    { value: 'select', label: 'Seçim' },
+  ],
+  get: (c) => getIoConfig(c).matrixInput,
+  set: (c, v) => reconfigureIo(c, { matrixInput: v as IoConfig['matrixInput'] }),
+};
+
+const ioSelectLocAttr: AttrDef = {
+  key: 'ioSelectLoc',
+  label: 'Giriş kenarı',
+  kind: 'buttons',
+  title: 'Girişlerin bulunduğu kenar (Logisim-evolution "Select Location")',
+  options: [
+    { value: 'bl', label: 'Alt / Sol' },
+    { value: 'tr', label: 'Üst / Sağ' },
+  ],
+  // the one-row select matrix has its pins on both sides either way
+  visible: (c) => !(c.type === 'dotMatrix' && getIoConfig(c).matrixInput === 'select' && getIoConfig(c).rows === 1),
+  get: (c) => getIoConfig(c).selectLoc,
+  set: (c, v) => reconfigureIo(c, { selectLoc: v as 'bl' | 'tr' }),
+};
+
+const dotShapeAttr: AttrDef = {
+  key: 'dotShape',
+  label: 'Nokta şekli',
+  kind: 'buttons',
+  title: 'Noktaların çizim şekli (Logisim "Dot Shape")',
+  options: [
+    { value: 'square', label: 'Kare' },
+    { value: 'circle', label: 'Daire' },
+    { value: 'padded', label: 'Boşluklu kare' },
+  ],
+  get: (c) => c.state.dotShape ?? 'square',
+  set: (c, v) => ((c.state.dotShape ?? 'square') === v ? null : withState(c, { dotShape: v as 'square' | 'circle' | 'padded' })),
+};
+
+const ioDpAttr: AttrDef = {
+  key: 'ioDp',
+  label: 'Ondalık nokta',
+  kind: 'buttons',
+  title: 'DP girişi ve noktası (Logisim-evolution "Decimal Point"); kaldırılınca DP girişindeki tel açık uç olarak kalır',
+  options: [
+    { value: 'on', label: 'Var' },
+    { value: 'off', label: 'Yok' },
+  ],
+  get: (c) => (getIoConfig(c).dp ? 'on' : 'off'),
+  set: (c, v) => reconfigureIo(c, { dp: v === 'on' }),
+};
+
+const ioActiveAttr: AttrDef = {
+  key: 'ioActive',
+  label: 'Segment yanar',
+  kind: 'buttons',
+  title:
+    '1\'de (ortak katot, aktif yüksek) ya da 0\'da (ortak anot, aktif düşük) yanar (Logisim "Active On High"). Aktif düşükte 1 olmayan her giriş, açık uç dahil, segmenti yakar',
+  options: [
+    { value: 'high', label: "1'de (ortak katot)" },
+    { value: 'low', label: "0'da (ortak anot)" },
+  ],
+  get: (c) => (c.state.ioActiveLow ? 'low' : 'high'),
+  set: (c, v) => ((c.state.ioActiveLow ? 'low' : 'high') === v ? null : withState(c, { ioActiveLow: v === 'low' })),
+};
+
+/** Colours offered for a lit segment / dot (Logisim lets any colour; a colour from a .circ file is kept and listed) */
+export const IO_ON_COLORS = [
+  { value: '#f00000', label: 'Kırmızı' },
+  { value: '#00ff00', label: 'Yeşil' },
+  { value: '#3b82f6', label: 'Mavi' },
+  { value: '#fbbf24', label: 'Sarı' },
+  { value: '#f97316', label: 'Turuncu' },
+  { value: '#f8fafc', label: 'Beyaz' },
+];
+/** Default lit colour (Logisim: 7-segment / hex digit red 240,0,0; dot matrix / LED bar Color.GREEN) */
+export const ioDefaultOnColor = (type: ComponentType) => (type === 'sevenSegment' || type === 'hexDigit' ? '#f00000' : '#00ff00');
+
+const ioColorAttr: AttrDef = {
+  key: 'ioOnColor',
+  label: 'Renk',
+  kind: 'buttons',
+  title: 'Yanan segmentin / noktanın rengi (Logisim "On Color")',
+  options: (c) => {
+    const cur = c.state.ioOnColor;
+    const list: AttrOption[] = IO_ON_COLORS.map((o) => ({ ...o, swatch: o.value }));
+    if (cur && !list.some((o) => o.value === cur)) list.push({ value: cur, label: cur, swatch: cur });
+    return list;
+  },
+  get: (c) => c.state.ioOnColor ?? ioDefaultOnColor(c.type),
+  set: (c, v) => ((c.state.ioOnColor ?? ioDefaultOnColor(c.type)) === v ? null : withState(c, { ioOnColor: String(v) })),
+};
 
 const isEvo = (c: CircuitComponentInstance) => (c.state.memFlavor ?? 'logisim') === 'evolution';
 const isEdge = (c: CircuitComponentInstance) => {
