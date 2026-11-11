@@ -106,7 +106,6 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'demultiplexer' || n === 'demux') return 'demultiplexer';
   if (n === 'decoder') return 'decoder';
   if (n === 'priority encoder') return 'priorityEncoder';
-  if (n === 'alu' || n.includes('arithmetic logic unit')) return 'alu4';
 
   // Memory (Logisim std/memory)
   const mem = LOGISIM_MEM_TYPE[n];

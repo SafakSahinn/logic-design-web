@@ -37,8 +37,6 @@ import {
   simulateCircuit,
   simulateCircuitStep,
   CIRCUIT_PRESETS,
-  HEX_7SEG_MAP,
-  HEX_7SEG_DASH,
   CHIPTUNE_NOTE_FREQS,
   CHIPTUNE_NOTE_NAMES,
   generateTruthTable,
@@ -69,7 +67,6 @@ import {
   memRead,
   pinKey as plexerPinKey,
   plexerLayout,
-  RETIRED_PALETTE_TYPES,
   getIoConfig,
   matrixDots,
   segmentsLit,
@@ -169,8 +166,15 @@ import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/vcdGenerator';
 import MemoryHexEditor from './MemoryHexEditor';
 
-/** Parts whose contents the hex editor opens: parametric RAM / ROM and the old 16x4 ones */
-const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam', 'ram16x4', 'rom16x4']);
+/**
+ * A saved part this version can draw and simulate. Parts of an unknown type (the fixed 4-bit parts removed in
+ * Aşama 3h, a newer version, a hand-edited file) would crash the renderer, so loaders drop them.
+ */
+const isKnownPart = (c: CircuitComponentInstance | null | undefined): c is CircuitComponentInstance =>
+  !!c && (c.type === 'subcircuit' || !!COMPONENT_CATALOG[c.type]) && Array.isArray(c.inputs) && Array.isArray(c.outputs);
+
+/** Parts whose contents the hex editor opens */
+const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam']);
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
@@ -274,7 +278,6 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
-  dipSwitch4: { label: '4-Bit DIP SW', badge: 'DIP' },
   dipSwitch: { label: 'DIP Anahtar', badge: 'DIP' },
   clock: { label: 'Saat Sinyali', badge: 'CLK' },
   vcc: { label: 'Sabit 1 (High)', badge: 'VCC' },
@@ -282,16 +285,13 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   constant: { label: 'Sabit', badge: 'Const' },
   tunnel: { label: 'Kablosuz Tünel', badge: 'Net' },
   led: { label: 'LED Lamba' },
-  ledBar4: { label: '4-Bit LED Bar', badge: 'Bar' },
   sevenSegment: { label: '7-Segment', badge: 'LED' },
   sevenSeg: { label: '7-Segment', badge: 'LED' },
-  hexDisplay: { label: 'Hex Gösterge', badge: '4-Bit' },
   hexDigit: { label: 'Hex Gösterge', badge: 'HEX' },
   ledBar: { label: 'LED Çubuk', badge: 'Bar' },
   dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
-  dotMatrix8x8: { label: '8x8 Matris', badge: 'GPU' },
   rgbMatrix16x16: { label: '16x16 RGB Matris', badge: 'GPU' },
   asciiKeyboard: { label: 'ASCII Klavye', badge: 'KBD' },
   textLabel: { label: 'Metin Etiketi' },
@@ -299,17 +299,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   fullAdder: { label: 'Tam Toplayıcı', badge: 'FA' },
   halfSubtractor: { label: 'Yarım Çıkarıcı', badge: 'HS' },
   fullSubtractor: { label: 'Tam Çıkarıcı', badge: 'FS' },
-  mux2: { label: '2:1 MUX' },
-  mux4: { label: '4:1 MUX' },
-  mux8: { label: '8:1 MUX', badge: '~74HC151' },
-  demux2: { label: '1:2 DEMUX' },
-  demux4: { label: '1:4 DEMUX' },
-  decoder2to4: { label: '2:4 Decoder' },
-  decoder3to8: { label: '3:8 Decoder', badge: '~74HC238' },
   bcdTo7Seg: { label: 'BCD/Hex → 7-Seg', badge: 'Hex' },
-  priorityEncoder4to2: { label: '4:2 Kodlayıcı', badge: '~74HC148' },
-  comparator4: { label: 'Karşılaştırıcı', badge: '4-Bit' },
-  alu4: { label: '4-Bit ALU', badge: '4 İşlem' },
   splitter4: { label: "4'lü Paralel Geçiş", badge: '4×1' },
   splitter: { label: 'Splitter', badge: 'Ayırıcı' },
   bitExtender: { label: 'Bit Genişletici', badge: 'Extend' },
@@ -340,18 +330,10 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   counter: { label: 'Sayaç', badge: 'CTR' },
   shiftRegister: { label: 'Kaydırmalı Yazmaç', badge: 'SHR' },
   srLatch: { label: 'SR Mandal', badge: 'Latch' },
-  dFlipFlop: { label: 'D Flip-Flop', badge: 'D-FF' },
-  jkFlipFlop: { label: 'JK Flip-Flop', badge: 'JK-FF' },
-  tFlipFlop: { label: 'T Flip-Flop', badge: 'T-FF' },
-  register4: { label: '4-Bit Yazmaç', badge: 'D-REG' },
-  counter4: { label: '4-Bit Sayaç', badge: '0-15' },
-  shiftRegister4: { label: 'Kaydırmalı Yazmaç', badge: '~74HC194' },
   ram: { label: 'RAM', badge: 'RAM' },
   dualRam: { label: 'Çift Portlu RAM', badge: 'D-RAM' },
   rom: { label: 'ROM', badge: 'ROM' },
   random: { label: 'Rastgele Sayı', badge: 'RND' },
-  ram16x4: { label: '16x4 RAM', badge: 'Bellek' },
-  rom16x4: { label: '16x4 ROM', badge: 'Bellek' },
 };
 
 export interface LogicCircuitSimulatorProps {
@@ -666,9 +648,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [fpgaCopied, setFpgaCopied] = useState<boolean>(false);
 
   // Hex Memory Editor Modal state (RAM & ROM Matrix)
-  const [showHexModal, setShowHexModal] = useState<boolean>(false);
-  const [hexTargetCompId, setHexTargetCompId] = useState<string | null>(null);
-  const [hexDataBuffer, setHexDataBuffer] = useState<number[]>([]);
   // Hex editor of a parametric RAM / ROM (paged contents)
   const [memEditorCompId, setMemEditorCompId] = useState<string | null>(null);
 
@@ -944,7 +923,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           );
         const hasNotes = Array.isArray(data?.annotations) && data.annotations.length > 0;
         if (data && Array.isArray(data.components) && (data.components.length > 0 || hasNotes || hasSheetContent)) {
-          const refreshedComps = data.components.map((c: CircuitComponentInstance) =>
+          let droppedParts = 0;
+          const known = (list: CircuitComponentInstance[] = []) => {
+            const kept = list.filter(isKnownPart);
+            droppedParts += list.length - kept.length;
+            return kept;
+          };
+          const refreshedComps = known(data.components).map((c: CircuitComponentInstance) =>
             updatePinPositions({ ...c, x: snapTo10(c.x), y: snapTo10(c.y) })
           );
           const repaired = repairWires(data.wires || [], refreshedComps);
@@ -961,14 +946,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const activeEntry = { components: sim.components, wires: sim.wires, annotations: restoredAnnotations };
           setSheets(
             Array.isArray(data.sheets) && data.sheets.length > 0
-              ? data.sheets.map((sh: CircuitSheet) => (sh.id === restoredActiveId ? { ...sh, ...activeEntry } : sh))
+              ? data.sheets.map((sh: CircuitSheet) =>
+                  sh.id === restoredActiveId ? { ...sh, ...activeEntry } : { ...sh, components: known(sh.components) }
+                )
               : [{ id: 'sheet_1', name: 'Ana Devre', ...activeEntry }]
           );
           setActiveSheetId(restoredActiveId);
           setAnnotations(restoredAnnotations);
           restored = true;
           if (!urlPreset) {
-            showToast('Önceki çalışma oturumunuz otomatik olarak geri yüklendi.');
+            showToast(
+              droppedParts > 0
+                ? `Önceki çalışma oturumunuz geri yüklendi (${droppedParts} tanınmayan bileşen atlandı: eski sürümün sabit 4 bitlik parçaları artık yok, yerine ayarlanabilir parçaları kullanın).`
+                : 'Önceki çalışma oturumunuz otomatik olarak geri yüklendi.',
+              droppedParts > 0 ? 8000 : undefined
+            );
             return;
           }
         }
@@ -1190,15 +1182,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           toggledTo = (((next.state.dipBits ?? 0) >>> switchIdx) & 1) === 1;
           return next;
         }
-        if (c.id === compId) {
-          const switches = [...(c.state.dipSwitches || [false, false, false, false])];
-          switches[switchIdx] = !switches[switchIdx];
-          toggledTo = switches[switchIdx];
-          return {
-            ...c,
-            state: { ...c.state, dipSwitches: switches },
-          };
-        }
         return c;
       });
       playSwitchSound(toggledTo);
@@ -1315,9 +1298,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
         // Detect if there is an active clock / counter running in the circuit
         const clockComp = components.find((c) => c.type === 'clock');
-        const counterComp = components.find((c) => c.type === 'counter4');
+        const counterQ = components.find((c) => c.type === 'counter')?.outputs[0];
         const isClockOn = clockComp ? !!clockComp.state.on : true;
-        const currentCount = counterComp ? (counterComp.state.count ?? 0) : 0;
+        const currentCount = counterQ
+          ? (counterQ.bits ?? [counterQ.value]).reduce<number>((n, b, i) => n + (b === 1 ? 2 ** i : 0), 0)
+          : 0;
 
         // Ensure square wave oscillator and gain node exist
         if (!buzzerOscRef.current || !buzzerGainRef.current) {
@@ -2067,18 +2052,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       showToast('Tuvalde RAM veya ROM bileşeni bulunamadı.');
       return;
     }
-    if (target.type === 'ram' || target.type === 'rom' || target.type === 'dualRam') {
-      setMemEditorCompId(target.id);
-      return;
-    }
-
-    setHexTargetCompId(target.id);
-    const rawData = target.type === 'ram16x4' ? target.state.ramData : target.state.romData;
-    // Same contents the simulator uses for a part whose memory was never set
-    const fallback = target.type === 'ram16x4' ? Array.from({ length: 16 }, (_, i) => i) : [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
-    const initial = Array.isArray(rawData) && rawData.length === 16 ? [...rawData] : fallback;
-    setHexDataBuffer(initial);
-    setShowHexModal(true);
+    setMemEditorCompId(target.id);
   };
 
   // Save a parametric RAM / ROM's edited contents (all-zero pages are left out)
@@ -2093,29 +2067,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     setWires(sim.wires);
     setMemEditorCompId(null);
     showToast('Bellek içeriği güncellendi.');
-  };
-
-  // Save Hex Memory Editor Data
-  const handleSaveHexEditor = () => {
-    if (!hexTargetCompId) return;
-    recordHistory();
-    const updated = components.map((c) => {
-      if (c.id === hexTargetCompId) {
-        if (c.type === 'ram16x4') {
-          return { ...c, state: { ...c.state, ramData: [...hexDataBuffer] } };
-        }
-        if (c.type === 'rom16x4') {
-          return { ...c, state: { ...c.state, romData: [...hexDataBuffer] } };
-        }
-      }
-      return c;
-    });
-    // Re-simulate so the memory outputs show the new contents right away
-    const sim = simulateCircuit(updated, wires);
-    setComponents(sim.components);
-    setWires(sim.wires);
-    setShowHexModal(false);
-    showToast('Bellek verileri başarıyla güncellendi!');
   };
 
   // Run Testbench Handler
@@ -2315,7 +2266,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         let droppedParts = 0;
         const knownParts = (list: CircuitComponentInstance[] = []) =>
           list.filter((c) => {
-            const ok = !!c && (c.type === 'subcircuit' || !!COMPONENT_CATALOG[c.type]) && Array.isArray(c.inputs) && Array.isArray(c.outputs);
+            const ok = isKnownPart(c);
             if (!ok) droppedParts++;
             return ok;
           });
@@ -2715,10 +2666,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Turn another project sheet into a modular IC block and place on active canvas
   const handleAddSheetAsSubcircuit = (sheet: CircuitSheet) => {
     const inputComps = sheet.components.filter((c) =>
-      ['switch', 'pushbutton', 'clock', 'tunnel', 'dipSwitch4'].includes(c.type)
+      ['switch', 'pushbutton', 'clock', 'tunnel'].includes(c.type)
     );
     const outputComps = sheet.components.filter((c) =>
-      ['led', 'sevenSegment', 'hexDisplay', 'buzzer', 'probe', 'tunnel', 'ledBar4'].includes(c.type)
+      ['led', 'sevenSegment', 'buzzer', 'probe', 'tunnel'].includes(c.type)
     );
 
     if (inputComps.length === 0 && outputComps.length === 0) {
@@ -3245,7 +3196,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         }
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch4', 'dipSwitch', 'clock', 'asciiKeyboard'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -3397,7 +3348,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
         const w = c.inputs[0]?.width ?? 1;
         list.push({ key: c.id, name: `${name}${w > 1 ? `[${w}]` : ''} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output', width: w });
-      } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
+      } else if (c.type === 'srLatch' || FLIP_FLOP_TYPES.has(c.type)) {
         list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
       } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
         // Register / counter / random generator: Q; shift register: OUT (the first output); RAM / ROM: D
@@ -3405,32 +3356,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const port = c.type === 'shiftRegister' ? 'OUT' : c.type === 'ram' || c.type === 'rom' ? 'D' : c.type === 'dualRam' ? 'D0' : 'Q';
         list.push({ key: `${c.id}_q`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
         if (c.type === 'dualRam') list.push({ key: `${c.id}_q1`, name: `${name} D1${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
-      } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
-        list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_q2`, name: `${name} Q2`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_q3`, name: `${name} Q3`, color: colors[cIdx++ % colors.length], type: 'state' });
-      } else if (c.type === 'alu4') {
-        list.push({ key: `${c.id}_f0`, name: `${name} F0`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_f1`, name: `${name} F1`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_f2`, name: `${name} F2`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_f3`, name: `${name} F3`, color: colors[cIdx++ % colors.length], type: 'state' });
-        list.push({ key: `${c.id}_z`, name: `${name} Z`, color: colors[cIdx++ % colors.length], type: 'state' });
       } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
         // one bus trace: the switches (bit i = switch i+1), the LED bar inputs (D0.. or D) or the hex digit's D
         const w = c.type === 'hexDigit' ? 4 : getIoConfig(c).size;
         const port = c.type === 'dipSwitch' ? 'Q' : 'D';
         list.push({ key: `${c.id}_io`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: c.type === 'dipSwitch' ? 'input' : 'output', width: w });
-      } else if (c.type === 'dipSwitch4') {
-        list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'input' });
-        list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'input' });
-        list.push({ key: `${c.id}_q2`, name: `${name} Q2`, color: colors[cIdx++ % colors.length], type: 'input' });
-        list.push({ key: `${c.id}_q3`, name: `${name} Q3`, color: colors[cIdx++ % colors.length], type: 'input' });
-      } else if (c.type === 'ledBar4') {
-        list.push({ key: `${c.id}_d0`, name: `${name} D0`, color: colors[cIdx++ % colors.length], type: 'output' });
-        list.push({ key: `${c.id}_d1`, name: `${name} D1`, color: colors[cIdx++ % colors.length], type: 'output' });
-        list.push({ key: `${c.id}_d2`, name: `${name} D2`, color: colors[cIdx++ % colors.length], type: 'output' });
-        list.push({ key: `${c.id}_d3`, name: `${name} D3`, color: colors[cIdx++ % colors.length], type: 'output' });
       } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
         list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
       } else if (c.type === 'asciiKeyboard') {
@@ -3465,7 +3395,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[c.id] = c.inputs[0]?.value ?? 0;
         } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
           values[c.id] = c.outputs[0]?.value ?? 0;
-        } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
+        } else if (c.type === 'srLatch' || FLIP_FLOP_TYPES.has(c.type)) {
           values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
         } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
           (c.type === 'dualRam' ? [0, 1] : [0]).forEach((oi) => {
@@ -3473,17 +3403,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const w = o?.width ?? 1;
             values[`${c.id}_q${oi ? oi : ''}`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
           });
-        } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
-          values[`${c.id}_q0`] = c.outputs[0]?.value ?? 0;
-          values[`${c.id}_q1`] = c.outputs[1]?.value ?? 0;
-          values[`${c.id}_q2`] = c.outputs[2]?.value ?? 0;
-          values[`${c.id}_q3`] = c.outputs[3]?.value ?? 0;
-        } else if (c.type === 'alu4') {
-          values[`${c.id}_f0`] = c.outputs[0]?.value ?? 0;
-          values[`${c.id}_f1`] = c.outputs[1]?.value ?? 0;
-          values[`${c.id}_f2`] = c.outputs[2]?.value ?? 0;
-          values[`${c.id}_f3`] = c.outputs[3]?.value ?? 0;
-          values[`${c.id}_z`] = c.outputs[5]?.value ?? 0;
         } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
           const bits: SignalValue[] =
             c.type === 'dipSwitch'
@@ -3494,17 +3413,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   ? [...c.inputs[0].bits]
                   : Array<SignalValue>(c.inputs[0]?.width ?? 1).fill('X');
           values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 0;
-        } else if (c.type === 'dipSwitch4') {
-          const switches = c.state.dipSwitches || [false, false, false, false];
-          values[`${c.id}_q0`] = switches[0] ? 1 : 0;
-          values[`${c.id}_q1`] = switches[1] ? 1 : 0;
-          values[`${c.id}_q2`] = switches[2] ? 1 : 0;
-          values[`${c.id}_q3`] = switches[3] ? 1 : 0;
-        } else if (c.type === 'ledBar4') {
-          values[`${c.id}_d0`] = c.inputs[0]?.value ?? 0;
-          values[`${c.id}_d1`] = c.inputs[1]?.value ?? 0;
-          values[`${c.id}_d2`] = c.inputs[2]?.value ?? 0;
-          values[`${c.id}_d3`] = c.inputs[3]?.value ?? 0;
         } else if (c.type === 'asciiKeyboard') {
           values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
           values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
@@ -4564,46 +4472,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'dotMatrix8x8': {
-        const grid = comp.state.matrixGrid || Array(8).fill(null).map(() => Array(8).fill(false));
-        return (
-          <g filter="url(#gateShadow)">
-            {/* Dark Bezel / GPU Display Chassis */}
-            <rect x={0} y={0} width={120} height={124} rx={10} fill="#090d16" stroke={strokeColor} strokeWidth={strokeWidth} />
-            {/* Matrix Screen Glass */}
-            <rect x={12} y={8} width={96} height={96} rx={6} fill="#020617" stroke="#1e293b" strokeWidth={1.5} />
-
-            {/* Title / Header */}
-            <text x={60} y={6} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-500 select-none">
-              8x8 DOT MATRIX
-            </text>
-
-            {/* 64 LED Pixels (8x8) */}
-            {grid.map((row, rIdx) =>
-              row.map((isLit, cIdx) => {
-                const cx = 18 + cIdx * 12;
-                const cy = 14 + rIdx * 12;
-                return (
-                  <circle
-                    key={`${rIdx}_${cIdx}`}
-                    cx={cx}
-                    cy={cy}
-                    r={3.8}
-                    fill={isLit ? '#22c55e' : '#0f172a'}
-                    stroke={isLit ? '#4ade80' : '#1e293b'}
-                    strokeWidth={0.8}
-                    filter={isLit ? 'drop-shadow(0 0 2px #22c55e)' : undefined}
-                  />
-                );
-              })
-            )}
-
-            {/* Pin Row / Col indicators */}
-            <text x={6} y={118} className="text-[6.5px] font-mono font-extrabold fill-slate-500 select-none">R0-7</text>
-            <text x={108} y={118} textAnchor="end" className="text-[6.5px] font-mono font-extrabold fill-slate-500 select-none">C0-7</text>
-          </g>
-        );
-      }
 
       case 'rgbMatrix16x16': {
         const pixels = comp.state.rgbPixels || Array.from({ length: 16 }, () => Array(16).fill('#050505'));
@@ -4697,87 +4565,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'halfAdder':
       case 'fullAdder':
       case 'halfSubtractor':
-      case 'fullSubtractor':
-      case 'mux2':
-      case 'mux4':
-      case 'mux8':
-      case 'demux2':
-      case 'demux4':
-      case 'priorityEncoder4to2':
-      case 'shiftRegister4':
-      case 'ram16x4':
-      case 'rom16x4': {
+      case 'fullSubtractor': {
         const meta = COMPONENT_CATALOG[comp.type];
         const isFA = comp.type === 'fullAdder';
-        const isHA = comp.type === 'halfAdder';
         const isFS = comp.type === 'fullSubtractor';
         const isHS = comp.type === 'halfSubtractor';
-        const isMUX2 = comp.type === 'mux2';
-        const isMUX4 = comp.type === 'mux4';
-        const isMUX8 = comp.type === 'mux8';
-        const isDEMUX2 = comp.type === 'demux2';
-        const isDEMUX4 = comp.type === 'demux4';
-        const isPRI = comp.type === 'priorityEncoder4to2';
-        const isSHIFT = comp.type === 'shiftRegister4';
-        const isRAM = comp.type === 'ram16x4';
-        const isROM = comp.type === 'rom16x4';
 
-        // Generic parts carry no real chip code; '~' marks a close but simplified match
-        const icPartCode = isFA
-          ? 'FA-1'
-          : isFS
-          ? 'FS-1'
-          : isHS
-          ? 'HS-1'
-          : isHA
-          ? 'HA-1'
-          : isMUX8
-          ? '~74HC151'
-          : isMUX4
-          ? 'MUX-4'
-          : isMUX2
-          ? 'MUX-2'
-          : isDEMUX4
-          ? 'DMX-4'
-          : isDEMUX2
-          ? 'DMX-2'
-          : isPRI
-          ? '~74HC148'
-          : isSHIFT
-          ? '~74HC194'
-          : isRAM
-          ? 'RAM-64'
-          : isROM
-          ? 'ROM-64'
-          : 'IC';
-
-        const icTitle = isFA
-          ? 'FULL ADDER'
-          : isFS
-          ? 'FULL SUB'
-          : isHS
-          ? 'HALF SUB'
-          : isHA
-          ? 'HALF ADDER'
-          : isMUX8
-          ? '8:1 MUX'
-          : isMUX4
-          ? '4:1 MUX'
-          : isMUX2
-          ? '2:1 MUX'
-          : isDEMUX4
-          ? '1:4 DEMUX'
-          : isDEMUX2
-          ? '1:2 DEMUX'
-          : isPRI
-          ? 'PRIORITY ENC'
-          : isSHIFT
-          ? 'SHIFT REG'
-          : isRAM
-          ? '16x4 RAM'
-          : isROM
-          ? '16x4 ROM'
-          : 'LOGIC BLOCK';
+        // Generic parts carry no real chip code
+        const icPartCode = isFA ? 'FA-1' : isFS ? 'FS-1' : isHS ? 'HS-1' : 'HA-1';
+        const icTitle = isFA ? 'FULL ADDER' : isFS ? 'FULL SUB' : isHS ? 'HALF SUB' : 'HALF ADDER';
         const pinLegsCount = Math.floor(meta.width / 14);
 
         return (
@@ -4939,282 +4735,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'hexDisplay': {
-        const val = comp.state.hexVal ?? 0;
-        const segs = val < 0 ? HEX_7SEG_DASH : HEX_7SEG_MAP[val] || HEX_7SEG_MAP[0];
-        const onColor = '#ef4444';
-        const offColor = '#241215';
-        const onGlow = 'drop-shadow(0 0 6px #ef4444)';
 
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={14}
-              y={2}
-              width={52}
-              height={80}
-              rx={6}
-              fill="#090d16"
-              stroke={isSelected ? '#3b82f6' : '#1e293b'}
-              strokeWidth={isSelected ? 2 : 1.5}
-            />
 
-            <rect
-              x={18}
-              y={6}
-              width={44}
-              height={60}
-              rx={4}
-              fill="#020617"
-              stroke="#0f172a"
-              strokeWidth={1}
-            />
 
-            {['1', '2', '4', '8'].map((lbl, idx) => (
-              <text
-                key={lbl}
-                x={8}
-                y={20 + idx * 18}
-                textAnchor="middle"
-                className="text-[8px] font-mono font-bold fill-slate-400 select-none"
-              >
-                {lbl}
-              </text>
-            ))}
-
-            <rect
-              x={27}
-              y={12}
-              width={24}
-              height={4.5}
-              rx={2}
-              fill={segs.a ? onColor : offColor}
-              filter={segs.a ? onGlow : undefined}
-            />
-            <rect
-              x={47}
-              y={16.5}
-              width={4.5}
-              height={17}
-              rx={2}
-              fill={segs.b ? onColor : offColor}
-              filter={segs.b ? onGlow : undefined}
-            />
-            <rect
-              x={47}
-              y={38.5}
-              width={4.5}
-              height={17}
-              rx={2}
-              fill={segs.c ? onColor : offColor}
-              filter={segs.c ? onGlow : undefined}
-            />
-            <rect
-              x={27}
-              y={55.5}
-              width={24}
-              height={4.5}
-              rx={2}
-              fill={segs.d ? onColor : offColor}
-              filter={segs.d ? onGlow : undefined}
-            />
-            <rect
-              x={26.5}
-              y={38.5}
-              width={4.5}
-              height={17}
-              rx={2}
-              fill={segs.e ? onColor : offColor}
-              filter={segs.e ? onGlow : undefined}
-            />
-            <rect
-              x={26.5}
-              y={16.5}
-              width={4.5}
-              height={17}
-              rx={2}
-              fill={segs.f ? onColor : offColor}
-              filter={segs.f ? onGlow : undefined}
-            />
-            <rect
-              x={27}
-              y={34}
-              width={24}
-              height={4.5}
-              rx={2}
-              fill={segs.g ? onColor : offColor}
-              filter={segs.g ? onGlow : undefined}
-            />
-
-            <text
-              x={40}
-              y={75}
-              textAnchor="middle"
-              className="text-[9px] font-mono font-extrabold fill-red-400 select-none"
-            >
-              HEX: {val.toString(16).toUpperCase()} ({val})
-            </text>
-          </g>
-        );
-      }
-
-      case 'dFlipFlop': {
-        const qVal = comp.outputs[0]?.value === 1;
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={0}
-              y={0}
-              width={84}
-              height={74}
-              rx={6}
-              fill="url(#gateGrad)"
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <path d="M 0,46 L 8,52 L 0,58" fill="none" stroke="#475569" strokeWidth={1.8} />
-            <circle cx={81} cy={52} r={3.5} fill="#ffffff" stroke={strokeColor} strokeWidth={1.5} />
-
-            <text x={12} y={26} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              D
-            </text>
-            <text x={12} y={56} className="text-[10px] font-mono font-bold fill-slate-700 select-none">
-              CLK
-            </text>
-            <text x={68} y={26} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              Q
-            </text>
-            <text x={64} y={56} className="text-[11px] font-mono font-bold fill-slate-700 select-none">
-              Q'
-            </text>
-
-            <circle
-              cx={52}
-              cy={22}
-              r={4}
-              fill={qVal ? '#22c55e' : '#cbd5e1'}
-              stroke="#64748b"
-              strokeWidth={1}
-              filter={qVal ? 'drop-shadow(0 0 5px #22c55e)' : undefined}
-            />
-
-            <text x={42} y={42} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-700 select-none">
-              D-FF
-            </text>
-            <text x={42} y={52} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              ↑ kenar
-            </text>
-          </g>
-        );
-      }
-
-      case 'tFlipFlop': {
-        const qVal = comp.outputs[0]?.value === 1;
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={0}
-              y={0}
-              width={86}
-              height={82}
-              rx={6}
-              fill="url(#gateGrad)"
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            {/* Clock Dynamic Edge Arrow */}
-            <path d="M 0,52 L 8,58 L 0,64" fill="none" stroke="#475569" strokeWidth={1.8} />
-            {/* Inverting Bubble on Q' */}
-            <circle cx={83} cy={58} r={3.5} fill="#ffffff" stroke={strokeColor} strokeWidth={1.5} />
-
-            <text x={12} y={26} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              T
-            </text>
-            <text x={12} y={62} className="text-[10px] font-mono font-bold fill-cyan-700 select-none">
-              CLK
-            </text>
-            <text x={43} y={76} textAnchor="middle" className="text-[8px] font-mono font-bold fill-rose-600 select-none">
-              RST
-            </text>
-            <text x={70} y={26} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              Q
-            </text>
-            <text x={66} y={62} className="text-[11px] font-mono font-bold fill-slate-700 select-none">
-              Q'
-            </text>
-
-            <circle
-              cx={52}
-              cy={22}
-              r={4}
-              fill={qVal ? '#22c55e' : '#cbd5e1'}
-              stroke="#64748b"
-              strokeWidth={1}
-              filter={qVal ? 'drop-shadow(0 0 5px #22c55e)' : undefined}
-            />
-
-            <text x={43} y={40} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-700 select-none">
-              T-FF
-            </text>
-            <text x={43} y={50} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              TOGGLE
-            </text>
-          </g>
-        );
-      }
-
-      case 'jkFlipFlop': {
-        const qVal = comp.outputs[0]?.value === 1;
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={0}
-              y={0}
-              width={88}
-              height={84}
-              rx={6}
-              fill="url(#gateGrad)"
-              stroke={strokeColor}
-              strokeWidth={strokeWidth}
-            />
-            <path d="M 0,36 L 8,42 L 0,48" fill="none" stroke="#475569" strokeWidth={1.8} />
-            <circle cx={85} cy={60} r={3.5} fill="#ffffff" stroke={strokeColor} strokeWidth={1.5} />
-
-            <text x={12} y={24} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              J
-            </text>
-            <text x={12} y={46} className="text-[9px] font-mono font-bold fill-slate-700 select-none">
-              CLK
-            </text>
-            <text x={12} y={68} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              K
-            </text>
-            <text x={72} y={28} className="text-xs font-mono font-bold fill-slate-700 select-none">
-              Q
-            </text>
-            <text x={68} y={64} className="text-[11px] font-mono font-bold fill-slate-700 select-none">
-              Q'
-            </text>
-
-            <circle
-              cx={54}
-              cy={24}
-              r={4}
-              fill={qVal ? '#22c55e' : '#cbd5e1'}
-              stroke="#64748b"
-              strokeWidth={1}
-              filter={qVal ? 'drop-shadow(0 0 5px #22c55e)' : undefined}
-            />
-
-            <text x={44} y={54} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-700 select-none">
-              JK-FF
-            </text>
-            <text x={44} y={64} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              ↑ kenar
-            </text>
-          </g>
-        );
-      }
 
       case 'srLatch': {
         const qVal = comp.outputs[0]?.value === 1;
@@ -5262,98 +4785,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'decoder2to4': {
-        const enVal = comp.inputs[0]?.value === 1;
-        const a0 = comp.inputs[1]?.value === 1;
-        const a1 = comp.inputs[2]?.value === 1;
-        const selIdx = enVal ? (a0 ? 1 : 0) + (a1 ? 2 : 0) : -1;
 
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <g key={i}>
-                <rect x={14 + i * 14} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                <rect x={14 + i * 14} y={82} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={88} height={80} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,36 A 6,6 0 0,0 0,48 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
-
-            <text x={12} y={19} className="text-[9px] font-mono font-bold fill-slate-300 select-none">EN</text>
-            <text x={12} y={45} className="text-[9px] font-mono font-bold fill-slate-300 select-none">A0</text>
-            <text x={12} y={69} className="text-[9px] font-mono font-bold fill-slate-300 select-none">A1</text>
-
-            {['Y0', 'Y1', 'Y2', 'Y3'].map((lbl, idx) => (
-              <text
-                key={lbl}
-                x={74}
-                y={19 + idx * 18}
-                textAnchor="end"
-                className={`text-[9px] font-mono font-extrabold select-none ${
-                  selIdx === idx ? 'fill-emerald-400' : 'fill-slate-400'
-                }`}
-              >
-                {lbl}
-              </text>
-            ))}
-
-            <text x={44} y={40} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-indigo-300 select-none">
-              DEC 2:4
-            </text>
-            <text x={44} y={50} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              2:4 DECODER
-            </text>
-          </g>
-        );
-      }
-
-      case 'decoder3to8': {
-        const enVal = comp.inputs[0]?.value === 1;
-        const a0 = comp.inputs[1]?.value === 1;
-        const a1 = comp.inputs[2]?.value === 1;
-        const a2 = comp.inputs[3]?.value === 1;
-        const selIdx = enVal ? (a0 ? 1 : 0) + (a1 ? 2 : 0) + (a2 ? 4 : 0) : -1;
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <g key={i}>
-                <rect x={14 + i * 14} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                <rect x={14 + i * 14} y={114} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={96} height={112} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,50 A 6,6 0 0,0 0,62 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
-
-            <text x={12} y={18} className="text-[8.5px] font-mono font-bold fill-slate-300 select-none">EN</text>
-            <text x={12} y={43} className="text-[8.5px] font-mono font-bold fill-slate-300 select-none">A0</text>
-            <text x={12} y={68} className="text-[8.5px] font-mono font-bold fill-slate-300 select-none">A1</text>
-            <text x={12} y={93} className="text-[8.5px] font-mono font-bold fill-slate-300 select-none">A2</text>
-
-            {[0, 1, 2, 3, 4, 5, 6, 7].map((idx) => (
-              <text
-                key={idx}
-                x={84}
-                y={18 + idx * 13}
-                textAnchor="end"
-                className={`text-[8.5px] font-mono font-extrabold select-none ${
-                  selIdx === idx ? 'fill-emerald-400' : 'fill-slate-400'
-                }`}
-              >
-                Y{idx}
-              </text>
-            ))}
-
-            <text x={48} y={54} textAnchor="middle" className="text-[9.5px] font-mono font-extrabold fill-indigo-300 select-none">
-              ~74HC238
-            </text>
-            <text x={48} y={66} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">
-              3:8 DEC
-            </text>
-          </g>
-        );
-      }
 
       case 'bcdTo7Seg': {
         const inA = comp.inputs[0]?.value === 1;
@@ -5523,66 +4955,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'dipSwitch4': {
-        const switches = comp.state.dipSwitches || [false, false, false, false];
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={0}
-              y={0}
-              width={84}
-              height={86}
-              rx={6}
-              fill="#b91c1c"
-              stroke={isSelected ? '#3b82f6' : '#7f1d1d'}
-              strokeWidth={strokeWidth}
-            />
-            <text x={42} y={11} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none tracking-widest">
-              DIP-4 SW
-            </text>
-            <text x={18} y={11} className="text-[6.5px] font-mono font-bold fill-red-200 select-none">
-              ON
-            </text>
-
-            {[0, 1, 2, 3].map((idx) => {
-              const isOn = switches[idx];
-              const yPos = 16 + idx * 18;
-              return (
-                <g key={idx} onClick={(e) => handleToggleDipSwitch(e, comp.id, idx)} className="cursor-pointer group">
-                  <rect x={16} y={yPos - 2} width={40} height={14} rx={3} fill="#0f172a" stroke="#450a0a" strokeWidth={1} />
-                  <rect
-                    x={isOn ? 38 : 18}
-                    y={yPos}
-                    width={16}
-                    height={10}
-                    rx={2}
-                    fill={isOn ? '#f8fafc' : '#cbd5e1'}
-                    stroke="#475569"
-                    strokeWidth={0.8}
-                    filter="drop-shadow(0 1px 2px rgba(0,0,0,0.4))"
-                  />
-                  <line x1={isOn ? 44 : 24} y1={yPos + 2} x2={isOn ? 44 : 24} y2={yPos + 8} stroke="#94a3b8" strokeWidth={0.8} />
-                  <line x1={isOn ? 48 : 28} y1={yPos + 2} x2={isOn ? 48 : 28} y2={yPos + 8} stroke="#94a3b8" strokeWidth={0.8} />
-
-                  <text x={10} y={yPos + 8} textAnchor="middle" className="text-[8px] font-mono font-bold fill-white select-none">
-                    {idx + 1}
-                  </text>
-                  <text x={64} y={yPos + 8} className="text-[8.5px] font-mono font-bold fill-white select-none">
-                    Q{idx}
-                  </text>
-                  <circle
-                    cx={76}
-                    cy={yPos + 5}
-                    r={2.5}
-                    fill={isOn ? '#22c55e' : '#7f1d1d'}
-                    filter={isOn ? 'drop-shadow(0 0 4px #22c55e)' : undefined}
-                  />
-                </g>
-              );
-            })}
-          </g>
-        );
-      }
 
       case 'asciiKeyboard': {
         const char = comp.state.asciiChar ?? 'A';
@@ -5648,224 +5020,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
-      case 'ledBar4': {
-        const in0 = comp.inputs[0]?.value === 1;
-        const in1 = comp.inputs[1]?.value === 1;
-        const in2 = comp.inputs[2]?.value === 1;
-        const in3 = comp.inputs[3]?.value === 1;
-        const bits = [in0, in1, in2, in3];
-        return (
-          <g filter="url(#gateShadow)">
-            <rect
-              x={0}
-              y={0}
-              width={76}
-              height={86}
-              rx={6}
-              fill="#0f172a"
-              stroke={isSelected ? '#3b82f6' : '#334155'}
-              strokeWidth={strokeWidth}
-            />
-            <text x={38} y={11} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none tracking-wider">
-              LED BAR-4
-            </text>
 
-            {bits.map((active, idx) => {
-              const yPos = 16 + idx * 18;
-              return (
-                <g key={idx}>
-                  <text x={12} y={yPos + 9} className="text-[8.5px] font-mono font-bold fill-slate-400 select-none">
-                    D{idx}
-                  </text>
-                  <rect
-                    x={28}
-                    y={yPos}
-                    width={40}
-                    height={12}
-                    rx={2.5}
-                    fill={active ? '#22c55e' : '#1e293b'}
-                    stroke={active ? '#16a34a' : '#334155'}
-                    strokeWidth={1}
-                    filter={active ? 'drop-shadow(0 0 6px #22c55e)' : undefined}
-                  />
-                  {active && (
-                    <rect x={30} y={yPos + 2} width={36} height={3} rx={1} fill="#86efac" opacity={0.6} />
-                  )}
-                </g>
-              );
-            })}
-          </g>
-        );
-      }
 
-      case 'comparator4': {
-        // Highlights follow the output pins, so x / E inputs light nothing
-        const gt = comp.outputs[0]?.value === 1;
-        const eq = comp.outputs[1]?.value === 1;
-        const lt = comp.outputs[2]?.value === 1;
-        const aVal = pinsNumber(comp.inputs.slice(0, 4));
-        const bVal = pinsNumber(comp.inputs.slice(4, 8));
 
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <g key={i}>
-                <rect x={14 + i * 12} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={96} height={86} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,39 A 6,6 0 0,0 0,51 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
 
-            <text x={12} y={20} className="text-[8px] font-mono font-bold fill-slate-400 select-none">A[3:0]</text>
-            <text x={48} y={82} textAnchor="middle" className="text-[8px] font-mono font-bold fill-slate-400 select-none">B[3:0]</text>
-
-            <text x={84} y={25} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${gt ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &gt; B</text>
-            <text x={84} y={48} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${eq ? 'fill-emerald-400' : 'fill-slate-500'}`}>A = B</text>
-            <text x={84} y={71} textAnchor="end" className={`text-[8.5px] font-mono font-extrabold select-none ${lt ? 'fill-emerald-400' : 'fill-slate-500'}`}>A &lt; B</text>
-
-            <text x={44} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              ~74HC85
-            </text>
-            <text x={44} y={48} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              4-BIT CMP
-            </text>
-            <text x={44} y={60} textAnchor="middle" className="text-[8px] font-mono font-bold fill-amber-300 select-none">
-              {numText(aVal)} vs {numText(bVal)}
-            </text>
-          </g>
-        );
-      }
-
-      case 'counter4': {
-        const count = comp.state.count ?? 0;
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <g key={i}>
-                <rect x={14 + i * 13} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                <rect x={14 + i * 13} y={86} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={90} height={84} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,38 A 6,6 0 0,0 0,50 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
-
-            <text x={12} y={33} className="text-[9px] font-mono font-bold fill-slate-300 select-none">CLK</text>
-            <text x={12} y={63} className="text-[9px] font-mono font-bold fill-slate-300 select-none">RST</text>
-
-            {['Q0', 'Q1', 'Q2', 'Q3'].map((lbl, idx) => {
-              const bitVal = ((count >> idx) & 1) === 1;
-              return (
-                <text
-                  key={lbl}
-                  x={76}
-                  y={19 + idx * 20}
-                  textAnchor="end"
-                  className={`text-[9px] font-mono font-extrabold select-none ${
-                    bitVal ? 'fill-emerald-400' : 'fill-slate-500'
-                  }`}
-                >
-                  {lbl}
-                </text>
-              );
-            })}
-
-            <text x={42} y={36} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              CNT-4
-            </text>
-            <text x={42} y={48} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              4-BIT CTR
-            </text>
-            <rect x={26} y={54} width={32} height={18} rx={3} fill="#020617" stroke="#334155" strokeWidth={1} />
-            <text x={42} y={67} textAnchor="middle" className="text-xs font-mono font-extrabold fill-emerald-400 select-none">
-              {count.toString(16).toUpperCase()} ({count})
-            </text>
-          </g>
-        );
-      }
-
-      case 'alu4': {
-        // Numbers come from the pins: an undefined bit shows '?' (aluResult is not updated then)
-        const aVal = pinsNumber(comp.inputs.slice(0, 4));
-        const cinVal = pinsNumber([comp.inputs[4]]);
-        const bVal = pinsNumber(comp.inputs.slice(5, 9));
-        const mode = pinsNumber([comp.inputs[9], comp.inputs[10]]);
-        const modeLabels = ['ADD (A+B)', 'SUB (A-B)', 'AND (A&B)', 'OR (A|B)'];
-        const resVal = pinsNumber(comp.outputs.slice(0, 4));
-
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-              <g key={i}>
-                <rect x={12 + i * 12} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                <rect x={12 + i * 12} y={96} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={104} height={94} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,43 A 6,6 0 0,0 0,55 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
-
-            <text x={12} y={18} className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">A[3:0]</text>
-            <text x={12} y={80} className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">Cin</text>
-            <text x={52} y={92} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">B[3:0]</text>
-            <text x={52} y={12} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-cyan-400 select-none">S1 S0</text>
-
-            <text x={94} y={20} textAnchor="end" className="text-[7.5px] font-mono font-bold fill-emerald-400 select-none">F[3:0]</text>
-            <text x={94} y={80} textAnchor="end" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">Cout</text>
-            <text x={94} y={92} textAnchor="end" className="text-[7.5px] font-mono font-bold fill-purple-300 select-none">Z</text>
-
-            <text x={52} y={26} textAnchor="middle" className="text-[7px] font-mono font-bold fill-slate-400 select-none">A={numText(aVal)} B={numText(bVal)} (Ci={numText(cinVal)})</text>
-            <text x={52} y={38} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              ALU-4
-            </text>
-            <text x={52} y={49} textAnchor="middle" className="text-[7.5px] font-mono font-extrabold fill-yellow-300 select-none">
-              {mode === null ? 'S1 S0 = ?' : modeLabels[mode]}
-            </text>
-            <rect x={32} y={56} width={40} height={18} rx={3} fill="#020617" stroke="#334155" strokeWidth={1} />
-            <text x={52} y={69} textAnchor="middle" className="text-xs font-mono font-black fill-emerald-400 select-none">
-              {resVal === null ? 'F=?' : `F=${resVal.toString(16).toUpperCase()} (${resVal})`}
-            </text>
-          </g>
-        );
-      }
-
-      case 'register4': {
-        const val = comp.state.regVal ?? 0;
-        const we = comp.inputs[5]?.value === 1;
-
-        return (
-          <g filter="url(#gateShadow)">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <g key={i}>
-                <rect x={12 + i * 13} y={-4} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-                <rect x={12 + i * 13} y={86} width={5} height={6} rx={1} fill="url(#icPin)" stroke="#64748b" strokeWidth={0.5} />
-              </g>
-            ))}
-            <rect x={0} y={2} width={92} height={84} rx={6} fill="url(#icBody)" stroke={strokeColor} strokeWidth={strokeWidth} />
-            <path d="M 0,38 A 6,6 0 0,0 0,50 Z" fill="#020617" stroke="#334155" strokeWidth={1} />
-            <circle cx={10} cy={10} r={2} fill="#020617" stroke="#1e293b" strokeWidth={0.8} />
-
-            <text x={12} y={18} className="text-[8px] font-mono font-bold fill-slate-400 select-none">D[3:0]</text>
-            <text x={28} y={80} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-cyan-400 select-none">CLK</text>
-            <text x={50} y={80} textAnchor="middle" className={`text-[7.5px] font-mono font-bold select-none ${we ? 'fill-emerald-400' : 'fill-slate-500'}`}>WE</text>
-            <text x={72} y={80} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-rose-400 select-none">RST</text>
-
-            <text x={82} y={18} textAnchor="end" className="text-[8px] font-mono font-bold fill-emerald-400 select-none">Q[3:0]</text>
-
-            <text x={46} y={35} textAnchor="middle" className="text-[10px] font-mono font-extrabold fill-blue-300 select-none">
-              REG-4
-            </text>
-            <text x={46} y={46} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-slate-400 select-none">
-              4-BIT REGISTER
-            </text>
-            <rect x={28} y={52} width={36} height={18} rx={3} fill="#020617" stroke="#334155" strokeWidth={1} />
-            <text x={46} y={65} textAnchor="middle" className="text-xs font-mono font-black fill-emerald-400 select-none">
-              Q={val.toString(16).toUpperCase()} ({val})
-            </text>
-          </g>
-        );
-      }
 
       case 'splitter': {
         // Logisim SplitterPainter (facing east): combined end lead, a spine, one lead per end and its bit range
@@ -6692,7 +5850,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     // 1. Standard Components
     Object.values(COMPONENT_CATALOG).forEach((meta) => {
-      if (meta.type === 'subcircuit' || RETIRED_PALETTE_TYPES.has(meta.type)) return;
+      if (meta.type === 'subcircuit') return;
       if (!q || has(meta.name) || has(meta.type) || has(meta.description)) {
         items.push({
           id: meta.type,
@@ -9117,7 +8275,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <>
                   {Object.values(COMPONENT_CATALOG)
                     .filter((meta) => {
-                      if (meta.type === 'subcircuit' || RETIRED_PALETTE_TYPES.has(meta.type)) return false;
+                      if (meta.type === 'subcircuit') return false;
                       if (paletteSearch.trim()) {
                         const q = paletteSearch.toLowerCase();
                         return (
@@ -13094,216 +12252,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             />
           ) : null;
         })()}
-
-      {/* Hex Memory Matrix Editor Modal (16x4 RAM & ROM) */}
-      {showHexModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-xl w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
-            {/* Header */}
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-cyan-50 to-sky-50">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-sky-500 text-white rounded-2xl shadow-xs">
-                  <Binary className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                    <span>RAM / ROM İnteraktif Hex Bellek Editörü</span>
-                    <span className="px-2 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-mono font-bold rounded-full">
-                      16x4-Bit
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    Hafıza hücrelerini canlı olarak onaltılık (Hex) veya ikilik (Bin) formatında düzenleyin.
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowHexModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-xl cursor-pointer transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Quick Actions Bar */}
-            <div className="p-3 bg-slate-100/70 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  onClick={() => setHexDataBuffer(Array(16).fill(0))}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
-                >
-                  0x0 Sıfırla
-                </button>
-                <button
-                  onClick={() => setHexDataBuffer(Array.from({ length: 16 }, (_, i) => i % 16))}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
-                >
-                  Sayıcı (0..F)
-                </button>
-                <button
-                  onClick={() =>
-                    setHexDataBuffer(Array.from({ length: 16 }, () => Math.floor(Math.random() * 16)))
-                  }
-                  className="px-2.5 py-1 bg-white hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
-                >
-                  Rastgele
-                </button>
-                <div className="h-4 w-px bg-slate-300 mx-1 hidden sm:block" />
-                <button
-                  onClick={() =>
-                    setHexDataBuffer([9, 9, 15, 9, 15, 7, 9, 15, 11, 15, 15, 15, 4, 15, 15, 15])
-                  }
-                  className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg text-xs font-bold border border-amber-300 transition-colors cursor-pointer flex items-center gap-1"
-                  title="Super Mario Bros İntro Teması"
-                >
-                  <span>🍄 Mario</span>
-                </button>
-                <button
-                  onClick={() =>
-                    setHexDataBuffer([4, 4, 4, 7, 7, 11, 11, 10, 9, 8, 14, 14, 11, 11, 15, 15])
-                  }
-                  className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-lg text-xs font-bold border border-blue-300 transition-colors cursor-pointer flex items-center gap-1"
-                  title="Star Wars Fanfare Ana Teması"
-                >
-                  <span>⚔️ Star Wars</span>
-                </button>
-                <button
-                  onClick={() =>
-                    setHexDataBuffer([9, 6, 7, 8, 7, 6, 5, 5, 7, 9, 8, 7, 6, 7, 8, 9])
-                  }
-                  className="px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-900 rounded-lg text-xs font-bold border border-purple-300 transition-colors cursor-pointer flex items-center gap-1"
-                  title="Tetris (Korobeiniki) Teması"
-                >
-                  <span>🧱 Tetris</span>
-                </button>
-              </div>
-
-              <button
-                onClick={() => {
-                  const hexStr = hexDataBuffer.map((b) => b.toString(16).toUpperCase()).join(' ');
-                  navigator.clipboard.writeText(hexStr);
-                  showToast('Hex dizesi panoya kopyalandı!');
-                }}
-                className="px-2.5 py-1 bg-white hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 flex items-center gap-1 transition-colors cursor-pointer"
-              >
-                <Copy className="w-3 h-3 text-slate-500" />
-                <span>Hex Kopyala</span>
-              </button>
-            </div>
-
-            {/* Memory Matrix Table */}
-            <div className="p-5 overflow-y-auto max-h-96 space-y-3">
-              <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner">
-                <table className="w-full text-xs font-mono">
-                  <thead className="bg-slate-100 border-b border-slate-200 text-slate-700 text-[11px]">
-                    <tr>
-                      <th className="p-2.5 text-center w-16">Adres</th>
-                      <th className="p-2.5 text-center">Hex (0-F)</th>
-                      <th className="p-2.5 text-center">İkilik (Bin)</th>
-                      <th className="p-2.5 text-center">Onluk (Dec)</th>
-                      <th className="p-2.5 text-center text-amber-700 bg-amber-50/50">Nota (Chiptune)</th>
-                      <th className="p-2.5 text-center w-24">Hızlı Ayar</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {hexDataBuffer.map((val, addr) => {
-                      const hexChar = val.toString(16).toUpperCase();
-                      const binStr = val.toString(2).padStart(4, '0');
-                      return (
-                        <tr key={addr} className="hover:bg-sky-50/50 transition-colors">
-                          <td className="p-2 text-center text-slate-400 font-bold bg-slate-50/50">
-                            0x{addr.toString(16).toUpperCase()}
-                          </td>
-                          <td className="p-2 text-center">
-                            <input
-                              type="text"
-                              value={hexChar}
-                              onFocus={(e) => e.target.select()}
-                              onChange={(e) => {
-                                // The newest typed hex digit replaces the cell; anything else is ignored
-                                const typed = e.target.value.replace(/[^0-9a-fA-F]/g, '');
-                                if (!typed) return;
-                                const nextVal = parseInt(typed.slice(-1), 16);
-                                setHexDataBuffer((prev) => {
-                                  const n = [...prev];
-                                  n[addr] = nextVal;
-                                  return n;
-                                });
-                              }}
-                              className="w-10 text-center py-1 bg-white border border-slate-300 rounded-lg font-black text-sky-950 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-200"
-                            />
-                          </td>
-                          <td className="p-2 text-center text-slate-600 font-bold">{binStr}</td>
-                          <td className="p-2 text-center text-slate-500">{val}</td>
-                          <td className="p-2 text-center">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              val === 15
-                                ? 'bg-slate-100 text-slate-400'
-                                : 'bg-amber-100/80 text-amber-900 border border-amber-200'
-                            }`}>
-                              {CHIPTUNE_NOTE_NAMES[val] || 'Bilinmiyor'}
-                            </span>
-                          </td>
-                          <td className="p-2 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                onClick={() => {
-                                  setHexDataBuffer((prev) => {
-                                    const n = [...prev];
-                                    n[addr] = (n[addr] + 1) % 16;
-                                    return n;
-                                  });
-                                }}
-                                className="w-6 h-6 rounded-md bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-900 font-bold text-xs flex items-center justify-center cursor-pointer"
-                              >
-                                +
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setHexDataBuffer((prev) => {
-                                    const n = [...prev];
-                                    n[addr] = (n[addr] - 1 + 16) % 16;
-                                    return n;
-                                  });
-                                }}
-                                className="w-6 h-6 rounded-md bg-slate-100 hover:bg-sky-100 text-slate-700 hover:text-sky-900 font-bold text-xs flex items-center justify-center cursor-pointer"
-                              >
-                                -
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-              <span className="text-[11px] text-slate-500">
-                * Değişiklikler kaydedildiğinde bellek verileri devre simülasyonuna anında yansır.
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowHexModal(false)}
-                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs rounded-xl cursor-pointer transition-colors"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={handleSaveHexEditor}
-                  className="px-5 py-2 bg-sky-600 hover:bg-sky-700 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-2xs flex items-center gap-1.5"
-                >
-                  <Check className="w-4 h-4" />
-                  <span>Belleğe Yaz & Kaydet</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Automated Test Vector / Testbench Runner Modal */}
       {showTestbenchModal && (

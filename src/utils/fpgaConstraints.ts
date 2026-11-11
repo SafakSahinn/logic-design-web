@@ -132,11 +132,11 @@ export function generateFpgaConstraints(
     if (type === 'clock') {
       if (!clockPort) clockPort = p.name;
       else unassigned.push(p.name);
-    } else if (type === 'switch' || type === 'dipSwitch4' || type === 'dipSwitch') {
+    } else if (type === 'switch' || type === 'dipSwitch') {
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
-    } else if (type === 'led' || type === 'probe' || type === 'ledBar4' || type === 'ledBar') {
+    } else if (type === 'led' || type === 'probe' || type === 'ledBar') {
       assign('LED çıkışları', pools.led, p);
     } else if (type === 'sevenSegment' && !sevenSegUsed) {
       sevenSegUsed = true;

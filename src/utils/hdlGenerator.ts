@@ -171,8 +171,8 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Netlist
 // ---------------------------------------------------------------------------
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'dipSwitch', 'asciiKeyboard'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'hexDigit', 'ledBar4', 'ledBar', 'dotMatrix8x8', 'dotMatrix', 'rgbMatrix16x16'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbMatrix16x16'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -415,7 +415,7 @@ function buildModule(
       const pn = names.make(/clk|saat|clock/i.test(label) ? label : `clk_${label}`, 'clk');
       addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type } });
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
-    } else if (c.type === 'dipSwitch4' || c.type === 'dipSwitch') {
+    } else if (c.type === 'dipSwitch') {
       // one input port, bit i = switch i+1
       const pn = names.make(`in_${label}`, 'in_dip');
       addPort({ name: pn, dir: 'in', width: c.outputs.length, source: { compId: c.id, type: c.type } });
@@ -766,10 +766,6 @@ function buildModule(
     const connectedIns = c.inputs.filter((p) => isConnected(p.id) || portBound.has(p.id)).map((p) => inputExpr(p.id));
     // Data input i of a gate: a vector for a wide gate (open bits 0, noted)
     const gateIn = (i: number) => (gateW > 1 ? compose(wideBits(i)) : inp(i));
-    // Open pins of a 4-bit data / address group: the simulator never stores an undefined word and
-    // a RAM / ROM ignores an undefined address
-    const openNibble = (from: number) =>
-      [0, 1, 2, 3].map((i) => c.inputs[from + i]).filter((p) => p && isFloating(p.id)).map((p) => p.name);
     body.push(L.comment(`${c.label || c.type} (${c.type})`));
     const noteAt = body.length;
 
@@ -841,73 +837,14 @@ function buildModule(
         emit(out[1], L.or([L.and([L.not(a), b]), L.and([L.not(L.xor([a, b])), bi])]));
         break;
       }
-      case 'mux2':
-        emit(out[0], L.mux(inp(2), inp(1), inp(0)));
-        break;
-      case 'mux4':
-        emit(out[0], L.mux(inp(5), L.mux(inp(4), inp(3), inp(2)), L.mux(inp(4), inp(1), inp(0))));
-        break;
-      case 'mux8': {
-        const d = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => inp(i));
-        const [s0, s1, s2] = [inp(8), inp(9), inp(10)];
-        const m2 = (i: number) => L.mux(s0, d[i + 1], d[i]);
-        const m4 = (i: number) => L.mux(s1, m2(i + 2), m2(i));
-        const y = names.make(`${nm}_sel`, 'sel');
-        declare(y);
-        emit(y, L.mux(s2, m4(4), m4(0)));
-        if (out[0]) emit(out[0], y);
-        if (out[1]) emit(out[1], L.not(y));
-        break;
-      }
-      case 'demux2':
-        emit(out[0], L.and([inp(0), L.not(inp(1))]));
-        emit(out[1], L.and([inp(0), inp(1)]));
-        break;
-      case 'demux4': {
-        const [dd, s0, s1] = [inp(0), inp(1), inp(2)];
-        for (let i = 0; i < 4; i++) {
-          if (out[i]) emit(out[i], L.and([dd, i & 1 ? s0 : L.not(s0), i & 2 ? s1 : L.not(s1)]));
-        }
-        break;
-      }
-      case 'decoder2to4':
-      case 'decoder3to8': {
-        const bits = c.type === 'decoder2to4' ? 2 : 3;
-        const en = inp(0, L.one); // unconnected enable = enabled
-        for (let i = 0; i < 1 << bits; i++) {
-          const lits = [en];
-          for (let b = 0; b < bits; b++) lits.push(i & (1 << b) ? inp(1 + b) : L.not(inp(1 + b)));
-          if (out[i]) emit(out[i], L.and(lits));
-        }
-        break;
-      }
-      case 'priorityEncoder4to2': {
-        const [d0, d1, d2, d3] = [inp(0, L.zero), inp(1, L.zero), inp(2, L.zero), inp(3, L.zero)];
-        if (out[0]) emit(out[0], L.or([d3, d2])); // Y1
-        if (out[1]) emit(out[1], L.or([d3, L.and([L.not(d2), d1])])); // Y0
-        if (out[2]) emit(out[2], L.or([d0, d1, d2, d3])); // V
-        break;
-      }
-      case 'bcdTo7Seg':
-      case 'rom16x4': {
-        if (c.type === 'rom16x4' && openNibble(0).length > 0) {
-          body.push(L.comment(`boştaki adres girişi ${openNibble(0).join(', ')}: simülatörde çıkış başlangıçtaki 0'da kalır, burada da 0`));
-          out.forEach((o) => o && emit(o, L.zero));
-          break;
-        }
+      case 'bcdTo7Seg': {
         // Constant lookup tables as sum-of-minterms over the 4 address bits (bit 0 = LSB)
         const addr = [inp(0), inp(1), inp(2), inp(3)];
-        const table: number[] =
-          c.type === 'bcdTo7Seg'
-            ? Array.from({ length: 16 }, (_, k) => {
-                const m = HEX_7SEG_MAP[k];
-                return (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const).reduce((acc, s, i) => acc | ((m[s] ? 1 : 0) << i), 0);
-              })
-            : Array.isArray(c.state.romData) && c.state.romData.length === 16
-              ? c.state.romData
-              : [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
-        const nOut = c.type === 'bcdTo7Seg' ? 7 : 4;
-        for (let bit = 0; bit < nOut; bit++) {
+        const table: number[] = Array.from({ length: 16 }, (_, k) => {
+          const m = HEX_7SEG_MAP[k];
+          return (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const).reduce((acc, s, i) => acc | ((m[s] ? 1 : 0) << i), 0);
+        });
+        for (let bit = 0; bit < 7; bit++) {
           if (!out[bit]) continue;
           const terms: string[] = [];
           for (let k = 0; k < 16; k++) {
@@ -915,104 +852,6 @@ function buildModule(
           }
           emit(out[bit], terms.length === 0 ? L.zero : terms.length === 16 ? L.one : L.or(terms));
         }
-        break;
-      }
-      case 'comparator4': {
-        const a = [inp(3), inp(2), inp(1), inp(0)];
-        const b = [inp(7), inp(6), inp(5), inp(4)];
-        if (lang === 'verilog') {
-          const av = `{${a.join(', ')}}`;
-          const bv = `{${b.join(', ')}}`;
-          if (out[0]) emit(out[0], `${av} > ${bv}`);
-          if (out[1]) emit(out[1], `${av} == ${bv}`);
-          if (out[2]) emit(out[2], `${av} < ${bv}`);
-        } else {
-          const av = names.make(`${nm}_a`, 'a');
-          const bv = names.make(`${nm}_b`, 'b');
-          declare(av, 4);
-          declare(bv, 4);
-          body.push(`  ${av} <= ${a.join(' & ')};`, `  ${bv} <= ${b.join(' & ')};`);
-          if (out[0]) body.push(`  ${out[0]} <= '1' when unsigned(${av}) > unsigned(${bv}) else '0';`);
-          if (out[1]) body.push(`  ${out[1]} <= '1' when ${av} = ${bv} else '0';`);
-          if (out[2]) body.push(`  ${out[2]} <= '1' when unsigned(${av}) < unsigned(${bv}) else '0';`);
-        }
-        break;
-      }
-      case 'alu4': {
-        const a = [inp(3), inp(2), inp(1), inp(0)];
-        const b = [inp(8), inp(7), inp(6), inp(5)];
-        const cin = inp(4, L.zero);
-        const [s0, s1] = [inp(9), inp(10)];
-        const r = names.make(`${nm}_result`, 'result');
-        if (lang === 'verilog') {
-          // 5-bit sum/difference: bit 4 is the carry, or NOT borrow for A - B - Cin (Cout = A >= B + Cin)
-          declare(r, 5);
-          const sum = names.make(`${nm}_sum`, 'sum');
-          const diff = names.make(`${nm}_diff`, 'diff');
-          declare(sum, 5);
-          declare(diff, 5);
-          const av = `{1'b0, ${a.join(', ')}}`;
-          const bv = `{1'b0, ${b.join(', ')}}`;
-          body.push(
-            `  assign ${sum} = ${av} + ${bv} + ${cin};`,
-            `  assign ${diff} = ${av} - ${bv} - ${cin};`,
-            `  assign ${r} = ({${s1}, ${s0}} == 2'b00) ? ${sum} :`,
-            `                ({${s1}, ${s0}} == 2'b01) ? {(${av} >= ${bv} + ${cin}), ${diff}[3:0]} :`,
-            `                ({${s1}, ${s0}} == 2'b10) ? (${av} & ${bv}) : (${av} | ${bv});`
-          );
-          for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], `${r}[${i}]`);
-          if (out[4]) emit(out[4], `${r}[4]`);
-          if (out[5]) emit(out[5], `${r}[3:0] == 4'b0000`);
-        } else {
-          declare(r, 5);
-          const av = names.make(`${nm}_a`, 'a');
-          const bv = names.make(`${nm}_b`, 'b');
-          declare(av, 4);
-          declare(bv, 4);
-          body.push(
-            `  ${av} <= ${a.join(' & ')};`,
-            `  ${bv} <= ${b.join(' & ')};`,
-            `  process (${[av, bv, cin, s0, s1].filter(isSignalName).join(', ')})`,
-            `    variable va, vb, vc : unsigned(4 downto 0);`,
-            `  begin`,
-            `    va := unsigned('0' & ${av});`,
-            `    vb := unsigned('0' & ${bv});`,
-            `    if ${is1(cin)} then vc := to_unsigned(1, 5); else vc := to_unsigned(0, 5); end if;`,
-            `    if ${is0(s1)} and ${is0(s0)} then`,
-            `      ${r} <= std_logic_vector(va + vb + vc);`,
-            `    elsif ${is0(s1)} and ${is1(s0)} then`,
-            `      ${r}(3 downto 0) <= std_logic_vector(resize(va - vb - vc, 4));`,
-            `      if va >= vb + vc then ${r}(4) <= '1'; else ${r}(4) <= '0'; end if;`,
-            `    elsif ${is1(s1)} and ${is0(s0)} then`,
-            `      ${r} <= '0' & (${av} and ${bv});`,
-            `    else`,
-            `      ${r} <= '0' & (${av} or ${bv});`,
-            `    end if;`,
-            `  end process;`
-          );
-          for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${r}(${i});`);
-          if (out[4]) body.push(`  ${out[4]} <= ${r}(4);`);
-          if (out[5]) body.push(`  ${out[5]} <= '1' when ${r}(3 downto 0) = "0000" else '0';`);
-        }
-        break;
-      }
-      case 'dFlipFlop':
-      case 'jkFlipFlop':
-      case 'tFlipFlop': {
-        const q = names.make(`${nm}_q_reg`, 'q_reg');
-        declare(q, 1, '0');
-        const clk = inp(1, L.zero);
-        const rst = c.type === 'tFlipFlop' ? inp(2, L.zero) : L.zero;
-        const next =
-          c.type === 'dFlipFlop'
-            ? inp(0)
-            : c.type === 'tFlipFlop'
-              ? L.xor([q, inp(0)])
-              : // JK: Q+ = J·Q' + K'·Q
-                L.or([L.and([inp(0), L.not(q)]), L.and([L.not(inp(2)), q])]);
-        body.push(...seqBlock(lang, clk, rst, [[q, next]], [[q, L.zero]], L));
-        if (out[0]) emit(out[0], q);
-        if (out[1]) emit(out[1], L.not(q));
         break;
       }
       case 'srLatch': {
@@ -1041,105 +880,6 @@ function buildModule(
         }
         if (out[0]) emit(out[0], q);
         if (out[1]) emit(out[1], L.not(q));
-        break;
-      }
-      case 'counter4':
-      case 'register4':
-      case 'shiftRegister4': {
-        const r = names.make(`${nm}_q_reg`, 'q_reg');
-        declare(r, 4, '0000');
-        const bit = (i: number) => vecIndex(r, i);
-        let clk: string;
-        let rst: string;
-        let updates: [string, string][];
-        if (c.type === 'counter4') {
-          clk = inp(0, L.zero);
-          rst = inp(1, L.zero);
-          updates = [[r, lang === 'verilog' ? `${r} + 4'd1` : `std_logic_vector(unsigned(${r}) + 1)`]];
-        } else if (c.type === 'register4') {
-          clk = inp(4, L.zero);
-          rst = inp(6, L.zero);
-          const dOpen = openNibble(0);
-          let we = inp(5, L.one); // unconnected write enable = enabled
-          if (dOpen.length > 0) {
-            body.push(L.comment(`boştaki veri girişi ${dOpen.join(', ')}: simülatör tanımsız veriyi yüklemez, burada yükleme kapalı`));
-            we = L.zero;
-          }
-          const dIn = (i: number) => inputExpr(c.inputs[i]?.id);
-          const d = lang === 'verilog' ? `{${dIn(3)}, ${dIn(2)}, ${dIn(1)}, ${dIn(0)}}` : `${dIn(3)} & ${dIn(2)} & ${dIn(1)} & ${dIn(0)}`;
-          updates = [[r, lang === 'verilog' ? `${wrap(we)} ? ${d} : ${r}` : `__WE__(${we}|${d}|${r})`]];
-        } else {
-          clk = inp(0, L.zero);
-          rst = inp(1, L.zero);
-          const [sl, sr, s0, s1] = [inp(2), inp(3), inp(4), inp(5)];
-          // 74HC194: mode 1 (S1S0=01) shifts right, SR enters Q0 and data moves toward Q3;
-          // mode 2 (10) shifts left, SL enters Q3 and data moves toward Q0; else hold
-          const right = lang === 'verilog' ? `{${bit(2)}, ${bit(1)}, ${bit(0)}, ${sr}}` : `${r}(2 downto 0) & ${sr}`;
-          const left = lang === 'verilog' ? `{${sl}, ${bit(3)}, ${bit(2)}, ${bit(1)}}` : `${sl} & ${r}(3 downto 1)`;
-          updates = [
-            [
-              r,
-              lang === 'verilog'
-                ? `({${s1}, ${s0}} == 2'b01) ? ${right} : ({${s1}, ${s0}} == 2'b10) ? ${left} : ${r}`
-                : `__SHIFT__(${s1}|${s0}|${right}|${left}|${r})`,
-            ],
-          ];
-        }
-        body.push(...seqBlock(lang, clk, rst, updates, [[r, lang === 'verilog' ? "4'b0000" : '"0000"']], L));
-        for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], bit(i));
-        break;
-      }
-      case 'ram16x4': {
-        if (openNibble(0).length > 0) {
-          body.push(L.comment(`boştaki adres girişi ${openNibble(0).join(', ')}: simülatörde bellek yazılmaz, çıkış başlangıçtaki 0'da kalır; burada da öyle`));
-          out.forEach((o) => o && emit(o, L.zero));
-          break;
-        }
-        const mem = names.make(`${nm}_mem`, 'mem');
-        const init = Array.isArray(c.state.ramData) && c.state.ramData.length === 16 ? c.state.ramData : Array.from({ length: 16 }, (_, i) => i);
-        const clk = inp(8, L.zero);
-        let we = inp(9, L.one); // unconnected write enable = enabled, as in the simulator
-        const dOpen = openNibble(4);
-        if (dOpen.length > 0) {
-          body.push(L.comment(`boştaki veri girişi ${dOpen.join(', ')}: simülatör tanımsız veriyi yazmaz, burada yazma kapalı`));
-          we = L.zero;
-        }
-        const dIn = (i: number) => inputExpr(c.inputs[i]?.id);
-        if (lang === 'verilog') {
-          const addr = `{${inp(3)}, ${inp(2)}, ${inp(1)}, ${inp(0)}}`;
-          const din = `{${dIn(7)}, ${dIn(6)}, ${dIn(5)}, ${dIn(4)}}`;
-          extraDecls.push(`  reg [3:0] ${mem} [0:15];`, `  initial begin`, ...init.map((v, i) => `    ${mem}[${i}] = 4'd${v & 15};`), `  end`);
-          if (isSignalName(clk)) {
-            body.push(`  always @(posedge ${clk}) begin`, `    if (${we}) ${mem}[${addr}] <= ${din};`, `  end`);
-          }
-          const rd = names.make(`${nm}_rdata`, 'rdata');
-          declare(rd, 4);
-          body.push(`  assign ${rd} = ${mem}[${addr}];`);
-          for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], `${rd}[${i}]`);
-        } else {
-          const typ = names.make(`${nm}_mem_t`, 'mem_t');
-          const addrSig = names.make(`${nm}_addr`, 'addr');
-          declare(addrSig, 4);
-          extraDecls.push(
-            `  type ${typ} is array (0 to 15) of std_logic_vector(3 downto 0);`,
-            `  signal ${mem} : ${typ} := (${init.map((v) => `"${(v & 15).toString(2).padStart(4, '0')}"`).join(', ')});`
-          );
-          body.push(`  ${addrSig} <= ${inp(3)} & ${inp(2)} & ${inp(1)} & ${inp(0)};`);
-          if (isSignalName(clk)) {
-            body.push(
-              `  process (${clk})`,
-              `  begin`,
-              `    if rising_edge(${clk}) then`,
-              `      if ${is1(we)} then ${mem}(to_integer(unsigned(${addrSig}))) <= ${dIn(7)} & ${dIn(6)} & ${dIn(5)} & ${dIn(4)}; end if;`,
-              `    end if;`,
-              `  end process;`
-            );
-          }
-          const rd = names.make(`${nm}_rdata`, 'rdata');
-          declare(rd, 4);
-          body.push(`  ${rd} <= ${mem}(to_integer(unsigned(${addrSig})));`);
-          for (let i = 0; i < 4; i++) if (out[i]) body.push(`  ${out[i]} <= ${rd}(${i});`);
-        }
         break;
       }
       case 'ram':
@@ -2061,12 +1801,7 @@ function buildModule(
       if (!OUTPUT_TYPES.includes(c.type)) continue;
       const label = c.label || c.type;
       const groups: { suffix: string; pins: typeof c.inputs }[] =
-        c.type === 'dotMatrix8x8'
-          ? [
-              { suffix: 'rows', pins: c.inputs.slice(0, 8) },
-              { suffix: 'cols', pins: c.inputs.slice(8, 16) },
-            ]
-          : c.type === 'rgbMatrix16x16'
+        c.type === 'rgbMatrix16x16'
             ? [
                 { suffix: 'x', pins: c.inputs.slice(0, 4) },
                 { suffix: 'y', pins: c.inputs.slice(4, 8) },
@@ -2087,7 +1822,7 @@ function buildModule(
                 : [{ suffix: '', pins: c.inputs }];
       for (const g of groups) {
         if (g.pins.length === 0) continue;
-        const prefix = c.type === 'sevenSegment' ? 'out_seg' : c.type === 'hexDisplay' || c.type === 'hexDigit' ? 'out_hex' : 'out';
+        const prefix = c.type === 'sevenSegment' ? 'out_seg' : c.type === 'hexDigit' ? 'out_hex' : 'out';
         const pn = names.make(`${prefix}_${label}${g.suffix ? `_${g.suffix}` : ''}`, 'out_sig');
         // A multi-bit LED / display input has its own width, a probe takes the width of its net; a group of
         // 1-bit inputs (7-segment, separated LED bar) is one vector, bit i = input i
@@ -2114,52 +1849,6 @@ function subPortNames(ports: CustomSubcircuit['ports']): { inputs: string[]; out
 
 function isSignalName(e: string): boolean {
   return /^[a-z][a-z0-9_]*(\[\d+\]|\(\d+\))?$/.test(e);
-}
-
-// Clocked process/always block with asynchronous active-high reset (as the simulator: reset wins)
-function seqBlock(
-  lang: Lang,
-  clk: string,
-  rst: string,
-  updates: [string, string][],
-  resets: [string, string][],
-  L: LangOps
-): string[] {
-  const hasClk = isSignalName(clk);
-  const hasRst = rst !== L.zero && rst !== L.one;
-  const lines: string[] = [];
-  if (rst === L.one) {
-    // Reset tied high: the register is held cleared
-    if (lang === 'verilog') lines.push(...resets.map(([r, v]) => `  always @(*) ${r} = ${v};`));
-    else lines.push(...resets.map(([r, v]) => `  ${r} <= ${v};`));
-    return lines;
-  }
-  if (!hasClk) {
-    lines.push(L.comment(`saat girişi bağlı değil (${clk}); kayıtçı başlangıç değerinde kalır`));
-    return lines;
-  }
-  if (lang === 'verilog') {
-    lines.push(`  always @(posedge ${clk}${hasRst ? ` or posedge ${rst}` : ''}) begin`);
-    if (hasRst) {
-      lines.push(`    if (${rst}) begin`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    end else begin`);
-      lines.push(...updates.map(([r, v]) => `      ${r} <= ${v};`), `    end`);
-    } else {
-      lines.push(...updates.map(([r, v]) => `    ${r} <= ${v};`));
-    }
-    lines.push('  end');
-  } else {
-    const vhdlValue = (v: string) =>
-      v.includes('__WE__') ? vhdlWe(v) : v.includes('__SHIFT__') ? vhdlShift(v) : v.includes('__MUX__') ? vhdlMuxSeq(v) : `@${v};`;
-    lines.push(`  process (${clk}${hasRst && isSignalName(rst) ? `, ${rst}` : ''})`, `  begin`);
-    if (hasRst) {
-      lines.push(`    if ${is1(rst)} then`, ...resets.map(([r, v]) => `      ${r} <= ${v};`), `    elsif rising_edge(${clk}) then`);
-    } else {
-      lines.push(`    if rising_edge(${clk}) then`);
-    }
-    for (const [r, v] of updates) lines.push(...vhdlValue(v).split('\n').map((l) => `      ${l.replace(/^(\s*)@/, `$1${r} <= `)}`));
-    lines.push('    end if;', '  end process;');
-  }
-  return lines;
 }
 
 // ---- Parametric arithmetic parts -------------------------------------------
@@ -2556,22 +2245,6 @@ function vhdlMuxInline(expr: string): string {
     e = `${call.before}((${wrap(sel)} and ${wrap(a)}) or (not ${wrap(sel)} and ${wrap(b)}))${call.after}`;
   }
   return e;
-}
-
-function vhdlMuxSeq(v: string): string {
-  return `@${vhdlMuxInline(v)};`;
-}
-
-function vhdlWe(v: string): string {
-  const call = extractCall(v, '__WE__')!;
-  const [we, d] = call.args.map((x) => x.trim());
-  return `if ${is1(we)} then\n  @${d};\nend if;`;
-}
-
-function vhdlShift(v: string): string {
-  const call = extractCall(v, '__SHIFT__')!;
-  const [s1, s0, right, left] = call.args.map((x) => x.trim());
-  return `if ${is0(s1)} and ${is1(s0)} then\n  @${right};\nelsif ${is1(s1)} and ${is0(s0)} then\n  @${left};\nend if;`;
 }
 
 // ---------------------------------------------------------------------------

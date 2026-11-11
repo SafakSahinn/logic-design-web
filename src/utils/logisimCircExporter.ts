@@ -333,7 +333,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           P.push({ kind: 'const', value: width >= 32 ? v >>> 0 : v % 2 ** width, out: out(0), width });
           break;
         }
-        case 'dipSwitch4':
         case 'asciiKeyboard':
           c.outputs.forEach((p, i) => {
             const l = `${label}_${p.name}`;
@@ -347,9 +346,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'led':
         case 'probe':
         case 'buzzer':
-        case 'hexDisplay':
-        case 'ledBar4':
-        case 'dotMatrix8x8':
         case 'rgbMatrix16x16':
           if (inScope) break; // an IC's outputs reach the outside through its ports
           c.inputs.forEach((p, i) => {
@@ -534,85 +530,16 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           g('OR', [g('AND', [not(a), b]), g('AND', [not(x), bin])], out(1));
           break;
         }
-        case 'mux2': {
-          const s = ins(2);
-          g('OR', [g('AND', [not(s), ins(0)]), g('AND', [s, ins(1)])], out(0));
-          break;
-        }
-        case 'mux4':
-        case 'mux8': {
-          const bits = c.type === 'mux4' ? 2 : 3;
-          const sel = Array.from({ length: bits }, (_, b) => ins((c.type === 'mux4' ? 4 : 8) + b));
-          const nsel = sel.map((s) => not(s));
-          const terms = Array.from({ length: 1 << bits }, (_, k) =>
-            g('AND', [...sel.map((s, b) => ((k >> b) & 1 ? s : nsel[b])), ins(k)])
-          );
-          const y = g('OR', terms, c.type === 'mux4' ? out(0) : undefined);
-          if (c.type === 'mux8') {
-            union(y, out(0));
-            if (c.outputs[1]) not(y, out(1));
-          }
-          break;
-        }
-        case 'demux2': {
-          const [d, s] = [ins(0), ins(1)];
-          g('AND', [d, not(s)], out(0));
-          g('AND', [d, s], out(1));
-          break;
-        }
-        case 'demux4': {
-          const [d, s0, s1] = [ins(0), ins(1), ins(2)];
-          const [n0, n1] = [not(s0), not(s1)];
-          for (let k = 0; k < 4; k++) if (c.outputs[k]) g('AND', [d, k & 1 ? s0 : n0, k & 2 ? s1 : n1], out(k));
-          break;
-        }
-        case 'decoder2to4':
-        case 'decoder3to8': {
-          const bits = c.type === 'decoder2to4' ? 2 : 3;
-          const en = ins(0, 1); // unconnected enable = enabled
-          const a = Array.from({ length: bits }, (_, b) => ins(1 + b));
-          const na = a.map((x) => not(x));
-          for (let k = 0; k < 1 << bits; k++) if (c.outputs[k]) g('AND', [en, ...a.map((x, b) => ((k >> b) & 1 ? x : na[b]))], out(k));
-          break;
-        }
-        case 'priorityEncoder4to2': {
-          // Only inputs at 1 count, so an open one is a 0
-          const [d0, d1, d2, d3] = [ins(0, 0), ins(1, 0), ins(2, 0), ins(3, 0)];
-          if (c.outputs[0]) g('OR', [d3, d2], out(0));
-          if (c.outputs[1]) g('OR', [d3, g('AND', [not(d2), d1])], out(1));
-          if (c.outputs[2]) g('OR', [d0, d1, d2, d3], out(2));
-          break;
-        }
-        case 'comparator4': {
-          const a = [ins(0), ins(1), ins(2), ins(3)];
-          const b = [ins(4), ins(5), ins(6), ins(7)];
-          const e = a.map((x, i) => g('XNOR', [x, b[i]]));
-          const na = a.map((x) => not(x));
-          const nb = b.map((x) => not(x));
-          const chain = (bitTerm: (i: number) => string) =>
-            [3, 2, 1, 0].map((i) => g('AND', [...[3, 2, 1].filter((j) => j > i).map((j) => e[j]), bitTerm(i)]));
-          if (c.outputs[0]) g('OR', chain((i) => g('AND', [a[i], nb[i]])), out(0));
-          if (c.outputs[1]) g('AND', e, out(1));
-          if (c.outputs[2]) g('OR', chain((i) => g('AND', [na[i], b[i]])), out(2));
-          break;
-        }
-        case 'bcdTo7Seg':
-        case 'rom16x4': {
+        case 'bcdTo7Seg': {
           // Constant tables: minimal sum of products per output bit (address bit 0 = LSB)
-          const table: number[] =
-            c.type === 'bcdTo7Seg'
-              ? Array.from({ length: 16 }, (_, k) =>
-                  (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const).reduce((acc, s, i) => acc | ((HEX_7SEG_MAP[k][s] ? 1 : 0) << i), 0)
-                )
-              : Array.isArray(c.state.romData) && c.state.romData.length === 16
-                ? c.state.romData
-                : [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
+          const table: number[] = Array.from({ length: 16 }, (_, k) =>
+            (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as const).reduce((acc, s, i) => acc | ((HEX_7SEG_MAP[k][s] ? 1 : 0) << i), 0)
+          );
           const addr = [ins(0), ins(1), ins(2), ins(3)];
           const lit: Record<string, string> = { A: addr[3], B: addr[2], C: addr[1], D: addr[0] };
           const negCache: Record<string, string> = {};
           const neg = (v: string) => (negCache[v] ||= not(lit[v]));
-          const nOut = c.type === 'bcdTo7Seg' ? 7 : 4;
-          for (let bit = 0; bit < nOut; bit++) {
+          for (let bit = 0; bit < 7; bit++) {
             if (!c.outputs[bit]) continue;
             const values: Record<number, LogicValue> = {};
             // K-map index: A B C D = address bits 3 2 1 0
@@ -631,115 +558,11 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           }
           break;
         }
-        case 'alu4': {
-          const a = [ins(0), ins(1), ins(2), ins(3)];
-          const b = [ins(5), ins(6), ins(7), ins(8)];
-          const cin = ins(4, 0); // open carry-in = 0, like Logisim's adder
-          const [s0, s1] = [ins(9), ins(10)];
-          const adder = (x: string[], y: string[], c0: string) => {
-            let carry = c0;
-            const sum: string[] = [];
-            for (let i = 0; i < 4; i++) {
-              const t = g('XOR', [x[i], y[i]]);
-              sum.push(g('XOR', [t, carry]));
-              carry = g('OR', [g('AND', [x[i], y[i]]), g('AND', [carry, t])]);
-            }
-            return { sum, carry };
-          };
-          const add = adder(a, b, cin);
-          // A - B - Cin = A + ~B + ~Cin; its carry out is "no borrow", i.e. A >= B + Cin (as the simulator)
-          const sub = adder(a, b.map((x) => not(x)), not(cin));
-          const [ns0, ns1] = [not(s0), not(s1)];
-          const m = [g('AND', [ns1, ns0]), g('AND', [ns1, s0]), g('AND', [s1, ns0]), g('AND', [s1, s0])];
-          const f = [0, 1, 2, 3].map((i) =>
-            g(
-              'OR',
-              [g('AND', [m[0], add.sum[i]]), g('AND', [m[1], sub.sum[i]]), g('AND', [m[2], g('AND', [a[i], b[i]])]), g('AND', [m[3], g('OR', [a[i], b[i]])])],
-              c.outputs[i] ? out(i) : undefined
-            )
-          );
-          if (c.outputs[4]) g('OR', [g('AND', [m[0], add.carry]), g('AND', [m[1], sub.carry])], out(4));
-          if (c.outputs[5]) g('NOR', f, out(5));
-          break;
-        }
-        case 'dFlipFlop':
-          P.push({ kind: 'ff', type: 'D', a: pin(0), clk: pin(1), q: out(0), qn: out(1) });
-          break;
-        case 'jkFlipFlop':
-          P.push({ kind: 'ff', type: 'JK', a: pin(0), b: pin(2), clk: pin(1), q: out(0), qn: out(1) });
-          break;
-        case 'tFlipFlop':
-          P.push({ kind: 'ff', type: 'T', a: pin(0), clk: pin(1), reset: pin(2), q: out(0), qn: out(1) });
-          break;
         case 'srLatch': {
           // Level-sensitive latch = flip-flop driven only by its asynchronous set / reset;
           // S=R=1 holds like the simulator, so each only acts while the other is low
           const [s, r] = [ins(0, 0), ins(1, 0)]; // open S / R holds, as 0 does
           P.push({ kind: 'ff', type: 'D', preset: g('AND', [s, not(r)]), reset: g('AND', [r, not(s)]), q: out(0), qn: out(1) });
-          break;
-        }
-        case 'counter4': {
-          const clk = ins(0, 0);
-          const rst = ins(1, 0);
-          const q = [0, 1, 2, 3].map((i) => out(i));
-          const t = [constNet(1), q[0], g('AND', [q[0], q[1]]), g('AND', [q[0], q[1], q[2]])];
-          q.forEach((qi, i) => P.push({ kind: 'ff', type: 'T', a: t[i], clk, reset: rst, q: qi }));
-          break;
-        }
-        case 'register4': {
-          const clk = ins(4, 0);
-          const we = ins(5, 1); // unconnected write enable = enabled
-          const rst = ins(6, 0);
-          const nwe = not(we);
-          for (let i = 0; i < 4; i++) {
-            const q = out(i);
-            const d = g('OR', [g('AND', [we, ins(i)]), g('AND', [nwe, q])]);
-            P.push({ kind: 'ff', type: 'D', a: d, clk, reset: rst, q });
-          }
-          break;
-        }
-        case 'shiftRegister4': {
-          // 74HC194: 01 shifts right (SR into Q0), 10 shifts left (SL into Q3), else hold
-          const [clk, rst, sl, sr, s0, s1] = [ins(0, 0), ins(1, 0), ins(2), ins(3), ins(4), ins(5)];
-          const q = [0, 1, 2, 3].map((i) => out(i));
-          const right = g('AND', [not(s1), s0]);
-          const left = g('AND', [s1, not(s0)]);
-          const hold = g('NOR', [right, left]);
-          const fromRight = [sr, q[0], q[1], q[2]];
-          const fromLeft = [q[1], q[2], q[3], sl];
-          q.forEach((qi, i) => {
-            const d = g('OR', [g('AND', [right, fromRight[i]]), g('AND', [left, fromLeft[i]]), g('AND', [hold, qi])]);
-            P.push({ kind: 'ff', type: 'D', a: d, clk, reset: rst, q: qi });
-          });
-          break;
-        }
-        case 'ram16x4': {
-          const addr = [ins(0), ins(1), ins(2), ins(3)];
-          const din = [ins(4), ins(5), ins(6), ins(7)];
-          const clk = ins(8, 0);
-          const we = ins(9, 1); // unconnected write enable = enabled (only 0 blocks writing)
-          const na = addr.map((x) => not(x));
-          // Logisim flip-flops power up as 0, so a bit whose initial content is 1 is stored inverted:
-          // written as NOT data and read back through a NOT, which keeps the contents exact
-          const init = Array.isArray(c.state.ramData) && c.state.ramData.length === 16 ? c.state.ramData : Array.from({ length: 16 }, (_, i) => i);
-          const ndin: Record<number, string> = {};
-          const words: string[][] = [];
-          const sel: string[] = [];
-          for (let k = 0; k < 16; k++) {
-            sel.push(g('AND', addr.map((x, b) => ((k >> b) & 1 ? x : na[b]))));
-            const w = g('AND', [we, sel[k]]);
-            const nw = not(w);
-            words.push(
-              [0, 1, 2, 3].map((b) => {
-                const inverted = ((init[k] >> b) & 1) === 1;
-                const data = inverted ? (ndin[b] ||= not(din[b])) : din[b];
-                const q = newNet();
-                P.push({ kind: 'ff', type: 'D', a: g('OR', [g('AND', [w, data]), g('AND', [nw, q])]), clk, q });
-                return inverted ? not(q) : q;
-              })
-            );
-          }
-          for (let b = 0; b < 4; b++) if (c.outputs[b]) g('OR', words.map((w, k) => g('AND', [sel[k], w[b]])), out(b));
           break;
         }
         case 'subcircuit': {

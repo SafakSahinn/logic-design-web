@@ -653,21 +653,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'Bağlı olduğu hat hiçbir parça tarafından sürülmüyorsa (Hi-Z / x) hattı 0 (pull-down) ya da 1 (pull-up) seviyesine çeker',
   },
-  dipSwitch4: {
-    type: 'dipSwitch4',
-    name: '4-Bit DIP Anahtar (DIP Switch)',
-    category: 'inputs',
-    width: 84,
-    height: 86,
-    inputs: [],
-    outputs: [
-      { id: 'out0', name: 'Q0', type: 'output', relX: 84, relY: 20 },
-      { id: 'out1', name: 'Q1', type: 'output', relX: 84, relY: 40 },
-      { id: 'out2', name: 'Q2', type: 'output', relX: 84, relY: 60 },
-      { id: 'out3', name: 'Q3', type: 'output', relX: 84, relY: 80 },
-    ],
-    description: '4 adet bağımsız açma/kapama anahtarını tek pakette sunan DIP anahtar bankası',
-  },
   dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
@@ -850,33 +835,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'EN girişi 1 iken ses çalar. N0-N3 (4-Bit) nota girişleriyle 16 farklı müzik notası/şarkı çalabilir',
   },
-  dotMatrix8x8: {
-    type: 'dotMatrix8x8',
-    name: '8x8 LED Nokta Matris Ekranı (GPU)',
-    category: 'outputs',
-    width: 120,
-    height: 124,
-    inputs: [
-      { id: 'row0', name: 'R0', type: 'input', relX: 0, relY: 20 },
-      { id: 'row1', name: 'R1', type: 'input', relX: 0, relY: 30 },
-      { id: 'row2', name: 'R2', type: 'input', relX: 0, relY: 40 },
-      { id: 'row3', name: 'R3', type: 'input', relX: 0, relY: 50 },
-      { id: 'row4', name: 'R4', type: 'input', relX: 0, relY: 60 },
-      { id: 'row5', name: 'R5', type: 'input', relX: 0, relY: 70 },
-      { id: 'row6', name: 'R6', type: 'input', relX: 0, relY: 80 },
-      { id: 'row7', name: 'R7', type: 'input', relX: 0, relY: 90 },
-      { id: 'col0', name: 'C0', type: 'input', relX: 20, relY: 124 },
-      { id: 'col1', name: 'C1', type: 'input', relX: 30, relY: 124 },
-      { id: 'col2', name: 'C2', type: 'input', relX: 40, relY: 124 },
-      { id: 'col3', name: 'C3', type: 'input', relX: 50, relY: 124 },
-      { id: 'col4', name: 'C4', type: 'input', relX: 60, relY: 124 },
-      { id: 'col5', name: 'C5', type: 'input', relX: 70, relY: 124 },
-      { id: 'col6', name: 'C6', type: 'input', relX: 80, relY: 124 },
-      { id: 'col7', name: 'C7', type: 'input', relX: 90, relY: 124 },
-    ],
-    outputs: [],
-    description: '8 Satır (R0-R7) ve 8 Sütun (C0-C7) matrisiyle piksel grafik ve animasyon oynatan 64 LED ekran',
-  },
   hexDigit: ioMeta('hexDigit', 'Hex Gösterge', '4 bitlik D girişini 0-F onaltılık rakamı olarak gösterir (Logisim Hex Digit Display); tanımsız bitli girişte tire. DP girişi ondalık noktayı yakar, ayardan kaldırılabilir'),
   ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk (Logisim-evolution LedBar): her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
   dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris (Logisim DotMatrix). Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
@@ -934,69 +892,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     ],
     outputs: [],
     description: 'A-G ve DP girişleriyle kontrol edilen klasik 7-segment LED göstergesi',
-  },
-  hexDisplay: {
-    type: 'hexDisplay',
-    name: '4-Bit Hex Gösterge (0-F)',
-    category: 'outputs',
-    width: 68,
-    height: 84,
-    inputs: [
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-    ],
-    outputs: [],
-    description: '4-bit ikili girişi (D0-D3) otomatik çözerek 0-F arası onaltılık karakter gösterir',
-  },
-  ledBar4: {
-    type: 'ledBar4',
-    name: '4-Bit LED Bar Göstergesi',
-    category: 'outputs',
-    width: 76,
-    height: 86,
-    inputs: [
-      { id: 'in0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'in1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'in2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'in3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-    ],
-    outputs: [],
-    description: '4-Bit veri yollarını görselleştiren çoklu LED seviye barı',
-  },
-  dFlipFlop: {
-    type: 'dFlipFlop',
-    name: 'D Flip-Flop (Veri Kaydedici)',
-    category: 'sequential',
-    width: 84,
-    height: 74,
-    inputs: [
-      { id: 'inD', name: 'D', type: 'input', relX: 0, relY: 20 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 0, relY: 50 },
-    ],
-    outputs: [
-      { id: 'outQ', name: 'Q', type: 'output', relX: 84, relY: 20 },
-      { id: 'outQBar', name: "Q'", type: 'output', relX: 84, relY: 50 },
-    ],
-    description: 'Saat darbesinin yükselen kenarında D girişindeki biti saklar',
-  },
-  jkFlipFlop: {
-    type: 'jkFlipFlop',
-    name: 'JK Flip-Flop (Evrensel Saklayıcı)',
-    category: 'sequential',
-    width: 88,
-    height: 84,
-    inputs: [
-      { id: 'inJ', name: 'J', type: 'input', relX: 0, relY: 20 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 0, relY: 40 },
-      { id: 'inK', name: 'K', type: 'input', relX: 0, relY: 60 },
-    ],
-    outputs: [
-      { id: 'outQ', name: 'Q', type: 'output', relX: 88, relY: 20 },
-      { id: 'outQBar', name: "Q'", type: 'output', relX: 88, relY: 60 },
-    ],
-    description: 'J=1/K=0 kurar, J=0/K=1 sıfırlar, J=1/K=1 iken çıkış durumunu tersler (Toggle)',
   },
   srLatch: {
     type: 'srLatch',
@@ -1080,140 +975,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     ],
     description: 'Borç girişi (Bin) ile 3 biti çıkararak Fark D ve Borç Çıkışı Bout üretir',
   },
-  mux2: {
-    type: 'mux2',
-    name: '2:1 Çoklayıcı (MUX)',
-    category: 'combinational',
-    width: 86,
-    height: 70,
-    inputs: [
-      { id: 'inD0', name: 'I0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'I1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inS', name: 'S', type: 'input', relX: 40, relY: 70 },
-    ],
-    outputs: [{ id: 'outY', name: 'Y', type: 'output', relX: 86, relY: 30 }],
-    description: 'Seçme girişine (S) göre I0 veya I1 girişini çıkışa aktarır',
-  },
-  mux4: {
-    type: 'mux4',
-    name: '4:1 Çoklayıcı (4:1 MUX)',
-    category: 'combinational',
-    width: 88,
-    height: 96,
-    inputs: [
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-      { id: 'inS0', name: 'S0', type: 'input', relX: 30, relY: 96 },
-      { id: 'inS1', name: 'S1', type: 'input', relX: 60, relY: 96 },
-    ],
-    outputs: [{ id: 'outY', name: 'Y', type: 'output', relX: 88, relY: 50 }],
-    description: '2-Bit seçme girişine (S1-S0) göre 4 girişten birini çıkışa iletir',
-  },
-  mux8: {
-    type: 'mux8',
-    name: '8:1 Çoklayıcı (74HC151 benzeri)',
-    category: 'combinational',
-    width: 96,
-    height: 160,
-    inputs: [
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-      { id: 'inD4', name: 'D4', type: 'input', relX: 0, relY: 100 },
-      { id: 'inD5', name: 'D5', type: 'input', relX: 0, relY: 110 },
-      { id: 'inD6', name: 'D6', type: 'input', relX: 0, relY: 120 },
-      { id: 'inD7', name: 'D7', type: 'input', relX: 0, relY: 130 },
-      { id: 'inS0', name: 'S0', type: 'input', relX: 20, relY: 160 },
-      { id: 'inS1', name: 'S1', type: 'input', relX: 50, relY: 160 },
-      { id: 'inS2', name: 'S2', type: 'input', relX: 70, relY: 160 },
-    ],
-    outputs: [
-      { id: 'outY', name: 'Y', type: 'output', relX: 96, relY: 60 },
-      { id: 'outW', name: "W (Y')", type: 'output', relX: 96, relY: 100 },
-    ],
-    description: '3-Bit seçme girişi (S2-S0) ile 8 girişten birini seçip Y ve W (ters) çıkışlarına iletir; gerçek 74HC151\'deki aktif-düşük E\' yetki girişi yoktur',
-  },
-  demux2: {
-    type: 'demux2',
-    name: '1:2 Çoklayıcı Çözücü (DEMUX)',
-    category: 'combinational',
-    width: 86,
-    height: 70,
-    inputs: [
-      { id: 'inD', name: 'D', type: 'input', relX: 0, relY: 30 },
-      { id: 'inS', name: 'S', type: 'input', relX: 40, relY: 70 },
-    ],
-    outputs: [
-      { id: 'outY0', name: 'Y0', type: 'output', relX: 86, relY: 20 },
-      { id: 'outY1', name: 'Y1', type: 'output', relX: 86, relY: 50 },
-    ],
-    description: 'Seçme girişine (S) göre D girişini Y0 (S=0) veya Y1 (S=1) çıkışına yönlendirir',
-  },
-  demux4: {
-    type: 'demux4',
-    name: '1:4 Çoklayıcı Çözücü (1:4 DEMUX)',
-    category: 'combinational',
-    width: 88,
-    height: 94,
-    inputs: [
-      { id: 'inD', name: 'D', type: 'input', relX: 0, relY: 50 },
-      { id: 'inS0', name: 'S0', type: 'input', relX: 30, relY: 94 },
-      { id: 'inS1', name: 'S1', type: 'input', relX: 60, relY: 94 },
-    ],
-    outputs: [
-      { id: 'outY0', name: 'Y0', type: 'output', relX: 88, relY: 20 },
-      { id: 'outY1', name: 'Y1', type: 'output', relX: 88, relY: 40 },
-      { id: 'outY2', name: 'Y2', type: 'output', relX: 88, relY: 60 },
-      { id: 'outY3', name: 'Y3', type: 'output', relX: 88, relY: 80 },
-    ],
-    description: '2-Bit seçme girişine (S1-S0) göre D giriş sinyalini 4 çıkıştan birine yönlendirir',
-  },
-  decoder2to4: {
-    type: 'decoder2to4',
-    name: '2:4 Kod Çözücü (Decoder)',
-    category: 'combinational',
-    width: 88,
-    height: 84,
-    inputs: [
-      { id: 'inEN', name: 'EN', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 40 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 60 },
-    ],
-    outputs: [
-      { id: 'outY0', name: 'Y0', type: 'output', relX: 88, relY: 20 },
-      { id: 'outY1', name: 'Y1', type: 'output', relX: 88, relY: 40 },
-      { id: 'outY2', name: 'Y2', type: 'output', relX: 88, relY: 60 },
-      { id: 'outY3', name: 'Y3', type: 'output', relX: 88, relY: 80 },
-    ],
-    description: '2-bit adresi çözerek 4 çıkıştan birini aktif (1) yapar',
-  },
-  decoder3to8: {
-    type: 'decoder3to8',
-    name: '3:8 Kod Çözücü (74HC238 benzeri, aktif-yüksek)',
-    category: 'combinational',
-    width: 96,
-    height: 116,
-    inputs: [
-      { id: 'inEN', name: 'EN', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 40 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 60 },
-      { id: 'inA2', name: 'A2', type: 'input', relX: 0, relY: 80 },
-    ],
-    outputs: [
-      { id: 'outY0', name: 'Y0', type: 'output', relX: 96, relY: 20 },
-      { id: 'outY1', name: 'Y1', type: 'output', relX: 96, relY: 30 },
-      { id: 'outY2', name: 'Y2', type: 'output', relX: 96, relY: 40 },
-      { id: 'outY3', name: 'Y3', type: 'output', relX: 96, relY: 50 },
-      { id: 'outY4', name: 'Y4', type: 'output', relX: 96, relY: 60 },
-      { id: 'outY5', name: 'Y5', type: 'output', relX: 96, relY: 70 },
-      { id: 'outY6', name: 'Y6', type: 'output', relX: 96, relY: 80 },
-      { id: 'outY7', name: 'Y7', type: 'output', relX: 96, relY: 90 },
-    ],
-    description: '3-bit ikili adresi çözerek 8 minterm çıkışından birini aktif (1) yapar; çıkışlar aktif-yüksektir (74HC238 gibi, 74HC138\'de aktif-düşük)',
-  },
   bcdTo7Seg: {
     type: 'bcdTo7Seg',
     name: 'BCD/Hex → 7-Segment Kod Çözücü (aktif-yüksek)',
@@ -1236,77 +997,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outG', name: 'g', type: 'output', relX: 96, relY: 80 },
     ],
     description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir. Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
-  },
-  priorityEncoder4to2: {
-    type: 'priorityEncoder4to2',
-    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
-    category: 'combinational',
-    width: 90,
-    height: 92,
-    inputs: [
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-    ],
-    outputs: [
-      { id: 'outY1', name: 'Y1', type: 'output', relX: 90, relY: 20 },
-      { id: 'outY0', name: 'Y0', type: 'output', relX: 90, relY: 50 },
-      { id: 'outV', name: 'V', type: 'output', relX: 90, relY: 70 },
-    ],
-    description: 'En yüksek öncelikli aktif girişi (D3 > D2 > D1 > D0) 2-bit ikili koda çevirir; V aktiflik göstergesidir. Girişler ve çıkışlar aktif-yüksektir (gerçek 74HC148 8:3 ve aktif-düşüktür)',
-  },
-  comparator4: {
-    type: 'comparator4',
-    name: '4-Bit Karşılaştırıcı (CMP)',
-    category: 'arithmetic',
-    width: 96,
-    height: 90,
-    inputs: [
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 30 },
-      { id: 'inA2', name: 'A2', type: 'input', relX: 0, relY: 50 },
-      { id: 'inA3', name: 'A3', type: 'input', relX: 0, relY: 60 },
-      { id: 'inB0', name: 'B0', type: 'input', relX: 30, relY: 90 },
-      { id: 'inB1', name: 'B1', type: 'input', relX: 50, relY: 90 },
-      { id: 'inB2', name: 'B2', type: 'input', relX: 70, relY: 90 },
-      { id: 'inB3', name: 'B3', type: 'input', relX: 80, relY: 90 },
-    ],
-    outputs: [
-      { id: 'outGT', name: 'A>B', type: 'output', relX: 96, relY: 20 },
-      { id: 'outEQ', name: 'A=B', type: 'output', relX: 96, relY: 50 },
-      { id: 'outLT', name: 'A<B', type: 'output', relX: 96, relY: 70 },
-    ],
-    description: '4-bit A ve B sayılarını karşılaştırır: A>B, A=B veya A<B çıkışı verir',
-  },
-  alu4: {
-    type: 'alu4',
-    name: '4-Bit Aritmetik Mantık Birimi (4 İşlem ALU)',
-    category: 'arithmetic',
-    width: 104,
-    height: 98,
-    inputs: [
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 30 },
-      { id: 'inA2', name: 'A2', type: 'input', relX: 0, relY: 40 },
-      { id: 'inA3', name: 'A3', type: 'input', relX: 0, relY: 60 },
-      { id: 'inCin', name: 'Cin', type: 'input', relX: 0, relY: 80 },
-      { id: 'inB0', name: 'B0', type: 'input', relX: 20, relY: 98 },
-      { id: 'inB1', name: 'B1', type: 'input', relX: 40, relY: 98 },
-      { id: 'inB2', name: 'B2', type: 'input', relX: 60, relY: 98 },
-      { id: 'inB3', name: 'B3', type: 'input', relX: 80, relY: 98 },
-      { id: 'inS0', name: 'S0', type: 'input', relX: 40, relY: 0 },
-      { id: 'inS1', name: 'S1', type: 'input', relX: 70, relY: 0 },
-    ],
-    outputs: [
-      { id: 'outF0', name: 'F0', type: 'output', relX: 104, relY: 20 },
-      { id: 'outF1', name: 'F1', type: 'output', relX: 104, relY: 30 },
-      { id: 'outF2', name: 'F2', type: 'output', relX: 104, relY: 50 },
-      { id: 'outF3', name: 'F3', type: 'output', relX: 104, relY: 60 },
-      { id: 'outCout', name: 'Cout', type: 'output', relX: 104, relY: 80 },
-      { id: 'outZero', name: 'Z', type: 'output', relX: 104, relY: 90 },
-    ],
-    description: '4-Bit ALU: S1-S0 fonksiyonlarına göre A+B, A-B, A&B, A|B işlemlerini yapar',
   },
   splitter4: {
     type: 'splitter4',
@@ -1471,132 +1161,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek (Logisim-evolution 5): her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı Logisim-evolution RAM'i gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
   random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
-  counter4: {
-    type: 'counter4',
-    name: '4-Bit İkili Sayaç (0-15 Counter)',
-    category: 'sequential',
-    width: 90,
-    height: 88,
-    inputs: [
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 0, relY: 30 },
-      { id: 'inRst', name: 'RST', type: 'input', relX: 0, relY: 60 },
-    ],
-    outputs: [
-      { id: 'outQ0', name: 'Q0', type: 'output', relX: 90, relY: 20 },
-      { id: 'outQ1', name: 'Q1', type: 'output', relX: 90, relY: 40 },
-      { id: 'outQ2', name: 'Q2', type: 'output', relX: 90, relY: 60 },
-      { id: 'outQ3', name: 'Q3', type: 'output', relX: 90, relY: 80 },
-    ],
-    description: 'Her saat darbesinde 0-15 arası yukarı sayan 4-bit senkron sayaç',
-  },
-  register4: {
-    type: 'register4',
-    name: '4-Bit Paralel Yazmaç (Register)',
-    category: 'sequential',
-    width: 92,
-    height: 88,
-    inputs: [
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 80 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 30, relY: 88 },
-      { id: 'inWE', name: 'WE', type: 'input', relX: 50, relY: 88 },
-      { id: 'inRst', name: 'RST', type: 'input', relX: 70, relY: 88 },
-    ],
-    outputs: [
-      { id: 'outQ0', name: 'Q0', type: 'output', relX: 92, relY: 20 },
-      { id: 'outQ1', name: 'Q1', type: 'output', relX: 92, relY: 40 },
-      { id: 'outQ2', name: 'Q2', type: 'output', relX: 92, relY: 60 },
-      { id: 'outQ3', name: 'Q3', type: 'output', relX: 92, relY: 80 },
-    ],
-    description: '4-Bit paralel saklama yazmacı: WE=1 iken saat darbesinde D verisini Q çıkışına kilitler',
-  },
-  shiftRegister4: {
-    type: 'shiftRegister4',
-    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
-    category: 'sequential',
-    width: 104,
-    height: 110,
-    inputs: [
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 0, relY: 20 },
-      { id: 'inRst', name: 'CLR', type: 'input', relX: 0, relY: 40 },
-      { id: 'inSL', name: 'SL', type: 'input', relX: 0, relY: 60 },
-      { id: 'inSR', name: 'SR', type: 'input', relX: 0, relY: 80 },
-      { id: 'inS0', name: 'S0', type: 'input', relX: 30, relY: 110 },
-      { id: 'inS1', name: 'S1', type: 'input', relX: 70, relY: 110 },
-    ],
-    outputs: [
-      { id: 'outQ0', name: 'Q0', type: 'output', relX: 104, relY: 20 },
-      { id: 'outQ1', name: 'Q1', type: 'output', relX: 104, relY: 40 },
-      { id: 'outQ2', name: 'Q2', type: 'output', relX: 104, relY: 60 },
-      { id: 'outQ3', name: 'Q3', type: 'output', relX: 104, relY: 80 },
-    ],
-    description: '4-Bit Sağa/Sola kaydıran veya tutan saklayıcı (S1-S0: 00=Tut, 01=Sağa Kaydır, 10=Sola Kaydır, 11=Tut). CLR aktif-yüksektir; gerçek 74HC194\'teki paralel yükleme (11) yoktur',
-  },
-  tFlipFlop: {
-    type: 'tFlipFlop',
-    name: 'T Flip-Flop (T-FF / Toggle)',
-    category: 'sequential',
-    width: 86,
-    height: 82,
-    inputs: [
-      { id: 'inT', name: 'T', type: 'input', relX: 0, relY: 20 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 0, relY: 60 },
-      { id: 'inRst', name: 'RST', type: 'input', relX: 40, relY: 82 },
-    ],
-    outputs: [
-      { id: 'outQ', name: 'Q', type: 'output', relX: 86, relY: 20 },
-      { id: 'outQBar', name: "Q'", type: 'output', relX: 86, relY: 60 },
-    ],
-    description: 'T=1 iken her saat darbesinde (CLK) durumunu tersleyen temel ikili sayaç ve frekans bölücü birim',
-  },
-  ram16x4: {
-    type: 'ram16x4',
-    name: '16x4-Bit RAM (Saatli Yazma)',
-    category: 'sequential',
-    width: 108,
-    height: 124,
-    inputs: [
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 30 },
-      { id: 'inA2', name: 'A2', type: 'input', relX: 0, relY: 50 },
-      { id: 'inA3', name: 'A3', type: 'input', relX: 0, relY: 60 },
-      { id: 'inD0', name: 'D0', type: 'input', relX: 0, relY: 80 },
-      { id: 'inD1', name: 'D1', type: 'input', relX: 0, relY: 90 },
-      { id: 'inD2', name: 'D2', type: 'input', relX: 0, relY: 110 },
-      { id: 'inD3', name: 'D3', type: 'input', relX: 0, relY: 120 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 40, relY: 124 },
-      { id: 'inWE', name: 'WE', type: 'input', relX: 70, relY: 124 },
-    ],
-    outputs: [
-      { id: 'outQ0', name: 'Q0', type: 'output', relX: 108, relY: 20 },
-      { id: 'outQ1', name: 'Q1', type: 'output', relX: 108, relY: 40 },
-      { id: 'outQ2', name: 'Q2', type: 'output', relX: 108, relY: 60 },
-      { id: 'outQ3', name: 'Q3', type: 'output', relX: 108, relY: 80 },
-    ],
-    description: '16 Adres x 4-Bit Rastgele Erişimli Bellek: WE=1 iken saat darbesinde D verisini adrese yazar, adresteki veriyi Q çıkışına verir',
-  },
-  rom16x4: {
-    type: 'rom16x4',
-    name: '16x4-Bit ROM (Salt Okunur Bellek)',
-    category: 'sequential',
-    width: 100,
-    height: 96,
-    inputs: [
-      { id: 'inA0', name: 'A0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inA1', name: 'A1', type: 'input', relX: 0, relY: 40 },
-      { id: 'inA2', name: 'A2', type: 'input', relX: 0, relY: 60 },
-      { id: 'inA3', name: 'A3', type: 'input', relX: 0, relY: 80 },
-    ],
-    outputs: [
-      { id: 'outQ0', name: 'Q0', type: 'output', relX: 100, relY: 20 },
-      { id: 'outQ1', name: 'Q1', type: 'output', relX: 100, relY: 40 },
-      { id: 'outQ2', name: 'Q2', type: 'output', relX: 100, relY: 60 },
-      { id: 'outQ3', name: 'Q3', type: 'output', relX: 100, relY: 80 },
-    ],
-    description: '16 Adres x 4-Bit Önceden Programlanmış Salt Okunur Bellek: A3-A0 adresindeki veriyi anında Q çıkışlarına okur',
-  },
   subcircuit: {
     type: 'subcircuit',
     name: 'Özel Alt Devre (IC)',
@@ -1615,16 +1179,6 @@ const COMPONENT_TYPE_ALIASES: Record<string, ComponentType> = {
   busSplitter: 'splitter4',
   constantHigh: 'vcc',
   constantLow: 'gnd',
-  mux2to1: 'mux2',
-  mux4to1: 'mux4',
-  mux8to1: 'mux8',
-  demux1to2: 'demux2',
-  demux1to4: 'demux4',
-  comparator4bit: 'comparator4',
-  alu4bit: 'alu4',
-  register4bit: 'register4',
-  counter4bit: 'counter4',
-  shiftRegister4bit: 'shiftRegister4',
   sevenSeg: 'sevenSegment',
 };
 
@@ -1679,11 +1233,6 @@ export function createComponentInstance(
       // No previous clock yet: the first evaluation never counts as an edge (like Logisim, whose signals
       // power up unknown), so a flip-flop clocked by a high signal does not toggle when the circuit starts
       lastClk: undefined,
-      hexVal: 0,
-      regVal: 0,
-      aluResult: 0,
-      dipSwitches: type === 'dipSwitch4' ? [false, false, false, false] : undefined,
-      matrixGrid: type === 'dotMatrix8x8' ? Array(8).fill(null).map(() => Array(8).fill(false)) : undefined,
       rgbPixels: type === 'rgbMatrix16x16' ? Array(16).fill(null).map(() => Array(16).fill('#050505')) : undefined,
       asciiChar: type === 'asciiKeyboard' ? 'A' : undefined,
       asciiCode: type === 'asciiKeyboard' ? 65 : undefined,
@@ -1950,20 +1499,6 @@ export function configureBitSelector(
 
 export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder']);
 
-/**
- * Fixed-size parts replaced by parametric ones (Aşama 3). They still load and simulate (built-in example
- * circuits use them until they are rebuilt) but are no longer offered in the palettes.
- */
-export const RETIRED_PALETTE_TYPES = new Set<ComponentType>([
-  'mux2', 'mux4', 'mux8', 'demux2', 'demux4', 'decoder2to4', 'decoder3to8', 'priorityEncoder4to2',
-  'comparator4', 'alu4',
-  // Aşama 3e: parametric flip-flops / register / counter / shift register (srLatch stays: no Logisim counterpart)
-  'dFlipFlop', 'tFlipFlop', 'jkFlipFlop', 'register4', 'counter4', 'shiftRegister4',
-  // Aşama 3f: parametric RAM / ROM (old circuits keep opening until 3h)
-  'ram16x4', 'rom16x4',
-  // Aşama 3g: parametric DIP switch / LED bar / dot matrix, hex digit with a 4-bit input
-  'dipSwitch4', 'ledBar4', 'dotMatrix8x8', 'hexDisplay',
-]);
 export const PLEXER_MAX_SELECT = 5;
 
 /** Key of a pin inside its part ('in3', 'sel', 'out', ...): the pin id without the part id prefix */
@@ -3568,15 +3103,6 @@ export function simulateCircuitStep(
           hasChanged = true;
         }
       });
-    } else if (comp.type === 'dipSwitch4') {
-      const switches = comp.state.dipSwitches || [false, false, false, false];
-      for (let i = 0; i < 4; i++) {
-        const targetVal: SignalValue = switches[i] ? 1 : 0;
-        if (comp.outputs[i] && comp.outputs[i].value !== targetVal) {
-          comp.outputs[i].value = targetVal;
-          hasChanged = true;
-        }
-      }
     } else if (comp.type === 'asciiKeyboard') {
       const code = comp.state.asciiCode ?? 65;
       const strobeVal: SignalValue = comp.state.strobe ? 1 : 0;
@@ -4056,166 +3582,6 @@ export function simulateCircuitStep(
         for (let i = 0; i < 4; i++) setOut(i, raw[i] ?? 'Z');
         break;
       }
-      case 'demux2':
-      case 'demux4': {
-        // Logisim demultiplexer: the selected output carries D as is, the others are 0;
-        // an undefined select makes every output x (or E)
-        const sel = busValue(raw.slice(1));
-        for (let i = 0; i < comp.outputs.length; i++) {
-          setOut(i, typeof sel === 'number' ? (i === sel ? raw[0] : 0) : sel);
-        }
-        break;
-      }
-      case 'alu4': {
-        // No Logisim counterpart: an undefined operation select, or an E / undefined operand bit
-        // (carry-in too for add/sub; open or x counts as 0 like Logisim's adder), makes every output E or x
-        const op = busValue([raw[9], raw[10]]);
-        const used = [...raw.slice(0, 4), ...raw.slice(5, 9)];
-        if (typeof op === 'number' && op < 2 && raw[4] !== 'X' && raw[4] !== 'Z') used.push(raw[4]);
-        const bad: SignalValue | null =
-          typeof op !== 'number' ? op : used.some((v) => v === 'E') ? 'E' : used.every(isLevel) ? null : 'X';
-        if (bad !== null) {
-          for (let i = 0; i < comp.outputs.length; i++) setOut(i, bad);
-          break;
-        }
-        const a = (inVals[0] || 0) + (inVals[1] || 0) * 2 + (inVals[2] || 0) * 4 + (inVals[3] || 0) * 8;
-        const cin = inVals[4] || 0;
-        const b = (inVals[5] || 0) + (inVals[6] || 0) * 2 + (inVals[7] || 0) * 4 + (inVals[8] || 0) * 8;
-        const s0 = inVals[9] || 0;
-        const s1 = inVals[10] || 0;
-        const mode = s0 + s1 * 2;
-
-        let result = 0;
-        let cout = 0;
-        if (mode === 0) {
-          const sum = a + b + cin;
-          result = sum & 0xf;
-          cout = sum > 15 ? 1 : 0;
-        } else if (mode === 1) {
-          const diff = a - b - cin;
-          result = (diff + 16) & 0xf;
-          cout = a >= b + cin ? 1 : 0;
-        } else if (mode === 2) {
-          result = (a & b) & 0xf;
-          cout = 0;
-        } else {
-          result = (a | b) & 0xf;
-          cout = 0;
-        }
-
-        const isZero: SignalValue = result === 0 ? 1 : 0;
-        comp.state.aluResult = result;
-
-        for (let bit = 0; bit < 4; bit++) {
-          const bitVal: SignalValue = ((result >> bit) & 1) === 1 ? 1 : 0;
-          if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
-            comp.outputs[bit].value = bitVal;
-            hasChanged = true;
-          }
-        }
-        if (comp.outputs[4] && comp.outputs[4].value !== cout) {
-          comp.outputs[4].value = cout as SignalValue;
-          hasChanged = true;
-        }
-        if (comp.outputs[5] && comp.outputs[5].value !== isZero) {
-          comp.outputs[5].value = isZero;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'register4': {
-        // Logisim register: only an enable of 0 blocks loading (open, x and E enable it), only a
-        // clear at 1 clears, and a D that is not fully defined is not loaded
-        const dBits = busValue(raw.slice(0, 4));
-        const isRisingEdge = risingEdge(comp, raw[4]);
-        const we = raw[5] !== 0;
-        const rst = raw[6];
-
-        let curVal = comp.state.regVal ?? 0;
-        if (rst === 1) {
-          curVal = 0;
-          if (comp.state.regVal !== 0) {
-            comp.state.regVal = 0;
-            hasChanged = true;
-          }
-        } else if (isRisingEdge && we && typeof dBits === 'number') {
-          const d = dBits;
-          curVal = d;
-          if (comp.state.regVal !== d) {
-            comp.state.regVal = d;
-            hasChanged = true;
-          }
-        }
-
-        for (let bit = 0; bit < 4; bit++) {
-          const bitVal: SignalValue = ((curVal >> bit) & 1) === 1 ? 1 : 0;
-          if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
-            comp.outputs[bit].value = bitVal;
-            hasChanged = true;
-          }
-        }
-        break;
-      }
-      case 'decoder2to4':
-      case 'decoder3to8': {
-        // Logisim decoder: only an enable of 0 disables (all outputs 0 here, active-high like the
-        // 74HC238), an enable of E gives E, and an undefined address gives x (or E) on every output
-        const en = raw[0];
-        const sel = en === 0 ? -1 : en === 'E' && isPinConnected(comp.inputs[0]?.id ?? '') ? 'E' : busValue(raw.slice(1));
-        for (let i = 0; i < comp.outputs.length; i++) {
-          setOut(i, typeof sel === 'number' ? (i === sel ? 1 : 0) : sel);
-        }
-        break;
-      }
-      case 'comparator4': {
-        // Logisim unsigned comparator: walks from the MSB and stops at the first bit pair that
-        // differs; an E or undefined bit met before that makes all three outputs E or x
-        let res: SignalValue[] = [0, 1, 0];
-        for (let i = 3; i >= 0; i--) {
-          const a = raw[i];
-          const b = raw[4 + i];
-          if (a === 'E' || b === 'E') {
-            res = ['E', 'E', 'E'];
-            break;
-          }
-          if (!isLevel(a) || !isLevel(b)) {
-            res = ['X', 'X', 'X'];
-            break;
-          }
-          if (a !== b) {
-            res = a === 1 ? [1, 0, 0] : [0, 0, 1];
-            break;
-          }
-        }
-        res.forEach((v, i) => setOut(i, v));
-        break;
-      }
-      case 'counter4': {
-        const isRisingEdge = risingEdge(comp, raw[0]);
-        const rst = raw[1];
-
-        let curCount = comp.state.count ?? 0;
-        if (rst === 1) {
-          curCount = 0;
-          if (comp.state.count !== 0) {
-            comp.state.count = 0;
-            hasChanged = true;
-          }
-        } else if (isRisingEdge) {
-          curCount = (curCount + 1) % 16;
-          comp.state.count = curCount;
-          hasChanged = true;
-        }
-
-        for (let bit = 0; bit < 4; bit++) {
-          const bitVal: SignalValue = ((curCount >> bit) & 1) === 1 ? 1 : 0;
-          if (comp.outputs[bit] && comp.outputs[bit].value !== bitVal) {
-            comp.outputs[bit].value = bitVal;
-            hasChanged = true;
-          }
-        }
-        break;
-      }
       case 'halfAdder':
       case 'fullAdder': {
         // Logisim 1-bit adder; the half adder is one with its carry-in left open
@@ -4261,76 +3627,8 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'mux2':
-      case 'mux4':
-      case 'mux8': {
-        // Logisim multiplexer: the selected input passes as is (x/E included); an undefined
-        // select gives x, an E bit in it gives E
-        const n = comp.type === 'mux2' ? 2 : comp.type === 'mux4' ? 4 : 8;
-        const sel = busValue(raw.slice(n, n + Math.log2(n)));
-        const y: SignalValue = typeof sel === 'number' ? raw[sel] ?? 'Z' : sel;
-        setOut(0, y);
-        // mux8's W is the inverted output (like the 74HC151), so a non-level Y makes it E
-        if (comp.type === 'mux8') setOut(1, sigNot(y));
-        break;
-      }
-      case 'priorityEncoder4to2': {
-        // Logisim priority encoder: only inputs at 1 count; with none the code is x and V is 0
-        let hi = -1;
-        for (let i = 3; i >= 0; i--) {
-          if (raw[i] === 1) {
-            hi = i;
-            break;
-          }
-        }
-        setOut(0, hi < 0 ? 'X' : hi >> 1 ? 1 : 0);
-        setOut(1, hi < 0 ? 'X' : hi & 1 ? 1 : 0);
-        setOut(2, hi < 0 ? 0 : 1);
-        break;
-      }
-      case 'shiftRegister4': {
-        const isRisingEdge = risingEdge(comp, raw[0]);
-        const rst = raw[1];
-        // Like Logisim's shift register the serial bit is stored as is, so an x shifted in shows up
-        // on the outputs (a floating one is kept as x); an undefined mode select does not shift
-        const sl: SignalValue = raw[2] === 'Z' ? 'X' : raw[2];
-        const sr: SignalValue = raw[3] === 'Z' ? 'X' : raw[3];
-        const mode = busValue([raw[4], raw[5]]);
-
-        if (!Array.isArray(comp.state.regBits)) {
-          comp.state.regBits = [0, 0, 0, 0];
-        }
-
-        if (rst === 1) {
-          comp.state.regBits = [0, 0, 0, 0];
-        } else {
-          if (isRisingEdge) {
-            const cur = [...comp.state.regBits];
-            // Same directions as the 74HC194 this part models
-            if (mode === 1) {
-              // Shift Right: SR (DSR) into Q0, Q0 into Q1, Q1 into Q2, Q2 into Q3
-              comp.state.regBits = [sr, cur[0], cur[1], cur[2]];
-            } else if (mode === 2) {
-              // Shift Left: SL (DSL) into Q3, Q3 into Q2, Q2 into Q1, Q1 into Q0
-              comp.state.regBits = [cur[1], cur[2], cur[3], sl];
-            }
-          }
-        }
-        for (let b = 0; b < 4; b++) setOut(b, comp.state.regBits[b] ?? 0);
-        break;
-      }
       case 'sevenSegment': {
         // Direct segment mapping handled in renderer
-        break;
-      }
-      case 'hexDisplay': {
-        // Like Logisim's hex digit, any input that is not 0/1 shows a dash (stored as -1)
-        const code = busValue(raw.slice(0, 4));
-        const hexVal = typeof code === 'number' ? code : -1;
-        if (comp.state.hexVal !== hexVal) {
-          comp.state.hexVal = hexVal;
-          hasChanged = true;
-        }
         break;
       }
       case 'buzzer': {
@@ -4345,19 +3643,6 @@ export function simulateCircuitStep(
           comp.state.buzzerNote = note;
           hasChanged = true;
         }
-        break;
-      }
-      case 'dotMatrix8x8': {
-        const rows = inVals.slice(0, 8).map((v) => v === 1);
-        const cols = inVals.slice(8, 16).map((v) => v === 1);
-        const grid: boolean[][] = [];
-        for (let r = 0; r < 8; r++) {
-          grid[r] = [];
-          for (let c = 0; c < 8; c++) {
-            grid[r][c] = !!rows[r] && !!cols[c];
-          }
-        }
-        comp.state.matrixGrid = grid;
         break;
       }
       case 'rgbMatrix16x16': {
@@ -4413,59 +3698,6 @@ export function simulateCircuitStep(
         }
         break;
       }
-      case 'dFlipFlop': {
-        // Logisim: a D that is x or E at the edge leaves the stored value unchanged
-        const d = raw[0];
-        if (risingEdge(comp, raw[1]) && isLevel(d)) {
-          const nextQ = d;
-          const nextQBar: SignalValue = d === 1 ? 0 : 1;
-          if (comp.state.q !== nextQ) {
-            comp.state.q = nextQ;
-            comp.state.qBar = nextQBar;
-            hasChanged = true;
-          }
-        }
-        const qVal = comp.state.q ?? 0;
-        const qBarVal = comp.state.qBar ?? 1;
-        if (comp.outputs[0] && comp.outputs[0].value !== qVal) {
-          comp.outputs[0].value = qVal;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== qBarVal) {
-          comp.outputs[1].value = qBarVal;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'jkFlipFlop': {
-        // Logisim: unless both J and K are 0/1 the edge leaves the stored value unchanged
-        const j = raw[0];
-        const k = raw[2];
-        if (risingEdge(comp, raw[1]) && isLevel(j) && isLevel(k)) {
-          let nextQ = comp.state.q ?? 0;
-          if (j === 0 && k === 1) nextQ = 0;
-          else if (j === 1 && k === 0) nextQ = 1;
-          else if (j === 1 && k === 1) nextQ = nextQ === 1 ? 0 : 1;
-
-          const nextQBar: SignalValue = nextQ === 1 ? 0 : 1;
-          if (comp.state.q !== nextQ) {
-            comp.state.q = nextQ;
-            comp.state.qBar = nextQBar;
-            hasChanged = true;
-          }
-        }
-        const qVal = comp.state.q ?? 0;
-        const qBarVal = comp.state.qBar ?? 1;
-        if (comp.outputs[0] && comp.outputs[0].value !== qVal) {
-          comp.outputs[0].value = qVal;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== qBarVal) {
-          comp.outputs[1].value = qBarVal;
-          hasChanged = true;
-        }
-        break;
-      }
       case 'srLatch': {
         // Like Logisim's S-R flip-flop: an x or E on S or R holds the state (as S = R = 1 does)
         const s = raw[0];
@@ -4492,86 +3724,6 @@ export function simulateCircuitStep(
         if (comp.outputs[1] && comp.outputs[1].value !== qBarVal) {
           comp.outputs[1].value = qBarVal;
           hasChanged = true;
-        }
-        break;
-      }
-      case 'tFlipFlop': {
-        // Logisim: only T = 1 toggles, and only a reset at 1 clears (open or x does nothing)
-        const t = raw[0];
-        const isRisingEdge = risingEdge(comp, raw[1]);
-        const rst = raw[2];
-
-        let curQ = comp.state.q ?? 0;
-        if (rst === 1) {
-          curQ = 0;
-          if (comp.state.q !== 0) {
-            comp.state.q = 0;
-            comp.state.qBar = 1;
-            hasChanged = true;
-          }
-        } else if (isRisingEdge) {
-          if (t === 1) {
-            curQ = curQ === 1 ? 0 : 1;
-            comp.state.q = curQ;
-            comp.state.qBar = (curQ === 1 ? 0 : 1) as SignalValue;
-            hasChanged = true;
-          }
-        }
-        const qVal: SignalValue = comp.state.q ?? 0;
-        const qBarVal: SignalValue = comp.state.qBar ?? 1;
-        if (comp.outputs[0] && comp.outputs[0].value !== qVal) {
-          comp.outputs[0].value = qVal;
-          hasChanged = true;
-        }
-        if (comp.outputs[1] && comp.outputs[1].value !== qBarVal) {
-          comp.outputs[1].value = qBarVal;
-          hasChanged = true;
-        }
-        break;
-      }
-      case 'ram16x4': {
-        if (!Array.isArray(comp.state.ramData) || comp.state.ramData.length !== 16) {
-          comp.state.ramData = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-        }
-        // Logisim RAM: an undefined address keeps the output as it was and writes nothing, and only
-        // a write enable of 0 blocks writing (open or x writes). Unlike Logisim, which stores an
-        // undefined data word as all ones, such a word is not written.
-        const addr = busValue(raw.slice(0, 4));
-        const dataIn = busValue(raw.slice(4, 8));
-        const isRisingEdge = risingEdge(comp, raw[8]);
-        if (typeof addr !== 'number') break;
-
-        if (isRisingEdge && raw[9] !== 0 && typeof dataIn === 'number') {
-          // Copy on write: the array is shared with the previous step's state and the preset template
-          comp.state.ramData = comp.state.ramData.map((v, i) => (i === addr ? dataIn : v));
-          hasChanged = true;
-        }
-
-        const storedVal = comp.state.ramData[addr] ?? 0;
-        for (let b = 0; b < 4; b++) {
-          const bitVal: SignalValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
-          if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
-            comp.outputs[b].value = bitVal;
-            hasChanged = true;
-          }
-        }
-        break;
-      }
-      case 'rom16x4': {
-        const DEFAULT_ROM = [0, 1, 4, 9, 3, 7, 15, 12, 8, 5, 10, 2, 6, 11, 14, 13];
-        if (!Array.isArray(comp.state.romData) || comp.state.romData.length !== 16) {
-          comp.state.romData = [...DEFAULT_ROM];
-        }
-        // Logisim ROM: an undefined address keeps the output as it was
-        const addr = busValue(raw.slice(0, 4));
-        if (typeof addr !== 'number') break;
-        const storedVal = comp.state.romData[addr] ?? 0;
-        for (let b = 0; b < 4; b++) {
-          const bitVal: SignalValue = ((storedVal >> b) & 1) === 1 ? 1 : 0;
-          if (comp.outputs[b] && comp.outputs[b].value !== bitVal) {
-            comp.outputs[b].value = bitVal;
-            hasChanged = true;
-          }
         }
         break;
       }
@@ -4691,9 +3843,8 @@ export function simulateCircuit(
 }
 
 /**
- * Multi-bit bus demo presets (Aşama 2l). Built with the multi-bit parts that exist so far (wide
- * switch/LED/constant/probe, tunnel, splitter, bit extender, bit selector); the fixed 4-bit parts (ALU,
- * hex display...) still have 1-bit pins, so splitters bridge a bus to them.
+ * Preset builder: a part by type, position, label and id with its width / splitter / extender / selector /
+ * parametric settings (multi-bit bus demos since Aşama 2l, every preset with a parametric part since 3h).
  */
 type BusPartOptions = {
   width?: number;
@@ -5694,9 +4845,6 @@ export const HEX_7SEG_MAP: Record<number, { a: boolean; b: boolean; c: boolean; 
   15: { a: true,  b: false, c: false, d: false, e: true,  f: true,  g: true  }, // F
 };
 
-// What Logisim's hex digit shows for an undefined input: a dash
-export const HEX_7SEG_DASH = { a: false, b: false, c: false, d: false, e: false, f: false, g: true };
-
 /**
  * 16-Tone Programmable Chiptune Musical Scale Table (Do-Re-Mi / Hz)
  */
@@ -5972,12 +5120,6 @@ function booleanExprOf(
           ? `(${inputExprs[0]}'·${inputExprs[1]} + (${inputExprs[0]}⊕${inputExprs[1]})'·${inputExprs[2]})`
           : `(${inputExprs[0]} ⊕ ${inputExprs[1]} ⊕ ${inputExprs[2]})`;
       break;
-    case 'mux2':
-      result = `(${inputExprs[2]}'·${inputExprs[0]} + ${inputExprs[2]}·${inputExprs[1]})`;
-      break;
-    case 'demux2':
-      result = pinIndex === 1 ? `(${inputExprs[0]} · ${inputExprs[1]})` : `(${inputExprs[0]} · ${inputExprs[1]}')`;
-      break;
     case 'triState':
       result = `(${inputExprs[1]} ? ${inputExprs[0]} : Z)`;
       break;
@@ -6054,10 +5196,8 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'vcc' &&
       c.type !== 'gnd' &&
       c.type !== 'constant' &&
-      c.type !== 'dipSwitch4' &&
       c.type !== 'dipSwitch' &&
       c.type !== 'asciiKeyboard' &&
-      c.type !== 'dotMatrix8x8' &&
       c.type !== 'rgbMatrix16x16' &&
       c.type !== 'textLabel' &&
       c.type !== 'splitter' &&
@@ -6286,7 +5426,7 @@ export function generateTruthTable(
   }
 
   const stateful = components.filter(
-    (c) => COMPONENT_CATALOG[c.type]?.category === 'sequential' && c.type !== 'rom16x4'
+    (c) => COMPONENT_CATALOG[c.type]?.category === 'sequential'
   );
   if (stateful.length > 0) {
     notes.push(

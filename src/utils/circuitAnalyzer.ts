@@ -18,21 +18,20 @@ import {
   shifterDistBits,
 } from './circuitEngine';
 
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'dipSwitch', 'asciiKeyboard'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
 // Displays carry no logic (no transistors counted)
-const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'hexDigit', 'buzzer', 'ledBar4', 'ledBar', 'dotMatrix8x8', 'dotMatrix', 'rgbMatrix16x16'];
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbMatrix16x16'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [
-  'dFlipFlop', 'jkFlipFlop', 'tFlipFlop', 'srLatch', 'register4', 'register4bit', 'counter4', 'counter4bit', 'shiftRegister4', 'shiftRegister4bit',
+  'srLatch',
   ...MEM_TYPES,
-  'ram16x4',
   'ram',
   'random',
   'dualRam',
 ];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
-const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4' && t !== 'ram' && t !== 'dualRam');
+const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram' && t !== 'dualRam');
 /** evolution RAM with a clocked read: its output changes only at the clock edge, so it starts a new path */
 function ramSyncRead(c: CircuitComponentInstance): boolean {
   if (c.type !== 'ram' && c.type !== 'dualRam') return false;
@@ -78,42 +77,23 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   fullAdder: 28,
   halfSubtractor: 14,
   fullSubtractor: 32,
-  mux2: 14,
-  mux4: 34,
-  mux8: 72,
   mux2to1: 14,
   mux4to1: 34,
   mux8to1: 72,
-  demux2: 12,
-  demux4: 28,
   demux1to2: 12,
   demux1to4: 28,
-  decoder2to4: 24,
-  decoder3to8: 52,
   bcdTo7Seg: 110,
-  priorityEncoder4to2: 48,
-  comparator4: 64,
   comparator4bit: 64,
-  alu4: 280,
   alu4bit: 280,
   splitter4: 0,
   splitter: 0,
   busSplitter: 0,
-  dotMatrix8x8: 128,
   rgbMatrix16x16: 512,
   asciiKeyboard: 140,
-  dFlipFlop: 22,
-  jkFlipFlop: 28,
-  tFlipFlop: 24,
   srLatch: 8,
-  register4: 92,
   register4bit: 92,
-  counter4: 124,
   counter4bit: 124,
-  shiftRegister4: 118,
   shiftRegister4bit: 118,
-  ram16x4: 384,
-  rom16x4: 192,
 };
 
 /**

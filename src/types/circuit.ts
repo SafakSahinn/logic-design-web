@@ -12,7 +12,6 @@ export type ComponentType =
   | 'constant'
   | 'tunnel'
   | 'pullResistor'
-  | 'dipSwitch4'
   // Parametric DIP switch (Logisim-evolution DipSwitch, Aşama 3g)
   | 'dipSwitch'
   | 'asciiKeyboard'
@@ -33,9 +32,6 @@ export type ComponentType =
   | 'buzzer'
   | 'textLabel'
   | 'sevenSegment'
-  | 'hexDisplay'
-  | 'ledBar4'
-  | 'dotMatrix8x8'
   // Parametric displays (Logisim std/io HexDigit, DotMatrix; evolution LedBar; Aşama 3g)
   | 'hexDigit'
   | 'ledBar'
@@ -46,15 +42,7 @@ export type ComponentType =
   | 'fullAdder'
   | 'halfSubtractor'
   | 'fullSubtractor'
-  | 'mux2'
-  | 'mux4'
-  | 'mux8'
-  | 'demux2'
-  | 'demux4'
-  | 'decoder2to4'
-  | 'decoder3to8'
   | 'bcdTo7Seg'
-  | 'priorityEncoder4to2'
   | 'multiplexer'
   | 'demultiplexer'
   | 'decoder'
@@ -73,20 +61,12 @@ export type ComponentType =
   | 'bitAdder'
   | 'bitFinder'
   | 'alu'
-  | 'comparator4'
-  | 'alu4'
   | 'splitter4'
   | 'splitter'
   | 'bitExtender'
   | 'bitSelector'
   // Sequential & Memory Elements (Ardışıl Mantık & Bellek)
-  | 'dFlipFlop'
-  | 'tFlipFlop'
-  | 'jkFlipFlop'
   | 'srLatch'
-  | 'counter4'
-  | 'register4'
-  | 'shiftRegister4'
   // Parametric memory (Logisim std/memory, Aşama 3e)
   | 'flipFlopD'
   | 'flipFlopT'
@@ -101,8 +81,6 @@ export type ComponentType =
   | 'random'
   // Logisim-evolution 5 dual-port RAM (Aşama 3f-5)
   | 'dualRam'
-  | 'ram16x4'
-  | 'rom16x4'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
   | 'subcircuit';
 
@@ -244,16 +222,9 @@ export interface CircuitComponentInstance {
     q?: SignalValue;
     qBar?: SignalValue;
     lastClk?: SignalValue;
-    hexVal?: number;
-    count?: number;
-    regVal?: number;
     regBits?: SignalValue[];
-    ramData?: number[];
-    romData?: number[];
-    aluResult?: number;
     hiZ?: boolean;
     gateInputsCount?: number;
-    dipSwitches?: boolean[];
     subcircuitId?: string;
     subcircuitName?: string;
     subcircuitCode?: string;
@@ -261,7 +232,6 @@ export interface CircuitComponentInstance {
     subcircuitInternal?: { components: CircuitComponentInstance[]; wires: CircuitWire[] };
     // The IC's internal circuit did not settle in its last evaluation
     oscillating?: boolean;
-    matrixGrid?: boolean[][];
     /** DIP switch / LED bar: number of switches / segments (Logisim-evolution 'number' / 'matrixcols', 1-32); unset = 8 */
     ioSize?: number;
     /** DIP switch: switch positions, bit i = switch i+1 (unsigned 32-bit); unset = all off */
