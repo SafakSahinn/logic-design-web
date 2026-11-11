@@ -294,6 +294,7 @@ export function ramByteEnableCount(cfg: RamConfig): number {
  */
 export function ramPinKeys(type: ComponentType, cfg: RamConfig): { inputs: string[]; outputs: string[] } {
   if (type === 'random') return { inputs: ['ck', 'nxt', 'rst'], outputs: ['out'] };
+  if (type === 'dualRam') return dualRamPinKeys(cfg);
   const evo = cfg.flavor === 'evolution';
   if (type === 'rom') return { inputs: evo ? ['a'] : ['a', 'cs'], outputs: ['d'] };
   if (!evo) {
@@ -320,11 +321,38 @@ export function ramPinKeys(type: ComponentType, cfg: RamConfig): { inputs: strin
   };
 }
 
+/**
+ * Pin keys of a dual-port RAM (Logisim-evolution 5 DualRam, port order of DualRamAppearance): port 0 keeps the
+ * single RAM's keys, port 1 adds '1' (a1, din1, oe1, we1, clk1, dio1, d1). Byte enables are numbered like
+ * evolution's: be0..be(n-1) port 0, be(n)..be(2n-1) port 1 (n = bytes per word). One clear pin for both ports.
+ */
+export function dualRamPinKeys(cfg: RamConfig): { inputs: string[]; outputs: string[] } {
+  const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
+  const bidir = cfg.dataBus === 'bidir';
+  const nBE = ramByteEnableCount(cfg);
+  return {
+    inputs: [
+      'a',
+      'a1',
+      ...(bidir ? [] : ['din', 'din1']),
+      'oe',
+      'oe1',
+      'we',
+      'we1',
+      ...(edge ? ['clk', 'clk1'] : []),
+      ...Array.from({ length: 2 * nBE }, (_, i) => `be${i}`),
+      ...(cfg.clearPin ? ['clr'] : []),
+      ...(bidir ? ['dio', 'dio1'] : []),
+    ],
+    outputs: ['d', 'd1'],
+  };
+}
+
 /** Width of a RAM / ROM / random generator pin */
 export function ramPinWidth(type: ComponentType, key: string, cfg: RamConfig): number {
   if (type === 'random') return key === 'out' ? cfg.dataWidth : 1;
-  if (key === 'a') return cfg.addrWidth;
-  return key === 'd' || key === 'dio' || key === 'din' ? cfg.dataWidth : 1;
+  if (key === 'a' || key === 'a1') return cfg.addrWidth;
+  return ['d', 'dio', 'din', 'd1', 'dio1', 'din1'].includes(key) ? cfg.dataWidth : 1;
 }
 
 /**
@@ -342,6 +370,33 @@ export function ramGeometry(type: ComponentType, _cfg: RamConfig): {
 } {
   if (type === 'random') {
     return { width: 40, height: 40, pins: { out: { x: 40, y: 20 }, ck: { x: 0, y: 10 }, nxt: { x: 0, y: 30 }, rst: { x: 10, y: 40 } }, anchor: { x: 40, y: 20 } };
+  }
+  if (type === 'dualRam') {
+    // 180 x 160: port 0 in the upper half (controls on top), port 1 in the lower half (controls at the bottom),
+    // addresses and data inputs on the left, data on the right, the shared clear pin between the ports
+    const pins: Record<string, { x: number; y: number }> = {
+      a: { x: 0, y: 40 },
+      din: { x: 0, y: 60 },
+      clr: { x: 0, y: 80 },
+      a1: { x: 0, y: 120 },
+      din1: { x: 0, y: 140 },
+      d: { x: 180, y: 40 },
+      dio: { x: 180, y: 40 },
+      d1: { x: 180, y: 120 },
+      dio1: { x: 180, y: 120 },
+      we: { x: 30, y: 0 },
+      clk: { x: 50, y: 0 },
+      oe: { x: 70, y: 0 },
+      we1: { x: 30, y: 160 },
+      clk1: { x: 50, y: 160 },
+      oe1: { x: 70, y: 160 },
+    };
+    const nBE = ramByteEnableCount(_cfg);
+    for (let i = 0; i < nBE; i++) {
+      pins[`be${i}`] = { x: 90 + 20 * i, y: 0 };
+      pins[`be${nBE + i}`] = { x: 90 + 20 * i, y: 160 };
+    }
+    return { width: 180, height: 160, pins, anchor: { x: 180, y: 40 } };
   }
   const pins: Record<string, { x: number; y: number }> = {
     a: { x: 0, y: 40 },
@@ -361,17 +416,25 @@ export function ramGeometry(type: ComponentType, _cfg: RamConfig): {
 const RAM_PIN_LABELS: Record<string, string> = {
   a: 'A', d: 'D', dio: 'D', din: 'DIN', cs: 'sel', oe: 'OE', clr: 'CLR', clk: 'CLK', we: 'WE', ck: 'CK', nxt: 'NXT', rst: 'RST', out: 'Q',
 };
-export function ramPinLabel(key: string): string {
+export function ramPinLabel(key: string, type?: ComponentType): string {
+  if (type === 'dualRam') {
+    // evolution's classic labels: A0 / A1, D0 / D1, ... (byte enables keep their running number)
+    if (/^be\d+$/.test(key)) return key.toUpperCase();
+    if (key === 'clr') return 'CLR';
+    const port = key.endsWith('1') ? '1' : '0';
+    const base = port === '1' ? key.slice(0, -1) : key;
+    return (RAM_PIN_LABELS[base] ?? base.toUpperCase()) + port;
+  }
   return RAM_PIN_LABELS[key] ?? key.toUpperCase();
 }
 
 function ramMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
-  const cfg = defaultRamConfig();
+  const cfg = { ...defaultRamConfig(), ...(type === 'dualRam' ? { flavor: 'evolution' as const } : {}) };
   const g = ramGeometry(type, cfg);
   const keys = ramPinKeys(type, cfg);
   const pin = (id: string, kind: 'input' | 'output') => {
     const width = ramPinWidth(type, id, cfg);
-    return { id, name: ramPinLabel(id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+    return { id, name: ramPinLabel(id, type), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
   };
   return {
     type,
@@ -1276,6 +1339,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
   ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. Logisim 2.7.1 kuralları (sel seçme bacağı; ortak, asenkron ya da ayrı veri yolu; yükselen kenarda yazma) ya da Logisim-evolution kuralları (WE bacağı; tetikleme seçimi; saatli ya da asenkron okuma; bayt etkinleştirme; CLR bacağı)'),
   rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir. Logisim 2.7.1 kurallarında sel = 0 iken çıkış yüzer'),
+  dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek (Logisim-evolution 5): her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı Logisim-evolution RAM'i gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
   random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   counter4: {
@@ -2365,9 +2429,9 @@ export function configureMem(comp: CircuitComponentInstance, patch: Partial<MemC
 }
 
 /** Whether the clock acts now (Logisim ClockState.updateClock); edges need a clean 0/1 step, the first evaluation has no previous level */
-const clockActs = (comp: CircuitComponentInstance, clk: SignalValue, mode: TriggerMode): boolean => {
-  const prev = comp.state.lastClk ?? clk;
-  comp.state.lastClk = clk;
+const clockActs = (comp: CircuitComponentInstance, clk: SignalValue, mode: TriggerMode, key: 'lastClk' | 'lastClkB' = 'lastClk'): boolean => {
+  const prev = comp.state[key] ?? clk;
+  comp.state[key] = clk;
   if (mode === 'falling') return prev === 1 && clk === 0;
   if (mode === 'high') return clk === 1;
   if (mode === 'low') return clk === 0;
@@ -2474,7 +2538,7 @@ export function stepMem(comp: CircuitComponentInstance, ins: SignalValue[][]): S
 
 // ---- Parametric RAM / ROM / random generator (Logisim std/memory Ram, Rom, Random) --------------------------
 
-export const RAM_TYPES = new Set<ComponentType>(['ram', 'rom', 'random']);
+export const RAM_TYPES = new Set<ComponentType>(['ram', 'rom', 'random', 'dualRam']);
 export const RAM_ADDR_MIN = 2;
 export const RAM_ADDR_MAX = 24;
 /** Words per contents page (memPages) */
@@ -2488,7 +2552,7 @@ export function getRamConfig(comp: CircuitComponentInstance): RamConfig {
   return {
     addrWidth: find('a')?.width ?? d.addrWidth,
     dataWidth: find('d')?.width ?? 1,
-    flavor: st.memFlavor ?? 'logisim',
+    flavor: comp.type === 'dualRam' ? 'evolution' : st.memFlavor ?? 'logisim',
     bus: st.ramBus ?? 'combined',
     dataBus: st.ramDataBus ?? 'separate',
     trigger: st.trigger ?? 'rising',
@@ -2521,19 +2585,21 @@ export function memWrite(comp: CircuitComponentInstance, addr: number, value: nu
 export function configureRam(comp: CircuitComponentInstance, patch: Partial<RamConfig>): CircuitComponentInstance {
   const cur = comp.inputs.length ? getRamConfig(comp) : defaultRamConfig();
   const cfg: RamConfig = { ...cur, ...patch };
+  // the dual-port RAM exists only in Logisim-evolution
+  if (comp.type === 'dualRam') cfg.flavor = 'evolution';
   cfg.dataWidth = clampWidth(cfg.dataWidth);
   cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, Math.round(cfg.addrWidth)));
   const keys = ramPinKeys(comp.type, cfg);
   const old = new Map<string, CircuitPin>();
   for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
   const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
-    const name = ramPinLabel(key);
+    const name = ramPinLabel(key, comp.type);
     return { ...pinWithWidth(old.get(key) ?? newPin(comp, key, name, type), ramPinWidth(comp.type, key, cfg)), name };
   };
   const state = { ...comp.state };
   if (comp.type !== 'random') {
     state.memFlavor = cfg.flavor;
-    if (comp.type === 'ram') {
+    if (comp.type === 'ram' || comp.type === 'dualRam') {
       state.ramBus = cfg.bus;
       state.ramDataBus = cfg.dataBus;
       state.trigger = cfg.trigger;
@@ -2627,6 +2693,7 @@ export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): S
     else if (acts && one('nxt') !== 0) randomStep(comp);
     return [numBits(st.randomValue ?? 0, cfg.dataWidth)];
   }
+  if (comp.type === 'dualRam') return stepDualRam(comp, cfg, at);
   const w = cfg.dataWidth;
   const mask = memMask(w);
   const evo = cfg.flavor === 'evolution';
@@ -2716,6 +2783,79 @@ export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): S
   if (async || st.ramAsyncRead) return finish(show(newVal));
   if (edge) return finish(show(st.ramReadBehavior === 'war' ? oldVal : newVal));
   return finish(out);
+}
+
+/**
+ * Dual-port RAM (Logisim-evolution 5 DualRam.propagate): two evolution RAM ports on one contents. CLR = 1 clears
+ * and drives both data outputs like the single RAM, without looking at the clocks. Each port writes with WE = 1
+ * at its own clock's edge (a level trigger: WE at the active level, no clocks) and reads like the single RAM
+ * (OE, E / undefined address, asynchronous or clocked read with raw / war).
+ *
+ * Where the two ports meet, the part behaves like a real dual-port SRAM rather than copying evolution's
+ * evaluation order: both writes happen first (port 0, then port 1, so port 1 wins on the same word, byte enables
+ * merge), then both ports read the contents after the writes (war: the word before this evaluation's writes).
+ * evolution instead reads port 0 before port 1 writes and does not update an asynchronous read when only the other
+ * port wrote, and its low-level trigger never writes (it asks for WE = 1 and WE = 0 at once); here a low trigger
+ * writes at WE = 0 like the single RAM.
+ */
+function stepDualRam(comp: CircuitComponentInstance, cfg: RamConfig, at: (k: string) => SignalValue[] | undefined): SignalValue[][] {
+  const st = comp.state;
+  const w = cfg.dataWidth;
+  const mask = memMask(w);
+  const one = (k: string): SignalValue => at(k)?.[0] ?? 'X';
+  const sep = cfg.dataBus !== 'bidir';
+  const prev = st.memOut?.length === 2 && st.memOut[0].length === w ? st.memOut : [fillBits(w, 'Z'), fillBits(w, 'Z')];
+  const finish = (outs: SignalValue[][]): SignalValue[][] => {
+    st.memOut = outs;
+    return outs;
+  };
+  if (cfg.clearPin && one('clr') === 1) {
+    st.memPages = {};
+    const v = sep ? numBits(0, w) : fillBits(w, 'Z');
+    return finish([v, [...v]]);
+  }
+  const trig = cfg.trigger;
+  const async = trig === 'high' || trig === 'low';
+  const nBE = ramByteEnableCount(cfg);
+  const ports = (['', '1'] as const).map((sfx, p) => {
+    const aBits = fitBits(at('a' + sfx), cfg.addrWidth);
+    const addr = defined(aBits) ? bitsBig(aBits) : -1;
+    if (addr >= 0) {
+      if (p === 0) st.memCurrent = addr;
+      else st.memCurrentB = addr;
+    }
+    const we = one('we' + sfx);
+    const edge = !async && clockActs(comp, one('clk' + sfx), trig, p === 0 ? 'lastClk' : 'lastClkB');
+    const write = addr >= 0 && ((async && we === (trig === 'high' ? 1 : 0)) || (edge && we === 1));
+    const din = fitBits(at((sep ? 'din' : 'dio') + sfx), w);
+    return { sfx, p, aBits, addr, edge, write, din: defined(din) ? bitsBig(din) : mask, old: memRead(comp, addr) };
+  });
+  for (const q of ports) {
+    if (!q.write) continue;
+    let val = memRead(comp, q.addr);
+    if (nBE === 0) val = q.din;
+    else {
+      for (let i = 0; i < nBE; i++) {
+        if (one(`be${q.p * nBE + i}`) !== 1) continue;
+        const unit = 2 ** (8 * i);
+        const byteOf = (n: number) => Math.floor(n / unit) % 256;
+        val += (byteOf(q.din) - byteOf(val)) * unit;
+      }
+      val = val % 2 ** w;
+    }
+    memWrite(comp, q.addr, val);
+  }
+  return finish(
+    ports.map((q) => {
+      const kept = prev[q.p];
+      if (one('oe' + q.sfx) === 0) return !sep || cfg.dataBus === 'controlled' ? fillBits(w, 'Z') : kept;
+      if (q.aBits.includes('E')) return fillBits(w, 'E');
+      if (q.addr < 0) return fillBits(w, 'Z');
+      if (async || st.ramAsyncRead) return numBits(memRead(comp, q.addr), w);
+      if (q.edge) return numBits(st.ramReadBehavior === 'war' ? q.old : memRead(comp, q.addr), w);
+      return kept;
+    })
+  );
 }
 
 /**
@@ -3599,6 +3739,7 @@ export function simulateCircuitStep(
       case 'ram':
       case 'rom':
       case 'random':
+      case 'dualRam':
         stepRam(comp, comp.inputs.map((p) => readBits(p, p.width ?? 1))).forEach((bits, i) => setBitsOut(i, bits));
         break;
       case 'bitSelector': {

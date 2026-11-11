@@ -93,6 +93,8 @@ export type ComponentType =
   | 'ram'
   | 'rom'
   | 'random'
+  // Logisim-evolution 5 dual-port RAM (Aşama 3f-5)
+  | 'dualRam'
   | 'ram16x4'
   | 'rom16x4'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
@@ -220,6 +222,10 @@ export interface CircuitComponentInstance {
     memPages?: Record<string, number[]>;
     /** RAM / ROM: last address shown (Logisim MemState current), -1 = none */
     memCurrent?: number;
+    /** Dual-port RAM: last address shown for port 1 (memCurrent is port 0's), -1 = none */
+    memCurrentB?: number;
+    /** Dual-port RAM: last value seen on port 1's clock (lastClk is port 0's) */
+    lastClkB?: SignalValue;
     /** RAM / ROM: outputs as last driven (a memory that does not drive keeps them, like Logisim) */
     memOut?: SignalValue[][];
     /** Random generator: seed (Logisim 'seed', 0 = from the time) */
