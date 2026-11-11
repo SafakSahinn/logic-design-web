@@ -448,6 +448,129 @@ function ramMeta(type: ComponentType, name: string, description: string): Compon
   };
 }
 
+// ---- Parametric I/O parts (Logisim std/io; Aşama 3g) ------------------------------------------------
+// dipSwitch = Logisim-evolution DipSwitch, ledBar = evolution LedBar, dotMatrix = Logisim DotMatrix,
+// hexDigit = Logisim Hex Digit Display. Our drawings are twice Logisim's (one dot / segment / switch = 20px)
+// so every pin sits on the 10px grid; the pin order and bit order are Logisim's.
+
+export interface IoConfig {
+  /** DIP switches / LED bar segments, 1-32 */
+  size: number;
+  ledBarMode: 'separated' | 'oneWire';
+  cols: number;
+  rows: number;
+  matrixInput: 'column' | 'row' | 'select';
+  /** Pins on the bottom / left side (bl) or on the top / right side (tr) (evolution 'selloc') */
+  selectLoc: 'bl' | 'tr';
+  /** Hex digit / 7-segment decimal point input */
+  dp: boolean;
+}
+
+export function defaultIoConfig(): IoConfig {
+  return { size: 8, ledBarMode: 'separated', cols: 5, rows: 7, matrixInput: 'column', selectLoc: 'bl', dp: true };
+}
+
+function ioPinKeys(type: ComponentType, cfg: IoConfig): { inputs: string[]; outputs: string[] } {
+  const seq = (p: string, n: number) => Array.from({ length: n }, (_, i) => `${p}${i}`);
+  switch (type) {
+    case 'dipSwitch':
+      return { inputs: [], outputs: seq('out', cfg.size) };
+    case 'ledBar':
+      return { inputs: cfg.ledBarMode === 'oneWire' ? ['in'] : seq('in', cfg.size), outputs: [] };
+    case 'dotMatrix':
+      if (cfg.matrixInput === 'column') return { inputs: seq('c', cfg.cols), outputs: [] };
+      if (cfg.matrixInput === 'row') return { inputs: seq('r', cfg.rows), outputs: [] };
+      return { inputs: ['col', 'row'], outputs: [] };
+    case 'hexDigit':
+      return { inputs: cfg.dp ? ['in', 'dp'] : ['in'], outputs: [] };
+    default:
+      return { inputs: [], outputs: [] };
+  }
+}
+
+function ioPinWidth(type: ComponentType, key: string, cfg: IoConfig): number {
+  if (type === 'ledBar' && key === 'in') return cfg.ledBarMode === 'oneWire' ? cfg.size : 1;
+  if (type === 'dotMatrix') {
+    if (key === 'col') return cfg.cols;
+    if (key === 'row') return cfg.rows;
+    return key.startsWith('c') ? cfg.rows : cfg.cols;
+  }
+  if (type === 'hexDigit' && key === 'in') return 4;
+  return 1;
+}
+
+function ioPinLabel(type: ComponentType, key: string): string {
+  const n = key.replace(/^\D+/, '');
+  if (type === 'dipSwitch') return `Q${n}`;
+  if (type === 'ledBar') return key === 'in' ? 'D' : `D${n}`;
+  if (type === 'hexDigit') return key === 'dp' ? 'DP' : 'D';
+  if (key === 'col') return 'C';
+  if (key === 'row') return 'R';
+  return `${key[0].toUpperCase()}${n}`;
+}
+
+/** Body size and pin points (unrotated, relative to the top-left corner) of a parametric I/O part */
+export function ioGeometry(type: ComponentType, cfg: IoConfig): { width: number; height: number; pins: Record<string, { x: number; y: number }> } {
+  const pins: Record<string, { x: number; y: number }> = {};
+  const U = 20;
+  if (type === 'dipSwitch') {
+    // Logisim-evolution facing east: the switches stacked top to bottom, one output each on the right
+    const n = cfg.size;
+    for (let i = 0; i < n; i++) pins[`out${i}`] = { x: 3 * U, y: U * (i + 1) };
+    return { width: 3 * U, height: U * (n + 1), pins };
+  }
+  if (type === 'hexDigit') {
+    return { width: 60, height: 90, pins: { in: { x: 0, y: 30 }, dp: { x: 0, y: 60 } } };
+  }
+  // LED bar = a 1-row dot matrix (evolution LedBar: segments 3 dots tall, 'separated' = column input, 'one wire' = row input)
+  const bar = type === 'ledBar';
+  const cols = bar ? cfg.size : cfg.cols;
+  const rows = bar ? 1 : cfg.rows;
+  const cellH = bar ? 3 * U : U;
+  const width = U * cols;
+  const height = cellH * rows;
+  const tr = cfg.selectLoc === 'tr';
+  const mode = bar ? (cfg.ledBarMode === 'oneWire' ? 'row' : 'column') : cfg.matrixInput;
+  if (mode === 'column') {
+    // Logisim: column i's pin under the middle of the column (above it with selloc top-right), bit 0 = bottom dot
+    for (let i = 0; i < cols; i++) pins[bar ? `in${i}` : `c${i}`] = { x: U * i + U / 2, y: tr ? 0 : height };
+  } else if (mode === 'row') {
+    // Logisim: row i's pin beside the middle of the row, bit 0 = rightmost dot
+    for (let i = 0; i < rows; i++) pins[bar ? 'in' : `r${i}`] = { x: tr ? width : 0, y: cellH * i + cellH / 2 };
+  } else if (rows === 1) {
+    // Logisim-evolution select with one row: column vector on the left, row bit on the right
+    pins.col = { x: 0, y: U / 2 };
+    pins.row = { x: width, y: U / 2 };
+  } else {
+    // Logisim select: column vector, row vector 10px (ours 20px) below it, around the middle of the side
+    const x = tr ? width : 0;
+    const y0 = (U / 2) * rows - U / 2;
+    pins.col = { x, y: y0 };
+    pins.row = { x, y: y0 + U };
+  }
+  return { width, height, pins };
+}
+
+function ioMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const cfg = defaultIoConfig();
+  const g = ioGeometry(type, cfg);
+  const keys = ioPinKeys(type, cfg);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = ioPinWidth(type, id, cfg);
+    return { id, name: ioPinLabel(type, id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: type === 'dipSwitch' ? 'inputs' : 'outputs',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   switch: {
     type: 'switch',
@@ -544,6 +667,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     ],
     description: '4 adet bağımsız açma/kapama anahtarını tek pakette sunan DIP anahtar bankası',
   },
+  dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
     name: 'ASCII Klavye Giriş Matrisi',
@@ -752,6 +876,9 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: '8 Satır (R0-R7) ve 8 Sütun (C0-C7) matrisiyle piksel grafik ve animasyon oynatan 64 LED ekran',
   },
+  hexDigit: ioMeta('hexDigit', 'Hex Gösterge', '4 bitlik D girişini 0-F onaltılık rakamı olarak gösterir (Logisim Hex Digit Display); tanımsız bitli girişte tire. DP girişi ondalık noktayı yakar, ayardan kaldırılabilir'),
+  ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk (Logisim-evolution LedBar): her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
+  dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris (Logisim DotMatrix). Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
   rgbMatrix16x16: {
     type: 'rgbMatrix16x16',
     name: '16x16 RGB Video Matrisi (VRAM GPU Ekranı)',
@@ -1571,6 +1698,7 @@ export function createComponentInstance(
   if (ARITH_TYPES.has(type)) return configureArith(inst, {});
   if (MEM_TYPES.has(type)) return configureMem(inst, {});
   if (RAM_TYPES.has(type)) return configureRam(inst, {});
+  if (IO_TYPES.has(type)) return configureIo(inst, {});
   return inst;
 }
 
@@ -1610,6 +1738,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (RAM_TYPES.has(comp.type)) {
     const g = ramGeometry(comp.type, getRamConfig(comp));
+    return { width: g.width, height: g.height };
+  }
+  if (IO_TYPES.has(comp.type)) {
+    const g = ioGeometry(comp.type, getIoConfig(comp));
     return { width: g.width, height: g.height };
   }
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
@@ -2862,6 +2994,152 @@ function stepDualRam(comp: CircuitComponentInstance, cfg: RamConfig, at: (k: str
  * Unrotated (local frame) Y offset of input pin `idx` on a multi-input gate with `count` inputs.
  * Shared by updatePinPositions and the gate renderer so the drawn input leads match the pins.
  */
+// ---- Parametric I/O parts: settings and what the displays show (Aşama 3g) -----------------------------
+
+export const IO_TYPES = new Set<ComponentType>(['dipSwitch', 'ledBar', 'dotMatrix', 'hexDigit']);
+export const IO_MAX_SIZE = 32;
+
+const clampIo = (n: number) => Math.max(1, Math.min(IO_MAX_SIZE, Math.round(n)));
+
+export function getIoConfig(comp: CircuitComponentInstance): IoConfig {
+  const d = defaultIoConfig();
+  const st = comp.state;
+  return {
+    size: clampIo(st.ioSize ?? d.size),
+    ledBarMode: st.ledBarMode ?? d.ledBarMode,
+    cols: clampIo(st.matrixCols ?? d.cols),
+    rows: clampIo(st.matrixRows ?? d.rows),
+    matrixInput: st.matrixInput ?? d.matrixInput,
+    selectLoc: st.selectLoc ?? d.selectLoc,
+    dp: st.ioDp ?? d.dp,
+  };
+}
+
+/**
+ * New settings of a DIP switch / LED bar / dot matrix / hex digit / 7-segment display; pins keep their ids
+ * (and wires), widths follow the settings. A DIP switch keeps the positions of the switches that still exist.
+ */
+export function configureIo(comp: CircuitComponentInstance, patch: Partial<IoConfig>): CircuitComponentInstance {
+  const cfg: IoConfig = { ...getIoConfig(comp), ...patch };
+  cfg.size = clampIo(cfg.size);
+  cfg.cols = clampIo(cfg.cols);
+  cfg.rows = clampIo(cfg.rows);
+  const state = { ...comp.state };
+  if (comp.type === 'sevenSegment') {
+    // Logisim-evolution 'decimalPoint': without it the part has the 7 segment inputs only
+    state.ioDp = cfg.dp;
+    const meta = COMPONENT_CATALOG.sevenSegment;
+    const has = new Map(comp.inputs.map((p) => [pinKey(comp, p), p]));
+    const inputs = meta.inputs
+      .filter((p) => cfg.dp || p.id !== 'inDP')
+      .map((p) => has.get(p.id) ?? newPin(comp, p.id, p.name, 'input'));
+    return updatePinPositions({ ...comp, inputs, state });
+  }
+  const keys = ioPinKeys(comp.type, cfg);
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = ioPinLabel(comp.type, key);
+    const fresh = newPin(comp, key, name, type);
+    return { ...pinWithWidth(old.get(key) ?? (type === 'output' ? { ...fresh, value: 0 } : fresh), ioPinWidth(comp.type, key, cfg)), name };
+  };
+  if (comp.type === 'dipSwitch') {
+    state.ioSize = cfg.size;
+    state.dipBits = cfg.size >= 32 ? (state.dipBits ?? 0) >>> 0 : ((state.dipBits ?? 0) % 2 ** cfg.size) >>> 0;
+  } else if (comp.type === 'ledBar') {
+    state.ioSize = cfg.size;
+    state.ledBarMode = cfg.ledBarMode;
+    state.selectLoc = cfg.selectLoc;
+  } else if (comp.type === 'dotMatrix') {
+    state.matrixCols = cfg.cols;
+    state.matrixRows = cfg.rows;
+    state.matrixInput = cfg.matrixInput;
+    state.selectLoc = cfg.selectLoc;
+  } else if (comp.type === 'hexDigit') {
+    state.ioDp = cfg.dp;
+  }
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+/** DIP switch: flip switch i (0-based); the outputs follow on the next simulation step */
+export function toggleDipSwitch(comp: CircuitComponentInstance, i: number): CircuitComponentInstance {
+  const n = getIoConfig(comp).size;
+  if (i < 0 || i >= n) return comp;
+  return { ...comp, state: { ...comp.state, dipBits: ((comp.state.dipBits ?? 0) ^ (1 << i)) >>> 0 } };
+}
+
+// A display dot / segment: 1 lit, 0 dark, 'E' Logisim's error colour (an input that is neither 0 nor 1)
+export type IoDot = 1 | 0 | 'E';
+const dotOf = (v: SignalValue): IoDot => (v === 1 ? 1 : v === 0 ? 0 : 'E');
+
+/**
+ * Dots of a dot matrix (or LED bar = 1 row), row-major from the top-left corner, as Logisim's DotMatrix
+ * State.setColumn / setRow / setSelect leave them (persistence 0):
+ * - column input i: bit k lights row rows-1-k of column i (bit 0 = bottom)
+ * - row input i: bit k lights column cols-1-k of row i (bit 0 = rightmost)
+ * - select: row r is on when row bit rows-1-r is 1, then column c shows column bit c (bit 0 = leftmost);
+ *   a 0 row is dark, any other row value shows the error colour
+ */
+export function matrixDots(comp: CircuitComponentInstance): IoDot[] {
+  const cfg = getIoConfig(comp);
+  const bar = comp.type === 'ledBar';
+  const cols = bar ? cfg.size : cfg.cols;
+  const rows = bar ? 1 : cfg.rows;
+  const mode = bar ? (cfg.ledBarMode === 'oneWire' ? 'row' : 'column') : cfg.matrixInput;
+  const dots: IoDot[] = new Array<IoDot>(rows * cols).fill('E');
+  const at = (key: string, w: number) => readBits(comp.inputs.find((p) => pinKey(comp, p) === key), w);
+  if (mode === 'column') {
+    for (let c = 0; c < cols; c++) {
+      const v = at(bar ? `in${c}` : `c${c}`, rows);
+      for (let k = 0; k < rows; k++) dots[(rows - 1 - k) * cols + c] = dotOf(v[k]);
+    }
+  } else if (mode === 'row') {
+    for (let r = 0; r < rows; r++) {
+      const v = at(bar ? 'in' : `r${r}`, cols);
+      for (let k = 0; k < cols; k++) dots[r * cols + (cols - 1 - k)] = dotOf(v[k]);
+    }
+  } else {
+    const colV = at('col', cols);
+    const rowV = at('row', rows);
+    for (let r = 0; r < rows; r++) {
+      const whole = rowV[rows - 1 - r];
+      for (let c = 0; c < cols; c++) dots[r * cols + c] = whole === 1 ? dotOf(colV[c]) : whole === 0 ? 0 : 'E';
+    }
+  }
+  return dots;
+}
+
+// Logisim HexDigit: the segments of each value, a..g (a dash for an input with any x / E bit, Logisim 2.7.1)
+const HEX_SEGMENTS = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x67, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71];
+
+/**
+ * Lit segments of a 7-segment display or hex digit: a, b, c, d, e, f, g, dp. A 7-segment input lights its
+ * segment when it is 1 (active high) or when it is anything but 1 (active low, like Logisim: an open input
+ * is lit then); a hex digit lights the DP on a 1.
+ */
+export function segmentsLit(comp: CircuitComponentInstance): boolean[] {
+  const dp = comp.state.ioDp ?? true;
+  if (comp.type === 'hexDigit') {
+    const v = bitsToNumber(readBits(comp.inputs.find((p) => pinKey(comp, p) === 'in'), 4));
+    const segs = v === undefined ? 0x40 : HEX_SEGMENTS[v & 15];
+    const dpIn = comp.inputs.find((p) => pinKey(comp, p) === 'dp');
+    return [...Array.from({ length: 7 }, (_, i) => ((segs >> i) & 1) === 1), dp && dpIn?.value === 1];
+  }
+  const low = comp.state.ioActiveLow === true;
+  const keys = ['inA', 'inB', 'inC', 'inD', 'inE', 'inF', 'inG', 'inDP'];
+  return keys.map((k, i) => {
+    if (i === 7 && !dp) return false;
+    const p = comp.inputs.find((q) => pinKey(comp, q) === k);
+    const one = p?.value === 1;
+    return low ? !one : one;
+  });
+}
+
 export function getMultiInputGatePinRelY(count: number, idx: number, height: number): number {
   if (count === 2) return idx === 0 ? 20 : 40;
   if (count === 3) return idx === 0 ? 10 : idx === 1 ? 30 : 50;
@@ -2973,8 +3251,12 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type)) {
-    const g = MEM_TYPES.has(comp.type) ? memLayout(comp) : ramGeometry(comp.type, getRamConfig(comp));
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type)) {
+    const g = MEM_TYPES.has(comp.type)
+      ? memLayout(comp)
+      : RAM_TYPES.has(comp.type)
+        ? ramGeometry(comp.type, getRamConfig(comp))
+        : ioGeometry(comp.type, getIoConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -3273,6 +3555,15 @@ export function simulateCircuitStep(
         comp.outputs[0].value = 0;
         hasChanged = true;
       }
+    } else if (comp.type === 'dipSwitch') {
+      const bits = comp.state.dipBits ?? 0;
+      comp.outputs.forEach((p, i) => {
+        const targetVal: SignalValue = (bits >>> i) & 1 ? 1 : 0;
+        if (p.value !== targetVal) {
+          p.value = targetVal;
+          hasChanged = true;
+        }
+      });
     } else if (comp.type === 'dipSwitch4') {
       const switches = comp.state.dipSwitches || [false, false, false, false];
       for (let i = 0; i < 4; i++) {
@@ -5746,6 +6037,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'gnd' &&
       c.type !== 'constant' &&
       c.type !== 'dipSwitch4' &&
+      c.type !== 'dipSwitch' &&
       c.type !== 'asciiKeyboard' &&
       c.type !== 'dotMatrix8x8' &&
       c.type !== 'rgbMatrix16x16' &&

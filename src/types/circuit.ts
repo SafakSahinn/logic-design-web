@@ -13,6 +13,8 @@ export type ComponentType =
   | 'tunnel'
   | 'pullResistor'
   | 'dipSwitch4'
+  // Parametric DIP switch (Logisim-evolution DipSwitch, Aşama 3g)
+  | 'dipSwitch'
   | 'asciiKeyboard'
   // Basic Gates
   | 'not'
@@ -34,6 +36,10 @@ export type ComponentType =
   | 'hexDisplay'
   | 'ledBar4'
   | 'dotMatrix8x8'
+  // Parametric displays (Logisim std/io HexDigit, DotMatrix; evolution LedBar; Aşama 3g)
+  | 'hexDigit'
+  | 'ledBar'
+  | 'dotMatrix'
   | 'rgbMatrix16x16'
   // Combinational Blocks
   | 'halfAdder'
@@ -256,6 +262,27 @@ export interface CircuitComponentInstance {
     // The IC's internal circuit did not settle in its last evaluation
     oscillating?: boolean;
     matrixGrid?: boolean[][];
+    /** DIP switch / LED bar: number of switches / segments (Logisim-evolution 'number' / 'matrixcols', 1-32); unset = 8 */
+    ioSize?: number;
+    /** DIP switch: switch positions, bit i = switch i+1 (unsigned 32-bit); unset = all off */
+    dipBits?: number;
+    /** LED bar: one 1-bit input per segment or one wide input (evolution 'inputtype' column / row); unset = separated */
+    ledBarMode?: 'separated' | 'oneWire';
+    /** Dot matrix: columns and rows (Logisim 'matrixcols' / 'matrixrows', 1-32); unset = 5 x 7 */
+    matrixCols?: number;
+    matrixRows?: number;
+    /** Dot matrix: how the inputs drive the dots (Logisim 'inputtype'); unset = column */
+    matrixInput?: 'column' | 'row' | 'select';
+    /** Dot matrix / LED bar: dot shape (Logisim 'dotshape': circle, square, clusterSegment); unset = square (LED bar: padded) */
+    dotShape?: 'circle' | 'square' | 'padded';
+    /** Dot matrix / LED bar: Logisim 'persist' (ticks a dot stays lit), kept for .circ files; the simulator has no tick counter and shows 0 */
+    ioPersist?: number;
+    /** 7-segment / hex digit: decimal point input (evolution 'decimalPoint'); unset = true */
+    ioDp?: boolean;
+    /** 7-segment: segments light on a 0 (common anode; Logisim 'active' false); unset = active high */
+    ioActiveLow?: boolean;
+    /** Displays: colour of a lit segment / dot (Logisim 'color'), CSS hex; unset = the part's default */
+    ioOnColor?: string;
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;
