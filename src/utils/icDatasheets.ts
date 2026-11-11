@@ -1,4 +1,5 @@
-import type { ComponentType } from '../types/circuit';
+import type { CircuitComponentInstance, ComponentType } from '../types/circuit';
+import { configureArith, configureMem, configurePlexer, configureRam } from './circuitEngine';
 
 export interface ICPin {
   pin: number;
@@ -16,6 +17,8 @@ export interface ICDatasheet {
   packageType: string;
   pinCount: number;
   simulatorCompType?: ComponentType;
+  /** Settings of the parametric part placed on the canvas (width, select bits, ...) */
+  simulatorSetup?: (c: CircuitComponentInstance) => CircuitComponentInstance;
   // How the part placed on the canvas differs from the real chip
   simulatorNote?: string;
   pins: ICPin[];
@@ -83,9 +86,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Bilgisayar işlemcilerinin kalbini oluşturan efsanevi entegre. S0..S3 seçici girişleri ve M (Mod: 0=Aritmetik, 1=Mantıksal) piniyle 16 farklı aritmetik (Toplama, Çıkarma, Negasyon vb.) ve 16 farklı mantıksal (AND, OR, XOR, NOT vb.) işlem gerçekleştirir.',
     packageType: '24-Pin DIP',
     pinCount: 24,
-    simulatorCompType: 'alu4',
+    simulatorCompType: 'alu',
+    simulatorSetup: (c) => configureArith(c, { width: 4 }),
     simulatorNote:
-      'Simülatörün 4-bit ALU\'su yalnızca dört işlem yapar (S1-S0: 00 toplama, 01 çıkarma, 10 VE, 11 VEYA) ve sıfır bayrağı (Z) verir. M, P, G ve A=B bacakları yoktur, 74HC181\'in 32 fonksiyonunu modellemez.',
+      'Tuvale 4 bitlik parametrik ALU eklenir: 8 işlem (0 ADD, 1 SUB, 2 AND, 3 OR, 4 XOR, 5 NOR, 6 SLT, 7 B\'yi geçir), işlem kodu 3 bitlik tek bacaktan girer, Z N C V bayrakları vardır. M, P, G ve A=B bacakları yoktur, 74HC181\'in 32 fonksiyonunu modellemez.',
     pins: [
       { pin: 1, label: 'B0', desc: 'B Verisi Bit 0', type: 'in' },
       { pin: 2, label: 'A0', desc: 'A Verisi Bit 0', type: 'in' },
@@ -141,9 +145,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'İki adet 4-bit ikili veya BCD kelimeyi (A3..A0 ile B3..B0) büyüklük açısından karşılaştırarak A>B, A<B veya A=B çıkışlarından birini lojik 1 yapar. Kaskat bağlama girişleriyle n-bit karşılaştırıcı oluşturulabilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'comparator4',
+    simulatorCompType: 'comparator',
+    simulatorSetup: (c) => ({ ...configureArith(c, { width: 4 }), state: { ...c.state, arithMode: 'unsigned' as const } }),
     simulatorNote:
-      'Kaskat girişleri (I(A>B), I(A=B), I(A<B)) yoktur; tek başına kullanılan bir 74HC85 gibi davranır.',
+      'Tuvale işaretsiz modda 4 bitlik karşılaştırıcı eklenir (A ve B 4 bitlik tek bacak). Kaskat girişleri (I(A>B), I(A=B), I(A<B)) yoktur; tek başına kullanılan bir 74HC85 gibi davranır.',
     pins: [
       { pin: 1, label: 'B3', desc: 'B Sayısı Bit 3 (MSB)', type: 'in' },
       { pin: 2, label: 'I(A<B)', desc: 'Kaskat Girişi: A < B', type: 'in' },
@@ -187,9 +192,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '8 farklı veri girişinden (D0..D7) birini, 3-bit adres seçici koduna (S2, S1, S0) göre seçerek Y çıkışına ve tersini W çıkışına ileten çok amaçlı veri yönlendiricidir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'mux8',
+    simulatorCompType: 'multiplexer',
+    simulatorSetup: (c) => configurePlexer(c, { select: 3, width: 1, enable: true }),
     simulatorNote:
-      'Aktif-düşük E\' yetki girişi yoktur (seçici her zaman etkindir). Y ve W çıkışları gerçek çipteki gibidir.',
+      'Tuvale 8:1 MUX eklenir: seçme girişi 3 bitlik tek bacaktır, yetki (EN) aktif-yüksektir (74HC151\'de E\' aktif-düşük). Ters çıkış W yoktur.',
     pins: [
       { pin: 1, label: 'D3', desc: 'Veri Girişi 3', type: 'in' },
       { pin: 2, label: 'D2', desc: 'Veri Girişi 2', type: 'in' },
@@ -237,9 +243,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek pakette iki bağımsız 2-girişli 4-çıkışlı kod çözücü içerir. 2-bit ikili adres girişini 4 aktif-düşük çıkıştan birine dönüştürür. Bellek adres çözümleme (Chip Select) devrelerinde standarttır.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'demux4',
+    simulatorCompType: 'demultiplexer',
+    simulatorSetup: (c) => configurePlexer(c, { select: 2, width: 1, enable: true }),
     simulatorNote:
-      'Tuvale tek bir 1:4 DEMUX eklenir: D girişi seçilen çıkışa aktarılır, çıkışlar aktif-yüksektir. 74HC139\'da çıkışlar aktif-düşüktür ve bir pakette iki çözücü vardır.',
+      'Tuvale tek bir 1:4 DEMUX eklenir: D girişi seçilen çıkışa aktarılır, seçme girişi 2 bitlik tek bacaktır, çıkışlar ve EN aktif-yüksektir. 74HC139\'da çıkışlar aktif-düşüktür ve bir pakette iki çözücü vardır.',
     pins: [
       { pin: 1, label: '1E\'', desc: 'Bölüm 1 Yetkilendirme (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: '1A0', desc: 'Bölüm 1 Adres Bit 0', type: 'in' },
@@ -283,9 +290,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '8 aktif-düşük giriş hattından en yüksek önceliğe sahip olanı (7 numaralı hattan başlayarak) tespit eder ve 3-bitlik ikili kod üretir. Donanım kesme (Interrupt controller) yapılarında kritiktir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'priorityEncoder4to2',
+    simulatorCompType: 'priorityEncoder',
+    simulatorSetup: (c) => configurePlexer(c, { select: 3 }),
     simulatorNote:
-      'Tuvale 4:2 ve aktif-yüksek bir öncelikli kodlayıcı eklenir (D3 > D2 > D1 > D0, V = en az bir giriş aktif). Aktif-düşük mantık, EI ve EO yoktur.',
+      'Tuvale 8:3 aktif-yüksek öncelikli kodlayıcı eklenir (7 > 6 > ... > 0): çıkış kodu 3 bitlik tek bacak, GS en az bir girişin aktif olduğunu gösterir, EI yetki girişi ve EO zincirleme çıkışı vardır. 74HC148\'de tüm girişler ve çıkışlar aktif-düşüktür.',
     pins: [
       { pin: 1, label: 'I4\'', desc: 'Giriş 4', type: 'in' },
       { pin: 2, label: 'I5\'', desc: 'Giriş 5', type: 'in' },
@@ -329,9 +337,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Pozitif saat kenarında 0 dan 15 e kadar sayan senkron sayaçtır. Asenkron Master Reset (MR\') ve paralel yükleme (SPE\') pinleriyle istenen sayıdan başlatılabilir veya döngüsel modüllere (Mod-10, Mod-12) ayarlanabilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'counter4',
+    simulatorCompType: 'counter',
+    simulatorSetup: (c) => configureMem(c, { width: 4 }),
     simulatorNote:
-      'Simülatör sayacında yalnızca CLK ve RST (asenkron, aktif-yüksek) vardır. Paralel yükleme, CEP/CET ve TC bacakları yoktur.',
+      'Tuvale 4 bitlik sayaç eklenir: paralel yükleme (LD, öncelikli), sayma izni (CT), yön (UD) ve elde çıkışı (C, en üst değerde 1) vardır. CLR asenkron ve aktif-yüksektir (74HC161\'de MR\' aktif-düşük); CEP ve CET yerine tek bir CT bacağı vardır.',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Sıfırlama (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'CLK', desc: 'Saat Darbe Girişi (Yükselen Kenar)', type: 'ctrl' },
@@ -374,9 +383,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Dört farklı çalışma modunu destekleyen üniversal kaydedici: Paralel yükleme, Sağa kaydırma, Sola kaydırma ve Veriyi koruma. İşlemcilerin veri transfer yollarında vazgeçilmezdir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'shiftRegister4',
+    simulatorCompType: 'shiftRegister',
+    simulatorSetup: (c) => configureMem(c, { width: 1, length: 4, parallel: true }),
     simulatorNote:
-      'Paralel yükleme yoktur: S1-S0=11 durumu tutar. CLR asenkron ve aktif-yüksektir (74HC194\'te MR\' aktif-düşük). Kaydırma yönleri gerçek çipteki gibidir.',
+      'Tuvale 4 aşamalı kaydırmalı yazmaç eklenir: tek yönde kaydırır (SH=1 iken), paralel yükleme (LD) ve paralel çıkışlar vardır, CLR aktif-yüksektir. Sola kaydırma ve S1-S0 mod seçimi yoktur; çift yönlü yapı için Hazır Devreler\'deki 74HC194 örneğine bakın (4 bitlik yazmaç + 4:1 MUX).',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Master Reset (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'DSR', desc: 'Seri Veri Girişi Sağa (Shift-Right)', type: 'in' },
@@ -419,9 +429,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '4-bitlik 16 adresi adresleyebilen (16 kelime x 4 bit) ultra hızlı SRAM entegresidir. A0..A3 adres girişleri, D0..D3 veri girişleri ve ters Q0\'..Q3\' çıkışları bulunur. CS\' (Chip Select) ve WE\' (Write Enable) ile kontrol edilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'ram16x4',
+    simulatorCompType: 'ram',
+    simulatorSetup: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
     simulatorNote:
-      'Simülatör RAM\'i saatli yazar (WE=1 iken CLK yükselen kenarında). Çıkışları ters değildir ve CS\' yoktur. Başlangıçta her adreste kendi numarası saklıdır.',
+      'Tuvale 16x4 RAM eklenir (4 bit adres, ayrı 4 bitlik veri girişi ve çıkışı). Saatli yazar (WE=1 iken CLK yükselen kenarında); çıkışları ters değildir, CS ve OE aktif-yüksektir. Başlangıçta bellek sıfırdır.',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'CS\'', desc: 'Yonga Seçimi / Chip Select (Aktif 0)', type: 'ctrl' },
@@ -463,9 +474,9 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek kılıfta iki bağımsız D flip-flop içerir. Her ünitenin asenkron Preset (PRE\') ve Clear (CLR\') girişleri mevcuttur. Saat sinyalinin pozitif kenarında D girişindeki lojik seviyeyi Q çıkışına aktarır.',
     packageType: '14-Pin DIP',
     pinCount: 14,
-    simulatorCompType: 'dFlipFlop',
+    simulatorCompType: 'flipFlopD',
     simulatorNote:
-      'Tuvale tek bir D flip-flop eklenir; PRE\' ve CLR\' girişleri yoktur.',
+      'Tuvale tek bir D flip-flop eklenir. CLR ve PRE girişleri aktif-yüksektir (74HC74\'te CLR\' ve PRE\' aktif-düşük); ayrıca bir yetki (EN) girişi vardır.',
     pins: [
       { pin: 1, label: '1CLR\'', desc: 'Flip-Flop 1 Asenkron Sıfırlama', type: 'ctrl' },
       { pin: 2, label: '1D', desc: 'Flip-Flop 1 Veri Girişi', type: 'in' },
@@ -508,9 +519,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Evrensel flip-flop mimarisi olan JK flip-flop, J ve K girişlerinin durumuna göre Tutma (00), Sıfırlama (01), Kurma (10) ve Durum Değiştirme / Toggle (11) işlemlerini icra eder.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'jkFlipFlop',
+    simulatorCompType: 'flipFlopJK',
+    simulatorSetup: (c) => ({ ...c, state: { ...c.state, trigger: 'falling' as const } }),
     simulatorNote:
-      'Tuvale tek bir JK flip-flop eklenir. PRE\'/CLR\' yoktur ve yükselen kenarda tetiklenir (74HC76 düşen kenarda tetiklenir).',
+      'Tuvale tek bir JK flip-flop eklenir, 74HC76 gibi düşen kenarda tetiklenecek şekilde ayarlıdır. CLR ve PRE aktif-yüksektir (74HC76\'da CLR\' ve PRE\' aktif-düşük); ayrıca bir yetki (EN) girişi vardır.',
     pins: [
       { pin: 1, label: '1CLK', desc: 'Flip-Flop 1 Saat Girişi', type: 'ctrl' },
       { pin: 2, label: '1PRE\'', desc: 'Flip-Flop 1 Asenkron Kur', type: 'ctrl' },
@@ -634,9 +646,10 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '3-bit ikili adresi (A0..A2) 8 aktif-düşük çıkıştan birine dönüştürür. Bellek adresleme, I/O port seçimi ve minterm üretimi için endüstri standardıdır.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'decoder3to8',
+    simulatorCompType: 'decoder',
+    simulatorSetup: (c) => configurePlexer(c, { select: 3, enable: true }),
     simulatorNote:
-      'Simülatördeki 3:8 kod çözücünün tek bir aktif-yüksek EN girişi vardır ve çıkışları aktif-yüksektir (74HC238 gibi). 74HC138\'de çıkışlar aktif-düşüktür ve üç yetki girişi vardır.',
+      'Simülatördeki 3:8 kod çözücünün seçme girişi 3 bitlik tek bacaktır, tek bir aktif-yüksek EN girişi vardır ve çıkışları aktif-yüksektir (74HC238 gibi). 74HC138\'de çıkışlar aktif-düşüktür ve üç yetki girişi vardır.',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'A1', desc: 'Adres Girişi Bit 1', type: 'in' },

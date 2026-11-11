@@ -206,8 +206,8 @@ export function synthesizeFSM(
   const xIn = add('switch', sx, sy + 120, 'Giriş (X)', 'x');
   const xNot = add('not', sx + 120, sy + 200, "X'", 'xnot');
   connect({ compId: xIn.id, pinId: xIn.outputs[0].id }, xNot, 0);
-  const ff1 = add('dFlipFlop', sx + 620, sy + 40, 'Durum FF1 (Q1)', 'ff1');
-  const ff0 = add('dFlipFlop', sx + 620, sy + 220, 'Durum FF0 (Q0)', 'ff0');
+  const ff1 = add('flipFlopD', sx + 620, sy + 40, 'Durum FF1 (Q1)', 'ff1');
+  const ff0 = add('flipFlopD', sx + 620, sy + 220, 'Durum FF0 (Q0)', 'ff0');
   connect({ compId: clk.id, pinId: clk.outputs[0].id }, ff1, 1);
   connect({ compId: clk.id, pinId: clk.outputs[0].id }, ff0, 1);
 

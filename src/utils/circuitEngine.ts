@@ -4702,6 +4702,8 @@ type BusPartOptions = {
   splitter?: Parameters<typeof configureSplitter>[1];
   extender?: Parameters<typeof configureBitExtender>[1];
   selector?: Parameters<typeof configureBitSelector>[1];
+  /** Parametric part settings (configureMem / configureRam / configurePlexer / ...) */
+  configure?: (c: CircuitComponentInstance) => CircuitComponentInstance;
 };
 
 function busPart(
@@ -4718,6 +4720,7 @@ function busPart(
   if (opt.splitter) c = configureSplitter(c, opt.splitter);
   if (opt.extender) c = configureBitExtender(c, opt.extender);
   if (opt.selector) c = configureBitSelector(c, opt.selector);
+  if (opt.configure) c = opt.configure(c);
   if (opt.state) c = { ...c, state: { ...c.state, ...opt.state } };
   return updatePinPositions(c);
 }
@@ -4736,11 +4739,9 @@ function busSplitJoinPreset(): CircuitPreset {
   const pIn = busPart('probe', 160, 60, 'Giriş (hex)', 'bsj_pin', { state: { radix: '16' } });
   // 8 bits -> two 4-bit halves (end 1 = b3..b0, end 2 = b7..b4)
   const nib = busPart('splitter', 200, 150, 'Yarımlara Ayır', 'bsj_nib', { splitter: { incoming: 8, fanout: 2 } });
-  // each half -> 4 single lines for its hex digit
-  const sHi = busPart('splitter', 300, 50, 'Üst Yarım', 'bsj_shi', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
-  const hexHi = busPart('hexDisplay', 360, 40, 'Üst Hane (b7..b4)', 'bsj_hexhi');
-  const sLo = busPart('splitter', 480, 50, 'Alt Yarım', 'bsj_slo', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
-  const hexLo = busPart('hexDisplay', 540, 40, 'Alt Hane (b3..b0)', 'bsj_hexlo');
+  // each 4-bit half straight into its hex digit
+  const hexHi = hexDigitPart(320, 30, 'Üst Hane (b7..b4)', 'bsj_hexhi');
+  const hexLo = hexDigitPart(460, 30, 'Alt Hane (b3..b0)', 'bsj_hexlo');
   // the halves crossed over into a west-facing joining splitter: they swap places
   const join = busPart('splitter', 380, 250, 'Birleştir', 'bsj_join', { splitter: { incoming: 8, fanout: 2 }, rotation: 180 });
   const led = busPart('led', 450, 230, 'Yer Değişmiş (8 bit)', 'bsj_led', { width: 8 });
@@ -4748,10 +4749,8 @@ function busSplitJoinPreset(): CircuitPreset {
   const { wires, link } = busWires();
   link(sw, sw.outputs[0], pIn, pIn.inputs[0]);
   link(sw, sw.outputs[0], nib, nib.inputs[0]);
-  link(nib, nib.outputs[1], sHi, sHi.inputs[0]);
-  link(nib, nib.outputs[0], sLo, sLo.inputs[0]);
-  for (let i = 0; i < 4; i++) link(sHi, sHi.outputs[i], hexHi, hexHi.inputs[i]);
-  for (let i = 0; i < 4; i++) link(sLo, sLo.outputs[i], hexLo, hexLo.inputs[i]);
+  link(nib, nib.outputs[1], hexHi, pk(hexHi, 'in'));
+  link(nib, nib.outputs[0], hexLo, pk(hexLo, 'in'));
   link(nib, nib.outputs[0], join, join.outputs[1]);
   link(nib, nib.outputs[1], join, join.outputs[0]);
   link(join, join.inputs[0], led, led.inputs[0]);
@@ -4761,48 +4760,8 @@ function busSplitJoinPreset(): CircuitPreset {
     name: 'Çok Bitli: 8-Bit Veri Yolunu Bölme ve Birleştirme (Splitter)',
     category: 'bus',
     description:
-      '8 bitlik bir veri yolu splitter ile iki 4 bitlik yarıma bölünür; her yarım ikinci bir splitter ile tek bitlere açılıp Hex ekranda gösterilir. Aynı yarımlar, batıya bakan bir splitter ile yer değiştirerek yeniden 8 bite birleştirilir (A5 → 5A). Splitter iki yönlüdür: aynı parça hem ayırır hem birleştirir.',
-    components: [sw, pIn, nib, sHi, hexHi, sLo, hexLo, join, led, pOut],
-    wires,
-  };
-}
-
-function busAluPreset(): CircuitPreset {
-  const a = busPart('switch', 150, 130, 'A (4 bit)', 'bal_a', { width: 4, state: { inputValue: 7 } });
-  const b = busPart('switch', 180, 320, 'B (4 bit)', 'bal_b', { width: 4, state: { inputValue: 5 } });
-  const op = busPart('switch', 240, 80, 'İşlem (S1 S0)', 'bal_op', { width: 2, state: { inputValue: 0 } });
-  const cin = busPart('switch', 170, 190, 'Elde Girişi (Cin)', 'bal_cin');
-  const sa = busPart('splitter', 250, 150, 'A bitleri', 'bal_sa', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
-  const sb = busPart('splitter', 330, 260, 'B bitleri', 'bal_sb', { splitter: { incoming: 4, fanout: 4 }, rotation: 270 });
-  const sop = busPart('splitter', 320, 100, 'S bitleri', 'bal_sop', { splitter: { incoming: 2, fanout: 2 }, rotation: 90 });
-  const alu = busPart('alu4', 300, 140, '4-Bit ALU', 'bal_alu');
-  const sf = busPart('splitter', 440, 150, 'Sonucu Birleştir', 'bal_sf', { splitter: { incoming: 4, fanout: 4, bitEnd: [4, 3, 2, 1] }, rotation: 180 });
-  const ledF = busPart('led', 500, 130, 'F (4 bit)', 'bal_ledf', { width: 4 });
-  const pF = busPart('probe', 500, 60, 'F (ondalık)', 'bal_pf', { state: { radix: '10u' } });
-  const ledC = busPart('led', 520, 190, 'Elde Çıkışı (Cout)', 'bal_ledc');
-  const ledZ = busPart('led', 520, 270, 'Sıfır (Z)', 'bal_ledz');
-  const { wires, link } = busWires();
-  link(a, a.outputs[0], sa, sa.inputs[0]);
-  link(b, b.outputs[0], sb, sb.inputs[0]);
-  link(op, op.outputs[0], sop, sop.inputs[0]);
-  for (let i = 0; i < 4; i++) link(sa, sa.outputs[i], alu, alu.inputs[i]);
-  link(cin, cin.outputs[0], alu, alu.inputs[4]);
-  for (let i = 0; i < 4; i++) link(sb, sb.outputs[i], alu, alu.inputs[5 + i]);
-  link(sop, sop.outputs[0], alu, alu.inputs[9]);
-  link(sop, sop.outputs[1], alu, alu.inputs[10]);
-  // bit i of F is end 4-i of the west-facing joiner (bit 0 on top, next to F0)
-  for (let i = 0; i < 4; i++) link(alu, alu.outputs[i], sf, sf.outputs[3 - i]);
-  link(sf, sf.inputs[0], ledF, ledF.inputs[0]);
-  link(sf, sf.inputs[0], pF, pF.inputs[0]);
-  link(alu, alu.outputs[4], ledC, ledC.inputs[0]);
-  link(alu, alu.outputs[5], ledZ, ledZ.inputs[0]);
-  return {
-    id: 'bus_alu4',
-    name: "Çok Bitli: 4-Bit ALU'yu Veri Yollarıyla Sürmek",
-    category: 'bus',
-    description:
-      "A ve B 4 bitlik, işlem seçimi 2 bitlik veri yollarından gelir; splitter'lar yolları ALU'nun tek bitlik pinlerine dağıtır, sonuç bitleri yeniden 4 bitlik F yoluna birleştirilir. Başlangıç: 7 + 5 = 12. İşlem: 00 toplama, 01 çıkarma, 10 VE, 11 VEYA.",
-    components: [a, b, op, cin, sa, sb, sop, alu, sf, ledF, pF, ledC, ledZ],
+      '8 bitlik bir veri yolu splitter ile iki 4 bitlik yarıma bölünür; her yarım 4 bitlik tek telle kendi Hex ekranına gider. Aynı yarımlar, batıya bakan bir splitter ile yer değiştirerek yeniden 8 bite birleştirilir (A5 → 5A). Splitter iki yönlüdür: aynı parça hem ayırır hem birleştirir.',
+    components: [sw, pIn, nib, hexHi, hexLo, join, led, pOut],
     wires,
   };
 }
@@ -4842,8 +4801,7 @@ function busBitSelectorPreset(): CircuitPreset {
   const pd = busPart('probe', 40, 90, 'Veri (hex)', 'bbs_pd', { state: { radix: '16' } });
   const half = busPart('switch', 180, 240, 'Yarım Seç (0 alt, 1 üst)', 'bbs_half');
   const selN = busPart('bitSelector', 220, 180, 'Yarım Bayt Seçici', 'bbs_seln', { selector: { dataWidth: 8, groupWidth: 4 } });
-  const sn = busPart('splitter', 300, 200, 'Bitler', 'bbs_sn', { splitter: { incoming: 4, fanout: 4, appear: 'right' } });
-  const hex = busPart('hexDisplay', 380, 190, 'Seçilen Yarım Bayt', 'bbs_hex');
+  const hex = hexDigitPart(380, 170, 'Seçilen Yarım Bayt', 'bbs_hex');
   const pn = busPart('probe', 300, 100, 'Seçilen (ikili)', 'bbs_pn');
   const idx = busPart('switch', 200, 460, 'Bit No (0-7)', 'bbs_idx', { width: 3, state: { inputValue: 2 } });
   const selB = busPart('bitSelector', 220, 380, 'Tek Bit Seçici (8:1 MUX)', 'bbs_selb', { selector: { dataWidth: 8, groupWidth: 1 } });
@@ -4852,8 +4810,7 @@ function busBitSelectorPreset(): CircuitPreset {
   link(d, d.outputs[0], pd, pd.inputs[0]);
   link(d, d.outputs[0], selN, selN.inputs[0]);
   link(half, half.outputs[0], selN, selN.inputs[1]);
-  link(selN, selN.outputs[0], sn, sn.inputs[0]);
-  for (let i = 0; i < 4; i++) link(sn, sn.outputs[i], hex, hex.inputs[i]);
+  link(selN, selN.outputs[0], hex, pk(hex, 'in'));
   link(selN, selN.outputs[0], pn, pn.inputs[0]);
   link(d, d.outputs[0], selB, selB.inputs[0]);
   link(idx, idx.outputs[0], selB, selB.inputs[1]);
@@ -4864,7 +4821,7 @@ function busBitSelectorPreset(): CircuitPreset {
     category: 'bus',
     description:
       'Bit seçici, veri yolunu eşit gruplara böler ve seçme girişinin gösterdiği grubu çıkışa verir; yani bir çoklayıcıdır. Üstteki 4 bitlik gruplarla çalışır (1 bit seçme: alt ya da üst yarım bayt), alttaki 1 bitlik gruplarla 8:1 MUX gibi davranır (3 bit seçme). Veri 3C: alt yarım C, üst yarım 3; bit 2 = 1.',
-    components: [d, pd, half, selN, sn, hex, pn, idx, selB, lb],
+    components: [d, pd, half, selN, hex, pn, idx, selB, lb],
     wires,
   };
 }
@@ -4904,6 +4861,572 @@ function busTriStatePreset(): CircuitPreset {
     description:
       "İki 4 bitlik kaynak, bit başına birer tri-state tamponla aynı veri yoluna bağlanır; yol tünellerle (VERİ YOLU) taşınır. Aynı anda yalnız bir EN açık olmalı. İkisi birden açılırsa farklı olan bitler çakışır (0011 + 0101 = 0EE1, kırmızı), ikisi de kapalıysa yol sürülmez (xxxx, gri).",
     components: parts,
+    wires,
+  };
+}
+
+// ---- Presets rebuilt with the parametric parts and multi-bit wires (Aşama 3h) --------------------------------
+
+/** A part's pin by its key ('d', 'clk', 'out3', ...) */
+function pk(c: CircuitComponentInstance, key: string): CircuitPin {
+  const p = [...c.inputs, ...c.outputs].find((q) => pinKey(c, q) === key);
+  if (!p) throw new Error(`preset pin ${c.id}.${key}`);
+  return p;
+}
+
+type PresetLink = ReturnType<typeof busWires>['link'];
+
+/** West-facing splitter that joins single lines (bit 0 first) into one bus; read the bus from inputs[0] */
+function joinBits(
+  link: PresetLink,
+  id: string,
+  label: string,
+  x: number,
+  y: number,
+  sources: [CircuitComponentInstance, CircuitPin][]
+): CircuitComponentInstance {
+  const n = sources.length;
+  const j = busPart('splitter', x, y, label, id, { splitter: { incoming: n, fanout: n }, rotation: 180 });
+  sources.forEach(([c, p], i) => link(c, p, j, j.outputs[i]));
+  return j;
+}
+
+/** Splitter that opens a bus into single lines (outputs[i] = bit i) */
+function splitBits(
+  link: PresetLink,
+  id: string,
+  label: string,
+  x: number,
+  y: number,
+  n: number,
+  source: [CircuitComponentInstance, CircuitPin]
+): CircuitComponentInstance {
+  const s = busPart('splitter', x, y, label, id, { splitter: { incoming: n, fanout: n, appear: 'right' } });
+  link(source[0], source[1], s, s.inputs[0]);
+  return s;
+}
+
+/** Contents for a RAM / ROM: the words from address 0 */
+const memContents = (words: number[]): CircuitComponentInstance['state']['memPages'] => ({
+  '0': Array.from({ length: MEM_PAGE_SIZE }, (_, i) => words[i] ?? 0),
+});
+
+/** Hex digit without the decimal point input */
+const hexDigitPart = (x: number, y: number, label: string, id: string) =>
+  busPart('hexDigit', x, y, label, id, { configure: (c) => configureIo(c, { dp: false }) });
+
+function dFlipFlopPreset(): CircuitPreset {
+  const d = busPart('switch', 60, 100, 'Veri Girişi (D)', 'sw_d');
+  const clk = busPart('clock', 60, 220, 'Saat Darbesi (CLK)', 'clk_1');
+  const ff = busPart('flipFlopD', 280, 140, 'D Flip-Flop', 'dff_1');
+  const q = busPart('led', 480, 100, 'Kayıtlı Çıkış (Q)', 'led_q');
+  const qn = busPart('led', 480, 220, "Ters Çıkış (Q')", 'led_q_bar');
+  const { wires, link } = busWires();
+  link(d, d.outputs[0], ff, pk(ff, 'd'));
+  link(clk, clk.outputs[0], ff, pk(ff, 'clk'));
+  link(ff, pk(ff, 'q'), q, q.inputs[0]);
+  link(ff, pk(ff, 'qn'), qn, qn.inputs[0]);
+  return {
+    id: 'd_flip_flop_memory',
+    name: 'D Flip-Flop ile 1-Bit Bellek (Kayıtçı)',
+    category: 'sequential',
+    description:
+      "Saat darbesinin (CLK) yükselen kenarında Giriş D verisini saklayan ve Q ile Q' çıkışlarına aktaran temel ardışıl bellek devresi. CLR (sıfırla), PRE (kur) ve EN (yetki) bacakları boş bırakıldığında flip-flop normal çalışır.",
+    components: [d, clk, ff, q, qn],
+    wires,
+  };
+}
+
+function tFlipFlopCounterPreset(): CircuitPreset {
+  const vcc = busPart('vcc', 50, 70, '1 (High)', 'vcc_tff');
+  const clk = busPart('clock', 50, 170, 'Saat (CLK)', 'clk_tff');
+  const t0 = busPart('flipFlopT', 190, 110, 'T-FF 0 (Bit 0)', 'tff_0');
+  const t1 = busPart('flipFlopT', 370, 110, 'T-FF 1 (Bit 1)', 'tff_1');
+  const l0 = busPart('led', 290, 260, 'Q0 (1ler Biti)', 'led_tff_q0');
+  const l1 = busPart('led', 470, 260, 'Q1 (2ler Biti)', 'led_tff_q1');
+  const { wires, link } = busWires();
+  link(vcc, vcc.outputs[0], t0, pk(t0, 't'));
+  link(clk, clk.outputs[0], t0, pk(t0, 'clk'));
+  link(vcc, vcc.outputs[0], t1, pk(t1, 't'));
+  // Rising-edge flip-flops: Q0' clocks bit 1 (Q0 there would make it count down 00, 11, 10, 01)
+  link(t0, pk(t0, 'qn'), t1, pk(t1, 'clk'));
+  link(t0, pk(t0, 'q'), l0, l0.inputs[0]);
+  link(t1, pk(t1, 'q'), l1, l1.inputs[0]);
+  return {
+    id: 't_flip_flop_counter',
+    name: 'T-FF ile 2-Bit Asenkron İkili Sayaç (Ripple Counter)',
+    category: 'sequential',
+    description:
+      "T Flip-Flop elemanlarının kaskat bağlanmasıyla saat darbelerini sayan ve 00, 01, 10, 11 sayma dizisini üreten 2-bit sayaç. Flip-flop'lar yükselen kenarda tetiklendiği için ikinci flip-flop'un saatine Q0' bağlıdır.",
+    components: [vcc, clk, t0, t1, l0, l1],
+    wires,
+  };
+}
+
+function decoder2to4Preset(): CircuitPreset {
+  const en = busPart('vcc', 120, 300, 'EN (Yetki=1)', 'vcc_dec');
+  const a = busPart('switch', 50, 180, 'Adres (A1 A0)', 'sw_dec_a', { width: 2 });
+  const dec = busPart('decoder', 230, 110, '2:4 Kod Çözücü', 'dec_1', {
+    configure: (c) => configurePlexer(c, { select: 2, enable: true }),
+  });
+  const leds = [0, 1, 2, 3].map((i) => busPart('led', 380, 40 + i * 80, `Hat ${i} (Y${i})`, `led_dec_${i}`));
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], dec, pk(dec, 'sel'));
+  link(en, en.outputs[0], dec, pk(dec, 'en'));
+  leds.forEach((l, i) => link(dec, pk(dec, `out${i}`), l, l.inputs[0]));
+  return {
+    id: 'decoder_demo',
+    name: '2:4 Kod Çözücü (1-of-4 Decoder Seçici)',
+    category: 'bus',
+    description:
+      '2 bitlik adresi (A1 A0) tek bir çok bitli telden alıp çözerek 4 çıkış hattından tam olarak birini aktif (1) yapan adres çözücü devre. EN girişi 0 olursa hiçbir hat seçilmez.',
+    components: [en, a, dec, ...leds],
+    wires,
+  };
+}
+
+function hexDisplayPreset(): CircuitPreset {
+  const v = busPart('switch', 60, 180, 'Sayı (4 bit)', 'hex_sw', { width: 4 });
+  const p = busPart('probe', 60, 70, 'Sayı (ikili)', 'hex_probe');
+  const hex = hexDigitPart(300, 140, 'Hex 7-Segment Ekran', 'hex_disp');
+  const { wires, link } = busWires();
+  link(v, v.outputs[0], hex, pk(hex, 'in'));
+  link(v, v.outputs[0], p, p.inputs[0]);
+  return {
+    id: 'hex_display_demo',
+    name: '4-Bit Hex 7-Segment Sayı Göstergesi',
+    category: 'bus',
+    description:
+      "4 bitlik anahtarın değerini (0000 - 1111) onaltılık rakam (0-F) olarak gerçekçi LED ekranda gösteren devre. Anahtar ile ekran arasında tek bir 4 bitlik tel vardır; bitlere tek tek tıklayarak sayıyı değiştirin.",
+    components: [v, p, hex],
+    wires,
+  };
+}
+
+function aluConstantsPreset(): CircuitPreset {
+  const a = busPart('constant', 80, 100, 'A = 3', 'alu_const_a', { width: 4, state: { constValue: 3 } });
+  const b = busPart('constant', 80, 160, 'B = 1', 'alu_const_b', { width: 4, state: { constValue: 1 } });
+  const op = busPart('constant', 80, 220, 'İşlem = 0 (ADD)', 'alu_const_op', { width: 3, state: { constValue: 0 } });
+  const cin = busPart('gnd', 80, 280, 'Elde Girişi = 0', 'gnd_1');
+  const alu = busPart('alu', 220, 120, '4-Bit ALU', 'alu_core', { configure: (c) => configureArith(c, { width: 4 }) });
+  const hex = hexDigitPart(420, 100, 'Sonuç (Hex)', 'alu_hex');
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], alu, pk(alu, 'a'));
+  link(b, b.outputs[0], alu, pk(alu, 'b'));
+  link(op, op.outputs[0], alu, pk(alu, 'op'));
+  link(cin, cin.outputs[0], alu, pk(alu, 'cin'));
+  link(alu, pk(alu, 'out'), hex, pk(hex, 'in'));
+  return {
+    id: 'alu_bus_splitter',
+    name: '4-Bit ALU, Sabitler ve Hex Gösterge',
+    category: 'arithmetic',
+    description:
+      "4 bitlik ALU'nun A ve B girişlerini sabit (Constant) parçaları sürer: A = 3, B = 1, işlem kodu 0 (toplama). Sonuç 4 bitlik tek telle hex göstergeye gider ve 4 görünür. Sabitlerin değeri ve ALU işlemi ayar panelinden değiştirilebilir (0 ADD, 1 SUB, 2 AND, 3 OR, 4 XOR, 5 NOR, 6 SLT, 7 B'yi geçir).",
+    components: [a, b, op, cin, alu, hex],
+    wires,
+  };
+}
+
+function counterHexPreset(): CircuitPreset {
+  const clk = busPart('clock', 60, 100, 'Saat Darbesi (CLK)', 'cnt_clk');
+  const rst = busPart('pushbutton', 60, 180, 'Sıfırla (CLR)', 'cnt_rst');
+  const cnt = busPart('counter', 200, 100, '4-Bit Senkron Sayaç', 'cnt_core', { configure: (c) => configureMem(c, { width: 4 }) });
+  const hex = hexDigitPart(380, 80, 'Hex Ekran (0-F)', 'cnt_hex');
+  const led = busPart('led', 380, 230, 'Q (4 bit)', 'cnt_led', { width: 4 });
+  const { wires, link } = busWires();
+  link(clk, clk.outputs[0], cnt, pk(cnt, 'clk'));
+  link(rst, rst.outputs[0], cnt, pk(cnt, 'clr'));
+  link(cnt, pk(cnt, 'q'), hex, pk(hex, 'in'));
+  link(cnt, pk(cnt, 'q'), led, led.inputs[0]);
+  return {
+    id: 'counter_hex_demo',
+    name: '4-Bit Senkron Sayaç ve 7-Segment Hex Gösterge (0-F)',
+    category: 'sequential',
+    description:
+      "Saat darbesi (CLK) ve Sıfırla (CLR) butonu ile kontrol edilen 4 bitlik sayaç; 4 bitlik Q çıkışı tek telle hex ekrana ve 4 bitlik LED'e gider, 0'dan F'ye canlı sayar. Sayacın yükleme (LD), sayma izni (CT) ve yön (U/D) bacakları boş bırakıldığında yukarı sayar.",
+    components: [clk, rst, cnt, hex, led],
+    wires,
+  };
+}
+
+function comparatorPreset(): CircuitPreset {
+  const a = busPart('switch', 60, 100, 'A (4 bit)', 'cmp_sw_a', { width: 4 });
+  const b = busPart('switch', 60, 200, 'B (4 bit)', 'cmp_sw_b', { width: 4 });
+  const cmp = busPart('comparator', 220, 130, '4-Bit Karşılaştırıcı', 'cmp_core', {
+    configure: (c) => configureArith(c, { width: 4 }),
+    state: { arithMode: 'unsigned' },
+  });
+  const gt = busPart('led', 390, 40, 'A > B', 'led_gt');
+  const eq = busPart('led', 390, 120, 'A = B', 'led_eq');
+  const lt = busPart('led', 390, 200, 'A < B', 'led_lt');
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], cmp, pk(cmp, 'a'));
+  link(b, b.outputs[0], cmp, pk(cmp, 'b'));
+  link(cmp, pk(cmp, 'gt'), gt, gt.inputs[0]);
+  link(cmp, pk(cmp, 'eq'), eq, eq.inputs[0]);
+  link(cmp, pk(cmp, 'lt'), lt, lt.inputs[0]);
+  return {
+    id: 'magnitude_comparator',
+    name: '4-Bit Büyüklük Karşılaştırıcı (74HC85 benzeri)',
+    category: 'arithmetic',
+    description:
+      'İki adet 4 bitlik ikili sayıyı (A ve B) karşılaştırarak A>B, A=B veya A<B durumlarını anında tespit eden aritmetik mantık devresi. Karşılaştırıcı işaretsiz moddadır; ayar panelinden işaretli (ikiye tümleyen) moda alınabilir.',
+    components: [a, b, cmp, gt, eq, lt],
+    wires,
+  };
+}
+
+function priorityEncoderPreset(): CircuitPreset {
+  const sws = [0, 1, 2, 3].map((i) =>
+    busPart('switch', 60, 40 + i * 80, i === 0 ? 'D0 (En Düşük Öncelik)' : i === 3 ? 'D3 (En Yüksek Öncelik)' : `D${i}`, `pri_sw${i}`)
+  );
+  const en = busPart('vcc', 160, 380, 'EN (Yetki=1)', 'pri_en');
+  const enc = busPart('priorityEncoder', 240, 130, '4:2 Öncelikli Kodlayıcı', 'pri_core', {
+    configure: (c) => configurePlexer(c, { select: 2 }),
+  });
+  const y = busPart('led', 400, 140, 'Y (Y1 Y0)', 'pri_led_y', { width: 2 });
+  const gs = busPart('led', 400, 220, 'GS (Geçerli)', 'pri_led_gs');
+  const eo = busPart('led', 400, 40, 'EO (Hiçbiri Aktif Değil)', 'pri_led_eo');
+  const { wires, link } = busWires();
+  sws.forEach((s, i) => link(s, s.outputs[0], enc, pk(enc, `in${i}`)));
+  link(en, en.outputs[0], enc, pk(enc, 'en'));
+  link(enc, pk(enc, 'out'), y, y.inputs[0]);
+  link(enc, pk(enc, 'gs'), gs, gs.inputs[0]);
+  link(enc, pk(enc, 'eo'), eo, eo.inputs[0]);
+  return {
+    id: 'priority_encoder_demo',
+    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
+    category: 'basic',
+    description:
+      '4 aktif-yüksek girişten (D3..D0) önceliği en yüksek olanı 2 bitlik ikili koda (Y) çevirir. GS en az bir girişin aktif olduğunu, EO ise yetki varken hiçbir girişin aktif olmadığını gösterir (kodlayıcıları zincirlemek için). Gerçek 74HC148 ise 8:3 ve aktif-düşük çalışır.',
+    components: [...sws, en, enc, y, gs, eo],
+    wires,
+  };
+}
+
+function universalShiftRegisterPreset(): CircuitPreset {
+  const clk = busPart('clock', 40, 40, 'Saat Darbesi (CLK)', 'sh_clk');
+  const clr = busPart('pushbutton', 40, 500, 'Sıfırla (CLR)', 'sh_clr');
+  const sr = busPart('switch', 40, 180, 'SR (Sağa Kaydırma Girişi)', 'sh_sr', { state: { on: true } });
+  const sl = busPart('switch', 40, 300, 'SL (Sola Kaydırma Girişi)', 'sh_sl');
+  const d = busPart('switch', 40, 420, 'Paralel Veri (D3..D0)', 'sh_d', { width: 4, state: { inputValue: 0xa } });
+  const mode = busPart('switch', 360, 420, 'Mod (S1 S0)', 'sh_mode', { width: 2, state: { inputValue: 1 } });
+  const reg = busPart('register', 580, 240, '4-Bit Yazmaç', 'sh_core', { configure: (c) => configureMem(c, { width: 4 }) });
+  const mux = busPart('multiplexer', 440, 220, 'Mod Seçici (4:1 MUX)', 'sh_mux', {
+    configure: (c) => configurePlexer(c, { select: 2, width: 4 }),
+  });
+  const led = busPart('led', 720, 230, 'Q (Q3..Q0)', 'sh_led', { width: 4 });
+  const { wires, link } = busWires();
+  const q = splitBits(link, 'sh_qbits', 'Q bitleri', 200, 80, 4, [reg, pk(reg, 'q')]);
+  // shift right (74HC194): Q0 <- SR, Q1 <- Q0, Q2 <- Q1, Q3 <- Q2
+  const right = joinBits(link, 'sh_right', 'Sağa Kaydırılmış', 320, 180, [
+    [sr, sr.outputs[0]],
+    [q, q.outputs[0]],
+    [q, q.outputs[1]],
+    [q, q.outputs[2]],
+  ]);
+  // shift left: Q0 <- Q1, Q1 <- Q2, Q2 <- Q3, Q3 <- SL
+  const left = joinBits(link, 'sh_left', 'Sola Kaydırılmış', 320, 300, [
+    [q, q.outputs[1]],
+    [q, q.outputs[2]],
+    [q, q.outputs[3]],
+    [sl, sl.outputs[0]],
+  ]);
+  link(reg, pk(reg, 'q'), mux, pk(mux, 'in0'));
+  link(right, right.inputs[0], mux, pk(mux, 'in1'));
+  link(left, left.inputs[0], mux, pk(mux, 'in2'));
+  link(d, d.outputs[0], mux, pk(mux, 'in3'));
+  link(mode, mode.outputs[0], mux, pk(mux, 'sel'));
+  link(mux, pk(mux, 'out'), reg, pk(reg, 'd'));
+  link(clk, clk.outputs[0], reg, pk(reg, 'clk'));
+  link(clr, clr.outputs[0], reg, pk(reg, 'clr'));
+  link(reg, pk(reg, 'q'), led, led.inputs[0]);
+  return {
+    id: 'universal_shift_register_demo',
+    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
+    category: 'sequential',
+    description:
+      "74HC194'ün iç yapısı: 4 bitlik bir yazmaç ve girişinde 4 bitlik bir 4:1 MUX. Mod (S1 S0) her saat darbesinde yazmaca ne yükleneceğini seçer: 00 tut, 01 sağa kaydır (Q0 ← SR, Q3'e doğru), 10 sola kaydır (Q3 ← SL, Q0'a doğru), 11 paralel veriyi yükle. Kaydırılmış yollar splitter'larla Q bitlerinden kurulur.",
+    components: [clk, clr, sr, sl, d, mode, mux, reg, q, right, left, led],
+    wires,
+  };
+}
+
+function ramMemoryPreset(): CircuitPreset {
+  const a = busPart('switch', 60, 80, 'Adres (A3..A0)', 'ram_sw_a', { width: 4 });
+  const din = busPart('switch', 60, 180, 'Veri (D3..D0)', 'ram_sw_d', { width: 4 });
+  const clk = busPart('clock', 60, 280, 'CLK (Yazma Saati)', 'ram_clk');
+  const we = busPart('switch', 60, 360, 'WE (Yazma İzni)', 'ram_sw_we');
+  const vcc = busPart('vcc', 140, 440, 'Seçili / Okuma (1)', 'ram_vcc');
+  const ram = busPart('ram', 240, 80, '16x4 RAM', 'ram_chip', {
+    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
+  });
+  const hex = hexDigitPart(560, 100, 'Okunan Veri (Hex)', 'ram_disp');
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], ram, pk(ram, 'a'));
+  link(din, din.outputs[0], ram, pk(ram, 'din'));
+  link(clk, clk.outputs[0], ram, pk(ram, 'clk'));
+  link(we, we.outputs[0], ram, pk(ram, 'we'));
+  link(vcc, vcc.outputs[0], ram, pk(ram, 'cs'));
+  link(vcc, vcc.outputs[0], ram, pk(ram, 'oe'));
+  link(ram, pk(ram, 'd'), hex, pk(hex, 'in'));
+  return {
+    id: 'ram_memory_demo',
+    name: '16x4-Bit RAM Bellek ve Hex Gösterge',
+    category: 'sequential',
+    description:
+      "16 adresli 4 bitlik RAM (4 bit adres, 4 bit veri, ayrı veri girişi ve çıkışı): adresi ve veriyi 4 bitlik anahtarlardan ayarlayın, WE=1 iken CLK'nın yükselen kenarında veri belleğe yazılır. Seçilen adresteki veri doğrudan hex ekranda okunur.",
+    components: [a, din, clk, we, vcc, ram, hex],
+    wires,
+  };
+}
+
+function decoder3to8Preset(): CircuitPreset {
+  const en = busPart('switch', 60, 300, 'EN (Yetki = 1)', 'dec_sw_en', { state: { on: true } });
+  const a = busPart('switch', 60, 160, 'Adres (A2 A1 A0)', 'dec_sw_a', { width: 3 });
+  const dec = busPart('decoder', 230, 70, '3:8 Decoder', 'dec_chip', {
+    configure: (c) => configurePlexer(c, { select: 3, enable: true }),
+  });
+  const leds = Array.from({ length: 8 }, (_, i) =>
+    busPart('led', i < 4 ? 380 : 500, 40 + (i % 4) * 80, `m${i} (${i.toString(2).padStart(3, '0')})`, `dec_led_${i}`)
+  );
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], dec, pk(dec, 'sel'));
+  link(en, en.outputs[0], dec, pk(dec, 'en'));
+  leds.forEach((l, i) => link(dec, pk(dec, `out${i}`), l, l.inputs[0]));
+  return {
+    id: 'decoder_3to8_minterm_demo',
+    name: '3:8 Kod Çözücü ile Minterm Seçimi (74HC238 benzeri)',
+    category: 'basic',
+    description:
+      '3 bitlik ikili adres (A2 A1 A0, tek çok bitli tel) ve Enable yetkilendirmesiyle 8 çıkış hattından (m0-m7) birini seçen kod çözücü. Her çıkış, adresin bir mintermidir.',
+    components: [en, a, dec, ...leds],
+    wires,
+  };
+}
+
+function sap1Preset(): CircuitPreset {
+  const clk = busPart('clock', 60, 60, 'Ana Saat (CLK)', 'cpu_clk');
+  const rst = busPart('switch', 60, 140, 'Sıfırla (Reset=0)', 'cpu_rst');
+  const pc = busPart('counter', 180, 60, 'Program Sayacı (PC)', 'cpu_pc', { configure: (c) => configureMem(c, { width: 4 }) });
+  const ram = busPart('ram', 340, 60, '16x4 Program Belleği (RAM)', 'cpu_ram', {
+    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
+    state: { memPages: memContents([3, 7, 2, 9, 12, 5, 1, 14, 0, 4, 8, 11, 15, 6, 10, 13]) },
+  });
+  const we = busPart('switch', 200, 260, 'RAM Yazma (WE=0)', 'cpu_we');
+  const vcc = busPart('vcc', 260, 330, 'Seçili / Okuma (1)', 'cpu_vcc');
+  const regA = busPart('register', 620, 60, 'A Yazmacı (Akümülatör)', 'cpu_reg_a', { configure: (c) => configureMem(c, { width: 4 }) });
+  const regEn = busPart('switch', 500, 170, 'A-Yazmaç İzni (EN=1)', 'cpu_reg_we', { state: { on: true } });
+  const disp = hexDigitPart(780, 60, 'Çıkış Portu (Display)', 'cpu_disp');
+  const alu = busPart('alu', 680, 260, '4-Bit ALU', 'cpu_alu', { configure: (c) => configureArith(c, { width: 4 }) });
+  const zero = busPart('constant', 480, 300, 'B = 0', 'cpu_alu_b', { width: 4, state: { constValue: 0 } });
+  const op = busPart('constant', 480, 360, 'İşlem = 0 (ADD)', 'cpu_alu_op', { width: 3, state: { constValue: 0 } });
+  const gnd = busPart('gnd', 480, 420, 'Elde = 0', 'cpu_alu_gnd');
+  const { wires, link } = busWires();
+  link(clk, clk.outputs[0], pc, pk(pc, 'clk'));
+  link(rst, rst.outputs[0], pc, pk(pc, 'clr'));
+  link(pc, pk(pc, 'q'), ram, pk(ram, 'a'));
+  link(clk, clk.outputs[0], ram, pk(ram, 'clk'));
+  link(we, we.outputs[0], ram, pk(ram, 'we'));
+  link(vcc, vcc.outputs[0], ram, pk(ram, 'cs'));
+  link(vcc, vcc.outputs[0], ram, pk(ram, 'oe'));
+  link(ram, pk(ram, 'd'), regA, pk(regA, 'd'));
+  link(clk, clk.outputs[0], regA, pk(regA, 'clk'));
+  link(regEn, regEn.outputs[0], regA, pk(regA, 'en'));
+  link(regA, pk(regA, 'q'), disp, pk(disp, 'in'));
+  link(regA, pk(regA, 'q'), alu, pk(alu, 'a'));
+  link(zero, zero.outputs[0], alu, pk(alu, 'b'));
+  link(op, op.outputs[0], alu, pk(alu, 'op'));
+  link(gnd, gnd.outputs[0], alu, pk(alu, 'cin'));
+  return {
+    id: 'sap1_micro_cpu_demo',
+    name: 'SAP-1 Basit İşlemci (Simple As Possible CPU) Mimarisi',
+    category: 'sequential',
+    description:
+      'Sıfırdan İşlemciye yolculuğunun zirvesi: Program Sayacı (PC), 16x4 Program Belleği (RAM), A Yazmacı (Akümülatör), 4-Bit ALU ve Çıkış Göstergesinden oluşan gerçek zamanlı çalışan eğitim işlemcisi. Parçalar arasındaki adres ve veri yolları 4 bitlik tek tellerdir; her saat darbesinde PC bir artar ve bellekteki sözcük A yazmacına yüklenir.',
+    components: [clk, rst, pc, ram, we, vcc, regA, regEn, disp, alu, zero, op, gnd],
+    wires,
+  };
+}
+
+/** Clock -> 4-bit counter -> 16x4 ROM; returns the parts and the ROM, the wires so far and the link */
+function melodyCore(prefix: string, romLabel: string, notes: number[], cntLabel: string, vccLabel: string) {
+  const vcc = busPart('vcc', 50, 40, vccLabel, `vcc_${prefix}`);
+  const clk = busPart('clock', 50, 110, prefix === 'mario' ? 'Tempo Saati (CLK)' : 'Tempo Saati', `clk_${prefix}`, {
+    state: { frequencyHz: 4 },
+  });
+  const rst = busPart('pushbutton', 50, 180, prefix === 'mario' ? 'Başa Sar (CLR)' : 'Sıfırla / Başa Al', `rst_${prefix}`);
+  const cnt = busPart('counter', 180, 100, cntLabel, `cnt_${prefix}`, { configure: (c) => configureMem(c, { width: 4 }) });
+  const rom = busPart('rom', 340, 100, romLabel, `rom_${prefix}`, {
+    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4 }),
+    state: { memPages: memContents(notes) },
+  });
+  const { wires, link } = busWires();
+  link(clk, clk.outputs[0], cnt, pk(cnt, 'clk'));
+  link(rst, rst.outputs[0], cnt, pk(cnt, 'clr'));
+  link(cnt, pk(cnt, 'q'), rom, pk(rom, 'a'));
+  link(vcc, vcc.outputs[0], rom, pk(rom, 'cs'));
+  return { vcc, clk, rst, cnt, rom, wires, link };
+}
+
+function chiptuneMusicBoxPreset(): CircuitPreset {
+  const m = melodyCore('mario', 'Melodi ROM (Super Mario)', [9, 9, 15, 9, 15, 7, 9, 15, 11, 15, 15, 15, 4, 15, 15, 15], 'Melodi Sayacı (PC)', 'Ses İzni (EN=1)');
+  const s = splitBits(m.link, 'split_mario', 'Nota Bitleri', 520, 110, 4, [m.rom, pk(m.rom, 'd')]);
+  const buzz = busPart('buzzer', 600, 100, 'Chiptune Piezo Buzzer', 'buzz_mario');
+  for (let i = 0; i < 4; i++) m.link(s, s.outputs[i], buzz, pk(buzz, `pitch${i}`));
+  m.link(m.vcc, m.vcc.outputs[0], buzz, pk(buzz, 'in'));
+  return {
+    id: 'chiptune_music_box',
+    name: '8-Bit Chiptune Müzik Kutusu (Super Mario Melodisi)',
+    category: 'music_graphics',
+    description:
+      'Saat darbesi (CLK), 4 bitlik sayaç ve notaların yazılı olduğu 16x4 ROM belleğiyle piezo buzzer üzerinden Super Mario temasını 8-bit chiptune ses olarak çalan müzik devresi. Sayaç ROM adresini 4 bitlik tek telle sürer; ROM çıkışı bir splitter ile buzzer\'ın 4 nota bacağına dağıtılır.',
+    components: [m.vcc, m.clk, m.rst, m.cnt, m.rom, s, buzz],
+    wires: m.wires,
+  };
+}
+
+function chiptuneSynthPreset(): CircuitPreset {
+  const m = melodyCore('ps', 'Melodi ROM (Star Wars Fanfare)', [4, 4, 4, 7, 7, 11, 11, 10, 9, 8, 14, 14, 11, 11, 15, 15], 'Melodi Sayacı', 'Güç (VCC)');
+  const hex = hexDigitPart(540, 220, 'Nota Göstergesi (0-F)', 'hex_note');
+  const s = splitBits(m.link, 'split_ps', 'Nota Bitleri', 540, 90, 4, [m.rom, pk(m.rom, 'd')]);
+  const buzz = busPart('buzzer', 640, 80, 'Chiptune Synthesizer', 'buzz_ps');
+  const led = busPart('led', 680, 220, 'Sinyal Aktif LED', 'led_ps');
+  m.link(m.rom, pk(m.rom, 'd'), hex, pk(hex, 'in'));
+  for (let i = 0; i < 4; i++) m.link(s, s.outputs[i], buzz, pk(buzz, `pitch${i}`));
+  m.link(m.vcc, m.vcc.outputs[0], buzz, pk(buzz, 'in'));
+  m.link(m.vcc, m.vcc.outputs[0], led, led.inputs[0]);
+  return {
+    id: 'chiptune_synth_station',
+    name: '8-Bit Retro Ses Synthesizer & Müzik İstasyonu Kiti',
+    category: 'music_graphics',
+    description:
+      'Saat jeneratörü, 4 bitlik melodi sayacı, 16x4 melodi ROM belleği, 7-segment nota göstergesi ve piezo synthesizer içeren ses üretim kiti. ROM\'un 4 bitlik çıkışı hex göstergeye doğrudan, buzzer\'a bir splitter üzerinden gider.',
+    components: [m.vcc, m.clk, m.rst, m.cnt, m.rom, hex, s, buzz, led],
+    wires: m.wires,
+  };
+}
+
+function dotMatrixPreset(): CircuitPreset {
+  const vcc = busPart('vcc', 50, 40, 'VCC (1)', 'vcc_mat');
+  const gnd = busPart('gnd', 50, 330, 'GND (0)', 'gnd_mat');
+  const colSw = busPart('switch', 50, 120, 'Sütun 2 ve 5', 'sw_eye', { state: { on: true } });
+  const rowSw = busPart('switch', 50, 220, 'Satır 5 ve 6', 'sw_smile', { state: { on: true } });
+  const mat = busPart('dotMatrix', 360, 60, '8x8 Nokta Matris', 'disp_mat', {
+    configure: (c) => configureIo(c, { cols: 8, rows: 8, matrixInput: 'select' }),
+  });
+  const { wires, link } = busWires();
+  const V: [CircuitComponentInstance, CircuitPin] = [vcc, vcc.outputs[0]];
+  const G: [CircuitComponentInstance, CircuitPin] = [gnd, gnd.outputs[0]];
+  const C: [CircuitComponentInstance, CircuitPin] = [colSw, colSw.outputs[0]];
+  const R: [CircuitComponentInstance, CircuitPin] = [rowSw, rowSw.outputs[0]];
+  const cols = joinBits(link, 'mat_cols', 'Sütun Yolu (8 bit)', 220, 80, [G, G, C, V, V, C, G, G]);
+  const rows = joinBits(link, 'mat_rows', 'Satır Yolu (8 bit)', 220, 240, [G, V, V, G, G, R, R, G]);
+  link(cols, cols.inputs[0], mat, pk(mat, 'col'));
+  link(rows, rows.inputs[0], mat, pk(mat, 'row'));
+  return {
+    id: 'dot_matrix_demo',
+    name: '8x8 LED Nokta Matris: Satır × Sütun Kesişimi',
+    category: 'music_graphics',
+    description:
+      "Matris 'satır/sütun seç' modundadır: bir piksel, satır yolundaki ve sütun yolundaki biti aynı anda 1 olduğunda yanar. İki 8 bitlik yol splitter'larla tek tek hatlardan kurulur (sayılar 0'dan başlar). VCC satır 1-2 ile sütun 3-4'ü sürekli sürer; iki anahtar satır 5-6'yı ve sütun 2 ile 5'i açıp kapatarak yanan bloğun nasıl büyüyüp küçüldüğünü gösterir.",
+    components: [vcc, gnd, colSw, rowSw, cols, rows, mat],
+    wires,
+  };
+}
+
+function asciiKeyboardPreset(): CircuitPreset {
+  const kbd = busPart('asciiKeyboard', 60, 80, 'ASCII Giriş Terminali', 'kbd_unit', {
+    state: { asciiChar: 'A', asciiCode: 65, strobe: true },
+  });
+  const ack = busPart('pushbutton', 60, 230, 'ST Temizle (ACK/CLR)', 'btn_ack');
+  const hex = hexDigitPart(380, 60, 'ASCII Alt Hane (D0-D3)', 'hex_ascii');
+  const st = busPart('led', 380, 220, 'Veri Hazır (ST / IRQ)', 'led_strobe');
+  const bar = busPart('ledBar', 520, 70, 'ASCII D0-D3 Veri Yolu', 'bar_ascii', {
+    configure: (c) => configureIo(c, { size: 4, ledBarMode: 'oneWire' }),
+  });
+  const { wires, link } = busWires();
+  const low = joinBits(link, 'ascii_low', 'Alt 4 Bit', 280, 90, [0, 1, 2, 3].map((i) => [kbd, pk(kbd, `outD${i}`)] as [CircuitComponentInstance, CircuitPin]));
+  link(ack, ack.outputs[0], kbd, pk(kbd, 'inClr'));
+  link(kbd, pk(kbd, 'outStrobe'), st, st.inputs[0]);
+  link(low, low.inputs[0], hex, pk(hex, 'in'));
+  link(low, low.inputs[0], bar, pk(bar, 'in'));
+  return {
+    id: 'ascii_keyboard_terminal',
+    name: 'ASCII Klavye ve Veri Hazır (ST) Sinyali',
+    category: 'music_graphics',
+    description:
+      "Klavye basılan tuşun 7-bit ASCII kodunu (D0-D6) ve veri hazır (ST) sinyalini üretir. Bu şablonda alt 4 bit (D0-D3) bir splitter ile 4 bitlik tek tele birleştirilir: hex ekran ve tek telli LED çubuğu kodun son hex hanesini gösterir (ör. 'A' = 41h → 1). ST LED'i tuşa basılınca yanar, düğmeyle temizlenir.",
+    components: [kbd, ack, low, hex, st, bar],
+    wires,
+  };
+}
+
+function rgbMatrixPreset(): CircuitPreset {
+  const clk = busPart('clock', 40, 60, 'Piksel Saati (CLK)', 'clk_gpu', { state: { frequencyHz: 8 } });
+  const cx = busPart('counter', 180, 60, 'X-Koordinat Sayacı', 'cnt_x', { configure: (c) => configureMem(c, { width: 4 }) });
+  const cy = busPart('counter', 180, 240, 'Y-Koordinat Sayacı', 'cnt_y', { configure: (c) => configureMem(c, { width: 4 }) });
+  const we = busPart('vcc', 40, 340, 'Yazma İzni (WE=1)', 'vcc_we');
+  const r = busPart('switch', 40, 410, 'Kırmızı Renk (R)', 'sw_r', { state: { on: true } });
+  const g = busPart('switch', 40, 480, 'Yeşil Renk (G)', 'sw_g');
+  const b = busPart('switch', 40, 550, 'Mavi Renk (B)', 'sw_b', { state: { on: true } });
+  const scr = busPart('rgbMatrix16x16', 500, 60, '16x16 RGB Video Matrisi', 'gpu_screen');
+  const { wires, link } = busWires();
+  link(clk, clk.outputs[0], cx, pk(cx, 'clk'));
+  link(clk, clk.outputs[0], cy, pk(cy, 'clk'));
+  // Y counts once per line: only on the clock edge where X wraps from 15 to 0 (X's carry = 1 at 15)
+  link(cx, pk(cx, 'carry'), cy, pk(cy, 'ct'));
+  const sx = splitBits(link, 'split_x', 'X bitleri', 360, 60, 4, [cx, pk(cx, 'q')]);
+  const sy = splitBits(link, 'split_y', 'Y bitleri', 360, 240, 4, [cy, pk(cy, 'q')]);
+  for (let i = 0; i < 4; i++) {
+    link(sx, sx.outputs[i], scr, pk(scr, `inX${i}`));
+    link(sy, sy.outputs[i], scr, pk(scr, `inY${i}`));
+  }
+  link(we, we.outputs[0], scr, pk(scr, 'inWE'));
+  link(r, r.outputs[0], scr, pk(scr, 'inR'));
+  link(g, g.outputs[0], scr, pk(scr, 'inG'));
+  link(b, b.outputs[0], scr, pk(scr, 'inB'));
+  return {
+    id: 'rgb_matrix_gpu_painter',
+    name: '16x16 RGB VRAM Renkli Video Ekranı Kiti',
+    category: 'music_graphics',
+    description:
+      "X ve Y koordinat sayaçları, RGB renk seçici ve Yazma İzni (WE) ile 256 piksellik renkli grafik ekranına çizim yapan GPU gösterim devresi. İki sayaç aynı saatle çalışır; X'in elde çıkışı (X = 15) Y'nin sayma iznine bağlı olduğu için Y her satır sonunda bir artar (senkron sayaç zinciri).",
+    components: [clk, cx, cy, sx, sy, we, r, g, b, scr],
+    wires,
+  };
+}
+
+function busAluPreset(): CircuitPreset {
+  const a = busPart('switch', 60, 120, 'A (4 bit)', 'bal_a', { width: 4, state: { inputValue: 7 } });
+  const b = busPart('switch', 60, 220, 'B (4 bit)', 'bal_b', { width: 4, state: { inputValue: 5 } });
+  const op = busPart('switch', 200, 40, 'İşlem (3 bit)', 'bal_op', { width: 3, state: { inputValue: 0 } });
+  const cin = busPart('switch', 60, 320, 'Elde Girişi (Cin)', 'bal_cin');
+  const alu = busPart('alu', 240, 140, '4-Bit ALU', 'bal_alu', { configure: (c) => configureArith(c, { width: 4 }) });
+  const ledF = busPart('led', 460, 120, 'F (4 bit)', 'bal_ledf', { width: 4 });
+  const pF = busPart('probe', 460, 40, 'F (ondalık)', 'bal_pf', { state: { radix: '10u' } });
+  const ledZ = busPart('led', 300, 300, 'Sıfır (Z)', 'bal_ledz');
+  const ledN = busPart('led', 400, 300, 'Negatif (N)', 'bal_ledn');
+  const ledC = busPart('led', 500, 300, 'Elde Çıkışı (C)', 'bal_ledc');
+  const ledV = busPart('led', 600, 300, 'Taşma (V)', 'bal_ledv');
+  const { wires, link } = busWires();
+  link(a, a.outputs[0], alu, pk(alu, 'a'));
+  link(b, b.outputs[0], alu, pk(alu, 'b'));
+  link(op, op.outputs[0], alu, pk(alu, 'op'));
+  link(cin, cin.outputs[0], alu, pk(alu, 'cin'));
+  link(alu, pk(alu, 'out'), ledF, ledF.inputs[0]);
+  link(alu, pk(alu, 'out'), pF, pF.inputs[0]);
+  link(alu, pk(alu, 'z'), ledZ, ledZ.inputs[0]);
+  link(alu, pk(alu, 'n'), ledN, ledN.inputs[0]);
+  link(alu, pk(alu, 'c'), ledC, ledC.inputs[0]);
+  link(alu, pk(alu, 'v'), ledV, ledV.inputs[0]);
+  return {
+    id: 'bus_alu4',
+    name: "Çok Bitli: 4-Bit ALU'yu Veri Yollarıyla Sürmek",
+    category: 'bus',
+    description:
+      "A ve B 4 bitlik, işlem seçimi 3 bitlik veri yollarından doğrudan ALU'ya girer; sonuç F 4 bitlik tek teldir, yanında Z N C V bayrakları. Başlangıç: 7 + 5 = 12. İşlem: 0 ADD, 1 SUB, 2 AND, 3 OR, 4 XOR, 5 NOR, 6 SLT (A < B ise 1), 7 B'yi geçir. Çıkarmada C ödünç (borrow) bayrağıdır: A < B ise 1.",
+    components: [a, b, op, cin, alu, ledF, pF, ledZ, ledN, ledC, ledV],
     wires,
   };
 }
@@ -5026,48 +5549,8 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w8', fromCompId: 'or_out', fromPinId: 'or_out_out', toCompId: 'led_y', toPinId: 'led_y_in', value: 0 },
     ],
   },
-  {
-    id: 'd_flip_flop_memory',
-    name: 'D Flip-Flop ile 1-Bit Bellek (Kayıtçı)',
-    category: 'sequential',
-    description: 'Saat darbesinin (CLK) yükselen kenarında Giriş D verisini saklayan ve Q ile Q\' çıkışlarına aktaran temel ardışıl bellek devresi.',
-    components: [
-      { ...createComponentInstance('switch', 60, 100, 'Veri Girişi (D)'), id: 'sw_d' },
-      { ...createComponentInstance('clock', 60, 220, 'Saat Darbesi (CLK)'), id: 'clk_1' },
-      { ...createComponentInstance('dFlipFlop', 280, 140, 'D-FF Kaydedici'), id: 'dff_1' },
-      { ...createComponentInstance('led', 480, 100, 'Kayıtlı Çıkış (Q)'), id: 'led_q' },
-      { ...createComponentInstance('led', 480, 220, "Ters Çıkış (Q')"), id: 'led_q_bar' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'sw_d', fromPinId: 'sw_d_out', toCompId: 'dff_1', toPinId: 'dff_1_inD', value: 0 },
-      { id: 'w2', fromCompId: 'clk_1', fromPinId: 'clk_1_out', toCompId: 'dff_1', toPinId: 'dff_1_inClk', value: 0 },
-      { id: 'w3', fromCompId: 'dff_1', fromPinId: 'dff_1_outQ', toCompId: 'led_q', toPinId: 'led_q_in', value: 0 },
-      { id: 'w4', fromCompId: 'dff_1', fromPinId: 'dff_1_outQBar', toCompId: 'led_q_bar', toPinId: 'led_q_bar_in', value: 1 },
-    ],
-  },
-  {
-    id: 't_flip_flop_counter',
-    name: 'T-FF ile 2-Bit Asenkron İkili Sayaç (Ripple Counter)',
-    category: 'sequential',
-    description: 'T Flip-Flop elemanlarının kaskat bağlanmasıyla saat darbelerini sayan ve 00, 01, 10, 11 sayma dizisini üreten 2-bit sayaç.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 70, '1 (High)'), id: 'vcc_tff' },
-      { ...createComponentInstance('clock', 50, 170, 'Saat (CLK)'), id: 'clk_tff' },
-      { ...createComponentInstance('tFlipFlop', 190, 110, 'T-FF 0 (Bit 0)'), id: 'tff_0' },
-      { ...createComponentInstance('tFlipFlop', 370, 110, 'T-FF 1 (Bit 1)'), id: 'tff_1' },
-      { ...createComponentInstance('led', 270, 260, 'Q0 (1ler Biti)'), id: 'led_tff_q0' },
-      { ...createComponentInstance('led', 450, 260, 'Q1 (2ler Biti)'), id: 'led_tff_q1' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'vcc_tff', fromPinId: 'vcc_tff_out', toCompId: 'tff_0', toPinId: 'tff_0_inT', value: 1 },
-      { id: 'w2', fromCompId: 'clk_tff', fromPinId: 'clk_tff_out', toCompId: 'tff_0', toPinId: 'tff_0_inClk', value: 0 },
-      { id: 'w3', fromCompId: 'vcc_tff', fromPinId: 'vcc_tff_out', toCompId: 'tff_1', toPinId: 'tff_1_inT', value: 1 },
-      // Rising-edge flip-flops: Q0' clocks bit 1 (Q0 there would make it count down 00, 11, 10, 01)
-      { id: 'w4', fromCompId: 'tff_0', fromPinId: 'tff_0_outQBar', toCompId: 'tff_1', toPinId: 'tff_1_inClk', value: 1 },
-      { id: 'w5', fromCompId: 'tff_0', fromPinId: 'tff_0_outQ', toCompId: 'led_tff_q0', toPinId: 'led_tff_q0_in', value: 0 },
-      { id: 'w6', fromCompId: 'tff_1', fromPinId: 'tff_1_outQ', toCompId: 'led_tff_q1', toPinId: 'led_tff_q1_in', value: 0 },
-    ],
-  },
+  dFlipFlopPreset(),
+  tFlipFlopCounterPreset(),
   {
     id: 'sr_latch_memory',
     name: 'SR Mandalı (Set-Reset Bistable Latch)',
@@ -5087,50 +5570,8 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w4', fromCompId: 'sr_latch_1', fromPinId: 'sr_latch_1_outQBar', toCompId: 'led_sr_qbar', toPinId: 'led_sr_qbar_in', value: 1 },
     ],
   },
-  {
-    id: 'decoder_demo',
-    name: '2:4 Kod Çözücü (1-of-4 Decoder Seçici)',
-    category: 'bus',
-    description: '2-Bitlik adresi (A1, A0) çözerek 4 çıkış hattından tam olarak birini aktif (1) yapan adres çözücü devre.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 50, 'EN (Yetki=1)'), id: 'vcc_dec' },
-      { ...createComponentInstance('switch', 50, 130, 'Adres A0 (1ler)'), id: 'sw_dec_a0', state: { on: false } },
-      { ...createComponentInstance('switch', 50, 230, 'Adres A1 (2ler)'), id: 'sw_dec_a1', state: { on: false } },
-      { ...createComponentInstance('decoder2to4', 210, 110, '2:4 Kod Çözücü'), id: 'dec_1' },
-      { ...createComponentInstance('led', 420, 60, 'Hat 0 (Y0)'), id: 'led_dec_0' },
-      { ...createComponentInstance('led', 420, 120, 'Hat 1 (Y1)'), id: 'led_dec_1' },
-      { ...createComponentInstance('led', 420, 180, 'Hat 2 (Y2)'), id: 'led_dec_2' },
-      { ...createComponentInstance('led', 420, 240, 'Hat 3 (Y3)'), id: 'led_dec_3' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'vcc_dec', fromPinId: 'vcc_dec_out', toCompId: 'dec_1', toPinId: 'dec_1_inEN', value: 1 },
-      { id: 'w2', fromCompId: 'sw_dec_a0', fromPinId: 'sw_dec_a0_out', toCompId: 'dec_1', toPinId: 'dec_1_inA0', value: 0 },
-      { id: 'w3', fromCompId: 'sw_dec_a1', fromPinId: 'sw_dec_a1_out', toCompId: 'dec_1', toPinId: 'dec_1_inA1', value: 0 },
-      { id: 'w4', fromCompId: 'dec_1', fromPinId: 'dec_1_outY0', toCompId: 'led_dec_0', toPinId: 'led_dec_0_in', value: 1 },
-      { id: 'w5', fromCompId: 'dec_1', fromPinId: 'dec_1_outY1', toCompId: 'led_dec_1', toPinId: 'led_dec_1_in', value: 0 },
-      { id: 'w6', fromCompId: 'dec_1', fromPinId: 'dec_1_outY2', toCompId: 'led_dec_2', toPinId: 'led_dec_2_in', value: 0 },
-      { id: 'w7', fromCompId: 'dec_1', fromPinId: 'dec_1_outY3', toCompId: 'led_dec_3', toPinId: 'led_dec_3_in', value: 0 },
-    ],
-  },
-  {
-    id: 'hex_display_demo',
-    name: '4-Bit Hex 7-Segment Sayı Göstergesi',
-    category: 'bus',
-    description: '4 anahtarın ikili kombinasyonunu (0000 - 1111) onaltılık (0-F) olarak gerçekçi LED ekranda gösteren devre.',
-    components: [
-      { ...createComponentInstance('switch', 60, 60, 'Bit 0 (1ler)'), id: 'b0' },
-      { ...createComponentInstance('switch', 60, 150, 'Bit 1 (2ler)'), id: 'b1' },
-      { ...createComponentInstance('switch', 60, 240, 'Bit 2 (4ler)'), id: 'b2' },
-      { ...createComponentInstance('switch', 60, 330, 'Bit 3 (8ler)'), id: 'b3' },
-      { ...createComponentInstance('hexDisplay', 300, 170, 'Hex 7-Segment Ekran'), id: 'hex_disp' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'b0', fromPinId: 'b0_out', toCompId: 'hex_disp', toPinId: 'hex_disp_inD0', value: 0 },
-      { id: 'w2', fromCompId: 'b1', fromPinId: 'b1_out', toCompId: 'hex_disp', toPinId: 'hex_disp_inD1', value: 0 },
-      { id: 'w3', fromCompId: 'b2', fromPinId: 'b2_out', toCompId: 'hex_disp', toPinId: 'hex_disp_inD2', value: 0 },
-      { id: 'w4', fromCompId: 'b3', fromPinId: 'b3_out', toCompId: 'hex_disp', toPinId: 'hex_disp_inD3', value: 0 },
-    ],
-  },
+  decoder2to4Preset(),
+  hexDisplayPreset(),
   {
     id: 'tristate_bus',
     name: '3 Durumlu Tampon & Ortak Veri Yolu (Tri-State Bus)',
@@ -5155,194 +5596,12 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w7', fromCompId: 'buf_b', fromPinId: 'buf_b_outY', toCompId: 'bus_led', toPinId: 'bus_led_in', value: 1 },
     ],
   },
-  {
-    id: 'alu_bus_splitter',
-    name: '4-Bit ALU & Veri Yolu Ayırıcı (Splitter Bus)',
-    category: 'arithmetic',
-    description: '4-Bit ALU çıkışlarının paralel veri yolu ayırıcı (Splitter) ve 7-Segment Hex gösterge ile entegrasyonu.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 60, '1 (High)'), id: 'vcc_1' },
-      { ...createComponentInstance('gnd', 50, 120, '0 (Low)'), id: 'gnd_1' },
-      { ...createComponentInstance('alu4', 160, 120, '4-Bit ALU'), id: 'alu_core' },
-      { ...createComponentInstance('splitter4', 330, 120, 'Veri Yolu Splitter'), id: 'bus_split' },
-      { ...createComponentInstance('hexDisplay', 490, 100, 'Hex Ekran'), id: 'alu_hex' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'vcc_1', fromPinId: 'vcc_1_out', toCompId: 'alu_core', toPinId: 'alu_core_inA0', value: 1 },
-      { id: 'w2', fromCompId: 'vcc_1', fromPinId: 'vcc_1_out', toCompId: 'alu_core', toPinId: 'alu_core_inA1', value: 1 },
-      { id: 'w3', fromCompId: 'vcc_1', fromPinId: 'vcc_1_out', toCompId: 'alu_core', toPinId: 'alu_core_inB0', value: 1 },
-      { id: 'w4', fromCompId: 'alu_core', fromPinId: 'alu_core_outF0', toCompId: 'bus_split', toPinId: 'bus_split_in0', value: 0 },
-      { id: 'w5', fromCompId: 'alu_core', fromPinId: 'alu_core_outF1', toCompId: 'bus_split', toPinId: 'bus_split_in1', value: 0 },
-      { id: 'w6', fromCompId: 'alu_core', fromPinId: 'alu_core_outF2', toCompId: 'bus_split', toPinId: 'bus_split_in2', value: 0 },
-      { id: 'w7', fromCompId: 'alu_core', fromPinId: 'alu_core_outF3', toCompId: 'bus_split', toPinId: 'bus_split_in3', value: 0 },
-      { id: 'w8', fromCompId: 'bus_split', fromPinId: 'bus_split_out0', toCompId: 'alu_hex', toPinId: 'alu_hex_inD0', value: 0 },
-      { id: 'w9', fromCompId: 'bus_split', fromPinId: 'bus_split_out1', toCompId: 'alu_hex', toPinId: 'alu_hex_inD1', value: 0 },
-      { id: 'w10', fromCompId: 'bus_split', fromPinId: 'bus_split_out2', toCompId: 'alu_hex', toPinId: 'alu_hex_inD2', value: 0 },
-      { id: 'w11', fromCompId: 'bus_split', fromPinId: 'bus_split_out3', toCompId: 'alu_hex', toPinId: 'alu_hex_inD3', value: 0 },
-      // Open ALU inputs read as unknown, so the remaining bits and the operation select are tied low
-      ...['inA2', 'inA3', 'inCin', 'inB1', 'inB2', 'inB3', 'inS0', 'inS1'].map((pin, i) => ({
-        id: `w${12 + i}`,
-        fromCompId: 'gnd_1',
-        fromPinId: 'gnd_1_out',
-        toCompId: 'alu_core',
-        toPinId: `alu_core_${pin}`,
-        value: 0 as const,
-      })),
-    ],
-  },
-  {
-    id: 'counter_hex_demo',
-    name: '4-Bit Senkron Sayaç ve 7-Segment Hex Gösterge (0-F)',
-    category: 'sequential',
-    description: 'Saat darbesi (CLK) ve Sıfırlama (RST) butonu ile kontrol edilen 4-bit sayaç, çıkışındaki 4 ikili biti Hexadecimal 7-Segment ekranda 0\'dan F\'ye canlı olarak saydırır.',
-    components: [
-      { ...createComponentInstance('clock', 60, 100, 'Saat Darbesi (CLK)'), id: 'cnt_clk' },
-      { ...createComponentInstance('pushbutton', 60, 160, 'Sıfırla (RST)'), id: 'cnt_rst' },
-      { ...createComponentInstance('counter4', 190, 100, '4-Bit Senkron Sayaç'), id: 'cnt_core' },
-      { ...createComponentInstance('hexDisplay', 350, 100, 'Hex Ekran (0-F)'), id: 'cnt_hex' },
-      { ...createComponentInstance('led', 480, 70, 'Q0 (LSB)'), id: 'led_q0' },
-      { ...createComponentInstance('led', 480, 120, 'Q1'), id: 'led_q1' },
-      { ...createComponentInstance('led', 480, 170, 'Q2'), id: 'led_q2' },
-      { ...createComponentInstance('led', 480, 220, 'Q3 (MSB)'), id: 'led_q3' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'cnt_clk', fromPinId: 'cnt_clk_out', toCompId: 'cnt_core', toPinId: 'cnt_core_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'cnt_rst', fromPinId: 'cnt_rst_out', toCompId: 'cnt_core', toPinId: 'cnt_core_inRst', value: 0 },
-      { id: 'w3', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ0', toCompId: 'cnt_hex', toPinId: 'cnt_hex_inD0', value: 0 },
-      { id: 'w4', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ1', toCompId: 'cnt_hex', toPinId: 'cnt_hex_inD1', value: 0 },
-      { id: 'w5', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ2', toCompId: 'cnt_hex', toPinId: 'cnt_hex_inD2', value: 0 },
-      { id: 'w6', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ3', toCompId: 'cnt_hex', toPinId: 'cnt_hex_inD3', value: 0 },
-      { id: 'w7', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ0', toCompId: 'led_q0', toPinId: 'led_q0_in', value: 0 },
-      { id: 'w8', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ1', toCompId: 'led_q1', toPinId: 'led_q1_in', value: 0 },
-      { id: 'w9', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ2', toCompId: 'led_q2', toPinId: 'led_q2_in', value: 0 },
-      { id: 'w10', fromCompId: 'cnt_core', fromPinId: 'cnt_core_outQ3', toCompId: 'led_q3', toPinId: 'led_q3_in', value: 0 },
-    ],
-  },
-  {
-    id: 'magnitude_comparator',
-    name: '4-Bit Büyüklük Karşılaştırıcı (74HC85 benzeri)',
-    category: 'arithmetic',
-    description: 'İki adet 4-bitlik ikili sayıyı (A3..A0 ile B3..B0) karşılaştırarak A>B, A=B veya A<B durumlarını anında tespit eden aritmetik mantık devresi.',
-    components: [
-      { ...createComponentInstance('switch', 60, 50, 'A3 (MSB)'), id: 'sw_a3' },
-      { ...createComponentInstance('switch', 60, 90, 'A2'), id: 'sw_a2' },
-      { ...createComponentInstance('switch', 60, 140, 'A1'), id: 'sw_a1' },
-      { ...createComponentInstance('switch', 60, 190, 'A0 (LSB)'), id: 'sw_a0' },
-      { ...createComponentInstance('switch', 160, 240, 'B0 (LSB)'), id: 'sw_b0' },
-      { ...createComponentInstance('switch', 210, 240, 'B1'), id: 'sw_b1' },
-      { ...createComponentInstance('switch', 260, 240, 'B2'), id: 'sw_b2' },
-      { ...createComponentInstance('switch', 310, 240, 'B3 (MSB)'), id: 'sw_b3' },
-      { ...createComponentInstance('comparator4', 210, 90, '4-Bit CMP'), id: 'cmp_core' },
-      { ...createComponentInstance('led', 390, 80, 'A > B (Yeşil)'), id: 'led_gt' },
-      { ...createComponentInstance('led', 390, 130, 'A = B (Mavi)'), id: 'led_eq' },
-      { ...createComponentInstance('led', 390, 180, 'A < B (Kırmızı)'), id: 'led_lt' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'sw_a0', fromPinId: 'sw_a0_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inA0', value: 0 },
-      { id: 'w2', fromCompId: 'sw_a1', fromPinId: 'sw_a1_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inA1', value: 0 },
-      { id: 'w3', fromCompId: 'sw_a2', fromPinId: 'sw_a2_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inA2', value: 0 },
-      { id: 'w4', fromCompId: 'sw_a3', fromPinId: 'sw_a3_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inA3', value: 0 },
-      { id: 'w5', fromCompId: 'sw_b0', fromPinId: 'sw_b0_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inB0', value: 0 },
-      { id: 'w6', fromCompId: 'sw_b1', fromPinId: 'sw_b1_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inB1', value: 0 },
-      { id: 'w7', fromCompId: 'sw_b2', fromPinId: 'sw_b2_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inB2', value: 0 },
-      { id: 'w8', fromCompId: 'sw_b3', fromPinId: 'sw_b3_out', toCompId: 'cmp_core', toPinId: 'cmp_core_inB3', value: 0 },
-      { id: 'w9', fromCompId: 'cmp_core', fromPinId: 'cmp_core_outGT', toCompId: 'led_gt', toPinId: 'led_gt_in', value: 0 },
-      { id: 'w10', fromCompId: 'cmp_core', fromPinId: 'cmp_core_outEQ', toCompId: 'led_eq', toPinId: 'led_eq_in', value: 1 },
-      { id: 'w11', fromCompId: 'cmp_core', fromPinId: 'cmp_core_outLT', toCompId: 'led_lt', toPinId: 'led_lt_in', value: 0 },
-    ],
-  },
-  {
-    id: 'priority_encoder_demo',
-    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
-    category: 'basic',
-    description: '4 aktif-yüksek girişten (D3..D0) önceliği en yüksek olanı 2-bit ikili koda (Y1, Y0) çevirir; V pini en az bir girişin aktif olduğunu gösterir. Gerçek 74HC148 ise 8:3 ve aktif-düşük çalışır.',
-    components: [
-      { ...createComponentInstance('switch', 60, 50, 'D0 (En Düşük Öncelik)'), id: 'pri_sw0' },
-      { ...createComponentInstance('switch', 60, 100, 'D1'), id: 'pri_sw1' },
-      { ...createComponentInstance('switch', 60, 150, 'D2'), id: 'pri_sw2' },
-      { ...createComponentInstance('switch', 60, 200, 'D3 (En Yüksek Öncelik)'), id: 'pri_sw3' },
-      { ...createComponentInstance('priorityEncoder4to2', 200, 90, '4:2 Öncelikli Kodlayıcı'), id: 'pri_core' },
-      { ...createComponentInstance('led', 360, 80, 'Y1 (MSB)'), id: 'pri_led_y1' },
-      { ...createComponentInstance('led', 360, 130, 'Y0 (LSB)'), id: 'pri_led_y0' },
-      { ...createComponentInstance('led', 360, 180, 'V (Geçerli / Valid)'), id: 'pri_led_v' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'pri_sw0', fromPinId: 'pri_sw0_out', toCompId: 'pri_core', toPinId: 'pri_core_inD0', value: 0 },
-      { id: 'w2', fromCompId: 'pri_sw1', fromPinId: 'pri_sw1_out', toCompId: 'pri_core', toPinId: 'pri_core_inD1', value: 0 },
-      { id: 'w3', fromCompId: 'pri_sw2', fromPinId: 'pri_sw2_out', toCompId: 'pri_core', toPinId: 'pri_core_inD2', value: 0 },
-      { id: 'w4', fromCompId: 'pri_sw3', fromPinId: 'pri_sw3_out', toCompId: 'pri_core', toPinId: 'pri_core_inD3', value: 0 },
-      { id: 'w5', fromCompId: 'pri_core', fromPinId: 'pri_core_outY1', toCompId: 'pri_led_y1', toPinId: 'pri_led_y1_in', value: 0 },
-      { id: 'w6', fromCompId: 'pri_core', fromPinId: 'pri_core_outY0', toCompId: 'pri_led_y0', toPinId: 'pri_led_y0_in', value: 0 },
-      { id: 'w7', fromCompId: 'pri_core', fromPinId: 'pri_core_outV', toCompId: 'pri_led_v', toPinId: 'pri_led_v_in', value: 0 },
-    ],
-  },
-  {
-    id: 'universal_shift_register_demo',
-    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
-    category: 'sequential',
-    description: 'Saat darbesi (CLK) ve mod anahtarlarıyla çalışan 4-bit kaydırmalı saklayıcı: S1-S0=01 iken sağa, 10 iken sola kaydırır.',
-    components: [
-      { ...createComponentInstance('clock', 60, 60, 'Saat Darbesi (CLK)'), id: 'sh_clk' },
-      { ...createComponentInstance('pushbutton', 60, 110, 'Sıfırla (CLR)'), id: 'sh_clr' },
-      { ...createComponentInstance('switch', 60, 160, 'SR (Sağ Giriş)'), id: 'sh_sr' },
-      { ...createComponentInstance('switch', 60, 210, 'SL (Sol Giriş)'), id: 'sh_sl' },
-      { ...createComponentInstance('switch', 160, 260, 'S0 (Mod 0)'), id: 'sh_s0' },
-      { ...createComponentInstance('switch', 220, 260, 'S1 (Mod 1)'), id: 'sh_s1' },
-      { ...createComponentInstance('shiftRegister4', 200, 90, '4-Bit Shift Reg'), id: 'sh_core' },
-      { ...createComponentInstance('led', 380, 60, 'Q0 (LSB)'), id: 'sh_q0' },
-      { ...createComponentInstance('led', 380, 110, 'Q1'), id: 'sh_q1' },
-      { ...createComponentInstance('led', 380, 160, 'Q2'), id: 'sh_q2' },
-      { ...createComponentInstance('led', 380, 210, 'Q3 (MSB)'), id: 'sh_q3' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'sh_clk', fromPinId: 'sh_clk_out', toCompId: 'sh_core', toPinId: 'sh_core_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'sh_clr', fromPinId: 'sh_clr_out', toCompId: 'sh_core', toPinId: 'sh_core_inRst', value: 0 },
-      { id: 'w3', fromCompId: 'sh_sl', fromPinId: 'sh_sl_out', toCompId: 'sh_core', toPinId: 'sh_core_inSL', value: 0 },
-      { id: 'w4', fromCompId: 'sh_sr', fromPinId: 'sh_sr_out', toCompId: 'sh_core', toPinId: 'sh_core_inSR', value: 1 },
-      { id: 'w5', fromCompId: 'sh_s0', fromPinId: 'sh_s0_out', toCompId: 'sh_core', toPinId: 'sh_core_inS0', value: 1 },
-      { id: 'w6', fromCompId: 'sh_s1', fromPinId: 'sh_s1_out', toCompId: 'sh_core', toPinId: 'sh_core_inS1', value: 0 },
-      { id: 'w7', fromCompId: 'sh_core', fromPinId: 'sh_core_outQ0', toCompId: 'sh_q0', toPinId: 'sh_q0_in', value: 0 },
-      { id: 'w8', fromCompId: 'sh_core', fromPinId: 'sh_core_outQ1', toCompId: 'sh_q1', toPinId: 'sh_q1_in', value: 0 },
-      { id: 'w9', fromCompId: 'sh_core', fromPinId: 'sh_core_outQ2', toCompId: 'sh_q2', toPinId: 'sh_q2_in', value: 0 },
-      { id: 'w10', fromCompId: 'sh_core', fromPinId: 'sh_core_outQ3', toCompId: 'sh_q3', toPinId: 'sh_q3_in', value: 0 },
-    ],
-  },
-  {
-    id: 'ram_memory_demo',
-    name: '16x4-Bit RAM Bellek ve Hex Gösterge',
-    category: 'sequential',
-    description: '16 Adresli 4-Bit RAM: A3-A0 adresini seçin, D3-D0 verisini ayarlayın ve WE=1 iken CLK saat darbesiyle belleğe yazın. Adresteki veri doğrudan Hex ekranda okunur.',
-    components: [
-      { ...createComponentInstance('switch', 60, 50, 'A0 (Adres 0)'), id: 'ram_sw_a0' },
-      { ...createComponentInstance('switch', 60, 100, 'A1 (Adres 1)'), id: 'ram_sw_a1' },
-      { ...createComponentInstance('switch', 60, 150, 'A2 (Adres 2)'), id: 'ram_sw_a2' },
-      { ...createComponentInstance('switch', 60, 200, 'A3 (Adres 3)'), id: 'ram_sw_a3' },
-      { ...createComponentInstance('switch', 60, 250, 'D0 (Veri 0)'), id: 'ram_sw_d0' },
-      { ...createComponentInstance('switch', 60, 300, 'D1 (Veri 1)'), id: 'ram_sw_d1' },
-      { ...createComponentInstance('switch', 60, 350, 'D2 (Veri 2)'), id: 'ram_sw_d2' },
-      { ...createComponentInstance('switch', 60, 400, 'D3 (Veri 3)'), id: 'ram_sw_d3' },
-      { ...createComponentInstance('clock', 170, 290, 'CLK (Yazma Saati)'), id: 'ram_clk' },
-      { ...createComponentInstance('switch', 240, 290, 'WE (Yazma İzni)'), id: 'ram_sw_we' },
-      { ...createComponentInstance('ram16x4', 210, 80, '16x4 RAM'), id: 'ram_chip' },
-      { ...createComponentInstance('hexDisplay', 380, 80, 'Okunan Hex Ekran'), id: 'ram_disp' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'ram_sw_a0', fromPinId: 'ram_sw_a0_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inA0', value: 0 },
-      { id: 'w2', fromCompId: 'ram_sw_a1', fromPinId: 'ram_sw_a1_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inA1', value: 0 },
-      { id: 'w3', fromCompId: 'ram_sw_a2', fromPinId: 'ram_sw_a2_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inA2', value: 0 },
-      { id: 'w4', fromCompId: 'ram_sw_a3', fromPinId: 'ram_sw_a3_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inA3', value: 0 },
-      { id: 'w5', fromCompId: 'ram_sw_d0', fromPinId: 'ram_sw_d0_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD0', value: 0 },
-      { id: 'w6', fromCompId: 'ram_sw_d1', fromPinId: 'ram_sw_d1_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD1', value: 0 },
-      { id: 'w6b', fromCompId: 'ram_sw_d2', fromPinId: 'ram_sw_d2_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD2', value: 0 },
-      { id: 'w6c', fromCompId: 'ram_sw_d3', fromPinId: 'ram_sw_d3_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inD3', value: 0 },
-      { id: 'w7', fromCompId: 'ram_clk', fromPinId: 'ram_clk_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inClk', value: 0 },
-      { id: 'w8', fromCompId: 'ram_sw_we', fromPinId: 'ram_sw_we_out', toCompId: 'ram_chip', toPinId: 'ram_chip_inWE', value: 0 },
-      { id: 'w9', fromCompId: 'ram_chip', fromPinId: 'ram_chip_outQ0', toCompId: 'ram_disp', toPinId: 'ram_disp_inD0', value: 0 },
-      { id: 'w10', fromCompId: 'ram_chip', fromPinId: 'ram_chip_outQ1', toCompId: 'ram_disp', toPinId: 'ram_disp_inD1', value: 0 },
-      { id: 'w11', fromCompId: 'ram_chip', fromPinId: 'ram_chip_outQ2', toCompId: 'ram_disp', toPinId: 'ram_disp_inD2', value: 0 },
-      { id: 'w12', fromCompId: 'ram_chip', fromPinId: 'ram_chip_outQ3', toCompId: 'ram_disp', toPinId: 'ram_disp_inD3', value: 0 },
-    ],
-  },
+  aluConstantsPreset(),
+  counterHexPreset(),
+  comparatorPreset(),
+  priorityEncoderPreset(),
+  universalShiftRegisterPreset(),
+  ramMemoryPreset(),
   {
     id: 'full_subtractor_demo',
     name: '1-Bit Tam Çıkarıcı (Full Subtractor)',
@@ -5391,258 +5650,13 @@ const RAW_CIRCUIT_PRESETS: CircuitPreset[] = [
       { id: 'w11', fromCompId: 'bcd_chip', fromPinId: 'bcd_chip_outG', toCompId: 'bcd_disp', toPinId: 'bcd_disp_inG', value: 0 },
     ],
   },
-  {
-    id: 'decoder_3to8_minterm_demo',
-    name: '3:8 Kod Çözücü ile Minterm Seçimi (74HC238 benzeri)',
-    category: 'basic',
-    description: '3-Bit ikili adres (A0, A1, A2) ve Enable yetkilendirmesiyle 8 çıkış hattından (m0-m7) birini seçen kod çözücü mimarisi.',
-    components: [
-      { ...createComponentInstance('switch', 60, 40, 'EN (Yetki = 1)'), id: 'dec_sw_en', state: { on: true } },
-      { ...createComponentInstance('switch', 60, 100, 'A0 (Adres Bit 0)'), id: 'dec_sw_a0' },
-      { ...createComponentInstance('switch', 60, 160, 'A1 (Adres Bit 1)'), id: 'dec_sw_a1' },
-      { ...createComponentInstance('switch', 60, 220, 'A2 (Adres Bit 2)'), id: 'dec_sw_a2' },
-      { ...createComponentInstance('decoder3to8', 210, 70, '3:8 Decoder'), id: 'dec_chip' },
-      { ...createComponentInstance('led', 370, 40, 'm0 (000)'), id: 'dec_led_0' },
-      { ...createComponentInstance('led', 370, 80, 'm1 (001)'), id: 'dec_led_1' },
-      { ...createComponentInstance('led', 370, 120, 'm2 (010)'), id: 'dec_led_2' },
-      { ...createComponentInstance('led', 370, 160, 'm3 (011)'), id: 'dec_led_3' },
-      { ...createComponentInstance('led', 440, 40, 'm4 (100)'), id: 'dec_led_4' },
-      { ...createComponentInstance('led', 440, 80, 'm5 (101)'), id: 'dec_led_5' },
-      { ...createComponentInstance('led', 440, 120, 'm6 (110)'), id: 'dec_led_6' },
-      { ...createComponentInstance('led', 440, 160, 'm7 (111)'), id: 'dec_led_7' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'dec_sw_en', fromPinId: 'dec_sw_en_out', toCompId: 'dec_chip', toPinId: 'dec_chip_inEN', value: 1 },
-      { id: 'w2', fromCompId: 'dec_sw_a0', fromPinId: 'dec_sw_a0_out', toCompId: 'dec_chip', toPinId: 'dec_chip_inA0', value: 0 },
-      { id: 'w3', fromCompId: 'dec_sw_a1', fromPinId: 'dec_sw_a1_out', toCompId: 'dec_chip', toPinId: 'dec_chip_inA1', value: 0 },
-      { id: 'w4', fromCompId: 'dec_sw_a2', fromPinId: 'dec_sw_a2_out', toCompId: 'dec_chip', toPinId: 'dec_chip_inA2', value: 0 },
-      { id: 'w5', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY0', toCompId: 'dec_led_0', toPinId: 'dec_led_0_in', value: 0 },
-      { id: 'w6', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY1', toCompId: 'dec_led_1', toPinId: 'dec_led_1_in', value: 0 },
-      { id: 'w7', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY2', toCompId: 'dec_led_2', toPinId: 'dec_led_2_in', value: 0 },
-      { id: 'w8', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY3', toCompId: 'dec_led_3', toPinId: 'dec_led_3_in', value: 0 },
-      { id: 'w9', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY4', toCompId: 'dec_led_4', toPinId: 'dec_led_4_in', value: 0 },
-      { id: 'w10', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY5', toCompId: 'dec_led_5', toPinId: 'dec_led_5_in', value: 0 },
-      { id: 'w11', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY6', toCompId: 'dec_led_6', toPinId: 'dec_led_6_in', value: 0 },
-      { id: 'w12', fromCompId: 'dec_chip', fromPinId: 'dec_chip_outY7', toCompId: 'dec_led_7', toPinId: 'dec_led_7_in', value: 0 },
-    ],
-  },
-  {
-    id: 'sap1_micro_cpu_demo',
-    name: 'SAP-1 Basit İşlemci (Simple As Possible CPU) Mimarisi',
-    category: 'sequential',
-    description: 'Sıfırdan İşlemciye yolculuğunun zirvesi: Program Sayacı (PC), 16x4 Program Belleği (RAM), A Yazmacı (Akümülatör), 4-Bit ALU ve Çıkış Göstergesinden oluşan gerçek zamanlı çalışan eğitim işlemcisi.',
-    components: [
-      { ...createComponentInstance('clock', 60, 60, 'Ana Saat (CLK)'), id: 'cpu_clk' },
-      { ...createComponentInstance('switch', 60, 140, 'Sıfırla (Reset=0)'), id: 'cpu_rst' },
-      { ...createComponentInstance('counter4', 180, 70, 'Program Sayacı (PC)'), id: 'cpu_pc' },
-      {
-        ...createComponentInstance('ram16x4', 330, 70, '16x4 Program Belleği (RAM)'),
-        id: 'cpu_ram',
-        state: { ramData: [3, 7, 2, 9, 12, 5, 1, 14, 0, 4, 8, 11, 15, 6, 10, 13] },
-      },
-      { ...createComponentInstance('switch', 220, 250, 'RAM Yazma (WE=0)'), id: 'cpu_we' },
-      { ...createComponentInstance('register4', 500, 70, 'A Yazmacı (Akümülatör)'), id: 'cpu_reg_a' },
-      { ...createComponentInstance('switch', 500, 10, 'A-Yazmaç İzni (WE=1)'), id: 'cpu_reg_we', state: { on: true } },
-      { ...createComponentInstance('hexDisplay', 670, 70, 'Çıkış Portu (Display)'), id: 'cpu_disp' },
-      { ...createComponentInstance('alu4', 500, 240, '4-Bit ALU'), id: 'cpu_alu' },
-      { ...createComponentInstance('gnd', 400, 330, 'ALU B=0 (ADD)'), id: 'cpu_alu_gnd' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'cpu_clk', fromPinId: 'cpu_clk_out', toCompId: 'cpu_pc', toPinId: 'cpu_pc_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'cpu_rst', fromPinId: 'cpu_rst_out', toCompId: 'cpu_pc', toPinId: 'cpu_pc_inRst', value: 0 },
-      { id: 'w3', fromCompId: 'cpu_pc', fromPinId: 'cpu_pc_outQ0', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inA0', value: 0 },
-      { id: 'w4', fromCompId: 'cpu_pc', fromPinId: 'cpu_pc_outQ1', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inA1', value: 0 },
-      { id: 'w5', fromCompId: 'cpu_pc', fromPinId: 'cpu_pc_outQ2', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inA2', value: 0 },
-      { id: 'w6', fromCompId: 'cpu_pc', fromPinId: 'cpu_pc_outQ3', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inA3', value: 0 },
-      { id: 'w7', fromCompId: 'cpu_clk', fromPinId: 'cpu_clk_out', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inClk', value: 0 },
-      { id: 'w8', fromCompId: 'cpu_we', fromPinId: 'cpu_we_out', toCompId: 'cpu_ram', toPinId: 'cpu_ram_inWE', value: 0 },
-      { id: 'w9', fromCompId: 'cpu_ram', fromPinId: 'cpu_ram_outQ0', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inD0', value: 0 },
-      { id: 'w10', fromCompId: 'cpu_ram', fromPinId: 'cpu_ram_outQ1', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inD1', value: 0 },
-      { id: 'w11', fromCompId: 'cpu_ram', fromPinId: 'cpu_ram_outQ2', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inD2', value: 0 },
-      { id: 'w12', fromCompId: 'cpu_ram', fromPinId: 'cpu_ram_outQ3', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inD3', value: 0 },
-      { id: 'w13', fromCompId: 'cpu_clk', fromPinId: 'cpu_clk_out', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inClk', value: 0 },
-      { id: 'w14', fromCompId: 'cpu_reg_we', fromPinId: 'cpu_reg_we_out', toCompId: 'cpu_reg_a', toPinId: 'cpu_reg_a_inWE', value: 1 },
-      { id: 'w15', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ0', toCompId: 'cpu_disp', toPinId: 'cpu_disp_inD0', value: 0 },
-      { id: 'w16', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ1', toCompId: 'cpu_disp', toPinId: 'cpu_disp_inD1', value: 0 },
-      { id: 'w17', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ2', toCompId: 'cpu_disp', toPinId: 'cpu_disp_inD2', value: 0 },
-      { id: 'w18', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ3', toCompId: 'cpu_disp', toPinId: 'cpu_disp_inD3', value: 0 },
-      { id: 'w19', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ0', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA0', value: 0 },
-      { id: 'w20', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ1', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA1', value: 0 },
-      { id: 'w21', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ2', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA2', value: 0 },
-      { id: 'w22', fromCompId: 'cpu_reg_a', fromPinId: 'cpu_reg_a_outQ3', toCompId: 'cpu_alu', toPinId: 'cpu_alu_inA3', value: 0 },
-      // Open ALU inputs read as unknown, so B, the carry-in and the operation select are tied low
-      ...['inB0', 'inB1', 'inB2', 'inB3', 'inCin', 'inS0', 'inS1'].map((pin, i) => ({
-        id: `w${23 + i}`,
-        fromCompId: 'cpu_alu_gnd',
-        fromPinId: 'cpu_alu_gnd_out',
-        toCompId: 'cpu_alu',
-        toPinId: `cpu_alu_${pin}`,
-        value: 0 as const,
-      })),
-    ],
-  },
-  {
-    id: 'chiptune_music_box',
-    name: '8-Bit Chiptune Müzik Kutusu (Super Mario Melodisi)',
-    category: 'music_graphics',
-    description: 'Saat darbesi (CLK), 4-bit senkron sayaç ve notaların yazılı olduğu 16x4 ROM belleğiyle piezo buzzer üzerinden efsanevi Super Mario temasını 8-bit chiptune ses olarak çalan müzik işlemcisi.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 40, 'Ses İzni (EN=1)'), id: 'vcc_mario' },
-      { ...createComponentInstance('clock', 50, 110, 'Tempo Saati (CLK)'), id: 'clk_mario', state: { frequencyHz: 4 } },
-      { ...createComponentInstance('pushbutton', 50, 180, 'Başa Sar (RST)'), id: 'rst_mario' },
-      { ...createComponentInstance('counter4', 180, 100, 'Melodi Sayacı (PC)'), id: 'cnt_mario' },
-      {
-        ...createComponentInstance('rom16x4', 340, 100, 'Melodi ROM (Super Mario)'),
-        id: 'rom_mario',
-        state: { romData: [9, 9, 15, 9, 15, 7, 9, 15, 11, 15, 15, 15, 4, 15, 15, 15] },
-      },
-      { ...createComponentInstance('buzzer', 540, 100, 'Chiptune Piezo Buzzer'), id: 'buzz_mario' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'clk_mario', fromPinId: 'clk_mario_out', toCompId: 'cnt_mario', toPinId: 'cnt_mario_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'rst_mario', fromPinId: 'rst_mario_out', toCompId: 'cnt_mario', toPinId: 'cnt_mario_inRst', value: 0 },
-      { id: 'w3', fromCompId: 'cnt_mario', fromPinId: 'cnt_mario_outQ0', toCompId: 'rom_mario', toPinId: 'rom_mario_inA0', value: 0 },
-      { id: 'w4', fromCompId: 'cnt_mario', fromPinId: 'cnt_mario_outQ1', toCompId: 'rom_mario', toPinId: 'rom_mario_inA1', value: 0 },
-      { id: 'w5', fromCompId: 'cnt_mario', fromPinId: 'cnt_mario_outQ2', toCompId: 'rom_mario', toPinId: 'rom_mario_inA2', value: 0 },
-      { id: 'w6', fromCompId: 'cnt_mario', fromPinId: 'cnt_mario_outQ3', toCompId: 'rom_mario', toPinId: 'rom_mario_inA3', value: 0 },
-      { id: 'w7', fromCompId: 'rom_mario', fromPinId: 'rom_mario_outQ0', toCompId: 'buzz_mario', toPinId: 'buzz_mario_pitch0', value: 0 },
-      { id: 'w8', fromCompId: 'rom_mario', fromPinId: 'rom_mario_outQ1', toCompId: 'buzz_mario', toPinId: 'buzz_mario_pitch1', value: 0 },
-      { id: 'w9', fromCompId: 'rom_mario', fromPinId: 'rom_mario_outQ2', toCompId: 'buzz_mario', toPinId: 'buzz_mario_pitch2', value: 0 },
-      { id: 'w10', fromCompId: 'rom_mario', fromPinId: 'rom_mario_outQ3', toCompId: 'buzz_mario', toPinId: 'buzz_mario_pitch3', value: 0 },
-      { id: 'w11', fromCompId: 'vcc_mario', fromPinId: 'vcc_mario_out', toCompId: 'buzz_mario', toPinId: 'buzz_mario_in', value: 1 },
-    ],
-  },
-  {
-    id: 'chiptune_synth_station',
-    name: '8-Bit Retro Ses Synthesizer & Müzik İstasyonu Kiti',
-    category: 'music_graphics',
-    description: 'Saat jeneratörü, 4-bit melodi sayacı, 16x4 Melodi ROM belleği, 7-Segment nota göstergesi ve piezo synthesizer içeren tam donanımlı ses üretim kiti.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 40, 'Güç (VCC)'), id: 'vcc_ps' },
-      { ...createComponentInstance('clock', 50, 110, 'Tempo Saati'), id: 'clk_ps', state: { frequencyHz: 4 } },
-      { ...createComponentInstance('pushbutton', 50, 180, 'Sıfırla / Başa Al'), id: 'rst_ps' },
-      { ...createComponentInstance('counter4', 180, 100, 'Melodi Sayacı'), id: 'cnt_ps' },
-      {
-        ...createComponentInstance('rom16x4', 330, 100, 'Melodi ROM (Star Wars Fanfare)'),
-        id: 'rom_ps',
-        state: { romData: [4, 4, 4, 7, 7, 11, 11, 10, 9, 8, 14, 14, 11, 11, 15, 15] },
-      },
-      { ...createComponentInstance('hexDisplay', 490, 100, 'Nota Göstergesi (0-F)'), id: 'hex_note' },
-      { ...createComponentInstance('buzzer', 640, 80, 'Chiptune Synthesizer'), id: 'buzz_ps' },
-      { ...createComponentInstance('led', 640, 180, 'Sinyal Aktif LED'), id: 'led_ps' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'clk_ps', fromPinId: 'clk_ps_out', toCompId: 'cnt_ps', toPinId: 'cnt_ps_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'rst_ps', fromPinId: 'rst_ps_out', toCompId: 'cnt_ps', toPinId: 'cnt_ps_inRst', value: 0 },
-      { id: 'w3', fromCompId: 'cnt_ps', fromPinId: 'cnt_ps_outQ0', toCompId: 'rom_ps', toPinId: 'rom_ps_inA0', value: 0 },
-      { id: 'w4', fromCompId: 'cnt_ps', fromPinId: 'cnt_ps_outQ1', toCompId: 'rom_ps', toPinId: 'rom_ps_inA1', value: 0 },
-      { id: 'w5', fromCompId: 'cnt_ps', fromPinId: 'cnt_ps_outQ2', toCompId: 'rom_ps', toPinId: 'rom_ps_inA2', value: 0 },
-      { id: 'w6', fromCompId: 'cnt_ps', fromPinId: 'cnt_ps_outQ3', toCompId: 'rom_ps', toPinId: 'rom_ps_inA3', value: 0 },
-      { id: 'w7', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ0', toCompId: 'buzz_ps', toPinId: 'buzz_ps_pitch0', value: 0 },
-      { id: 'w8', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ1', toCompId: 'buzz_ps', toPinId: 'buzz_ps_pitch1', value: 0 },
-      { id: 'w9', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ2', toCompId: 'buzz_ps', toPinId: 'buzz_ps_pitch2', value: 0 },
-      { id: 'w10', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ3', toCompId: 'buzz_ps', toPinId: 'buzz_ps_pitch3', value: 0 },
-      { id: 'w11', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ0', toCompId: 'hex_note', toPinId: 'hex_note_inD0', value: 0 },
-      { id: 'w12', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ1', toCompId: 'hex_note', toPinId: 'hex_note_inD1', value: 0 },
-      { id: 'w13', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ2', toCompId: 'hex_note', toPinId: 'hex_note_inD2', value: 0 },
-      { id: 'w14', fromCompId: 'rom_ps', fromPinId: 'rom_ps_outQ3', toCompId: 'hex_note', toPinId: 'hex_note_inD3', value: 0 },
-      { id: 'w15', fromCompId: 'vcc_ps', fromPinId: 'vcc_ps_out', toCompId: 'buzz_ps', toPinId: 'buzz_ps_in', value: 1 },
-      { id: 'w16', fromCompId: 'vcc_ps', fromPinId: 'vcc_ps_out', toCompId: 'led_ps', toPinId: 'led_ps_in', value: 1 },
-    ],
-  },
-  {
-    id: 'dot_matrix_demo',
-    name: '8x8 LED Nokta Matris: Satır × Sütun Kesişimi',
-    category: 'music_graphics',
-    description: 'Bir piksel, satırı ve sütunu aynı anda 1 olduğunda yanar. VCC satır 1-2 ile sütun 3-4\'ü sürekli sürer; iki anahtar satır 5-6\'yı ve sütun 2 ile 5\'i açıp kapatarak yanan bloğun nasıl büyüyüp küçüldüğünü gösterir.',
-    components: [
-      { ...createComponentInstance('vcc', 50, 40, 'VCC (+5V)'), id: 'vcc_mat' },
-      { ...createComponentInstance('switch', 50, 110, 'Sütun 2 ve 5'), id: 'sw_eye', state: { on: true } },
-      { ...createComponentInstance('switch', 50, 180, 'Satır 5 ve 6'), id: 'sw_smile', state: { on: true } },
-      { ...createComponentInstance('dotMatrix8x8', 260, 60, '8x8 GPU Ekran'), id: 'disp_mat' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'vcc_mat', fromPinId: 'vcc_mat_out', toCompId: 'disp_mat', toPinId: 'disp_mat_row1', value: 1 },
-      { id: 'w2', fromCompId: 'vcc_mat', fromPinId: 'vcc_mat_out', toCompId: 'disp_mat', toPinId: 'disp_mat_row2', value: 1 },
-      { id: 'w3', fromCompId: 'sw_smile', fromPinId: 'sw_smile_out', toCompId: 'disp_mat', toPinId: 'disp_mat_row5', value: 1 },
-      { id: 'w4', fromCompId: 'sw_smile', fromPinId: 'sw_smile_out', toCompId: 'disp_mat', toPinId: 'disp_mat_row6', value: 1 },
-      { id: 'w5', fromCompId: 'sw_eye', fromPinId: 'sw_eye_out', toCompId: 'disp_mat', toPinId: 'disp_mat_col2', value: 1 },
-      { id: 'w6', fromCompId: 'vcc_mat', fromPinId: 'vcc_mat_out', toCompId: 'disp_mat', toPinId: 'disp_mat_col3', value: 1 },
-      { id: 'w7', fromCompId: 'vcc_mat', fromPinId: 'vcc_mat_out', toCompId: 'disp_mat', toPinId: 'disp_mat_col4', value: 1 },
-      { id: 'w8', fromCompId: 'sw_eye', fromPinId: 'sw_eye_out', toCompId: 'disp_mat', toPinId: 'disp_mat_col5', value: 1 },
-    ],
-  },
-  {
-    id: 'ascii_keyboard_terminal',
-    name: 'ASCII Klavye ve Veri Hazır (ST) Sinyali',
-    category: 'music_graphics',
-    description: 'Klavye basılan tuşun 7-bit ASCII kodunu (D0-D6) ve veri hazır (ST) sinyalini üretir. Bu şablonda yalnızca alt 4 bit (D0-D3) bağlıdır: hex ekran ve LED çubuğu kodun son hex hanesini gösterir (ör. \'A\' = 41h → 1). ST LED\'i tuşa basılınca yanar, düğmeyle temizlenir.',
-    components: [
-      { ...createComponentInstance('asciiKeyboard', 60, 80, 'ASCII Giriş Terminali'), id: 'kbd_unit', state: { asciiChar: 'A', asciiCode: 65, strobe: true } },
-      { ...createComponentInstance('pushbutton', 60, 210, 'ST Temizle (ACK/CLR)'), id: 'btn_ack' },
-      { ...createComponentInstance('hexDisplay', 260, 60, 'ASCII Alt Hane (D0-D3)'), id: 'hex_ascii' },
-      { ...createComponentInstance('led', 260, 180, 'Veri Hazır (ST / IRQ)'), id: 'led_strobe' },
-      { ...createComponentInstance('ledBar4', 400, 70, 'ASCII D0-D3 Veri Yolu'), id: 'bar_ascii' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'btn_ack', fromPinId: 'btn_ack_out', toCompId: 'kbd_unit', toPinId: 'kbd_unit_inClr', value: 0 },
-      { id: 'w2', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outStrobe', toCompId: 'led_strobe', toPinId: 'led_strobe_in', value: 1 },
-      { id: 'w3', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD0', toCompId: 'hex_ascii', toPinId: 'hex_ascii_inD0', value: 1 },
-      { id: 'w4', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD1', toCompId: 'hex_ascii', toPinId: 'hex_ascii_inD1', value: 0 },
-      { id: 'w5', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD2', toCompId: 'hex_ascii', toPinId: 'hex_ascii_inD2', value: 0 },
-      { id: 'w6', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD3', toCompId: 'hex_ascii', toPinId: 'hex_ascii_inD3', value: 0 },
-      { id: 'w7', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD0', toCompId: 'bar_ascii', toPinId: 'bar_ascii_in0', value: 1 },
-      { id: 'w8', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD1', toCompId: 'bar_ascii', toPinId: 'bar_ascii_in1', value: 0 },
-      { id: 'w9', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD2', toCompId: 'bar_ascii', toPinId: 'bar_ascii_in2', value: 0 },
-      { id: 'w10', fromCompId: 'kbd_unit', fromPinId: 'kbd_unit_outD3', toCompId: 'bar_ascii', toPinId: 'bar_ascii_in3', value: 0 },
-    ],
-  },
-  {
-    id: 'rgb_matrix_gpu_painter',
-    name: '16x16 RGB VRAM Renkli Video Ekranı Kiti',
-    category: 'music_graphics',
-    description: 'X ve Y koordinat sayaçları, RGB renk seçici ve Yazma İzni (WE) ile 256 piksellik renkli grafik ekranına çizim yapan GPU gösterim devresi.',
-    components: [
-      { ...createComponentInstance('clock', 40, 60, 'Piksel Saati (CLK)'), id: 'clk_gpu', state: { frequencyHz: 8 } },
-      { ...createComponentInstance('counter4', 180, 60, 'X-Koordinat Sayacı'), id: 'cnt_x' },
-      (() => {
-        const notC = createComponentInstance('not', 310, 140, 'Satır İlerleme (NOT)');
-        notC.id = 'not_y';
-        if (notC.outputs[0]) notC.outputs[0].value = 1;
-        return notC;
-      })(),
-      (() => {
-        const cntC = createComponentInstance('counter4', 180, 240, 'Y-Koordinat Sayacı');
-        cntC.id = 'cnt_y';
-        if (cntC.inputs[0]) cntC.inputs[0].value = 1;
-        cntC.state.lastClk = 1;
-        cntC.state.count = 0;
-        return cntC;
-      })(),
-      { ...createComponentInstance('vcc', 40, 340, 'Yazma İzni (WE=1)'), id: 'vcc_we' },
-      { ...createComponentInstance('switch', 40, 410, 'Kırmızı Renk (R)'), id: 'sw_r', state: { on: true } },
-      { ...createComponentInstance('switch', 40, 480, 'Yeşil Renk (G)'), id: 'sw_g', state: { on: false } },
-      { ...createComponentInstance('switch', 40, 550, 'Mavi Renk (B)'), id: 'sw_b', state: { on: true } },
-      { ...createComponentInstance('rgbMatrix16x16', 500, 60, '16x16 RGB Video Matrisi'), id: 'gpu_screen' },
-    ].map(updatePinPositions),
-    wires: [
-      { id: 'w1', fromCompId: 'clk_gpu', fromPinId: 'clk_gpu_out', toCompId: 'cnt_x', toPinId: 'cnt_x_inClk', value: 0 },
-      { id: 'w2', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ0', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX0', value: 0 },
-      { id: 'w3', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ1', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX1', value: 0 },
-      { id: 'w4', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX2', value: 0 },
-      { id: 'w5', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inX3', value: 0 },
-      { id: 'w6', fromCompId: 'cnt_x', fromPinId: 'cnt_x_outQ3', toCompId: 'not_y', toPinId: 'not_y_in', value: 0 },
-      { id: 'w7', fromCompId: 'not_y', fromPinId: 'not_y_out', toCompId: 'cnt_y', toPinId: 'cnt_y_inClk', value: 1 },
-      { id: 'w8', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ0', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY0', value: 0 },
-      { id: 'w9', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ1', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY1', value: 0 },
-      { id: 'w10', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ2', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY2', value: 0 },
-      { id: 'w11', fromCompId: 'cnt_y', fromPinId: 'cnt_y_outQ3', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inY3', value: 0 },
-      { id: 'w12', fromCompId: 'vcc_we', fromPinId: 'vcc_we_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inWE', value: 1 },
-      { id: 'w13', fromCompId: 'sw_r', fromPinId: 'sw_r_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inR', value: 1 },
-      { id: 'w14', fromCompId: 'sw_g', fromPinId: 'sw_g_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inG', value: 0 },
-      { id: 'w15', fromCompId: 'sw_b', fromPinId: 'sw_b_out', toCompId: 'gpu_screen', toPinId: 'gpu_screen_inB', value: 1 },
-    ],
-  },
+  decoder3to8Preset(),
+  sap1Preset(),
+  chiptuneMusicBoxPreset(),
+  chiptuneSynthPreset(),
+  dotMatrixPreset(),
+  asciiKeyboardPreset(),
+  rgbMatrixPreset(),
   busSplitJoinPreset(),
   busAluPreset(),
   busSignExtendPreset(),

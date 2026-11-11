@@ -3001,10 +3001,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     };
   };
 
-  const handleAddComponent = (type: ComponentType) => {
+  const handleAddComponent = (type: ComponentType, setup?: (c: CircuitComponentInstance) => CircuitComponentInstance) => {
     recordHistory();
-    const spot = findFreeSpot(updatePinPositions(createComponentInstance(type, 0, 0)));
-    const newComp = updatePinPositions(createComponentInstance(type, spot.x, spot.y));
+    const make = (x: number, y: number) => {
+      const c = updatePinPositions(createComponentInstance(type, x, y));
+      return setup ? updatePinPositions(setup(c)) : c;
+    };
+    const spot = findFreeSpot(make(0, 0));
+    const newComp = make(spot.x, spot.y);
     commitCircuit([...components, newComp], wires);
     setSelectedCompId(newComp.id);
     setSelectedWireId(null);
@@ -12423,7 +12427,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         <button
                           onClick={() => {
                             if (activeDS.simulatorCompType) {
-                              handleAddComponent(activeDS.simulatorCompType);
+                              handleAddComponent(activeDS.simulatorCompType, activeDS.simulatorSetup);
                               setShowDatasheetModal(false);
                             }
                           }}
