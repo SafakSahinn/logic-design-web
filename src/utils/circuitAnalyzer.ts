@@ -18,8 +18,9 @@ import {
   shifterDistBits,
 } from './circuitEngine';
 
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
-const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'buzzer', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'dipSwitch', 'asciiKeyboard'];
+// Displays carry no logic (no transistors counted)
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDisplay', 'hexDigit', 'buzzer', 'ledBar4', 'ledBar', 'dotMatrix8x8', 'dotMatrix', 'rgbMatrix16x16'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [

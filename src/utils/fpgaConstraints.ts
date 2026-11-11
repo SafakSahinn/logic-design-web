@@ -132,18 +132,22 @@ export function generateFpgaConstraints(
     if (type === 'clock') {
       if (!clockPort) clockPort = p.name;
       else unassigned.push(p.name);
-    } else if (type === 'switch' || type === 'dipSwitch4') {
+    } else if (type === 'switch' || type === 'dipSwitch4' || type === 'dipSwitch') {
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
-    } else if (type === 'led' || type === 'probe' || type === 'ledBar4') {
+    } else if (type === 'led' || type === 'probe' || type === 'ledBar4' || type === 'ledBar') {
       assign('LED çıkışları', pools.led, p);
     } else if (type === 'sevenSegment' && !sevenSegUsed) {
       sevenSegUsed = true;
       assign('7-segment ekran (a..g, dp)', [...board.sevenSegPins.segments], p);
+      const seg = components.find((x) => x.id === p.source?.compId);
       notes.push(
-        `Kart üzerindeki 7-segment ekranın segment girişleri ve hane seçici (anot) uçları çoğunlukla aktif-düşüktür; ` +
-          `bu tasarımda anot çıkışı yok, ekranı yakmak için ilgili anodu 0'a sürün veya segmentleri tersleyin.`
+        seg?.state.ioActiveLow
+          ? `7-segment ekran "0'da yanar" (ortak anot) ayarlı: kartların çoğu gibi segmentler aktif-düşük, uyumlu. ` +
+              `Bu tasarımda hane seçici (anot) çıkışı yok, ekranı yakmak için ilgili anodu 0'a sürün.`
+          : `Kart üzerindeki 7-segment ekranın segment girişleri ve hane seçici (anot) uçları çoğunlukla aktif-düşüktür; ` +
+              `bu tasarımda anot çıkışı yok, ekranı yakmak için ilgili anodu 0'a sürün; segmentler için 7-segment parçasını "0'da yanar" (ortak anot) yapın veya segmentleri tersleyin.`
       );
     } else {
       for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));

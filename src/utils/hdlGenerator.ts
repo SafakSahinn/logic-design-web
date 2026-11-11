@@ -171,8 +171,8 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Netlist
 // ---------------------------------------------------------------------------
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'asciiKeyboard'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'ledBar4', 'dotMatrix8x8', 'rgbMatrix16x16'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch4', 'dipSwitch', 'asciiKeyboard'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDisplay', 'hexDigit', 'ledBar4', 'ledBar', 'dotMatrix8x8', 'dotMatrix', 'rgbMatrix16x16'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -396,6 +396,12 @@ function buildModule(
       else if (c.outputs[0]) pinExpr.set(c.outputs[0].id, (c.state.constValue ?? 1) % 2 === 1 ? L.one : L.zero);
       continue;
     }
+    if (spec.subPorts && c.type === 'dipSwitch') {
+      // Inside an IC a DIP switch is a constant at its current switch positions
+      const bits = c.state.dipBits ?? 0;
+      c.outputs.forEach((p, i) => pinExpr.has(p.id) || pinExpr.set(p.id, (bits >>> i) & 1 ? L.one : L.zero));
+      continue;
+    }
     if (spec.subPorts && (c.type === 'switch' || c.type === 'pushbutton')) {
       // Inside an IC an unbound switch is a constant at its current position
       if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) {
@@ -409,10 +415,11 @@ function buildModule(
       const pn = names.make(/clk|saat|clock/i.test(label) ? label : `clk_${label}`, 'clk');
       addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type } });
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
-    } else if (c.type === 'dipSwitch4') {
+    } else if (c.type === 'dipSwitch4' || c.type === 'dipSwitch') {
+      // one input port, bit i = switch i+1
       const pn = names.make(`in_${label}`, 'in_dip');
-      addPort({ name: pn, dir: 'in', width: 4, source: { compId: c.id, type: c.type } });
-      c.outputs.forEach((p, i) => pinExpr.set(p.id, vecIndex(pn, i)));
+      addPort({ name: pn, dir: 'in', width: c.outputs.length, source: { compId: c.id, type: c.type } });
+      c.outputs.forEach((p, i) => pinExpr.set(p.id, c.outputs.length === 1 ? pn : vecIndex(pn, i)));
     } else if (c.type === 'asciiKeyboard') {
       const pd = names.make(`kbd_${label}_data`, 'kbd_data');
       const ps = names.make(`kbd_${label}_strobe`, 'kbd_strobe');
@@ -2071,14 +2078,22 @@ function buildModule(
                   { suffix: 'en', pins: c.inputs.slice(0, 1) },
                   { suffix: 'note', pins: c.inputs.slice(1, 5) },
                 ]
-              : [{ suffix: '', pins: c.inputs }];
+              : c.type === 'hexDigit' || c.type === 'dotMatrix'
+                ? // one port per input: the hex digit's 4-bit value and DP; each column / row / select vector of a matrix
+                  c.inputs.map((p) => {
+                    const k = p.id.startsWith(`${c.id}_`) ? p.id.slice(c.id.length + 1) : p.id;
+                    return { suffix: c.type === 'hexDigit' ? (k === 'dp' ? 'dp' : '') : k, pins: [p] };
+                  })
+                : [{ suffix: '', pins: c.inputs }];
       for (const g of groups) {
         if (g.pins.length === 0) continue;
-        const prefix = c.type === 'sevenSegment' ? 'out_seg' : c.type === 'hexDisplay' ? 'out_hex' : 'out';
+        const prefix = c.type === 'sevenSegment' ? 'out_seg' : c.type === 'hexDisplay' || c.type === 'hexDigit' ? 'out_hex' : 'out';
         const pn = names.make(`${prefix}_${label}${g.suffix ? `_${g.suffix}` : ''}`, 'out_sig');
-        // A multi-bit LED has its own width, a probe takes the width of its net
-        const busWidth = c.type === 'led' ? (g.pins[0].width ?? 1) : c.type === 'probe' ? Math.max(1, netWidth(g.pins[0].id)) : 0;
-        const width = c.type === 'led' || c.type === 'probe' ? busWidth : g.pins.length;
+        // A multi-bit LED / display input has its own width, a probe takes the width of its net; a group of
+        // 1-bit inputs (7-segment, separated LED bar) is one vector, bit i = input i
+        const wide = g.pins.length === 1 && (g.pins[0].width ?? 1) > 1;
+        const busWidth = c.type === 'led' || wide ? (g.pins[0].width ?? 1) : c.type === 'probe' ? Math.max(1, netWidth(g.pins[0].id)) : 0;
+        const width = c.type === 'led' || c.type === 'probe' || wide ? busWidth : g.pins.length;
         addPort({ name: pn, dir: 'out', width, source: { compId: c.id, type: c.type, group: g.suffix || undefined } });
         if (busWidth > 1) emit(pn, compose(readBits(g.pins[0].id, busWidth).bits));
         else g.pins.slice(0, width).forEach((pin, i) => emit(width === 1 ? pn : vecIndex(pn, i), inputExpr(pin.id)));
