@@ -28,12 +28,13 @@ const SEQUENTIAL_TYPES: string[] = [
   'ram16x4',
   'ram',
   'random',
+  'dualRam',
 ];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
-const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4' && t !== 'ram');
+const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram16x4' && t !== 'ram' && t !== 'dualRam');
 /** evolution RAM with a clocked read: its output changes only at the clock edge, so it starts a new path */
 function ramSyncRead(c: CircuitComponentInstance): boolean {
-  if (c.type !== 'ram') return false;
+  if (c.type !== 'ram' && c.type !== 'dualRam') return false;
   const cfg = getRamConfig(c);
   return cfg.flavor === 'evolution' && (cfg.trigger === 'rising' || cfg.trigger === 'falling') && !c.state.ramAsyncRead;
 }
@@ -186,10 +187,11 @@ function ramGroupDetail(c: CircuitComponentInstance, wired: Set<string>): string
   if (c.type === 'random') return '';
   const cfg = getRamConfig(c);
   const parts = [`${2 ** cfg.addrWidth}×${cfg.dataWidth}`, cfg.flavor === 'evolution' ? 'evo' : '2.7.1'];
+  if (c.type === 'dualRam') parts.push('2 port');
   if (ramTriState(c)) parts.push('üç durumlu');
   if (ramSyncRead(c)) parts.push('eşzamanlı okuma');
-  if (c.type === 'ram' && ramClearWired(c, wired)) parts.push('CLR');
-  const nBE = c.type === 'ram' ? ramByteEnableCount(cfg) : 0;
+  if ((c.type === 'ram' || c.type === 'dualRam') && ramClearWired(c, wired)) parts.push('CLR');
+  const nBE = c.type === 'ram' ? ramByteEnableCount(cfg) : c.type === 'dualRam' ? 2 * ramByteEnableCount(cfg) : 0;
   if (nBE) parts.push(`${nBE} bayt`);
   return parts.join(', ');
 }
@@ -197,7 +199,7 @@ function ramGroupDetail(c: CircuitComponentInstance, wired: Set<string>): string
 function ramTriState(c: CircuitComponentInstance): boolean {
   const cfg = getRamConfig(c);
   if (cfg.flavor !== 'evolution') return true;
-  return c.type === 'ram' && cfg.dataBus !== 'separate';
+  return (c.type === 'ram' || c.type === 'dualRam') && cfg.dataBus !== 'separate';
 }
 function ramClearWired(c: CircuitComponentInstance, wired: Set<string>): boolean {
   const clr = c.inputs.find((p) => pinKey(c, p) === 'clr');
@@ -333,6 +335,16 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
         6 * N * w + 7 * N - 4 + 14 * w + 20 + tri + (ramSyncRead(c) ? 28 * w : 0) +
         (ramClearWired(c, wired) ? N * w : 0) + 6 * ramByteEnableCount(cfg)
       );
+    }
+    case 'dualRam': {
+      // Dual-port SRAM: the standard 8T cell (6T + a second pair of access transistors), and per port its own
+      // row decoder, sense amplifier / write driver / precharge column circuit, control, output buffers and
+      // registers and byte-enable gates as in the single RAM; one clear transistor per cell for the shared pin
+      const cfg = getRamConfig(c);
+      const N = 2 ** cfg.addrWidth;
+      const w = cfg.dataWidth;
+      const perPort = 7 * N - 4 + 14 * w + 20 + (ramTriState(c) ? 6 * w : 0) + (ramSyncRead(c) ? 28 * w : 0) + 6 * ramByteEnableCount(cfg);
+      return 8 * N * w + 2 * perPort + (ramClearWired(c, wired) ? N * w : 0);
     }
     case 'random':
       // Logisim 2.7.1's 48-bit LCG: state register 48 x 28, seed load + next hold MUXes 2 x 48 x 14, the

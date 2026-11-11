@@ -183,7 +183,7 @@ const plexerFloats = (c: CircuitComponentInstance) =>
 // Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers
 const canFloat = (c?: CircuitComponentInstance) =>
   !!c &&
-  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
+  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
 
 export interface PortDecl {
   name: string;
@@ -1137,7 +1137,8 @@ function buildModule(
       }
       case 'ram':
       case 'rom':
-      case 'random': {
+      case 'random':
+      case 'dualRam': {
         // As stepRam. Controls read like the simulator: open select / OE / 2.7.1 WE / NXT count as on, open
         // clear / reset / evolution WE / byte enables as off. An open address bit never addresses a word (the
         // output floats, nothing is written); open data bits make the stored word all ones, as there
@@ -1277,6 +1278,179 @@ function buildModule(
           });
         }
         words.sort((x, y) => x[0] - y[0]);
+        // RAM: memory array starting at the contents (the simulator's starting point)
+        const mem = names.make(`${nm}_mem`, 'mem');
+        const ii = v && c.type !== 'rom' ? names.make(`${nm}_i`, 'i') : '';
+        const declareMem = () => {
+          if (v) {
+            extraDecls.push(
+              `  reg ${w > 1 ? `[${w - 1}:0] ` : ''}${mem} [0:${N - 1}];`,
+              `  integer ${ii};`,
+              '  initial begin',
+              `    for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] = ${zeros};`,
+              ...words.map(([k, val]) => `    ${mem}[${k}] = ${lit(val, w)};`),
+              '  end'
+            );
+          } else {
+            const typ = names.make(`${nm}_mem_t`, 'mem_t');
+            const el = w > 1 ? `std_logic_vector(${w - 1} downto 0)` : 'std_logic';
+            const zero = w > 1 ? "(others => '0')" : "'0'";
+            extraDecls.push(
+              `  type ${typ} is array (0 to ${N - 1}) of ${el};`,
+              `  signal ${mem} : ${typ} := (${[...words.map(([k, val]) => `${k} => ${lit(val, w)}`), `others => ${zero}`].join(', ')});`
+            );
+          }
+        };
+        const clearAll = v
+          ? (blocking: boolean) => {
+              return [`for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] ${blocking ? '=' : '<='} ${zeros};`];
+            }
+          : () => [`${mem} <= (others => ${w > 1 ? "(others => '0')" : "'0'"});`];
+        // if / else that never folds the else part into an else-if chain (it may hold several statements)
+        const ifElse = (cond: string, then: string[], els: string[]): string[] => {
+          if (cond === T) return then;
+          if (cond === F) return els;
+          if (!els.length) return ifs(cond, then);
+          return v ? [`if (${cond}) begin`, ...ind(then), 'end else begin', ...ind(els), 'end'] : [`if ${cond} then`, ...ind(then), 'else', ...ind(els), 'end if;'];
+        };
+
+        if (c.type === 'dualRam') {
+          // Two evolution RAM ports on one memory array (as stepDualRam): the shared clear pin, each port's own
+          // address, data, OE, WE, clock and byte enables. Writes: one process for both ports when they share the
+          // clock (port 1 after port 0, so it wins on the same word); else Verilog has one always block per
+          // port and VHDL one process with both edges (a signal has one driver). Reads per port like the single
+          // RAM; a clocked read with a shared clock sees the other port's write of the same edge too
+          declareMem();
+          const trig = cfg.trigger;
+          const level = trig === 'high' || trig === 'low';
+          const falling = trig === 'falling';
+          const sepData = cfg.dataBus !== 'bidir';
+          const floatsOff = cfg.dataBus !== 'separate';
+          const clrVal = sepData ? zeros : allZ;
+          const clr = cfg.clearPin ? ctl('clr', L.zero) : L.zero;
+          const nBE = ramByteEnableCount(cfg);
+          const ports = [0, 1].map((p) => {
+            const sfx = p ? '1' : '';
+            const pin = pinOf('a' + sfx);
+            const open = !pin || readBits(pin.id, cfg.addrWidth).floating || readBits(pin.id, cfg.addrWidth).mismatch;
+            if (open) {
+              notes.push(`port ${p} adres girişinin bir kısmı boşta: simülatörde bu port kelime seçmez, çıkışı tanımsız (x), yazmaz; burada çıkış Z`);
+              return { p, sfx, open, a: '', word: '', din: '', we: L.zero, oe: L.one, clk: L.zero, weOn: F, rd: '', writeLines: [] as string[], applyTo: (_q: string) => [] as string[] };
+            }
+            const a = vec('a' + sfx, cfg.addrWidth);
+            const word = v ? `${mem}[${a}]` : `${mem}(to_integer(unsigned(${a})))`;
+            let din: string;
+            if (sepData) {
+              if (isOpen('din' + sfx) || readBits(pinOf('din' + sfx)!.id, w).floating) {
+                notes.push(`port ${p} veri girişinin bir kısmı boşta: simülatör tanımsız kelimeyi hepsi 1 olarak yazar; burada da öyle`);
+                din = ones;
+              } else din = vec('din' + sfx, w);
+            } else {
+              const bus = vec('dio' + sfx, w);
+              din = names.make(`${nm}_wdata${p}`, 'wdata');
+              declare(din, w);
+              if (v) emit(din, `(^${wrap(bus)} === 1'bx) ? ${ones} : ${bus}`);
+              else body.push(`  ${din} <= ${ones} when is_x(${bus}) else ${bus};`);
+            }
+            const we = ctl('we' + sfx, L.zero);
+            const oe = ctl('oe' + sfx, L.one);
+            const clkPin = pinOf('clk' + sfx);
+            const clk = level || !clkPin || isFloating(clkPin.id) ? L.zero : ctl('clk' + sfx, L.zero);
+            const weOn = level ? (trig === 'high' ? is1c(we) : isOpen('we' + sfx) ? F : is0c(we)) : is1c(we);
+            const bytes = Array.from({ length: nBE }, (_, i) => {
+              const lo = 8 * i;
+              const hi = Math.min(w - 1, lo + 7);
+              const sl = (x: string) => (hi === lo ? (v ? `${x}[${lo}]` : `${x}(${lo})`) : v ? `${x}[${hi}:${lo}]` : `${x}(${hi} downto ${lo})`);
+              const src = din === ones ? lit(2 ** (hi - lo + 1) - 1, hi - lo + 1) : sl(din);
+              return { sl, src, be: is1c(ctl(`be${p * nBE + i}`, L.zero)) };
+            });
+            // This port's write into a word (memory or the captured output): the whole word or each enabled byte
+            const applyTo = (x: string, blocking = false) =>
+              nBE === 0 ? [`${x} ${blocking && v ? '=' : '<='} ${din};`] : bytes.flatMap((b) => ifs(b.be, [`${b.sl(x)} ${blocking && v ? '=' : '<='} ${b.src};`]));
+            const rd = names.make(`${nm}_rdata${p}`, 'rdata');
+            declare(rd, w);
+            if (v) emit(rd, word);
+            else body.push(`  ${rd} <= ${word};`);
+            return { p, sfx, open, a, word, din, we, oe, clk, weOn, rd, writeLines: applyTo(word), applyTo };
+          });
+          if (!sepData) notes.push('veri yolunda tanımsız bit varken yazılan kelime hepsi 1 olur (simülatördeki gibi; sentezde bu denetim yok sayılır)');
+          if (cfg.clearPin && clr !== L.zero && !level) notes.push('CLR 1 iken saat değişir ve CLR bırakıldığında saat başka seviyedeyse simülatör bunu bir kenar sayıp yazar; HDL saymaz');
+          if (level && !sepData) notes.push('çift yönlü yolda OE ve yazma aynı anda etkinse RAM kendi çıkışını geri yazar (kombinasyonel döngü); HDL simülasyonu salınabilir');
+          const live = ports.filter((q) => !q.open && q.weOn !== F && (level || isSignalName(q.clk)));
+          const shared = !level && live.length === 2 && live[0].clk === live[1].clk;
+          const evOf = (clk: string) => (v ? `${falling ? 'negedge' : 'posedge'} ${clk}` : `${falling ? 'falling_edge' : 'rising_edge'}(${clk})`);
+          if (clr === L.one) notes.push('CLR hep 1: bellek hep sıfır, yazılmaz');
+          else if (level) {
+            const ws = live.flatMap((q) => ifs(q.weOn, ports[q.p].applyTo(q.word, true)));
+            proc(sigs(clr, ...live.flatMap((q) => [q.we, q.a, q.din])), ifElse(is1c(clr), clearAll(true), ws));
+          } else if (live.length) {
+            if (live.length === 2 && !shared) notes.push('iki portun saati farklı: aynı anda gelen iki kenarda aynı kelimeye iki yazmanın sırası HDL\'de tanımsız (simülatörde port 1 kazanır)');
+            if (v) {
+              const groups = shared ? [live] : live.map((q) => [q]);
+              for (const g of groups) {
+                const ws = g.flatMap((q) => ifs(q.weOn, q.writeLines));
+                proc([], ifElse(is1c(clr), clearAll(false), ws), `${evOf(g[0].clk)}${clr === L.zero ? '' : ` or posedge ${clr}`}`);
+              }
+            } else {
+              const ws = (shared ? [live] : live.map((q) => [q])).flatMap((g) => [`if ${evOf(g[0].clk)} then`, ...ind(g.flatMap((q) => ifs(q.weOn, q.writeLines))), 'end if;']);
+              proc(sigs(...live.map((q) => q.clk), clr), ifElse(is1c(clr), clearAll(false), ws));
+            }
+          } else if (clr !== L.zero) {
+            if (v) proc([], clearAll(false), `posedge ${clr}`);
+            else proc([clr], ifs(is1c(clr), clearAll(false)));
+          }
+          // Outputs: q holds what the simulator's output shows (starts floating)
+          for (const q of ports) {
+            const d = out[q.p];
+            if (!d) continue;
+            if (q.open) {
+              emit(d, allZ);
+              continue;
+            }
+            if (clr === L.one) {
+              emit(d, clrVal);
+              continue;
+            }
+            const qs = names.make(`${nm}_dout${q.p}`, 'dout');
+            declare(qs, w, 'Z'.repeat(w));
+            if (level || c.state.ramAsyncRead) {
+              const set = (x: string) => `${qs} ${v ? '=' : '<='} ${x};`;
+              proc(sigs(clr, q.oe, q.rd), ifs(is1c(clr), [set(clrVal)], ifs(is0c(q.oe), floatsOff ? [set(allZ)] : v ? [] : ['null;'], [set(q.rd)])));
+              emit(d, qs);
+              continue;
+            }
+            // Captured at this port's edge: the word before the edge's writes ('war'), or after them ('raw': this
+            // port's write; with a shared clock also the other one's when it writes the same word, port 1 last)
+            const capture = (): string[] => {
+              const lines = [`${qs} <= ${q.word};`];
+              if (c.state.ramReadBehavior === 'war' || !isSignalName(q.clk)) return lines;
+              for (const o of ports) {
+                if (o.open || o.weOn === F) continue;
+                if (o.p !== q.p && !(shared || (o.clk === q.clk && isSignalName(o.clk)))) continue;
+                const same = o.p === q.p ? T : v ? `${o.a} == ${q.a}` : `${o.a} = ${q.a}`;
+                lines.push(...ifs(cAnd(o.weOn, same), o.applyTo(qs)));
+              }
+              return lines;
+            };
+            if (v) {
+              const evs = [
+                ...(isSignalName(q.clk) ? [evOf(q.clk)] : []),
+                ...(clr !== L.zero ? [`posedge ${clr}`] : []),
+                ...(floatsOff && isSignalName(q.oe) ? [`negedge ${q.oe}`] : []),
+              ];
+              if (evs.length) {
+                proc([], ifs(is1c(clr), [`${qs} <= ${clrVal};`], ifs(is0c(q.oe), floatsOff ? [`${qs} <= ${allZ};`] : [], isSignalName(q.clk) ? capture() : [])), evs.join(' or '));
+                if (cfg.clearPin && floatsOff) notes.push(`port ${q.p}: CLR, OE 0 iken bırakılırsa simülatör çıkışı Z tutar; Verilog bir sonraki saat kenarına kadar 0 gösterebilir`);
+              }
+            } else {
+              const chain = ifs(is1c(clr), [`${qs} <= ${clrVal};`], ifs(is0c(q.oe), [floatsOff ? `${qs} <= ${allZ};` : 'null;'], isSignalName(q.clk) ? ifs(evOf(q.clk), capture()) : []));
+              if (isSignalName(q.clk) || clr !== L.zero || (floatsOff && isSignalName(q.oe))) proc(sigs(q.clk, clr, q.oe), chain);
+            }
+            emit(d, qs);
+          }
+          for (const n of notes) body.push(L.comment(n));
+          break;
+        }
         if (aOpen) {
           body.push(L.comment('adres girişinin bir kısmı boşta: simülatörde hiçbir kelime seçilmez, çıkış tanımsız (x), yazma olmaz; burada çıkış Z'));
           emit(d, allZ);
@@ -1311,32 +1485,8 @@ function buildModule(
           break;
         }
 
-        // RAM: memory array starting at the contents
-        const mem = names.make(`${nm}_mem`, 'mem');
-        const ii = v ? names.make(`${nm}_i`, 'i') : '';
-        if (v) {
-          extraDecls.push(
-            `  reg ${w > 1 ? `[${w - 1}:0] ` : ''}${mem} [0:${N - 1}];`,
-            `  integer ${ii};`,
-            '  initial begin',
-            `    for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] = ${zeros};`,
-            ...words.map(([k, val]) => `    ${mem}[${k}] = ${lit(val, w)};`),
-            '  end'
-          );
-        } else {
-          const typ = names.make(`${nm}_mem_t`, 'mem_t');
-          const el = w > 1 ? `std_logic_vector(${w - 1} downto 0)` : 'std_logic';
-          const zero = w > 1 ? "(others => '0')" : "'0'";
-          extraDecls.push(
-            `  type ${typ} is array (0 to ${N - 1}) of ${el};`,
-            `  signal ${mem} : ${typ} := (${[...words.map(([k, val]) => `${k} => ${lit(val, w)}`), `others => ${zero}`].join(', ')});`
-          );
-        }
-        const clearAll = v
-          ? (blocking: boolean) => {
-              return [`for (${ii} = 0; ${ii} < ${N}; ${ii} = ${ii} + 1) ${mem}[${ii}] ${blocking ? '=' : '<='} ${zeros};`];
-            }
-          : () => [`${mem} <= (others => ${w > 1 ? "(others => '0')" : "'0'"});`];
+        // RAM
+        declareMem();
         declare(rd, w);
         if (v) emit(rd, idx(mem));
         else body.push(`  ${rd} <= ${idx(mem)};`);
