@@ -64,6 +64,8 @@ import {
   RAM_TYPES,
   getRamConfig,
   ramGeometry,
+  ramByteEnableCount,
+  ramPinLabel,
   memRead,
   pinKey as plexerPinKey,
   plexerLayout,
@@ -164,7 +166,7 @@ import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/v
 import MemoryHexEditor from './MemoryHexEditor';
 
 /** Parts whose contents the hex editor opens: parametric RAM / ROM and the old 16x4 ones */
-const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'ram16x4', 'rom16x4']);
+const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam', 'ram16x4', 'rom16x4']);
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
@@ -337,6 +339,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   counter4: { label: '4-Bit Sayaç', badge: '0-15' },
   shiftRegister4: { label: 'Kaydırmalı Yazmaç', badge: '~74HC194' },
   ram: { label: 'RAM', badge: 'RAM' },
+  dualRam: { label: 'Çift Portlu RAM', badge: 'D-RAM' },
   rom: { label: 'ROM', badge: 'ROM' },
   random: { label: 'Rastgele Sayı', badge: 'RND' },
   ram16x4: { label: '16x4 RAM', badge: 'Bellek' },
@@ -2051,7 +2054,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       showToast('Tuvalde RAM veya ROM bileşeni bulunamadı.');
       return;
     }
-    if (target.type === 'ram' || target.type === 'rom') {
+    if (target.type === 'ram' || target.type === 'rom' || target.type === 'dualRam') {
       setMemEditorCompId(target.id);
       return;
     }
@@ -3382,8 +3385,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
         // Register / counter / random generator: Q; shift register: OUT (the first output); RAM / ROM: D
         const w = c.outputs[0]?.width ?? 1;
-        const port = c.type === 'shiftRegister' ? 'OUT' : c.type === 'ram' || c.type === 'rom' ? 'D' : 'Q';
+        const port = c.type === 'shiftRegister' ? 'OUT' : c.type === 'ram' || c.type === 'rom' ? 'D' : c.type === 'dualRam' ? 'D0' : 'Q';
         list.push({ key: `${c.id}_q`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
+        if (c.type === 'dualRam') list.push({ key: `${c.id}_q1`, name: `${name} D1${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
       } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
         list.push({ key: `${c.id}_q0`, name: `${name} Q0`, color: colors[cIdx++ % colors.length], type: 'state' });
         list.push({ key: `${c.id}_q1`, name: `${name} Q1`, color: colors[cIdx++ % colors.length], type: 'state' });
@@ -3442,9 +3446,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         } else if (c.type === 'dFlipFlop' || c.type === 'jkFlipFlop' || c.type === 'srLatch' || c.type === 'tFlipFlop' || FLIP_FLOP_TYPES.has(c.type)) {
           values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
         } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
-          const o = c.outputs[0];
-          const w = o?.width ?? 1;
-          values[`${c.id}_q`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
+          (c.type === 'dualRam' ? [0, 1] : [0]).forEach((oi) => {
+            const o = c.outputs[oi];
+            const w = o?.width ?? 1;
+            values[`${c.id}_q${oi ? oi : ''}`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
+          });
         } else if (c.type === 'counter4' || c.type === 'register4' || c.type === 'shiftRegister4') {
           values[`${c.id}_q0`] = c.outputs[0]?.value ?? 0;
           values[`${c.id}_q1`] = c.outputs[1]?.value ?? 0;
@@ -6169,7 +6175,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'shiftRegister':
       case 'ram':
       case 'rom':
-      case 'random': {
+      case 'random':
+      case 'dualRam': {
         // Logisim std/memory classic painters: a plain box, the clock as a triangle on its pin (Logisim draws it
         // for every trigger; here edges get the triangle, levels none, falling / low a bubble too), port labels
         // just inside the pins (reset "0", preset "1", enable "en" in grey) and the stored value in the box.
@@ -6218,27 +6225,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         };
         // Clock mark in the body frame (it turns with the body). A 2.7.1 RAM stores on the rising edge; an
         // evolution RAM with a level trigger (and a 2.7.1 asynch one) has no clock pin
-        const clkKey = comp.type === 'random' ? 'ck' : 'clk';
-        const trig = comp.type === 'ram' && ramCfg!.flavor === 'logisim' ? 'rising' : comp.type === 'ram' ? ramCfg!.trigger : getTrigger(comp);
-        const clk = l.pins[clkKey] ?? { x: 0, y: 0 };
-        const ci = inwardOf(clk);
-        const along = { x: -ci.y, y: ci.x };
+        const clkKeys = comp.type === 'random' ? ['ck'] : comp.type === 'dualRam' ? ['clk', 'clk1'] : ['clk'];
+        const trig =
+          comp.type === 'ram' && ramCfg!.flavor === 'logisim' ? 'rising' : comp.type === 'ram' || comp.type === 'dualRam' ? ramCfg!.trigger : getTrigger(comp);
         const edge = trig === 'rising' || trig === 'falling';
         const negated = trig === 'falling' || trig === 'low';
-        const clockMark = !has(clkKey) ? null : (
-          <g key="clk">
-            {edge && (
-              <polyline
-                points={`${clk.x + along.x * 4},${clk.y + along.y * 4} ${clk.x + ci.x * 8},${clk.y + ci.y * 8} ${clk.x - along.x * 4},${clk.y - along.y * 4}`}
-                fill="none"
-                stroke={strokeColor}
-                strokeWidth={1.2}
-              />
-            )}
-            {negated && <circle cx={clk.x + ci.x * (edge ? 10.5 : 7)} cy={clk.y + ci.y * (edge ? 10.5 : 7)} r={2.2} fill="none" stroke={strokeColor} strokeWidth={1.2} />}
-            {!edge && portLabel('clk', 'C', false, negated ? 5 : 0)}
-          </g>
-        );
+        const clockMark = clkKeys.map((clkKey) => {
+          if (!has(clkKey)) return null;
+          const clk = l.pins[clkKey] ?? { x: 0, y: 0 };
+          const ci = inwardOf(clk);
+          const along = { x: -ci.y, y: ci.x };
+          return (
+            <g key={clkKey}>
+              {edge && (
+                <polyline
+                  points={`${clk.x + along.x * 4},${clk.y + along.y * 4} ${clk.x + ci.x * 8},${clk.y + ci.y * 8} ${clk.x - along.x * 4},${clk.y - along.y * 4}`}
+                  fill="none"
+                  stroke={strokeColor}
+                  strokeWidth={1.2}
+                />
+              )}
+              {negated && <circle cx={clk.x + ci.x * (edge ? 10.5 : 7)} cy={clk.y + ci.y * (edge ? 10.5 : 7)} r={2.2} fill="none" stroke={strokeColor} strokeWidth={1.2} />}
+              {!edge && portLabel(clkKey, 'C', false, negated ? 5 : 0)}
+            </g>
+          );
+        });
         // Stored value as Logisim shows it: hex digits; an undefined nibble shows x (E if it has an E bit)
         const hexOf = (bits: SignalValue[] | undefined, width: number) => {
           const b = Array.from({ length: width }, (_, i) => bits?.[i] ?? 0);
@@ -6280,6 +6291,73 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               {t.length <= 4
                 ? screenText(W / 2, H / 2, t, 7, 'v')
                 : [screenText(W / 2, H / 2 - 5, t.slice(0, t.length - 4), 7, 'v1'), screenText(W / 2, H / 2 + 5, t.slice(-4), 7, 'v2')]}
+            </g>
+          );
+        } else if (comp.type === 'dualRam' && ramCfg) {
+          // Dual-port RAM: port labels A0 / A1, D0 / D1, ... (evolution's classic names) and one two-row word
+          // table per port, each following its port's address (both addresses marked in both: own port filled,
+          // the other one dashed). The tables stay upright; turned 180 degrees port 1 is on top, so the upper
+          // table shows it. A quarter-turned body shows a summary
+          for (const k of ['a', 'din', 'oe', 'we', 'd', 'a1', 'din1', 'oe1', 'we1', 'd1', 'clr']) labels.push(portLabel(k, ramPinLabel(k, 'dualRam'), false));
+          const nBE = ramByteEnableCount(ramCfg);
+          for (let i = 0; i < 2 * nBE; i++) labels.push(portLabel(`be${i}`, `BE${i}`, true));
+          if (!edge) labels.push(<g key="lvl">{textAt(50, 8, trig === 'high' ? 'C=1' : 'C=0', 5.5, 'lv0')}{textAt(50, 152, trig === 'high' ? 'C=1' : 'C=0', 5.5, 'lv1')}</g>);
+          const addrBits = ramCfg.addrWidth;
+          const words = 2 ** addrBits;
+          const curs = [comp.state.memCurrent ?? -1, comp.state.memCurrentB ?? -1];
+          const hexDigits = (n: number, bits: number) => (n >>> 0).toString(16).toUpperCase().padStart(Math.ceil(bits / 4), '0');
+          const mask = w >= 32 ? 0xffffffff : 2 ** w - 1;
+          const cells: React.ReactNode[] = [];
+          const ink = cadTheme === 'dark' ? '#e2e8f0' : '#1e293b';
+          if (quarter) {
+            const cx = sx0 + SW / 2;
+            const cy = sy0 + SH / 2;
+            cells.push(screenText(cx, cy - 30, 'RAM ×2', 8, 'k', { fontWeight: 'bold' }), screenText(cx, cy - 18, `${memSizeText(addrBits)}×${w}`, 6.5, 's', { fill: grey, className: 'select-none' }));
+            curs.forEach((cur, p) => {
+              if (cur < 0 || cur >= words) return;
+              cells.push(screenText(cx, cy + 22 * p, `${p}: @${hexDigits(cur, addrBits)}`, 6.5, `ca${p}`, { fill: grey, className: 'select-none' }));
+              cells.push(screenText(cx, cy + 22 * p + 10, hexDigits((memRead(comp, cur) & mask) >>> 0, w), 7.5, `cv${p}`, { fontWeight: 'bold' }));
+            });
+          } else {
+            const cols = addrBits <= 12 ? (w <= 4 ? 8 : w <= 8 ? 4 : w <= 16 ? 2 : 1) : w <= 8 ? 2 : 1;
+            const boxX = addrBits <= 12 ? 50 : 65;
+            const boxW = addrBits <= 12 ? 90 : 75;
+            const rowH = 14;
+            const rows = Math.ceil(words / cols);
+            const entryW = boxW / cols;
+            [0, 1].forEach((half) => {
+              const port = rot === 180 ? 1 - half : half;
+              const own = curs[port];
+              const boxY = half === 0 ? 24 : 108;
+              const top = own < 0 ? 0 : Math.max(0, Math.min(Math.floor(own / cols) - 1, rows - 2));
+              cells.push(<rect key={`tbl${half}`} x={boxX} y={boxY} width={boxW} height={rowH * 2} fill="none" stroke={strokeColor} strokeWidth={0.8} />);
+              cells.push(screenText(boxX + boxW + 4, boxY + rowH, String(port), 6, `pn${half}`, { textAnchor: 'start', fill: grey, className: 'select-none' }));
+              for (let r = 0; r < 2 && top + r < rows; r++) {
+                const rowAddr = (top + r) * cols;
+                const y = boxY + rowH * r + rowH / 2;
+                cells.push(screenText(boxX - 2, y, hexDigits(rowAddr, addrBits), 6, `a${half}${r}`, { textAnchor: 'end', fill: grey, className: 'select-none' }));
+                for (let c = 0; c < cols && rowAddr + c < words; c++) {
+                  const addr = rowAddr + c;
+                  const x = boxX + entryW * c;
+                  const filled = addr === own;
+                  if (filled) cells.push(<rect key={`h${half}${addr}`} x={x} y={boxY + rowH * r} width={entryW} height={rowH} fill={ink} />);
+                  else if (addr === curs[1 - port])
+                    cells.push(<rect key={`o${half}${addr}`} x={x + 0.8} y={boxY + rowH * r + 0.8} width={entryW - 1.6} height={rowH - 1.6} fill="none" stroke={ink} strokeWidth={0.9} strokeDasharray="2 1.5" />);
+                  cells.push(
+                    screenText(x + entryW / 2, y, hexDigits((memRead(comp, addr) & mask) >>> 0, w), w > 24 && cols === 1 ? 6.5 : 7, `v${half}${addr}`, {
+                      fill: filled ? (cadTheme === 'dark' ? '#0f172a' : '#ffffff') : undefined,
+                      className: `${filled ? '' : gateTextClass} select-none`,
+                    })
+                  );
+                }
+              }
+            });
+          }
+          inside = (
+            <g key="mem" transform={unturn}>
+              {!quarter && <line x1={sx0 + 28} y1={sy0 + SH / 2} x2={sx0 + SW - 28} y2={sy0 + SH / 2} stroke={grey} strokeWidth={0.6} strokeDasharray="3 3" opacity={0.7} />}
+              {cells}
+              <title>{`Çift portlu RAM ${memSizeText(addrBits)} × ${w} bit (Logisim-evolution kuralları)`}</title>
             </g>
           );
         } else if (ramCfg) {
@@ -6701,7 +6779,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'memory',
       title: 'Bellek & Sıralı Devreler',
       icon: '💾',
-      types: ['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR', 'srLatch', 'register', 'counter', 'shiftRegister', 'ram', 'rom', 'random'] as ComponentType[],
+      types: ['flipFlopD', 'flipFlopT', 'flipFlopJK', 'flipFlopSR', 'srLatch', 'register', 'counter', 'shiftRegister', 'ram', 'dualRam', 'rom', 'random'] as ComponentType[],
     },
     {
       id: 'displays',
@@ -10228,7 +10306,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   {/* Input Pins */}
                   {comp.inputs.map((pin, pinIdx) => {
                     // A memory's bus input reads back its data pin on the same point: one pin is drawn there
-                    if (RAM_TYPES.has(comp.type) && plexerPinKey(comp, pin) === 'dio') return null;
+                    if (RAM_TYPES.has(comp.type) && (plexerPinKey(comp, pin) === 'dio' || plexerPinKey(comp, pin) === 'dio1')) return null;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     // Clamped hit radius ensures neighboring pins (e.g. 10px apart on 5-input gates) never overlap
@@ -10728,7 +10806,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               }
             };
 
-            const contentsRow = single && (first.type === 'ram' || first.type === 'rom') && (
+            const contentsRow = single && (first.type === 'ram' || first.type === 'rom' || first.type === 'dualRam') && (
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>İçerik</span>
                 <button onClick={() => handleOpenHexEditor(first.id)} className={btnCls(false)} title="Kelimeleri onaltılı düzenleyicide aç">

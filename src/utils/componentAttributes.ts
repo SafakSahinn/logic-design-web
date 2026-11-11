@@ -803,6 +803,10 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'ram':
       list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr, ramBusAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
       break;
+    case 'dualRam':
+      // Logisim-evolution only: no rules switch
+      list.push(ramAddrAttr, ramDataAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
+      break;
     case 'rom':
       list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr);
       break;

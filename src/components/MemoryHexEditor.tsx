@@ -48,6 +48,8 @@ export default function MemoryHexEditor({ comp, dark, onSave, onClose, onToast }
   const fileRef = useRef<HTMLInputElement>(null);
   const expectedScroll = useRef(0);
   const running = comp.state.memCurrent ?? -1;
+  // dual-port RAM: port 1's address too
+  const running1 = comp.type === 'dualRam' ? comp.state.memCurrentB ?? -1 : -1;
 
   const read = (a: number) => ((pages[Math.floor(a / MEM_PAGE_SIZE)]?.[a % MEM_PAGE_SIZE] ?? 0) & mask) >>> 0;
   const write = (a: number, v: number) => {
@@ -211,7 +213,7 @@ export default function MemoryHexEditor({ comp, dark, onSave, onClose, onToast }
                 setCursor(a);
                 setTyped(0);
               }}
-              className={`text-center rounded cursor-pointer select-none ${isSel ? c.sel : c.cell} ${a === running && !isSel ? c.run : ''}`}
+              className={`text-center rounded cursor-pointer select-none ${isSel ? c.sel : c.cell} ${(a === running || a === running1) && !isSel ? c.run : ''}`}
               style={{ width: `${digits + 1.5}ch`, marginRight: (i + 1) % 4 === 0 ? '0.75ch' : '0.25ch' }}
               title={`Adres ${hex(a, addrDigits)}`}
             >
@@ -233,7 +235,7 @@ export default function MemoryHexEditor({ comp, dark, onSave, onClose, onToast }
             </div>
             <div>
               <h3 className="font-extrabold text-base flex items-center gap-2">
-                <span>{comp.label || (comp.type === 'rom' ? 'ROM' : 'RAM')} içeriği</span>
+                <span>{comp.label || (comp.type === 'rom' ? 'ROM' : comp.type === 'dualRam' ? 'Çift portlu RAM' : 'RAM')} içeriği</span>
                 <span className="px-2 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-mono font-bold rounded-full">
                   {sizeText} × {w} bit
                 </span>
@@ -326,7 +328,12 @@ export default function MemoryHexEditor({ comp, dark, onSave, onClose, onToast }
         <div className={`p-4 border-t flex items-center justify-between gap-2 ${dark ? 'border-slate-700' : 'border-slate-200 bg-slate-50'}`}>
           <span className={`text-[11px] font-mono ${c.sub}`}>
             Adres {hex(cursor, addrDigits)} = {hex(read(cursor), digits)}
-            {running >= 0 && <span className="ml-3 text-amber-600">Devredeki adres: {hex(running, addrDigits)}</span>}
+            {running >= 0 && running1 < 0 && <span className="ml-3 text-amber-600">Devredeki adres: {hex(running, addrDigits)}</span>}
+            {running1 >= 0 && (
+              <span className="ml-3 text-amber-600">
+                Devredeki adresler: port 0 {running >= 0 ? hex(running, addrDigits) : '—'}, port 1 {hex(running1, addrDigits)}
+              </span>
+            )}
           </span>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className={`px-4 py-2 font-semibold text-xs rounded-xl cursor-pointer ${dark ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'}`}>
