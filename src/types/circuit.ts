@@ -5,7 +5,8 @@ export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational'
 // 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4); the part type is 'ttl' + the evolution id
 export const TTL_CHIP_IDS = [
   '7400', '7402', '7404', '7405', '7408', '7410', '7411', '7413', '7414', '7418', '7419', '7420', '7421', '7424',
-  '7427', '7430', '7432', '7434', '7436', '7438', '7451', '7454', '7458', '7464', '7486', '7487', '74132', '74266',
+  '7427', '7430', '7432', '7434', '7436', '7438', '7447', '7451', '7454', '7458', '7464', '7485', '7486', '7487',
+  '74132', '74138', '74139', '74148', '74151', '74153', '74157', '74266', '74283',
 ] as const;
 export type TtlChipId = (typeof TTL_CHIP_IDS)[number];
 export type TtlType = `ttl${TtlChipId}`;

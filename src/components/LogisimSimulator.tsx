@@ -3814,7 +3814,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const H = ttlHeight(ttlChip);
       const LEG = 7;
       const internal = !!comp.state.ttlInternal;
-      const names = new Map(ttlPorts(ttlChip, false).map((pt) => [pt.pin, pt.name]));
+      const ttlPortList = ttlPorts(ttlChip, false);
+      const names = new Map(ttlPortList.map((pt) => [pt.pin, pt.name]));
+      const labels = new Map(ttlPortList.map((pt, i) => [pt.pin, ttlChip.labels?.[i] ?? pt.name]));
       const bodyFill = internal ? (cadTheme === 'dark' ? '#e2e8f0' : '#f8fafc') : '#3f3f46';
       const textFill = internal ? '#0f172a' : '#e4e4e7';
       const legs: React.ReactNode[] = [];
@@ -3823,7 +3825,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const top = at.y === 0;
         const nc = ttlChip.unused?.includes(n);
         const power = n === ttlChip.vcc ? 'Vcc' : n === ttlChip.gnd ? 'GND' : undefined;
-        const text = power ?? (internal ? (nc ? 'NC' : names.get(n) ?? String(n)) : String(n));
+        const text = power ?? (internal ? (nc ? 'NC' : labels.get(n) ?? String(n)) : String(n));
         legs.push(
           <g key={n}>
             <rect x={at.x - 5} y={top ? 0 : H - LEG} width={10} height={LEG} fill={nc ? '#a1a1aa' : '#d4d4d8'} stroke="#18181b" strokeWidth={0.8} />
@@ -9565,6 +9567,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   {comp.inputs.map((pin, pinIdx) => {
                     // A memory's bus input reads back its data pin on the same point: one pin is drawn there
                     if (RAM_TYPES.has(comp.type) && (plexerPinKey(comp, pin) === 'dio' || plexerPinKey(comp, pin) === 'dio1')) return null;
+                    // A TTL in/out pin (7447 BI/RBO) is drawn once, by its output half
+                    if (ttlChipOf(comp.type) && plexerPinKey(comp, pin).endsWith('in')) return null;
                     const isValidTarget = wiringFrom && wiringFrom.pinId !== pin.id;
 
                     // Clamped hit radius ensures neighboring pins (e.g. 10px apart on 5-input gates) never overlap

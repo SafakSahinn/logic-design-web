@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, ComponentType } from '../types/circuit';
-import { configureArith, configureMem, configurePlexer, configureRam } from './circuitEngine';
+import { configureArith, configureMem, configureRam } from './circuitEngine';
 
 export interface ICPin {
   pin: number;
@@ -38,9 +38,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'İki adet 4-bitlik ikili sayıyı (A3..A0 ve B3..B0) ve giriş eldesini (C0) toplayarak 4-bit toplam (Σ3..Σ0) ve çıkış eldesi (C4) üreten yüksek hızlı CMOS toplayıcıdır. Look-ahead carry mimarisi ile gecikmeyi minimize eder.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'fullAdder',
-    simulatorNote:
-      'Tuvale tek bitlik bir tam toplayıcı (A, B, Cin → S, Cout) eklenir. 4 bitlik toplayıcı için dört tanesini elde zinciriyle (Cout → Cin) bağlayın.',
+    simulatorCompType: 'ttl74283',
     pins: [
       { pin: 1, label: 'Σ1', desc: 'Toplam Bit 1 Çıkışı', type: 'out' },
       { pin: 2, label: 'B1', desc: 'B Sayısı Bit 1 Girişi', type: 'in' },
@@ -145,10 +143,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'İki adet 4-bit ikili veya BCD kelimeyi (A3..A0 ile B3..B0) büyüklük açısından karşılaştırarak A>B, A<B veya A=B çıkışlarından birini lojik 1 yapar. Kaskat bağlama girişleriyle n-bit karşılaştırıcı oluşturulabilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'comparator',
-    simulatorSetup: (c) => ({ ...configureArith(c, { width: 4 }), state: { ...c.state, arithMode: 'unsigned' as const } }),
-    simulatorNote:
-      'Tuvale işaretsiz modda 4 bitlik karşılaştırıcı eklenir (A ve B 4 bitlik tek bacak). Kaskat girişleri (I(A>B), I(A=B), I(A<B)) yoktur; tek başına kullanılan bir 74HC85 gibi davranır.',
+    simulatorCompType: 'ttl7485',
     pins: [
       { pin: 1, label: 'B3', desc: 'B Sayısı Bit 3 (MSB)', type: 'in' },
       { pin: 2, label: 'I(A<B)', desc: 'Kaskat Girişi: A < B', type: 'in' },
@@ -192,10 +187,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '8 farklı veri girişinden (D0..D7) birini, 3-bit adres seçici koduna (S2, S1, S0) göre seçerek Y çıkışına ve tersini W çıkışına ileten çok amaçlı veri yönlendiricidir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'multiplexer',
-    simulatorSetup: (c) => configurePlexer(c, { select: 3, width: 1, enable: true }),
-    simulatorNote:
-      'Tuvale 8:1 MUX eklenir: seçme girişi 3 bitlik tek bacaktır, yetki (EN) aktif-yüksektir (74HC151\'de E\' aktif-düşük). Ters çıkış W yoktur.',
+    simulatorCompType: 'ttl74151',
     pins: [
       { pin: 1, label: 'D3', desc: 'Veri Girişi 3', type: 'in' },
       { pin: 2, label: 'D2', desc: 'Veri Girişi 2', type: 'in' },
@@ -243,10 +235,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek pakette iki bağımsız 2-girişli 4-çıkışlı kod çözücü içerir. 2-bit ikili adres girişini 4 aktif-düşük çıkıştan birine dönüştürür. Bellek adres çözümleme (Chip Select) devrelerinde standarttır.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'demultiplexer',
-    simulatorSetup: (c) => configurePlexer(c, { select: 2, width: 1, enable: true }),
-    simulatorNote:
-      'Tuvale tek bir 1:4 DEMUX eklenir: D girişi seçilen çıkışa aktarılır, seçme girişi 2 bitlik tek bacaktır, çıkışlar ve EN aktif-yüksektir. 74HC139\'da çıkışlar aktif-düşüktür ve bir pakette iki çözücü vardır.',
+    simulatorCompType: 'ttl74139',
     pins: [
       { pin: 1, label: '1E\'', desc: 'Bölüm 1 Yetkilendirme (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: '1A0', desc: 'Bölüm 1 Adres Bit 0', type: 'in' },
@@ -290,10 +279,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '8 aktif-düşük giriş hattından en yüksek önceliğe sahip olanı (7 numaralı hattan başlayarak) tespit eder ve 3-bitlik ikili kod üretir. Donanım kesme (Interrupt controller) yapılarında kritiktir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'priorityEncoder',
-    simulatorSetup: (c) => configurePlexer(c, { select: 3 }),
-    simulatorNote:
-      'Tuvale 8:3 aktif-yüksek öncelikli kodlayıcı eklenir (7 > 6 > ... > 0): çıkış kodu 3 bitlik tek bacak, GS en az bir girişin aktif olduğunu gösterir, EI yetki girişi ve EO zincirleme çıkışı vardır. 74HC148\'de tüm girişler ve çıkışlar aktif-düşüktür.',
+    simulatorCompType: 'ttl74148',
     pins: [
       { pin: 1, label: 'I4\'', desc: 'Giriş 4', type: 'in' },
       { pin: 2, label: 'I5\'', desc: 'Giriş 5', type: 'in' },
@@ -642,10 +628,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '3-bit ikili adresi (A0..A2) 8 aktif-düşük çıkıştan birine dönüştürür. Bellek adresleme, I/O port seçimi ve minterm üretimi için endüstri standardıdır.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'decoder',
-    simulatorSetup: (c) => configurePlexer(c, { select: 3, enable: true }),
-    simulatorNote:
-      'Simülatördeki 3:8 kod çözücünün seçme girişi 3 bitlik tek bacaktır, tek bir aktif-yüksek EN girişi vardır ve çıkışları aktif-yüksektir (74HC238 gibi). 74HC138\'de çıkışlar aktif-düşüktür ve üç yetki girişi vardır.',
+    simulatorCompType: 'ttl74138',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'A1', desc: 'Adres Girişi Bit 1', type: 'in' },
@@ -693,9 +676,9 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       '4-Bit BCD ikili girişini (A, B, C, D) ortak anotlu 7-segment LED göstergesini doğrudan sürmek üzere 7 çıkışa (a..g) dönüştürür. Açık kollektörlü yüksek akım çıkışları içerir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'bcdTo7Seg',
+    simulatorCompType: 'ttl7447',
     simulatorNote:
-      'Simülatördeki çözücü aktif-yüksek çıkış verir (ortak katot ekran içindir), 10-15 için A-F harflerini gösterir ve 6 ile 9\'u kuyruklu çizer. LT\', RBI\' ve BI\'/RBO\' bacakları yoktur.',
+      'Tuvale Logisim-evolution\'daki 7447 çipi eklenir: çıkışlar açık kollektörlü değil, doğrudan 0/1 sürer (ortak anotlu göstergeye direnç gerekmez). BI\'/RBO\' bacağında iç pull-up vardır.',
     pins: [
       { pin: 1, label: 'B', desc: 'BCD Veri Girişi Bit 1', type: 'in' },
       { pin: 2, label: 'C', desc: 'BCD Veri Girişi Bit 2', type: 'in' },

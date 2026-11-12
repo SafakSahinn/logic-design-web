@@ -11,7 +11,7 @@ import type {
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
-import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlPinPoint, ttlPorts, ttlSize, type TtlChip } from './ttlChips';
+import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
@@ -578,9 +578,9 @@ function ioMeta(type: ComponentType, name: string, description: string): Compone
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
   const size = ttlSize(chip);
-  const pin = (p: { pin: number; key: string; name: string }, type: 'input' | 'output') => {
+  const pin = (p: { pin: number; key: string; name: string; dir: string }, type: 'input' | 'output') => {
     const at = ttlPinPoint(chip, p.pin);
-    return { id: p.key, name: `${p.name} (${p.pin})`, type, relX: at.x, relY: at.y };
+    return { id: type === 'input' && p.dir === 'inout' ? ttlInKey(p.pin) : p.key, name: `${p.name} (${p.pin})`, type, relX: at.x, relY: at.y };
   };
   const ports = ttlPorts(chip, false);
   return {
@@ -589,8 +589,8 @@ function ttlMeta(chip: TtlChip): ComponentMetadata {
     category: 'ttl',
     width: size.width,
     height: size.height,
-    inputs: ports.filter((p) => p.dir === 'input').map((p) => pin(p, 'input')),
-    outputs: ports.filter((p) => p.dir === 'output').map((p) => pin(p, 'output')),
+    inputs: ports.filter((p) => p.dir !== 'output').map((p) => pin(p, 'input')),
+    outputs: ports.filter((p) => p.dir !== 'input').map((p) => pin(p, 'output')),
     description: `${chip.pins} bacaklı DIP, VCC ${chip.vcc} / GND ${chip.gnd}. ${chip.description}`,
   };
 }
@@ -2655,18 +2655,21 @@ export function configureTtl(comp: CircuitComponentInstance, patch: Partial<TtlC
   const old = new Map<string, CircuitPin>();
   for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
   const ports = ttlPorts(chip, cfg.vccGnd);
-  const pin = (p: { key: string; name: string; pin: number }, type: 'input' | 'output'): CircuitPin => {
+  // An in/out pin is an output (p<n>, powers up floating) plus an input (p<n>in) on the same point
+  const pin = (p: { key: string; name: string; pin: number; dir: string }, type: 'input' | 'output'): CircuitPin => {
     const name = `${p.name} (${p.pin})`;
-    const fresh = newPin(comp, p.key, name, type);
-    return { ...(old.get(p.key) ?? (type === 'output' ? { ...fresh, value: 0 } : fresh)), name };
+    const key = p.dir === 'inout' && type === 'input' ? ttlInKey(p.pin) : p.key;
+    const fresh = newPin(comp, key, name, type);
+    const start: SignalValue = p.dir === 'inout' ? 'Z' : 0;
+    return { ...(old.get(key) ?? (type === 'output' ? { ...fresh, value: start } : fresh)), name };
   };
   const state = { ...comp.state };
   if (cfg.vccGnd) state.ttlVccGnd = true;
   else delete state.ttlVccGnd;
   return updatePinPositions({
     ...comp,
-    inputs: ports.filter((p) => p.dir === 'input').map((p) => pin(p, 'input')),
-    outputs: ports.filter((p) => p.dir === 'output').map((p) => pin(p, 'output')),
+    inputs: ports.filter((p) => p.dir !== 'output').map((p) => pin(p, 'input')),
+    outputs: ports.filter((p) => p.dir !== 'input').map((p) => pin(p, 'output')),
     state,
   });
 }
@@ -2859,7 +2862,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
   const ttlChip = ttlChipOf(comp.type);
   if (ttlChip) {
     const place = (pin: CircuitPin) => {
-      const n = Number(pinKey(comp, pin).slice(1));
+      const n = ttlPinOfKey(pinKey(comp, pin));
       const at = n >= 1 && n <= ttlChip.pins ? ttlPinPoint(ttlChip, n) : { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
       return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
@@ -3298,6 +3301,12 @@ export function simulateCircuitStep(
     pinsInNet.forEach((pinId) => {
       const owner = pinOwner.get(pinId);
       if (owner?.type === 'pullResistor') pulls.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
+      // TTL pins with a built-in pull-up (evolution setPullPorts, 7447 BI/RBO)
+      const chip = owner ? ttlChipOf(owner.type) : undefined;
+      if (chip?.pullUp && owner) {
+        const pin = [...owner.inputs, ...owner.outputs].find((q) => q.id === pinId);
+        if (pin && chip.pullUp.includes(ttlPinOfKey(pinKey(owner, pin)))) pulls.add(1);
+      }
     });
     return pulls;
   };
@@ -4289,56 +4298,74 @@ function counterHexPreset(): CircuitPreset {
 }
 
 function comparatorPreset(): CircuitPreset {
-  const a = busPart('switch', 60, 100, 'A (4 bit)', 'cmp_sw_a', { width: 4 });
-  const b = busPart('switch', 60, 200, 'B (4 bit)', 'cmp_sw_b', { width: 4 });
-  const cmp = busPart('comparator', 220, 130, '4-Bit Karşılaştırıcı', 'cmp_core', {
-    configure: (c) => configureArith(c, { width: 4 }),
-    state: { arithMode: 'unsigned' },
-  });
-  const gt = busPart('led', 390, 40, 'A > B', 'led_gt');
-  const eq = busPart('led', 390, 120, 'A = B', 'led_eq');
-  const lt = busPart('led', 390, 200, 'A < B', 'led_lt');
+  // 7485 pins: A3 15, A2 13, A1 12, A0 10 / B3 1, B2 14, B1 11, B0 9 / I(A<B) 2, I(A=B) 3, I(A>B) 4 / A>B 5, A=B 6, A<B 7
+  const a = busPart('switch', 40, 40, 'A (4 bit)', 'cmp_sw_a', { width: 4, state: { inputValue: 9 } });
+  const b = busPart('switch', 40, 400, 'B (4 bit)', 'cmp_sw_b', { width: 4, state: { inputValue: 5 } });
+  const sa = busPart('splitter', 160, 40, 'A bitleri', 'cmp_split_a', { splitter: { incoming: 4, fanout: 4 } });
+  const sb = busPart('splitter', 160, 400, 'B bitleri', 'cmp_split_b', { splitter: { incoming: 4, fanout: 4 } });
+  const pa = busPart('probe', 40, 140, 'A', 'cmp_probe_a', { state: { radix: '10u' } });
+  const pb = busPart('probe', 40, 500, 'B', 'cmp_probe_b', { state: { radix: '10u' } });
+  const cmp = busPart('ttl7485', 320, 230, '7485', 'cmp_core', { state: { ttlInternal: true } });
+  const one = busPart('vcc', 200, 330, 'I(A=B)', 'cmp_vcc');
+  const zero = busPart('gnd', 200, 160, 'I(A<B), I(A>B)', 'cmp_gnd');
+  const gt = busPart('led', 620, 140, 'A > B', 'led_gt');
+  const eq = busPart('led', 620, 250, 'A = B', 'led_eq');
+  const lt = busPart('led', 620, 360, 'A < B', 'led_lt');
   const { wires, link } = busWires();
-  link(a, a.outputs[0], cmp, pk(cmp, 'a'));
-  link(b, b.outputs[0], cmp, pk(cmp, 'b'));
-  link(cmp, pk(cmp, 'gt'), gt, gt.inputs[0]);
-  link(cmp, pk(cmp, 'eq'), eq, eq.inputs[0]);
-  link(cmp, pk(cmp, 'lt'), lt, lt.inputs[0]);
+  link(a, a.outputs[0], sa, pk(sa, 'in0'));
+  link(b, b.outputs[0], sb, pk(sb, 'in0'));
+  link(a, a.outputs[0], pa, pa.inputs[0]);
+  link(b, b.outputs[0], pb, pb.inputs[0]);
+  [10, 12, 13, 15].forEach((pin, i) => link(sa, pk(sa, `out${i}`), cmp, pk(cmp, `p${pin}`)));
+  [9, 11, 14, 1].forEach((pin, i) => link(sb, pk(sb, `out${i}`), cmp, pk(cmp, `p${pin}`)));
+  link(one, one.outputs[0], cmp, pk(cmp, 'p3'));
+  link(zero, zero.outputs[0], cmp, pk(cmp, 'p2'));
+  link(zero, zero.outputs[0], cmp, pk(cmp, 'p4'));
+  link(cmp, pk(cmp, 'p5'), gt, gt.inputs[0]);
+  link(cmp, pk(cmp, 'p6'), eq, eq.inputs[0]);
+  link(cmp, pk(cmp, 'p7'), lt, lt.inputs[0]);
   return {
     id: 'magnitude_comparator',
-    name: '4-Bit Büyüklük Karşılaştırıcı (74HC85 benzeri)',
+    name: '4-Bit Büyüklük Karşılaştırıcı (7485)',
     category: 'arithmetic',
     description:
-      'İki adet 4 bitlik ikili sayıyı (A ve B) karşılaştırarak A>B, A=B veya A<B durumlarını anında tespit eden aritmetik mantık devresi. Karşılaştırıcı işaretsiz moddadır; ayar panelinden işaretli (ikiye tümleyen) moda alınabilir.',
-    components: [a, b, cmp, gt, eq, lt],
+      'Gerçek 7485 çipi iki adet 4 bitlik işaretsiz sayıyı (A ve B) karşılaştırır ve A>B, A=B, A<B çıkışlarından birini 1 yapar. 4 bitlik anahtarlar ayırıcılarla tek tek bacaklara dağıtılır. '
+      + 'Tek çip kullanıldığı için kademe girişlerinden I(A=B) 1\'e, I(A<B) ve I(A>B) 0\'a bağlıdır; daha geniş sayılar için alt çipin çıkışları üst çipin kademe girişlerine bağlanır.',
+    components: [a, b, sa, sb, pa, pb, cmp, one, zero, gt, eq, lt],
     wires,
   };
 }
 
 function priorityEncoderPreset(): CircuitPreset {
-  const sws = [0, 1, 2, 3].map((i) =>
-    busPart('switch', 60, 40 + i * 80, i === 0 ? 'D0 (En Düşük Öncelik)' : i === 3 ? 'D3 (En Yüksek Öncelik)' : `D${i}`, `pri_sw${i}`)
+  // 74148 pins: I0'..I3' 10-13, I4'..I7' 1-4, EI' 5 / A2' 6, A1' 7, A0' 9, GS' 14, EO' 15 (all active-low)
+  const inPins = [10, 11, 12, 13, 1, 2, 3, 4];
+  const sws = inPins.map((_, i) =>
+    busPart('switch', 40, 20 + i * 90, `I${i}'`, `pri_sw${i}`, {
+      state: { on: i !== 2 && i !== 5 },
+    })
   );
-  const en = busPart('vcc', 160, 380, 'EN (Yetki=1)', 'pri_en');
-  const enc = busPart('priorityEncoder', 240, 130, '4:2 Öncelikli Kodlayıcı', 'pri_core', {
-    configure: (c) => configurePlexer(c, { select: 2 }),
-  });
-  const y = busPart('led', 400, 140, 'Y (Y1 Y0)', 'pri_led_y', { width: 2 });
-  const gs = busPart('led', 400, 220, 'GS (Geçerli)', 'pri_led_gs');
-  const eo = busPart('led', 400, 40, 'EO (Hiçbiri Aktif Değil)', 'pri_led_eo');
+  const en = busPart('gnd', 240, 480, "EI' = 0", 'pri_en');
+  const enc = busPart('ttl74148', 320, 330, '74148', 'pri_core', { state: { ttlInternal: true } });
+  const outs: [number, string, string][] = [
+    [6, "A2'", 'pri_led_a2'],
+    [7, "A1'", 'pri_led_a1'],
+    [9, "A0'", 'pri_led_a0'],
+    [14, "GS'", 'pri_led_gs'],
+    [15, "EO'", 'pri_led_eo'],
+  ];
+  const leds = outs.map(([, label, id], i) => busPart('led', 640, 100 + i * 110, label, id));
   const { wires, link } = busWires();
-  sws.forEach((s, i) => link(s, s.outputs[0], enc, pk(enc, `in${i}`)));
-  link(en, en.outputs[0], enc, pk(enc, 'en'));
-  link(enc, pk(enc, 'out'), y, y.inputs[0]);
-  link(enc, pk(enc, 'gs'), gs, gs.inputs[0]);
-  link(enc, pk(enc, 'eo'), eo, eo.inputs[0]);
+  sws.forEach((s, i) => link(s, s.outputs[0], enc, pk(enc, `p${inPins[i]}`)));
+  link(en, en.outputs[0], enc, pk(enc, 'p5'));
+  outs.forEach(([pin], i) => link(enc, pk(enc, `p${pin}`), leds[i], leds[i].inputs[0]));
   return {
     id: 'priority_encoder_demo',
-    name: '4:2 Öncelikli Kodlayıcı (74HC148 benzeri)',
+    name: '8:3 Öncelikli Kodlayıcı (74148)',
     category: 'basic',
     description:
-      '4 aktif-yüksek girişten (D3..D0) önceliği en yüksek olanı 2 bitlik ikili koda (Y) çevirir. GS en az bir girişin aktif olduğunu, EO ise yetki varken hiçbir girişin aktif olmadığını gösterir (kodlayıcıları zincirlemek için). Gerçek 74HC148 ise 8:3 ve aktif-düşük çalışır.',
-    components: [...sws, en, enc, y, gs, eo],
+      "Gerçek 74148 çipi: girişler ve çıkışlar aktif-düşüktür. 0 olan girişlerden numarası en büyük olanın numarası A2' A1' A0' çıkışlarına TERS olarak yazılır (başlangıçta I2' ve I5' = 0, yani 5 = 101 seçilir ve çıkışlar 010 olur). "
+      + "GS' = 0 en az bir girişin etkin olduğunu, EO' = 0 ise çip etkinken hiçbir girişin etkin olmadığını gösterir (EO' bir sonraki 74148'in EI' girişine bağlanarak 16:4 kodlayıcı yapılır).",
+    components: [...sws, en, enc, ...leds],
     wires,
   };
 }
@@ -4421,25 +4448,31 @@ function ramMemoryPreset(): CircuitPreset {
 }
 
 function decoder3to8Preset(): CircuitPreset {
-  const en = busPart('switch', 60, 300, 'EN (Yetki = 1)', 'dec_sw_en', { state: { on: true } });
-  const a = busPart('switch', 60, 160, 'Adres (A2 A1 A0)', 'dec_sw_a', { width: 3 });
-  const dec = busPart('decoder', 230, 70, '3:8 Decoder', 'dec_chip', {
-    configure: (c) => configurePlexer(c, { select: 3, enable: true }),
-  });
-  const leds = Array.from({ length: 8 }, (_, i) =>
-    busPart('led', i < 4 ? 380 : 500, 40 + (i % 4) * 80, `m${i} (${i.toString(2).padStart(3, '0')})`, `dec_led_${i}`)
+  // 74138 pins: A0 1, A1 2, A2 3, E1' 4, E2' 5, E3 6 / Y0'..Y6' 15-9, Y7' 7 (active-low outputs)
+  const a = busPart('switch', 40, 330, 'Adres (A2 A1 A0)', 'dec_sw_a', { width: 3 });
+  const split = busPart('splitter', 160, 330, 'Adres bitleri', 'dec_split', { splitter: { incoming: 3, fanout: 3 } });
+  const en = busPart('switch', 40, 440, 'E3 (yetki = 1)', 'dec_sw_en', { state: { on: true } });
+  const low = busPart('gnd', 200, 440, "E1' = E2' = 0", 'dec_gnd');
+  const dec = busPart('ttl74138', 320, 220, '74138', 'dec_chip', { state: { ttlInternal: true } });
+  const yPins = [15, 14, 13, 12, 11, 10, 9, 7];
+  const leds = yPins.map((_, i) =>
+    busPart('led', i < 4 ? 620 : 780, 30 + (i % 4) * 120, `Y${i}' (${i.toString(2).padStart(3, '0')})`, `dec_led_${i}`)
   );
   const { wires, link } = busWires();
-  link(a, a.outputs[0], dec, pk(dec, 'sel'));
-  link(en, en.outputs[0], dec, pk(dec, 'en'));
-  leds.forEach((l, i) => link(dec, pk(dec, `out${i}`), l, l.inputs[0]));
+  link(a, a.outputs[0], split, pk(split, 'in0'));
+  [1, 2, 3].forEach((pin, i) => link(split, pk(split, `out${i}`), dec, pk(dec, `p${pin}`)));
+  link(en, en.outputs[0], dec, pk(dec, 'p6'));
+  link(low, low.outputs[0], dec, pk(dec, 'p4'));
+  link(low, low.outputs[0], dec, pk(dec, 'p5'));
+  yPins.forEach((pin, i) => link(dec, pk(dec, `p${pin}`), leds[i], leds[i].inputs[0]));
   return {
     id: 'decoder_3to8_minterm_demo',
-    name: '3:8 Kod Çözücü ile Minterm Seçimi (74HC238 benzeri)',
+    name: '3:8 Kod Çözücü ile Minterm Seçimi (74138)',
     category: 'basic',
     description:
-      '3 bitlik ikili adres (A2 A1 A0, tek çok bitli tel) ve Enable yetkilendirmesiyle 8 çıkış hattından (m0-m7) birini seçen kod çözücü. Her çıkış, adresin bir mintermidir.',
-    components: [en, a, dec, ...leds],
+      "Gerçek 74138 çipi 3 bitlik adresi (A2 A1 A0) çözer. Çıkışlar aktif-düşüktür: adresin gösterdiği Yi' çıkışı 0 olur (LED'i söner), diğer yedisi 1 kalır; yani her çıkış bir mintermin tersidir (Yi' = mi'). "
+      + "Çip yalnız E3 = 1, E1' = 0, E2' = 0 iken çalışır; E3 anahtarı 0 yapılırsa bütün çıkışlar 1 olur.",
+    components: [a, split, en, low, dec, ...leds],
     wires,
   };
 }
