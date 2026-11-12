@@ -1,6 +1,14 @@
 import type { Radix, SignalValue } from './logic';
 
-export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'arithmetic' | 'sequential' | 'custom';
+export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'arithmetic' | 'sequential' | 'ttl' | 'custom';
+
+// 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4); the part type is 'ttl' + the evolution id
+export const TTL_CHIP_IDS = [
+  '7400', '7402', '7404', '7405', '7408', '7410', '7411', '7413', '7414', '7418', '7419', '7420', '7421', '7424',
+  '7427', '7430', '7432', '7434', '7436', '7438', '7451', '7454', '7458', '7464', '7486', '7487', '74132', '74266',
+] as const;
+export type TtlChipId = (typeof TTL_CHIP_IDS)[number];
+export type TtlType = `ttl${TtlChipId}`;
 
 export type ComponentType =
   // Inputs
@@ -82,7 +90,8 @@ export type ComponentType =
   // Logisim-evolution 5 dual-port RAM (Aşama 3f-5)
   | 'dualRam'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
-  | 'subcircuit';
+  | 'subcircuit'
+  | TtlType;
 
 export interface PinDefinition {
   id: string;
@@ -253,6 +262,10 @@ export interface CircuitComponentInstance {
     ioActiveLow?: boolean;
     /** Displays: colour of a lit segment / dot (Logisim 'color'), CSS hex; unset = the part's default */
     ioOnColor?: string;
+    /** TTL chip: VCC and GND are pins that must be wired (evolution 'VccGndPorts'); unset = false */
+    ttlVccGnd?: boolean;
+    /** TTL chip: draw the gates / pin functions inside the package (evolution 'ShowInternalStructure'); unset = false */
+    ttlInternal?: boolean;
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;

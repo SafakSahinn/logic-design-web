@@ -11,6 +11,8 @@ import type {
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
+import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlPinPoint, ttlPorts, ttlSize, type TtlChip } from './ttlChips';
+import type { TtlType } from '../types/circuit';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
 
@@ -570,6 +572,31 @@ function ioMeta(type: ComponentType, name: string, description: string): Compone
     outputs: keys.outputs.map((k) => pin(k, 'output')),
     description,
   };
+}
+
+// ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
+
+function ttlMeta(chip: TtlChip): ComponentMetadata {
+  const size = ttlSize(chip);
+  const pin = (p: { pin: number; key: string; name: string }, type: 'input' | 'output') => {
+    const at = ttlPinPoint(chip, p.pin);
+    return { id: p.key, name: `${p.name} (${p.pin})`, type, relX: at.x, relY: at.y };
+  };
+  const ports = ttlPorts(chip, false);
+  return {
+    type: `ttl${chip.id}` as TtlType,
+    name: `${chip.id} ${chip.title}`,
+    category: 'ttl',
+    width: size.width,
+    height: size.height,
+    inputs: ports.filter((p) => p.dir === 'input').map((p) => pin(p, 'input')),
+    outputs: ports.filter((p) => p.dir === 'output').map((p) => pin(p, 'output')),
+    description: `${chip.pins} bacaklı DIP, VCC ${chip.vcc} / GND ${chip.gnd}. ${chip.description}`,
+  };
+}
+
+function ttlCatalog(): Record<TtlType, ComponentMetadata> {
+  return Object.fromEntries(Object.values(TTL_CHIPS).map((c) => [`ttl${c.id}`, ttlMeta(c)])) as Record<TtlType, ComponentMetadata>;
 }
 
 export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
@@ -1171,6 +1198,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'Kullanıcı tarafından paketlenmiş modüler alt devre / entegre modülü.',
   },
+  ...ttlCatalog(),
 };
 
 let componentCounter = 1;
@@ -1250,6 +1278,7 @@ export function createComponentInstance(
   if (MEM_TYPES.has(type)) return configureMem(inst, {});
   if (RAM_TYPES.has(type)) return configureRam(inst, {});
   if (IO_TYPES.has(type)) return configureIo(inst, {});
+  if (isTtlType(type)) return configureTtl(inst, {});
   return inst;
 }
 
@@ -1295,6 +1324,8 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
     const g = ioGeometry(comp.type, getIoConfig(comp));
     return { width: g.width, height: g.height };
   }
+  const ttl = ttlChipOf(comp.type);
+  if (ttl) return ttlSize(ttl);
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
   return { width: meta?.width ?? 60, height: meta?.height ?? 50 };
@@ -2605,6 +2636,41 @@ export function configureIo(comp: CircuitComponentInstance, patch: Partial<IoCon
   });
 }
 
+// ---- TTL chips: settings (Aşama 4) -------------------------------------------------------------------------
+
+export interface TtlConfig {
+  /** VCC and GND are pins (evolution 'VccGndPorts') */
+  vccGnd: boolean;
+}
+
+export function getTtlConfig(comp: CircuitComponentInstance): TtlConfig {
+  return { vccGnd: comp.state.ttlVccGnd === true };
+}
+
+/** New TTL settings: the VCC / GND pins come and go, every other pin keeps its id (and wires) */
+export function configureTtl(comp: CircuitComponentInstance, patch: Partial<TtlConfig>): CircuitComponentInstance {
+  const chip = ttlChipOf(comp.type);
+  if (!chip) return comp;
+  const cfg: TtlConfig = { ...getTtlConfig(comp), ...patch };
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const ports = ttlPorts(chip, cfg.vccGnd);
+  const pin = (p: { key: string; name: string; pin: number }, type: 'input' | 'output'): CircuitPin => {
+    const name = `${p.name} (${p.pin})`;
+    const fresh = newPin(comp, p.key, name, type);
+    return { ...(old.get(p.key) ?? (type === 'output' ? { ...fresh, value: 0 } : fresh)), name };
+  };
+  const state = { ...comp.state };
+  if (cfg.vccGnd) state.ttlVccGnd = true;
+  else delete state.ttlVccGnd;
+  return updatePinPositions({
+    ...comp,
+    inputs: ports.filter((p) => p.dir === 'input').map((p) => pin(p, 'input')),
+    outputs: ports.filter((p) => p.dir === 'output').map((p) => pin(p, 'output')),
+    state,
+  });
+}
+
 /** DIP switch: flip switch i (0-based); the outputs follow on the next simulation step */
 export function toggleDipSwitch(comp: CircuitComponentInstance, i: number): CircuitComponentInstance {
   const n = getIoConfig(comp).size;
@@ -2785,6 +2851,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     const g = arithLayout(comp);
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
+      const p = rotatePoint(at.x, at.y);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
+  }
+  const ttlChip = ttlChipOf(comp.type);
+  if (ttlChip) {
+    const place = (pin: CircuitPin) => {
+      const n = Number(pinKey(comp, pin).slice(1));
+      const at = n >= 1 && n <= ttlChip.pins ? ttlPinPoint(ttlChip, n) : { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
       return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
     };
@@ -3427,6 +3503,18 @@ export function simulateCircuitStep(
     };
     // In Logisim, multi-input logic gates ignore unconnected (floating) input pins
     const connectedInputs = comp.inputs.filter((p) => isPinConnected(p.id));
+
+    const ttlChip = ttlChipOf(comp.type);
+    if (ttlChip) {
+      // Evolution AbstractTtlGate.propagate: inputs read as Logisim values (an open pin is x)
+      const byKey = new Map(comp.inputs.map((p) => [pinKey(comp, p), p]));
+      const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0]);
+      comp.outputs.forEach((p, i) => {
+        const v = outs.get(pinKey(comp, p));
+        if (v !== undefined) setOut(i, v);
+      });
+      return;
+    }
 
     switch (comp.type) {
       case 'not': {

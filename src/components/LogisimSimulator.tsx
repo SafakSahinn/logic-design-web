@@ -150,6 +150,7 @@ import {
   type AttrValue,
 } from '../utils/componentAttributes';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
+import { TTL_CHIPS, TTL_GROUP_TITLES, ttlChipOf, ttlHeight, ttlPinPoint, ttlPorts, type TtlGroup } from '../utils/ttlChips';
 import { generateVerilogTestbench, generateVhdlTestbench } from '../utils/hdlTestbench';
 import {
   getAllSubcircuits,
@@ -266,6 +267,8 @@ const RADIX_LABEL: Record<Radix, string> = { '2': 'BIN', '8': 'OCT', '10u': 'DEC
 
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
+  // TTL chips (Aşama 4): "7400 NAND x4" style label, chip number as badge
+  ...Object.fromEntries(Object.values(TTL_CHIPS).map((c) => [`ttl${c.id}`, { label: c.title, badge: c.id }])),
   not: { label: 'NOT', badge: 'Değil' },
   buffer: { label: 'Buffer', badge: 'Tampon' },
   and: { label: 'AND', badge: 'VE' },
@@ -3803,6 +3806,57 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       : 'url(#gateGrad)';
     const gateTextClass = cadTheme === 'dark' ? 'fill-slate-100' : 'fill-slate-800';
 
+    const ttlChip = ttlChipOf(comp.type);
+    if (ttlChip) {
+      // Logisim-evolution TTL package: dark body, pin legs on the top and bottom edges, notch on the left
+      // (pin 1 bottom-left); pin numbers inside, or the pin functions with "internal structure" on
+      const W = ttlChip.pins * 10;
+      const H = ttlHeight(ttlChip);
+      const LEG = 7;
+      const internal = !!comp.state.ttlInternal;
+      const names = new Map(ttlPorts(ttlChip, false).map((pt) => [pt.pin, pt.name]));
+      const bodyFill = internal ? (cadTheme === 'dark' ? '#e2e8f0' : '#f8fafc') : '#3f3f46';
+      const textFill = internal ? '#0f172a' : '#e4e4e7';
+      const legs: React.ReactNode[] = [];
+      for (let n = 1; n <= ttlChip.pins; n++) {
+        const at = ttlPinPoint(ttlChip, n);
+        const top = at.y === 0;
+        const nc = ttlChip.unused?.includes(n);
+        const power = n === ttlChip.vcc ? 'Vcc' : n === ttlChip.gnd ? 'GND' : undefined;
+        const text = power ?? (internal ? (nc ? 'NC' : names.get(n) ?? String(n)) : String(n));
+        legs.push(
+          <g key={n}>
+            <rect x={at.x - 5} y={top ? 0 : H - LEG} width={10} height={LEG} fill={nc ? '#a1a1aa' : '#d4d4d8'} stroke="#18181b" strokeWidth={0.8} />
+            <text
+              x={at.x}
+              y={top ? LEG + 9 : H - LEG - 4}
+              textAnchor="middle"
+              fill={power ? (internal ? '#b91c1c' : '#fca5a5') : textFill}
+              className="text-[7px] font-mono font-bold select-none"
+            >
+              {text}
+            </text>
+            <title>{`${n}. bacak${power ? ` (${power})` : nc ? ' (boş)' : `: ${names.get(n) ?? ''}`}`}</title>
+          </g>
+        );
+      }
+      return (
+        <g filter="url(#gateShadow)">
+          <rect x={0} y={LEG} width={W} height={H - 2 * LEG} rx={5} fill={bodyFill} stroke={isSelected ? strokeColor : '#18181b'} strokeWidth={isSelected ? 2 : 1.2} />
+          <path d={`M 0 ${H / 2 - 7} A 7 7 0 0 1 0 ${H / 2 + 7}`} fill={internal ? '#94a3b8' : '#18181b'} />
+          {legs}
+          <text x={W / 2} y={H / 2 + 5} textAnchor="middle" fill={textFill} className={`${internal ? 'text-[11px]' : 'text-[14px]'} font-mono font-black select-none`}>
+            {ttlChip.id}
+          </text>
+          {ttlChip.openCollector && (
+            <text x={W - 6} y={H / 2 + 4} textAnchor="end" className="text-[7px] font-mono font-black fill-amber-500 select-none">
+              OC
+            </text>
+          )}
+        </g>
+      );
+    }
+
     switch (comp.type) {
       case 'switch': {
         if (getBitWidth(comp) > 1) return renderWidePin(comp, isSelected);
@@ -5987,6 +6041,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       icon: '🔊',
       types: ['buzzer'] as ComponentType[],
     },
+    // TTL chips (Aşama 4), one group per kind, only the kinds that have chips
+    ...(Object.keys(TTL_GROUP_TITLES) as TtlGroup[])
+      .map((g) => ({
+        id: `ttl_${g}`,
+        title: TTL_GROUP_TITLES[g],
+        icon: '🧩',
+        types: Object.values(TTL_CHIPS).filter((c) => c.group === g).map((c) => `ttl${c.id}` as ComponentType),
+      }))
+      .filter((g) => g.types.length > 0),
   ], []);
 
   // Render Desktop Menu Bar (File, Edit, Simulation, Tools, View, Help)
@@ -8169,6 +8232,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     { id: 'combinational' as const, label: 'Kombinasyonel' },
                     { id: 'arithmetic' as const, label: 'Aritmetik' },
                     { id: 'sequential' as const, label: 'Ardışıl Mantık (FF)' },
+                    { id: 'ttl' as const, label: 'TTL Çipleri' },
                     { id: 'custom' as const, label: `Özel Entegreler (${customSubcircuits.length})` },
                   ].map((cat) => (
                     <button

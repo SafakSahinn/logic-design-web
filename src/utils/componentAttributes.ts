@@ -23,6 +23,8 @@ import {
   configurePlexer,
   configureRam,
   configureIo,
+  configureTtl,
+  getTtlConfig,
   getIoConfig,
   IO_MAX_SIZE,
   type IoConfig,
@@ -50,6 +52,7 @@ import {
   updatePinPositions,
 } from './circuitEngine';
 import { snapPt10 } from './wiringEngine';
+import { isTtlType } from './ttlChips';
 
 export type AttrValue = string | number;
 
@@ -833,6 +836,7 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       list.push(ioActiveAttr, ioDpAttr, ioColorAttr);
       break;
   }
+  if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (MEM_TYPES.has(type) && !list.includes(triggerAttr)) list.push(triggerAttr);
   // Adder, subtractor, negator, absolute, square root: data width only
   if (ARITH_TYPES.has(type) && !list.includes(arithWidthAttr)) list.push(arithWidthAttr);
@@ -972,6 +976,49 @@ function reconfigureIo(c: CircuitComponentInstance, patch: Partial<IoConfig>): A
 }
 
 const IO_SIZE_OPTIONS = numberOptions(1, IO_MAX_SIZE);
+
+// ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires
+const ttlVccGndAttr: AttrDef = {
+  key: 'ttlVccGnd',
+  label: 'VCC/GND bacakları',
+  kind: 'buttons',
+  title:
+    'Açık: VCC ve GND bacakları bağlanması gereken pinler olur; GND = 0 ve VCC = 1 değilse bütün çıkışlar boşta kalır (Logisim-evolution "VCC/GND ports"). Kapalı: çip her zaman beslenmiş sayılır',
+  options: [
+    { value: 'off', label: 'Kapalı' },
+    { value: 'on', label: 'Açık' },
+  ],
+  get: (c) => (getTtlConfig(c).vccGnd ? 'on' : 'off'),
+  set: (c, v) => {
+    const vccGnd = v === 'on';
+    if (getTtlConfig(c).vccGnd === vccGnd) return null;
+    const next = configureTtl(c, { vccGnd });
+    const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+    const remap = new Map<string, string | null>();
+    for (const p of [...c.outputs, ...c.inputs]) {
+      const sp = snapPt10(p);
+      remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+    }
+    return { comp: next, remap };
+  },
+};
+
+const ttlInternalAttr: AttrDef = {
+  key: 'ttlInternal',
+  label: 'İç yapı',
+  kind: 'buttons',
+  title: 'Gövdenin içinde bacak işlevlerini (1A, 1B, 1Y...) göster (Logisim-evolution "Show internal structure")',
+  options: [
+    { value: 'off', label: 'Gizli' },
+    { value: 'on', label: 'Göster' },
+  ],
+  get: (c) => (c.state.ttlInternal ? 'on' : 'off'),
+  set: (c, v) => {
+    const on = v === 'on';
+    if (!!c.state.ttlInternal === on) return null;
+    return withState(c, { ttlInternal: on || undefined });
+  },
+};
 
 const dipSizeAttr: AttrDef = {
   key: 'dipSize',

@@ -565,9 +565,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek pakette dört bağımsız 2-girişli VE (AND) kapısı sunar. Her iki giriş de lojik 1 olduğunda çıkış lojik 1 olur.',
     packageType: '14-Pin DIP',
     pinCount: 14,
-    simulatorCompType: 'and',
-    simulatorNote:
-      'Tuvale paketteki dört kapıdan yalnızca biri (2 girişli VE) eklenir.',
+    simulatorCompType: 'ttl7408',
     pins: [
       { pin: 1, label: '1A', desc: 'Kapı 1 Giriş A', type: 'in' },
       { pin: 2, label: '1B', desc: 'Kapı 1 Giriş B', type: 'in' },
@@ -603,9 +601,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek pakette dört bağımsız XOR kapısı sunar. Girişler birbirinden farklı olduğunda lojik 1, aynı olduğunda lojik 0 üretir. Eşlik (Parity) ve toplayıcı devrelerinin temelidir.',
     packageType: '14-Pin DIP',
     pinCount: 14,
-    simulatorCompType: 'xor',
-    simulatorNote:
-      'Tuvale paketteki dört kapıdan yalnızca biri (2 girişli XOR) eklenir.',
+    simulatorCompType: 'ttl7486',
     pins: [
       { pin: 1, label: '1A', desc: 'Kapı 1 Giriş A', type: 'in' },
       { pin: 2, label: '1B', desc: 'Kapı 1 Giriş B', type: 'in' },
