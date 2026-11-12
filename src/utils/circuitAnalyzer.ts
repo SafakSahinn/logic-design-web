@@ -17,7 +17,62 @@ import {
   pinKey,
   shifterDistBits,
 } from './circuitEngine';
-import { TTL_SEQ_TYPES } from './ttlChips';
+import { TTL_SEQ_TYPES, ttlChipOf } from './ttlChips';
+import type { TtlChipId } from '../types/circuit';
+
+/**
+ * TTL chips (Aşama 4e-3): the sum of every gate / block in the package, each counted with the formula the
+ * matching canvas part uses (n-input NAND / NOR 2n, AND / OR 2n + 2, NOT 2, buffer 4, XOR / XNOR 8 per 2-input
+ * stage, 2:1 / 4:1 / 8:1 MUX 14 / 34 / 74, 3:8 decoder 52, 2:4 decoder 24, 8:3 priority encoder 96, BCD -> 7
+ * segment 110, 4-bit comparator 64, full adder 28, D flip-flop 28, J-K flip-flop 42, counter 82w + 20). Unused
+ * gates count too (they are on the chip); open-collector and Schmitt-trigger outputs count as the plain gate,
+ * as an open-collector gate on the canvas does.
+ */
+const TTL_TRANSISTORS: Record<TtlChipId, number> = {
+  '7400': 4 * 4, // 4 x NAND2
+  '7402': 4 * 4, // 4 x NOR2
+  '7404': 6 * 2, // 6 x NOT
+  '7405': 6 * 2, // 6 x NOT (open collector)
+  '7408': 4 * 6, // 4 x AND2
+  '7410': 3 * 6, // 3 x NAND3
+  '7411': 3 * 8, // 3 x AND3
+  '7413': 2 * 8, // 2 x NAND4 (Schmitt)
+  '7414': 6 * 2, // 6 x NOT (Schmitt)
+  '7418': 2 * 8, // 2 x NAND4 (Schmitt)
+  '7419': 6 * 2, // 6 x NOT (Schmitt)
+  '7420': 2 * 8, // 2 x NAND4
+  '7421': 2 * 10, // 2 x AND4
+  '7424': 4 * 4, // 4 x NAND2 (Schmitt)
+  '7427': 3 * 6, // 3 x NOR3
+  '7430': 16, // NAND8
+  '7432': 4 * 6, // 4 x OR2
+  '7434': 6 * 4, // 6 x buffer
+  '7436': 4 * 4, // 4 x NOR2
+  '7438': 4 * 4, // 4 x NAND2 (open collector)
+  '7451': 2 * (2 * 6 + 4), // 2 x (2 x AND2 + NOR2)
+  '7454': 4 * 6 + 8, // 4 x AND2 + NOR4
+  '7458': 6 + 6 + 6 + (8 + 8 + 6), // AND2 + AND2 + OR2, AND3 + AND3 + OR2
+  '7464': 6 + 8 + 6 + 10 + 8, // AND2 + AND3 + AND2 + AND4 + NOR4
+  '7486': 4 * 8, // 4 x XOR2
+  '7487': 4 * (8 + 2 + 14), // per bit XNOR2 + NOT + 2:1 MUX
+  '74132': 4 * 4, // 4 x NAND2 (Schmitt)
+  '74266': 4 * 8, // 4 x XNOR2 (open collector)
+  // BCD -> 7 segment 110; per segment LT' / BI' gating OR2 + AND2 (12); zero detect NOR4 + RBI' AND2 + NOT and
+  // the RBO' pull-down (16)
+  '7447': 110 + 7 * 12 + 16,
+  '7485': 64 + 3 * 12, // 4-bit comparator + per output cascade AND2 + OR2
+  '74138': 52 + 8 + 2 * 2, // 3:8 decoder + enable AND3 + 2 x NOT for E1' E2'
+  '74139': 2 * (24 + 2), // 2 x (2:4 decoder + NOT for E')
+  '74148': 96 + 16, // 8:3 priority encoder + EI' / GS' / EO' logic (AND2 + NAND2 + NOR2 + NOT)
+  '74151': 74 + 6 + 2, // 8:1 MUX + strobe AND2 + W inverter
+  '74153': 2 * (34 + 6), // 2 x (4:1 MUX + enable AND2)
+  '74157': 4 * (14 + 6), // 4 x (2:1 MUX + enable AND2)
+  '74283': 4 * 28, // 4 x full adder
+  '7474': 2 * 28, // 2 x D flip-flop (preset / clear included)
+  '7476': 2 * 42, // 2 x J-K flip-flop
+  '74161': 82 * 4 + 20, // 4-bit counter
+  '74194': 4 * (28 + 34), // per stage D flip-flop + 4:1 mode MUX (hold / right / left / load)
+};
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
 // Displays carry no logic (no transistors counted)
@@ -341,8 +396,11 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       const innerWired = wiredPins(getLogicalConnections(def.components, def.wires));
       return def.components.reduce((sum, ic) => sum + transistorsOf(ic, innerWired, inner), 0);
     }
-    default:
+    default: {
+      const chip = ttlChipOf(c.type);
+      if (chip) return TTL_TRANSISTORS[chip.id] ?? 0;
       return CMOS_TRANSISTOR_TABLE[c.type] || 0;
+    }
   }
 }
 
@@ -413,7 +471,9 @@ export function analyzeCircuit(
                 ? withDetail(c.type.toUpperCase(), memGroupDetail(c, flipFlopEnableWired(c, wired)))
                 : RAM_TYPES.has(c.type)
                   ? withDetail(c.type.toUpperCase(), ramGroupDetail(c, wired))
-                  : c.type.toUpperCase();
+                  : ttlChipOf(c.type)
+                    ? `TTL ${ttlChipOf(c.type)!.id} (${ttlChipOf(c.type)!.title})`
+                    : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
     g.count++;
     g.totalTransistors += t;

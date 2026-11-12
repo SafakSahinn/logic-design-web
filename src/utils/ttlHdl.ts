@@ -395,12 +395,9 @@ const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
     // A loaded D bit that is neither 0 nor 1 counts as -1 (evolution's toLongValue), the sum taken mod 16. A
     // function read inside the process: a signal in between would lag the clock by a delta in VHDL
     if (c.v) {
-      c.decls.push(
-        '  function [3:0] dv;',
-        '    input b;',
-        "    dv = (b === 1'b1) ? 4'd1 : (b === 1'b0) ? 4'd0 : 4'd15;",
-        '  endfunction'
-      );
+      const fn = ['  function [3:0] dv;', '    input b;', "    dv = (b === 1'b1) ? 4'd1 : (b === 1'b0) ? 4'd0 : 4'd15;", '  endfunction'];
+      c.syn.decls.push(...fn);
+      c.sim.decls.push(...fn);
     } else {
       c.decls.push(
         '  function dv(b : std_logic) return unsigned is',
@@ -595,8 +592,19 @@ export function renderTtlModule(lang: Lang, chip: TtlChip, moduleName: string): 
     seq({ v, i: (pin) => inName.get(pin)!, o: (pin) => outName.get(pin)!, ins, ...shared, syn, sim });
     decls.push(...shared.decls);
     if (v) {
-      decls.push('`ifdef SYNTHESIS', ...syn.decls, '`else', ...sim.decls, '`endif');
-      body.push('`ifdef SYNTHESIS', ...syn.body, '`else', ...sim.body, '`endif');
+      // Synthesis has no x / z to tell apart: case equality becomes plain equality (same meaning for 0 / 1,
+      // and some vendor tools reject === / !== in synthesis)
+      const eq = (ls: string[]) => ls.map((l) => l.replace(/!==/g, '!=').replace(/===/g, '=='));
+      decls.push('`ifdef SYNTHESIS', ...eq(syn.decls), '`else', ...sim.decls, '`endif');
+      body.push(
+        '`ifdef SYNTHESIS',
+        "  assign pwr = vcc & ~gnd;",
+        ...eq(syn.body),
+        '`else',
+        "  assign pwr = (vcc === 1'b1) & (gnd === 1'b0);",
+        ...sim.body,
+        '`endif'
+      );
     }
     body.push(...shared.body);
   }
@@ -637,7 +645,7 @@ export function renderTtlModule(lang: Lang, chip: TtlChip, moduleName: string): 
       ');',
       '  wire pwr;',
       ...decls,
-      seq ? "  assign pwr = (vcc === 1'b1) & (gnd === 1'b0);" : '  assign pwr = vcc & ~gnd;',
+      ...(seq ? [] : ['  assign pwr = vcc & ~gnd;']),
       ...body,
       'endmodule',
     ].join('\n');
