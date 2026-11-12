@@ -2074,7 +2074,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     try {
       const res = runCircuitTestbench(components, wires, testbenchText);
       setTestbenchResult(res);
-      showToast(`Test tamamlandı: ${res.passedTests}/${res.totalTests} test geçti (%${res.successRate})`);
+      if (res.errors) showToast(`Test vektörü okunamadı: ${res.errors[0]}`);
+      else showToast(`Test tamamlandı: ${res.passedTests}/${res.totalTests} test geçti (%${res.successRate})`);
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : 'Testbench çalıştırılamadı.');
     }
@@ -2082,10 +2083,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Auto-generate testbench text
   const handleAutoGenerateTestbench = () => {
-    const generated = generateExhaustiveTestVector(components);
+    const generated = generateExhaustiveTestVector(components, wires);
     setTestbenchText(generated);
     setTestbenchResult(null);
-    showToast('Tüm girişler için test vektörleri üretildi!');
+    showToast('Test vektörü üretildi; beklenen değerler simülatörün şu anki sonuçları.');
   };
 
   // FSM table editing: any change turns the loaded preset into a custom machine
@@ -12284,7 +12285,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-slate-700">
-                  Test Senaryoları [Girişler | Beklenen Çıkışlar]:
+                  Test Vektörü (Logisim-evolution biçimi):
                 </label>
                 <button
                   onClick={handleAutoGenerateTestbench}
@@ -12297,14 +12298,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               <textarea
                 value={testbenchText}
                 onChange={(e) => setTestbenchText(e.target.value)}
-                placeholder={`# Örnek format:\n0 0 | 0 0\n0 1 | 1 0\n1 0 | 1 0\n1 1 | 0 1\n# Çok bitli değer: 0101, 0xA5 ya da 10; beklenende x = önemsiz bit (1x0x)`}
-                className="w-full h-36 p-3.5 bg-slate-950 text-emerald-300 font-mono text-xs rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 shadow-inner"
+                placeholder={`# İlk satır sütun adları (HDL port adları; çok bitli: ad[genişlik])\nin_A in_B out_Y\n0 0 0\n0 1 1\n# Sıralı test: <set> <seq> sütunları; her adım bir saat tikiyle başlar\n# Değer: 0101, 0xA5, ondalık; x önemsiz bit, <DC> her değer, <float> yüzer`}
+                wrap="off"
+                spellCheck={false}
+                className="w-full h-44 p-3.5 bg-slate-950 text-emerald-300 font-mono text-xs rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 shadow-inner whitespace-pre overflow-auto"
               />
 
               {/* Action Toolbar */}
               <div className="flex items-center justify-between pt-1">
                 <span className="text-[11px] text-slate-500">
-                  * Her satırda giriş bitleri ve '|' işaretinden sonra beklenen çıkış bitleri yer alır.
+                  * Giriş sütunları sürülür, çıkış ve saat sütunları denetlenir. Eski "girişler | çıkışlar" biçimi de okunur.
                 </span>
                 <button
                   onClick={handleRunTestbench}
@@ -12315,8 +12318,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </button>
               </div>
 
+              {/* Problems that stopped the test */}
+              {testbenchResult?.errors && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-1">
+                  <div className="font-bold">Test vektörü okunamadı:</div>
+                  {testbenchResult.errors.map((e, i) => (
+                    <div key={i} className="font-mono">{e}</div>
+                  ))}
+                </div>
+              )}
+
               {/* Testbench Results Report */}
-              {testbenchResult && (
+              {testbenchResult && !testbenchResult.errors && (
                 <div className="space-y-3 pt-3 border-t border-slate-200">
                   <div className="grid grid-cols-4 gap-2.5">
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-center">
@@ -12353,6 +12366,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       <thead className="bg-slate-100 border-b border-slate-200 text-slate-700 text-[10.5px]">
                         <tr>
                           <th className="p-2 text-center w-10">#</th>
+                          {testbenchResult.rows.some((r) => r.set) && <th className="p-2 text-center w-14">set/seq</th>}
                           <th className="p-2 text-center">Girişler</th>
                           <th className="p-2 text-center">Beklenen</th>
                           <th className="p-2 text-center">Alınan</th>
@@ -12365,7 +12379,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                             key={row.index}
                             className={row.passed ? 'hover:bg-emerald-50/40' : 'bg-rose-50/40'}
                           >
-                            <td className="p-1.5 text-center text-slate-400 text-[10px]">{row.index}</td>
+                            <td className="p-1.5 text-center text-slate-400 text-[10px]" title={row.line ? `Satır ${row.line}` : undefined}>{row.index}</td>
+                            {testbenchResult.rows.some((r) => r.set) && (
+                              <td className="p-1.5 text-center text-slate-400 text-[10px]">{row.set ? `${row.set}/${row.seq}` : '-'}</td>
+                            )}
                             <td className="p-1.5 text-center text-slate-700">
                               {Object.entries(row.inputValues)
                                 .map(([k, v]) => `${k}:${v}`)
@@ -12377,7 +12394,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                             <td className="p-1.5 text-center font-bold text-slate-900">
                               {row.actualOutputs ? Object.values(row.actualOutputs).join(' ') : '-'}
                             </td>
-                            <td className="p-1.5 text-center">
+                            <td className="p-1.5 text-center" title={row.mismatches?.join('\n') || undefined}>
                               <span
                                 className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
                                   row.passed

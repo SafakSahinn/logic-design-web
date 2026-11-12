@@ -189,8 +189,9 @@ export interface PortDecl {
   name: string;
   dir: 'in' | 'out';
   width: number; // 1 = scalar
-  // Canvas part behind a top-level port (used by the FPGA pin constraints)
-  source?: { compId: string; type: string; group?: string };
+  // Canvas part behind a top-level port (used by the FPGA pin constraints and the test vectors); pins = the
+  // part's pin ids behind the port: one wide pin, or one 1-bit pin per port bit (LSB first)
+  source?: { compId: string; type: string; group?: string; pins?: string[] };
 }
 
 interface ModuleSpec {
@@ -413,24 +414,24 @@ function buildModule(
     const label = c.label || c.type;
     if (c.type === 'clock') {
       const pn = names.make(/clk|saat|clock/i.test(label) ? label : `clk_${label}`, 'clk');
-      addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type } });
+      addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
     } else if (c.type === 'dipSwitch') {
       // one input port, bit i = switch i+1
       const pn = names.make(`in_${label}`, 'in_dip');
-      addPort({ name: pn, dir: 'in', width: c.outputs.length, source: { compId: c.id, type: c.type } });
+      addPort({ name: pn, dir: 'in', width: c.outputs.length, source: { compId: c.id, type: c.type, pins: c.outputs.map((p) => p.id) } });
       c.outputs.forEach((p, i) => pinExpr.set(p.id, c.outputs.length === 1 ? pn : vecIndex(pn, i)));
     } else if (c.type === 'asciiKeyboard') {
       const pd = names.make(`kbd_${label}_data`, 'kbd_data');
       const ps = names.make(`kbd_${label}_strobe`, 'kbd_strobe');
-      addPort({ name: pd, dir: 'in', width: 7, source: { compId: c.id, type: c.type, group: 'data' } });
-      addPort({ name: ps, dir: 'in', width: 1, source: { compId: c.id, type: c.type, group: 'strobe' } });
+      addPort({ name: pd, dir: 'in', width: 7, source: { compId: c.id, type: c.type, group: 'data', pins: c.outputs.slice(0, 7).map((p) => p.id) } });
+      addPort({ name: ps, dir: 'in', width: 1, source: { compId: c.id, type: c.type, group: 'strobe', pins: c.outputs.slice(7, 8).map((p) => p.id) } });
       c.outputs.slice(0, 7).forEach((p, i) => pinExpr.set(p.id, vecIndex(pd, i)));
       if (c.outputs[7]) pinExpr.set(c.outputs[7].id, ps);
     } else {
       // switch (also a multi-bit one), push button
       const pn = names.make(`in_${label}`, 'in_sig');
-      addPort({ name: pn, dir: 'in', width: c.type === 'switch' ? outW : 1, source: { compId: c.id, type: c.type } });
+      addPort({ name: pn, dir: 'in', width: c.type === 'switch' ? outW : 1, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
     }
   }
@@ -1829,7 +1830,8 @@ function buildModule(
         const wide = g.pins.length === 1 && (g.pins[0].width ?? 1) > 1;
         const busWidth = c.type === 'led' || wide ? (g.pins[0].width ?? 1) : c.type === 'probe' ? Math.max(1, netWidth(g.pins[0].id)) : 0;
         const width = c.type === 'led' || c.type === 'probe' || wide ? busWidth : g.pins.length;
-        addPort({ name: pn, dir: 'out', width, source: { compId: c.id, type: c.type, group: g.suffix || undefined } });
+        const pins = (busWidth > 1 ? g.pins.slice(0, 1) : g.pins.slice(0, width)).map((p) => p.id);
+        addPort({ name: pn, dir: 'out', width, source: { compId: c.id, type: c.type, group: g.suffix || undefined, pins } });
         if (busWidth > 1) emit(pn, compose(readBits(g.pins[0].id, busWidth).bits));
         else g.pins.slice(0, width).forEach((pin, i) => emit(width === 1 ? pn : vecIndex(pn, i), inputExpr(pin.id)));
       }

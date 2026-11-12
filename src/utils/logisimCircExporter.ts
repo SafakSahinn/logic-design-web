@@ -898,7 +898,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         case 'ff': {
           const name = p.type === 'D' ? 'D Flip-Flop' : p.type === 'T' ? 'T Flip-Flop' : 'J-K Flip-Flop';
-          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${name}"/>`);
+          // Classic look: Logisim-evolution would otherwise open it with its own pin layout (2.7.1 ignores it)
+          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${name}"><a name="appearance" val="classic"/></comp>`);
           if (p.type === 'JK') {
             if (p.a) tunnel(x - 40, y, p.a, true, 1);
             if (p.b) tunnel(x - 40, y + 20, p.b, true, 1);
