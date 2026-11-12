@@ -75,6 +75,9 @@ import {
   splitterEndLabels,
   splitterThreads,
   getComponentSize,
+  nextSwitchBit,
+  switchBits,
+  switchStateFor,
 } from '../utils/circuitEngine';
 import {
   Play,
@@ -1102,10 +1105,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       let toggledTo = false;
       const updated = prev.map((c) => {
         if (c.id !== compId) return c;
-        const cur = c.state.inputValue ?? 0;
-        const isSet = Math.floor(cur / 2 ** bit) % 2 === 1;
-        toggledTo = !isSet;
-        return { ...c, state: { ...c.state, inputValue: isSet ? cur - 2 ** bit : cur + 2 ** bit } };
+        // 0 → 1 → 0, or 0 → 1 → Z → 0 on a three-state pin
+        const bits = switchBits(c);
+        bits[bit] = nextSwitchBit(bits[bit], !!c.state.pinTristate);
+        toggledTo = bits[bit] === 1;
+        return { ...c, state: { ...c.state, ...switchStateFor(bits) } };
       });
       playSwitchSound(toggledTo);
       const sim = simulateCircuit(updated, wires);
@@ -1154,12 +1158,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       let toggledTo = false;
       const updated = prev.map((c) => {
         if (c.id === compId) {
-          const nextState = !c.state.on;
-          toggledTo = nextState;
-          return {
-            ...c,
-            state: { ...c.state, on: nextState },
-          };
+          // 0 → 1 → 0, or 0 → 1 → Z → 0 on a three-state pin
+          const next = nextSwitchBit(switchBits(c)[0], !!c.state.pinTristate);
+          toggledTo = next === 1;
+          return { ...c, state: { ...c.state, ...switchStateFor([next]) } };
         }
         return c;
       });
@@ -3415,7 +3417,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           values[c.id] = c.outputs[0].bits ? [...c.outputs[0].bits] : numberToBits(c.state.inputValue ?? 0, outW);
         } else if ((c.type === 'led' || c.type === 'probe') && inW > 1) {
           values[c.id] = c.inputs[0].bits ? [...c.inputs[0].bits] : Array<SignalValue>(inW).fill('X');
-        } else if (c.type === 'clock' || c.type === 'switch' || c.type === 'pushbutton') {
+        } else if (c.type === 'switch') {
+          values[c.id] = switchBits(c)[0];
+        } else if (c.type === 'clock' || c.type === 'pushbutton') {
           values[c.id] = c.state.on ? 1 : 0;
         } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
           values[c.id] = c.inputs[0]?.value ?? 0;
@@ -3753,7 +3757,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const size = getComponentSize(comp);
     const isInput = comp.type === 'switch';
     const pinBits: SignalValue[] = isInput
-      ? numberToBits(comp.state.inputValue ?? 0, w)
+      ? switchBits(comp)
       : comp.inputs[0]?.bits ?? new Array<SignalValue>(w).fill(comp.inputs[0]?.value ?? 'Z');
     const rows = Math.ceil(w / 8);
     const dark = cadTheme === 'dark';
@@ -3862,7 +3866,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     switch (comp.type) {
       case 'switch': {
         if (getBitWidth(comp) > 1) return renderWidePin(comp, isSelected);
-        const isOn = !!comp.state.on;
+        const cur = switchBits(comp)[0];
+        const isOn = cur === 1;
+        // A three-state pin left floating: lever in the middle, indigo like Logisim's x
+        const isFloat = cur !== 0 && cur !== 1;
         return (
           <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer group" filter="url(#gateShadow)">
             {/* Brushed Aluminum Faceplate */}
@@ -3906,15 +3913,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
             {/* Status Indicator Jewelled LED */}
             <circle
-              cx={isOn ? 23 : 43}
-              cy={20}
+              cx={isFloat ? 33 : isOn ? 23 : 43}
+              cy={isFloat ? 29 : 20}
               r={3}
-              fill={isOn ? '#22c55e' : '#ef4444'}
+              fill={isFloat ? '#6366f1' : isOn ? '#22c55e' : '#ef4444'}
               filter={isOn ? 'drop-shadow(0 0 5px #22c55e)' : undefined}
             />
 
             {/* Realistic Chrome Bat Lever */}
-            {isOn ? (
+            {isFloat ? (
+              <g>
+                <line x1={33} y1={20} x2={33} y2={10} stroke="url(#metalLever)" strokeWidth={6} strokeLinecap="round" />
+                <circle cx={33} cy={10} r={5.5} fill="url(#metalPlate)" stroke="#475569" strokeWidth={1} filter="drop-shadow(0 2px 3px rgba(0,0,0,0.35))" />
+                <circle cx={31.5} cy={8.5} r={1.5} fill="#ffffff" opacity={0.8} />
+              </g>
+            ) : isOn ? (
               <g>
                 <line x1={33} y1={20} x2={47} y2={12} stroke="url(#metalLever)" strokeWidth={6} strokeLinecap="round" />
                 <circle cx={47} cy={12} r={5.5} fill="url(#metalPlate)" stroke="#475569" strokeWidth={1} filter="drop-shadow(0 2px 3px rgba(0,0,0,0.35))" />
@@ -3944,10 +3957,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               y={48}
               textAnchor="middle"
               className={`text-[9.5px] font-mono font-black tracking-wider select-none ${
-                isOn ? 'fill-emerald-400' : 'fill-slate-400'
+                isFloat ? 'fill-indigo-400' : isOn ? 'fill-emerald-400' : 'fill-slate-400'
               }`}
             >
-              {isOn ? 'ON · 1' : 'OFF · 0'}
+              {isFloat ? 'KAYAN Z' : isOn ? 'ON · 1' : 'OFF · 0'}
             </text>
           </g>
         );

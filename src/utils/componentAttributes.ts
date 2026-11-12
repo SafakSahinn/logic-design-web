@@ -50,6 +50,9 @@ import {
   setBitWidth,
   setGateWidth,
   updatePinPositions,
+  floatingSwitchState,
+  switchBits,
+  switchStateFor,
 } from './circuitEngine';
 import { snapPt10 } from './wiringEngine';
 import { isTtlType } from './ttlChips';
@@ -566,6 +569,26 @@ const plexerTristateAttr: AttrDef = {
   set: (c, v) => ((c.state.plexTristate ? 'Z' : '0') === v ? null : withState(c, { plexTristate: v === 'Z' })),
 };
 
+// Input pin behaviour (Logisim Pin 'tristate'): a three-state switch starts floating and a click cycles 0 → 1 → Z;
+// turned off, its floating bits become 0
+const switchTristateAttr: AttrDef = {
+  key: 'pinTristate',
+  label: 'Davranış',
+  kind: 'buttons',
+  title: 'Logisim "Three-state": 3 durumlu giriş kayan (Z) başlar, tıklandıkça 0 → 1 → Z sırasıyla döner',
+  options: [
+    { value: 'simple', label: 'Normal', title: 'Tıklandıkça 0 ↔ 1' },
+    { value: 'tristate', label: '3 durumlu', title: 'Kayan (Z) başlar, tıklandıkça 0 → 1 → Z' },
+  ],
+  get: (c) => (c.state.pinTristate ? 'tristate' : 'simple'),
+  set: (c, v) => {
+    const on = v === 'tristate';
+    if (!!c.state.pinTristate === on) return null;
+    if (on) return withState(c, { pinTristate: true, ...floatingSwitchState(c.outputs[0]?.width ?? 1) });
+    return withState(c, { pinTristate: undefined, ...switchStateFor(switchBits(c).map((b) => (b === 1 ? 1 : 0))) });
+  },
+};
+
 const plexerSelectLocAttr: AttrDef = {
   key: 'selectLoc',
   label: 'Seçme bacağı',
@@ -744,6 +767,8 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
   if (OUTPUT_MODE_TYPES.includes(type)) list.push(outputModeAttr);
   switch (type) {
     case 'switch':
+      list.push(bitWidthAttr, switchTristateAttr);
+      break;
     case 'led':
       list.push(bitWidthAttr);
       break;

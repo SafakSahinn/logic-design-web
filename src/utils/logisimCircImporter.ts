@@ -32,6 +32,7 @@ import {
   setGateWidth,
   splitterDistribution,
   updatePinPositions,
+  floatingSwitchState,
 } from './circuitEngine';
 import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance } from './subcircuitManager';
@@ -1230,7 +1231,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         if (aName) attr[aName] = attrs[a].hasAttribute('val') ? attrs[a].getAttribute('val') ?? '' : attrs[a].textContent ?? '';
       }
       sig.push(`c${compNode.getAttribute('lib') ?? ''}:${compName}${compNode.getAttribute('loc')}${Object.entries(attr).map(([k, v]) => `${k}=${v}`).join(',')}`);
-      const isOutput = attr.output === 'true';
+      // 2.7.1 and early evolution write output="true"; evolution 4+ writes type="output"
+      const isOutput = attr.output === 'true' || (compName.trim().toLowerCase() === 'pin' && attr.type === 'output');
       const constVal = attr.value ?? attr.val;
       const label = attr.label || undefined;
       const facing = attr.facing || 'east';
@@ -1657,6 +1659,15 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         if (label) inst.label = label;
         // Logisim's pull attribute: 0 (default), 1 or X
         if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
+        // Three-state input Pin: tristate="true" (2.7.1, early evolution) or behavior="tristate" (evolution 4+);
+        // without either the writer's default: 2.7.1's Pin is three-state, evolution's is not
+        if (nativeType === 'switch' && part.compName.trim().toLowerCase() === 'pin') {
+          const a = part.attr;
+          // a 2.7.1 Pin with a pull resistor reads 0/1 instead of floating (pull is not modelled here)
+          const pulled = a.pull === 'up' || a.pull === 'down';
+          const tri = a.behavior !== undefined ? a.behavior === 'tristate' : a.tristate !== undefined ? a.tristate === 'true' && !pulled : !evolutionFile && !pulled;
+          if (tri) inst = { ...inst, state: { ...inst.state, pinTristate: true, ...floatingSwitchState(width) } };
+        }
         components.push(inst);
         const pin = [...inst.inputs, ...inst.outputs][0];
         attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });

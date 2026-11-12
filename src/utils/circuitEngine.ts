@@ -1351,7 +1351,40 @@ export function setBitWidth(comp: CircuitComponentInstance, width: number): Circ
     },
   };
   if (comp.type === 'switch' && w === 1) next.state.on = (comp.state.inputValue ?? (comp.state.on ? 1 : 0)) % 2 === 1;
+  if (comp.type === 'switch' && comp.state.pinTristate) {
+    delete next.state.portValue;
+    delete next.state.portBits;
+    Object.assign(next.state, floatingSwitchState(w));
+  }
   return updatePinPositions(next);
+}
+
+// ---- Three-state input pin (Logisim Pin 'tristate', evolution behavior="tristate") ----------------
+// It starts floating and a click cycles a bit 0 → 1 → Z → 0, like Logisim's poke. Floating bits live in
+// portValue (1 bit) / portBits (wide), the fields an outside driver of an IC port uses as well.
+
+/** The bits a switch drives now, LSB first */
+export function switchBits(c: CircuitComponentInstance): SignalValue[] {
+  const w = c.outputs[0]?.width ?? 1;
+  if (w > 1) return c.state.portBits && c.state.portBits.length === w ? [...c.state.portBits] : numberToBits(c.state.inputValue ?? 0, w);
+  return [c.state.portValue ?? (c.state.on ? 1 : 0)];
+}
+
+/** State fields that make a switch drive these bits (LSB first) */
+export function switchStateFor(bits: SignalValue[]): Partial<CircuitComponentInstance['state']> {
+  const known = bits.every((b) => b === 0 || b === 1);
+  if (bits.length > 1) return known ? { inputValue: bitsToNumber(bits), portBits: undefined } : { portBits: [...bits] };
+  return known ? { on: bits[0] === 1, portValue: undefined } : { portValue: bits[0] };
+}
+
+/** A switch of this width with every bit floating (three-state start and reset) */
+export function floatingSwitchState(width: number): Partial<CircuitComponentInstance['state']> {
+  return width > 1 ? { portBits: Array<SignalValue>(width).fill('Z') } : { portValue: 'Z' };
+}
+
+/** One click on a switch bit: 0 → 1, 1 → Z (three-state) or 0, anything else → 0 */
+export function nextSwitchBit(b: SignalValue, tristate: boolean): SignalValue {
+  return b === 0 ? 1 : b === 1 ? (tristate ? 'Z' : 0) : 0;
 }
 
 // ---- Splitter (Logisim circuit/Splitter*) ----------------------------------------------------------
@@ -5392,9 +5425,9 @@ export function applyTruthTableInputs(
     if (truthInputWidth(c) > 1) {
       let n = c.state.inputValue ?? 0;
       for (const { bit, v } of bits) n += (v - (Math.floor(n / 2 ** bit) % 2)) * 2 ** bit;
-      return { ...c, state: { ...c.state, inputValue: n } };
+      return { ...c, state: { ...c.state, inputValue: n, portBits: undefined } };
     }
-    return { ...c, state: { ...c.state, on: bits[0].v === 1 } };
+    return { ...c, state: { ...c.state, on: bits[0].v === 1, portValue: undefined } };
   });
 }
 

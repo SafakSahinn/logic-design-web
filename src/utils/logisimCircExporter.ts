@@ -84,7 +84,7 @@ type Prim =
   | { kind: 'tri'; in: string; en: string; out: string; inv?: boolean; width?: number }
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: number; out: string; width?: number }
-  | { kind: 'inpin'; label: string; out: string; width?: number }
+  | { kind: 'inpin'; label: string; out: string; width?: number; tristate?: boolean }
   | { kind: 'clock'; label: string; out: string }
   // width undefined: the width of the net (a probe follows it)
   | { kind: 'outpin'; label: string; in: string; width?: number }
@@ -239,7 +239,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       inPorts.forEach((p, i) => {
         const net = `_port_in${i}`;
         alias.set(p.targetPinId, net);
-        fixed.push({ x: PORT_IN_X, y: portY(i), prim: { kind: 'inpin', label: p.name, out: net, width: subcircuitPortWidth(def, p) } });
+        const tristate = !!def.components.find((c) => c.id === p.targetCompId)?.state.pinTristate;
+        fixed.push({ x: PORT_IN_X, y: portY(i), prim: { kind: 'inpin', label: p.name, out: net, width: subcircuitPortWidth(def, p), tristate } });
       });
       outPorts.forEach((p, i) => {
         const net = `_port_out${i}`;
@@ -317,7 +318,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           const value = width > 1 ? (c.state.inputValue ?? 0) : c.state.on ? 1 : 0;
           if (inScope) P.push({ kind: 'const', value, out: out(0), width });
           else {
-            P.push({ kind: 'inpin', label, out: out(0), width });
+            P.push({ kind: 'inpin', label, out: out(0), width, tristate: !!c.state.pinTristate });
             inputs.push({ label, compId: c.id, pinIndex: 0 });
           }
           break;
@@ -953,7 +954,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'inpin':
-          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pin">${widthAttr(p.width)}<a name="tristate" val="false"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
+          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Pin">${widthAttr(p.width)}<a name="tristate" val="${!!p.tristate}"/><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
           tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'clock':

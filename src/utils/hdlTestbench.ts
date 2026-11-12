@@ -43,7 +43,7 @@ interface TbPlan {
   /** Rows of each module instance, in order */
   groups: number[][];
   /** Power-up value of every input port (LSB first) */
-  held: Map<string, (0 | 1)[]>;
+  held: Map<string, Bit[]>;
   /** Port names that are clocks */
   clocks: string[];
   /** Is a row a reset (start of a sequence / combinational row)? */
@@ -72,9 +72,10 @@ function plan(
   const ports = getTopLevelPorts(circuitName, components, wires);
   const notes: string[] = [];
 
-  // Power-up input values: the canvas values (settled), clocks 0
+  // Power-up input values: the canvas values (settled), clocks 0, a three-state input pin floating (as the
+  // runner's reset leaves it)
   const canvas = simulateCircuit(components.map((c) => ({ ...c, inputs: c.inputs.map((p) => ({ ...p })), outputs: c.outputs.map((p) => ({ ...p })), state: { ...c.state } })), wires).components;
-  const held = new Map<string, (0 | 1)[]>();
+  const held = new Map<string, Bit[]>();
   const clocks: string[] = [];
   for (const p of ports) {
     if (p.dir !== 'in') continue;
@@ -86,8 +87,9 @@ function plan(
     const comp = canvas.find((c) => c.id === p.source?.compId);
     const pins = p.source?.pins ?? [];
     const pinOf = (id: string) => comp?.outputs.find((q) => q.id === id) ?? comp?.inputs.find((q) => q.id === id);
-    let bits: (0 | 1)[];
-    if (pins.length === 1 && p.width > 1) {
+    let bits: Bit[];
+    if (comp?.type === 'switch' && comp.state.pinTristate) bits = Array<Bit>(p.width).fill('Z');
+    else if (pins.length === 1 && p.width > 1) {
       const q = pinOf(pins[0]);
       bits = Array.from({ length: p.width }, (_, k) => (q?.bits?.[k] === 1 ? 1 : 0));
     } else bits = Array.from({ length: p.width }, (_, k) => (pins[k] && pinOf(pins[k])?.value === 1 ? 1 : 0));

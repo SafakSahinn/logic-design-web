@@ -5,6 +5,7 @@ import {
   FLIP_FLOP_TYPES,
   MEM_TYPES,
   RAM_TYPES,
+  floatingSwitchState,
   getInputSignalNames,
   simulateCircuit,
 } from './circuitEngine';
@@ -362,6 +363,12 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
       delete st.randomValue;
     }
     if (c.type === 'clock') st.on = false;
+    // A three-state input pin starts floating again, as Logisim resets its pin state
+    if (c.type === 'switch' && st.pinTristate) {
+      delete st.portValue;
+      delete st.portBits;
+      Object.assign(st, floatingSwitchState(c.outputs[0]?.width ?? 1));
+    }
     return n;
   });
 }

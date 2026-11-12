@@ -173,6 +173,8 @@ export interface CircuitComponentInstance {
     plexDisabled?: '0' | 'Z';
     /** Demultiplexer/decoder: unselected outputs float (x) instead of 0 (Logisim 'tristate'); unset = false */
     plexTristate?: boolean;
+    /** Switch: three-state input pin (Logisim Pin 'tristate'): starts floating and a click cycles 0 → 1 → Z; unset = false */
+    pinTristate?: boolean;
     /** Plexers: select (and enable) pins on the bottom/left side or the top/right side (Logisim 'selloc'); unset = bl */
     selectLoc?: 'bl' | 'tr';
     /** Arithmetic parts: how operands are read (Logisim 'mode'): two's complement, signed A x unsigned B (multiplier), unsigned; unset = signed for the comparator, unsigned otherwise */
