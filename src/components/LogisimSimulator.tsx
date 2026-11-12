@@ -150,6 +150,7 @@ import {
   type AttrValue,
 } from '../utils/componentAttributes';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
+import { generateVerilogTestbench, generateVhdlTestbench } from '../utils/hdlTestbench';
 import {
   getAllSubcircuits,
   deleteCustomSubcircuit,
@@ -2002,6 +2003,27 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     a.download = `${currentCircuitName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // HDL testbench from the test vector in the testbench window (generated from all inputs when it is empty);
+  // it instantiates the module / entity of the HDL file above, so the two are simulated together
+  const handleDownloadTestbench = (lang: 'verilog' | 'vhdl') => {
+    const typed = testbenchText.trim();
+    const text = typed && !typed.startsWith('# Tuvalde') ? testbenchText : generateExhaustiveTestVector(components, wires);
+    const tb = (lang === 'verilog' ? generateVerilogTestbench : generateVhdlTestbench)(currentCircuitName, components, wires, text);
+    if (tb.errors.length) {
+      showToast(`Testbench üretilemedi: ${tb.errors[0]}`);
+      return;
+    }
+    const blob = new Blob([tb.code], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    downloadUrl(url, `${tb.name}.${lang === 'verilog' ? 'v' : 'vhd'}`);
+    URL.revokeObjectURL(url);
+    showToast(
+      tb.notes.length
+        ? `Testbench indirildi; ${tb.notes.length} not dosyanın başında. Tasarım dosyasıyla birlikte simüle edin.`
+        : `Testbench indirildi (${typed ? 'penceredeki vektör' : 'tüm girişlerden üretilen vektör'}). Tasarım dosyasıyla birlikte simüle edin.`
+    );
   };
 
   const generatedFpgaData = useMemo(() => {
@@ -12196,6 +12218,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   </button>
 
                   <button
+                    onClick={() => handleDownloadTestbench(hdlLang === 'verilog' ? 'verilog' : 'vhdl')}
+                    className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                    title="Testbench penceresindeki test vektöründen (boşsa tüm girişlerden üretilen vektörden) testbench"
+                  >
+                    <FlaskConical className="w-3.5 h-3.5 text-violet-500" />
+                    <span>Testbench İndir</span>
+                  </button>
+
+                  <button
                     onClick={handleDownloadHdlFile}
                     className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
                   >
@@ -12315,6 +12346,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 >
                   <Play className="w-3.5 h-3.5" />
                   <span>Testleri Koştur</span>
+                </button>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <span className="text-[11px] text-slate-500 mr-auto">HDL testbench: bu vektörü üretilen Verilog / VHDL modülü üzerinde koşturur.</span>
+                <button
+                  onClick={() => handleDownloadTestbench('verilog')}
+                  className="whitespace-nowrap shrink-0 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Verilog Testbench (.v)</span>
+                </button>
+                <button
+                  onClick={() => handleDownloadTestbench('vhdl')}
+                  className="whitespace-nowrap shrink-0 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>VHDL Testbench (.vhd)</span>
                 </button>
               </div>
 
