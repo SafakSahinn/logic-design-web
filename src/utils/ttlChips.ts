@@ -6,7 +6,9 @@
  * - with "VCC/GND pins" on, GND and VCC are two extra inputs; unless GND reads 0 and VCC reads 1 every output
  *   floats;
  * - the body is pins x 10 wide and 60 high, pins 20px apart on the top and bottom edges.
- * The chip logic is evolution's propagateTtl, written over the same port indices.
+ * The chip logic is evolution's propagateTtl, written over the same port indices. Sequential chips (Aşama 4c)
+ * keep their stored values and last clock levels in a TtlSeqState (evolution TtlRegisterData / ShiftRegisterData
+ * + ClockState), which the engine keeps in the part's state.
  */
 import type { SignalValue } from '../types/logic';
 import { TTL_CHIP_IDS, type TtlChipId, type TtlType } from '../types/circuit';
@@ -21,8 +23,17 @@ export const TTL_GROUP_TITLES: Record<TtlGroup, string> = {
   drivers: 'TTL: Tampon / Sürücü',
 };
 
-/** Port values in evolution's port order; the chip returns the values of the output ports it sets */
-export type TtlEval = (p: SignalValue[]) => (SignalValue | undefined)[];
+/** Stored values and last clock levels of a sequential chip (both start at 0 like evolution's) */
+export interface TtlSeqState {
+  v: SignalValue[];
+  clk: SignalValue[];
+}
+
+/**
+ * Port values in evolution's port order; the chip returns the values of the output ports it sets. A sequential
+ * chip also gets its state, which it updates in place.
+ */
+export type TtlEval = (p: SignalValue[], st: TtlSeqState) => (SignalValue | undefined)[];
 
 export interface TtlChip {
   /** Evolution tool id, also the .circ element name ("7400") */
@@ -53,6 +64,8 @@ export interface TtlChip {
   pullUp?: number[];
   /** Short labels for the "internal structure" view, port order (default: names) */
   labels?: string[];
+  /** Sequential chip: number of stored values and of clock inputs */
+  seq?: { v: number; clk: number };
   eval: TtlEval;
 }
 
@@ -144,7 +157,7 @@ type PinSet = (pin: number, v: SignalValue) => void;
 type MsiDef = Omit<TtlChip, 'eval' | 'group'> & { group?: TtlGroup };
 
 /** A chip whose logic reads / writes physical pins; the pin -> port index map skips NC and power pins */
-function msi(def: MsiDef, logic: (g: PinGet, s: PinSet) => void): TtlChip {
+function msi(def: MsiDef, logic: (g: PinGet, s: PinSet, st: TtlSeqState) => void): TtlChip {
   const idx = new Map<number, number>();
   let k = 0;
   for (let pin = 1; pin <= def.pins; pin++) {
@@ -154,9 +167,9 @@ function msi(def: MsiDef, logic: (g: PinGet, s: PinSet) => void): TtlChip {
   return {
     group: 'plexers',
     ...def,
-    eval: (p) => {
+    eval: (p, st) => {
       const o: SignalValue[] = [];
-      logic((pin) => p[idx.get(pin)!], (pin, v) => { o[idx.get(pin)!] = v; });
+      logic((pin) => p[idx.get(pin)!], (pin, v) => { o[idx.get(pin)!] = v; }, st);
       return o;
     },
   };
@@ -169,6 +182,21 @@ const lo = (v: SignalValue) => v === 0;
 const lvlOf = (b: boolean): SignalValue => (b ? 1 : 0);
 /** Evolution Value.UNKNOWN: an open input or a floating net (E is Value.ERROR) */
 const unknown = (v: SignalValue) => v === 'X' || v === 'Z';
+
+/**
+ * Evolution ClockState.updateClock: stores the new level of clock `i` and tells whether it was an edge (a clean
+ * 0 -> 1 step, or 1 -> 0 for a falling edge; the stored level starts at 0)
+ */
+function clockEdge(st: TtlSeqState, i: number, clk: SignalValue, falling = false): boolean {
+  const old = st.clk[i] ?? 0;
+  st.clk[i] = clk;
+  return falling ? old === 1 && clk === 0 : old === 0 && clk === 1;
+}
+
+/** A stored value on an output pin: evolution drives an unknown value as floating, 0 / 1 / E as they are */
+const drive = (v: SignalValue): SignalValue => (unknown(v) ? FLOAT : v);
+/** Evolution Value.toLongValue of one bit: 0 / 1, anything else -1 */
+const toLong = (v: SignalValue): number => (v === 0 ? 0 : v === 1 ? 1 : -1);
 
 /** Evolution DisplayDecoder.computeDisplayDecoderOutputs: segments a..g per digit, 1 = segment output high (off) */
 const SEG7_OFF = [
@@ -458,12 +486,111 @@ const CHIPS: TtlChip[] = [
     const sum = num([5, 3, 14, 12]) + num([6, 2, 15, 11]) + (hi(g(7)) ? 1 : 0);
     [4, 1, 13, 10, 9].forEach((pin, i) => s(pin, ((sum >> i) & 1) as 0 | 1));
   }),
+
+  // ---- 4c: sequential (flip-flops, counter, shift register) ---------------------------------------------
+  msi({
+    id: '7474', pins: 14, out: [5, 6, 8, 9], vcc: 14, gnd: 7, group: 'sequential', seq: { v: 2, clk: 2 },
+    title: 'Çift D flip-flop (preset/clear)',
+    description:
+      'İki adet yükselen kenar tetiklemeli D flip-flop: CLK 0 → 1 olurken Q = D. CLR\' = 0 Q\'yu hemen 0, PRE\' = 0 hemen 1 yapar '
+      + '(saatten bağımsız); ikisi birden 0 iken durum belirsizdir.',
+    names: ['1CLR\'', '1D', '1CLK', '1PRE\'', '1Q', '1Q\'', '2Q\'', '2Q', '2PRE\'', '2CLK', '2D', '2CLR\''],
+    labels: ['1CLR', '1D', '1CK', '1PRE', '1Q', '1Q\'', '2Q\'', '2Q', '2PRE', '2CK', '2D', '2CLR'],
+  }, (g, s, st) => {
+    // Evolution Ttl7474: both clocks are sampled first; clear and preset act while they read 0
+    const t = [clockEdge(st, 0, g(3)), clockEdge(st, 1, g(11))];
+    const ff = (i: number, clr: number, pre: number, d: number) => {
+      if (lo(g(clr)) && lo(g(pre))) st.v[i] = 'X';
+      else if (lo(g(clr))) st.v[i] = 0;
+      else if (lo(g(pre))) st.v[i] = 1;
+      else if (t[i]) st.v[i] = g(d);
+    };
+    ff(0, 1, 4, 2);
+    ff(1, 13, 10, 12);
+    s(5, drive(st.v[0]));
+    s(6, not(st.v[0]));
+    s(8, not(st.v[1]));
+    s(9, drive(st.v[1]));
+  }),
+  msi({
+    // Real 7476 pinout (VCC pin 5, GND pin 13); evolution's 7476 keeps the default VCC 16 / GND 8 and so shifts pins 8-16
+    id: '7476', pins: 16, out: [10, 11, 14, 15], vcc: 5, gnd: 13, group: 'sequential', seq: { v: 2, clk: 2 },
+    title: 'Çift JK flip-flop (preset/clear)',
+    description:
+      'İki adet düşen kenar tetiklemeli JK flip-flop: CLK 1 → 0 olurken J = 1, K = 0 → Q = 1; J = 0, K = 1 → Q = 0; '
+      + 'J = K = 1 → Q tersine döner; J = K = 0 → değişmez. PRE\' = 0 / CLR\' = 0 saatten bağımsız kurar / sıfırlar. '
+      + 'Besleme bacakları gerçek çipteki gibi 5 (VCC) ve 13 (GND).',
+    names: ['1CLK', '1PRE\'', '1CLR\'', '1J', '2CLK', '2PRE\'', '2CLR\'', '2J', '2Q\'', '2Q', '2K', '1Q\'', '1Q', '1K'],
+    labels: ['1CK', '1PRE', '1CLR', '1J', '2CK', '2PRE', '2CLR', '2J', '2Q\'', '2Q', '2K', '1Q\'', '1Q', '1K'],
+  }, (g, s, st) => {
+    // Evolution Ttl7476 (falling edges; J / K count only when they read 1 / 0)
+    const t = [clockEdge(st, 0, g(1), true), clockEdge(st, 1, g(6), true)];
+    const ff = (i: number, pre: number, clr: number, j: number, k: number) => {
+      if (lo(g(pre)) && lo(g(clr))) st.v[i] = 'X';
+      else if (lo(g(pre))) st.v[i] = 1;
+      else if (lo(g(clr))) st.v[i] = 0;
+      else if (t[i]) {
+        if (hi(g(j)) && hi(g(k))) st.v[i] = not(st.v[i]);
+        else if (hi(g(j)) && lo(g(k))) st.v[i] = 1;
+        else if (lo(g(j)) && hi(g(k))) st.v[i] = 0;
+      }
+    };
+    ff(0, 2, 3, 4, 16);
+    ff(1, 7, 8, 9, 12);
+    s(10, not(st.v[1]));
+    s(11, drive(st.v[1]));
+    s(14, not(st.v[0]));
+    s(15, drive(st.v[0]));
+  }),
+  msi({
+    id: '74161', pins: 16, out: [11, 12, 13, 14, 15], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 1 },
+    title: '4 bit senkron ikili sayaç',
+    description:
+      'Yükselen kenarda sayar: SPE\' = 0 ise D3..D0 yüklenir, değilse CEP = CET = 1 iken bir artar (15\'ten sonra 0). '
+      + 'MR\' = 0 sayacı saatten bağımsız sıfırlar. TC = CET · Q3·Q2·Q1·Q0 (sayaçları zincirlemek için).',
+    names: ['MR\'', 'CLK', 'D0', 'D1', 'D2', 'D3', 'CEP', 'SPE\'', 'CET', 'Q3', 'Q2', 'Q1', 'Q0', 'TC'],
+    labels: ['MR', 'CK', 'D0', 'D1', 'D2', 'D3', 'CEP', 'SPE', 'CET', 'Q3', 'Q2', 'Q1', 'Q0', 'TC'],
+  }, (g, s, st) => {
+    // Evolution Ttl74161: the count is a 4-bit number (an undefined D bit loads as -1, i.e. all ones above it)
+    const triggered = clockEdge(st, 0, g(2));
+    let n = st.v.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0);
+    if (toLong(g(1)) === 0) n = 0;
+    else if (triggered) {
+      if (toLong(g(9)) === 0) n = (toLong(g(3)) + (toLong(g(4)) << 1) + (toLong(g(5)) << 2) + (toLong(g(6)) << 3)) & 15;
+      else if (and(g(7), g(10)) === 1) n = (n + 1) & 15;
+    }
+    st.v = [0, 1, 2, 3].map((i) => ((n >> i) & 1) as 0 | 1);
+    [14, 13, 12, 11].forEach((pin, i) => s(pin, st.v[i]));
+    s(15, and(g(10), st.v[0], st.v[1], st.v[2], st.v[3]));
+  }),
+  msi({
+    id: '74194', pins: 16, out: [12, 13, 14, 15], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 1 },
+    title: '4 bit evrensel kaydırmalı yazmaç',
+    description:
+      'Yükselen kenarda S1 S0 kipine göre çalışır: 00 bekle, 01 sağa kaydır (DSR → Q0 → Q1 → Q2 → Q3), '
+      + '10 sola kaydır (DSL → Q3 → Q2 → Q1 → Q0), 11 D0..D3\'ü paralel yükle. MR\' = 0 saatten bağımsız sıfırlar.',
+    names: ['MR\'', 'DSR', 'D0', 'D1', 'D2', 'D3', 'DSL', 'S0', 'S1', 'CLK', 'Q3', 'Q2', 'Q1', 'Q0'],
+    labels: ['MR', 'DSR', 'D0', 'D1', 'D2', 'D3', 'DSL', 'S0', 'S1', 'CK', 'Q3', 'Q2', 'Q1', 'Q0'],
+  }, (g, s, st) => {
+    // Evolution Ttl74194: while MR' reads 0 the register clears and the clock is not sampled; v[0] = Q0 .. v[3] = Q3
+    const q = st.v;
+    if (lo(g(1))) st.v = [0, 0, 0, 0];
+    else if (clockEdge(st, 0, g(11))) {
+      const mode = (hi(g(10)) ? 2 : 0) + (hi(g(9)) ? 1 : 0);
+      if (mode === 3) st.v = [3, 4, 5, 6].map(g);
+      else if (mode === 1) st.v = [g(2), q[0], q[1], q[2]];
+      else if (mode === 2) st.v = [q[1], q[2], q[3], g(7)];
+    }
+    [15, 14, 13, 12].forEach((pin, i) => s(pin, drive(st.v[i])));
+  }),
 ];
 
 export const TTL_CHIPS: Record<TtlChipId, TtlChip> = Object.fromEntries(CHIPS.map((c) => [c.id, c])) as Record<TtlChipId, TtlChip>;
 
 export const TTL_TYPES = new Set<string>(TTL_CHIP_IDS.map((id) => `ttl${id}`));
 export const isTtlType = (t: string): t is TtlType => TTL_TYPES.has(t);
+/** Sequential TTL chips (they keep state between evaluations) */
+export const TTL_SEQ_TYPES = new Set<string>(CHIPS.filter((c) => c.seq).map((c) => `ttl${c.id}`));
 export const ttlChipOf = (t: string): TtlChip | undefined => (isTtlType(t) ? TTL_CHIPS[t.slice(3) as TtlChipId] : undefined);
 
 // ---- Ports and geometry ------------------------------------------------------------------------------------
@@ -522,13 +649,21 @@ export function ttlPinPoint(chip: TtlChip, pin: number): { x: number; y: number 
 
 // ---- Evaluation ------------------------------------------------------------------------------------------
 
+/** A sequential chip's power-up state: stored values and clock levels 0 */
+export const ttlSeqInit = (chip: TtlChip): TtlSeqState => ({
+  v: Array<SignalValue>(chip.seq?.v ?? 0).fill(0),
+  clk: Array<SignalValue>(chip.seq?.clk ?? 0).fill(0),
+});
+
 /**
- * Output values by pin key; `read` gives what an input pin reads (undriven = 'X').
+ * Output values by pin key; `read` gives what an input pin reads (undriven = 'X'). A sequential chip updates `st`
+ * in place; without power it keeps its state untouched (evolution skips propagateTtl).
  */
 export function evalTtl(
   chip: TtlChip,
   vccGnd: boolean,
   read: (key: string) => SignalValue,
+  st: TtlSeqState = ttlSeqInit(chip),
 ): Map<string, SignalValue> {
   const ports = ttlPorts(chip, false);
   const result = new Map<string, SignalValue>();
@@ -538,7 +673,7 @@ export function evalTtl(
   }
   // An in/out pin reads its net (the chip's own drive included, like evolution's getPortValue)
   const vals = ports.map((p) => read(p.dir === 'inout' ? ttlInKey(p.pin) : p.key));
-  const outs = chip.eval(vals);
+  const outs = chip.eval(vals, st);
   ports.forEach((p, i) => {
     if (p.dir !== 'input' && outs[i] !== undefined) result.set(p.key, outs[i]!);
   });

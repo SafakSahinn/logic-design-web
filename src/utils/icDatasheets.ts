@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, ComponentType } from '../types/circuit';
-import { configureArith, configureMem, configureRam } from './circuitEngine';
+import { configureArith, configureRam } from './circuitEngine';
 
 export interface ICPin {
   pin: number;
@@ -323,10 +323,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Pozitif saat kenarında 0 dan 15 e kadar sayan senkron sayaçtır. Asenkron Master Reset (MR\') ve paralel yükleme (SPE\') pinleriyle istenen sayıdan başlatılabilir veya döngüsel modüllere (Mod-10, Mod-12) ayarlanabilir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'counter',
-    simulatorSetup: (c) => configureMem(c, { width: 4 }),
-    simulatorNote:
-      'Tuvale 4 bitlik sayaç eklenir: paralel yükleme (LD, öncelikli), sayma izni (CT), yön (UD) ve elde çıkışı (C, en üst değerde 1) vardır. CLR asenkron ve aktif-yüksektir (74HC161\'de MR\' aktif-düşük); CEP ve CET yerine tek bir CT bacağı vardır.',
+    simulatorCompType: 'ttl74161',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Sıfırlama (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'CLK', desc: 'Saat Darbe Girişi (Yükselen Kenar)', type: 'ctrl' },
@@ -369,10 +366,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Dört farklı çalışma modunu destekleyen üniversal kaydedici: Paralel yükleme, Sağa kaydırma, Sola kaydırma ve Veriyi koruma. İşlemcilerin veri transfer yollarında vazgeçilmezdir.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'shiftRegister',
-    simulatorSetup: (c) => configureMem(c, { width: 1, length: 4, parallel: true }),
-    simulatorNote:
-      'Tuvale 4 aşamalı kaydırmalı yazmaç eklenir: tek yönde kaydırır (SH=1 iken), paralel yükleme (LD) ve paralel çıkışlar vardır, CLR aktif-yüksektir. Sola kaydırma ve S1-S0 mod seçimi yoktur; çift yönlü yapı için Hazır Devreler\'deki 74HC194 örneğine bakın (4 bitlik yazmaç + 4:1 MUX).',
+    simulatorCompType: 'ttl74194',
     pins: [
       { pin: 1, label: 'MR\'', desc: 'Asenkron Master Reset (Aktif 0)', type: 'ctrl' },
       { pin: 2, label: 'DSR', desc: 'Seri Veri Girişi Sağa (Shift-Right)', type: 'in' },
@@ -460,9 +454,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Tek kılıfta iki bağımsız D flip-flop içerir. Her ünitenin asenkron Preset (PRE\') ve Clear (CLR\') girişleri mevcuttur. Saat sinyalinin pozitif kenarında D girişindeki lojik seviyeyi Q çıkışına aktarır.',
     packageType: '14-Pin DIP',
     pinCount: 14,
-    simulatorCompType: 'flipFlopD',
-    simulatorNote:
-      'Tuvale tek bir D flip-flop eklenir. CLR ve PRE girişleri aktif-yüksektir (74HC74\'te CLR\' ve PRE\' aktif-düşük); ayrıca bir yetki (EN) girişi vardır.',
+    simulatorCompType: 'ttl7474',
     pins: [
       { pin: 1, label: '1CLR\'', desc: 'Flip-Flop 1 Asenkron Sıfırlama', type: 'ctrl' },
       { pin: 2, label: '1D', desc: 'Flip-Flop 1 Veri Girişi', type: 'in' },
@@ -505,10 +497,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
       'Evrensel flip-flop mimarisi olan JK flip-flop, J ve K girişlerinin durumuna göre Tutma (00), Sıfırlama (01), Kurma (10) ve Durum Değiştirme / Toggle (11) işlemlerini icra eder.',
     packageType: '16-Pin DIP',
     pinCount: 16,
-    simulatorCompType: 'flipFlopJK',
-    simulatorSetup: (c) => ({ ...c, state: { ...c.state, trigger: 'falling' as const } }),
-    simulatorNote:
-      'Tuvale tek bir JK flip-flop eklenir, 74HC76 gibi düşen kenarda tetiklenecek şekilde ayarlıdır. CLR ve PRE aktif-yüksektir (74HC76\'da CLR\' ve PRE\' aktif-düşük); ayrıca bir yetki (EN) girişi vardır.',
+    simulatorCompType: 'ttl7476',
     pins: [
       { pin: 1, label: '1CLK', desc: 'Flip-Flop 1 Saat Girişi', type: 'ctrl' },
       { pin: 2, label: '1PRE\'', desc: 'Flip-Flop 1 Asenkron Kur', type: 'ctrl' },

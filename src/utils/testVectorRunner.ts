@@ -9,6 +9,7 @@ import {
   simulateCircuit,
 } from './circuitEngine';
 import { getTopLevelPorts } from './hdlGenerator';
+import { TTL_SEQ_TYPES } from './ttlChips';
 
 /*
  * Test vectors (Aşama 3i-1). Two formats are read:
@@ -334,7 +335,8 @@ const cloneComp = (c: CircuitComponentInstance): CircuitComponentInstance => ({
 /** Does the circuit keep state between steps (memory parts, latches, ICs)? */
 export function circuitHasState(components: CircuitComponentInstance[]): boolean {
   return components.some(
-    (c) => MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type) || c.type === 'srLatch' || c.type === 'subcircuit' || c.type === 'clock'
+    (c) =>
+      MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type) || TTL_SEQ_TYPES.has(c.type) || c.type === 'srLatch' || c.type === 'subcircuit' || c.type === 'clock'
   );
 }
 
@@ -351,6 +353,7 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
     delete st.lastClkB;
     delete st.seqBits;
     delete st.shiftStages;
+    delete st.ttlSeq;
     delete st.regBits;
     delete st.subcircuitInternal;
     delete st.oscillating;

@@ -17,6 +17,7 @@ import {
   pinKey,
   shifterDistBits,
 } from './circuitEngine';
+import { TTL_SEQ_TYPES } from './ttlChips';
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
 // Displays carry no logic (no transistors counted)
@@ -26,6 +27,7 @@ const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 
 const SEQUENTIAL_TYPES: string[] = [
   'srLatch',
   ...MEM_TYPES,
+  ...TTL_SEQ_TYPES,
   'ram',
   'random',
   'dualRam',

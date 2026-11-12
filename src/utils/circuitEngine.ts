@@ -11,7 +11,7 @@ import type {
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
-import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlSize, type TtlChip } from './ttlChips';
+import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
@@ -3517,7 +3517,11 @@ export function simulateCircuitStep(
     if (ttlChip) {
       // Evolution AbstractTtlGate.propagate: inputs read as Logisim values (an open pin is x)
       const byKey = new Map(comp.inputs.map((p) => [pinKey(comp, p), p]));
-      const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0]);
+      // A sequential chip works on a copy of its stored state (the previous step's part may share the old object)
+      const prev = comp.state.ttlSeq;
+      const st = ttlChip.seq ? (prev ? { v: [...prev.v], clk: [...prev.clk] } : ttlSeqInit(ttlChip)) : undefined;
+      const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0], st);
+      if (st) comp.state.ttlSeq = st;
       comp.outputs.forEach((p, i) => {
         const v = outs.get(pinKey(comp, p));
         if (v !== undefined) setOut(i, v);
@@ -4371,49 +4375,38 @@ function priorityEncoderPreset(): CircuitPreset {
 }
 
 function universalShiftRegisterPreset(): CircuitPreset {
-  const clk = busPart('clock', 40, 40, 'Saat Darbesi (CLK)', 'sh_clk');
-  const clr = busPart('pushbutton', 40, 500, 'Sıfırla (CLR)', 'sh_clr');
-  const sr = busPart('switch', 40, 180, 'SR (Sağa Kaydırma Girişi)', 'sh_sr', { state: { on: true } });
-  const sl = busPart('switch', 40, 300, 'SL (Sola Kaydırma Girişi)', 'sh_sl');
-  const d = busPart('switch', 40, 420, 'Paralel Veri (D3..D0)', 'sh_d', { width: 4, state: { inputValue: 0xa } });
-  const mode = busPart('switch', 360, 420, 'Mod (S1 S0)', 'sh_mode', { width: 2, state: { inputValue: 1 } });
-  const reg = busPart('register', 580, 240, '4-Bit Yazmaç', 'sh_core', { configure: (c) => configureMem(c, { width: 4 }) });
-  const mux = busPart('multiplexer', 440, 220, 'Mod Seçici (4:1 MUX)', 'sh_mux', {
-    configure: (c) => configurePlexer(c, { select: 2, width: 4 }),
-  });
-  const led = busPart('led', 720, 230, 'Q (Q3..Q0)', 'sh_led', { width: 4 });
+  // 74194 pins: MR' 1, DSR 2, D0..D3 3-6, DSL 7 / S0 9, S1 10, CLK 11 / Q3 12, Q2 13, Q1 14, Q0 15
+  const clk = busPart('clock', 640, 20, 'Saat Darbesi (CLK)', 'sh_clk');
+  const mode = busPart('switch', 640, 120, 'Mod (S1 S0)', 'sh_mode', { width: 2, state: { inputValue: 1 } });
+  const mr = busPart('switch', 200, 420, "MR' (0 = Sıfırla)", 'sh_clr', { state: { on: true } });
+  const sr = busPart('switch', 200, 520, 'DSR (Sağa Kaydırma Girişi)', 'sh_sr', { state: { on: true } });
+  const d = busPart('switch', 360, 520, 'Paralel Veri (D3..D0)', 'sh_d', { width: 4, state: { inputValue: 0xa } });
+  const sl = busPart('switch', 600, 420, 'DSL (Sola Kaydırma Girişi)', 'sh_sl');
+  const reg = busPart('ttl74194', 360, 240, '74194', 'sh_core', { state: { ttlInternal: true } });
+  const led = busPart('led', 120, 100, 'Q (Q3..Q0)', 'sh_led', { width: 4 });
+  const pq = busPart('probe', 120, 190, 'Q (ikili)', 'sh_probe');
   const { wires, link } = busWires();
-  const q = splitBits(link, 'sh_qbits', 'Q bitleri', 200, 80, 4, [reg, pk(reg, 'q')]);
-  // shift right (74HC194): Q0 <- SR, Q1 <- Q0, Q2 <- Q1, Q3 <- Q2
-  const right = joinBits(link, 'sh_right', 'Sağa Kaydırılmış', 320, 180, [
-    [sr, sr.outputs[0]],
-    [q, q.outputs[0]],
-    [q, q.outputs[1]],
-    [q, q.outputs[2]],
-  ]);
-  // shift left: Q0 <- Q1, Q1 <- Q2, Q2 <- Q3, Q3 <- SL
-  const left = joinBits(link, 'sh_left', 'Sola Kaydırılmış', 320, 300, [
-    [q, q.outputs[1]],
-    [q, q.outputs[2]],
-    [q, q.outputs[3]],
-    [sl, sl.outputs[0]],
-  ]);
-  link(reg, pk(reg, 'q'), mux, pk(mux, 'in0'));
-  link(right, right.inputs[0], mux, pk(mux, 'in1'));
-  link(left, left.inputs[0], mux, pk(mux, 'in2'));
-  link(d, d.outputs[0], mux, pk(mux, 'in3'));
-  link(mode, mode.outputs[0], mux, pk(mux, 'sel'));
-  link(mux, pk(mux, 'out'), reg, pk(reg, 'd'));
-  link(clk, clk.outputs[0], reg, pk(reg, 'clk'));
-  link(clr, clr.outputs[0], reg, pk(reg, 'clr'));
-  link(reg, pk(reg, 'q'), led, led.inputs[0]);
+  const m = splitBits(link, 'sh_modebits', 'S1 S0', 580, 160, 2, [mode, mode.outputs[0]]);
+  const db = splitBits(link, 'sh_dbits', 'D bitleri', 400, 420, 4, [d, d.outputs[0]]);
+  link(clk, clk.outputs[0], reg, pk(reg, 'p11'));
+  link(m, m.outputs[0], reg, pk(reg, 'p9'));
+  link(m, m.outputs[1], reg, pk(reg, 'p10'));
+  link(mr, mr.outputs[0], reg, pk(reg, 'p1'));
+  link(sr, sr.outputs[0], reg, pk(reg, 'p2'));
+  [3, 4, 5, 6].forEach((pin, i) => link(db, db.outputs[i], reg, pk(reg, `p${pin}`)));
+  link(sl, sl.outputs[0], reg, pk(reg, 'p7'));
+  const q = busPart('splitter', 380, 110, 'Q bitleri', 'sh_qbits', { splitter: { incoming: 4, fanout: 4 }, rotation: 90 });
+  [15, 14, 13, 12].forEach((pin, i) => link(reg, pk(reg, `p${pin}`), q, q.outputs[i]));
+  link(q, q.inputs[0], led, led.inputs[0]);
+  link(q, q.inputs[0], pq, pq.inputs[0]);
   return {
     id: 'universal_shift_register_demo',
-    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74HC194 benzeri)',
+    name: '4-Bit Çift Yönlü Kaydırmalı Yazmaç (74194)',
     category: 'sequential',
     description:
-      "74HC194'ün iç yapısı: 4 bitlik bir yazmaç ve girişinde 4 bitlik bir 4:1 MUX. Mod (S1 S0) her saat darbesinde yazmaca ne yükleneceğini seçer: 00 tut, 01 sağa kaydır (Q0 ← SR, Q3'e doğru), 10 sola kaydır (Q3 ← SL, Q0'a doğru), 11 paralel veriyi yükle. Kaydırılmış yollar splitter'larla Q bitlerinden kurulur.",
-    components: [clk, clr, sr, sl, d, mode, mux, reg, q, right, left, led],
+      "Gerçek 74194 çipi: mod girişi (S1 S0) her yükselen saat kenarında ne yapılacağını seçer: 00 tut, 01 sağa kaydır (DSR → Q0 → Q1 → Q2 → Q3), 10 sola kaydır (DSL → Q3 → Q2 → Q1 → Q0), 11 paralel veriyi (D3..D0) yükle. "
+      + "Başlangıçta mod 01 ve DSR = 1 olduğu için yazmaç Q0'dan başlayarak 1'lerle dolar. MR' anahtarı 0 yapılınca yazmaç saatten bağımsız sıfırlanır.",
+    components: [clk, mode, m, mr, sr, d, db, sl, reg, q, led, pq],
     wires,
   };
 }
