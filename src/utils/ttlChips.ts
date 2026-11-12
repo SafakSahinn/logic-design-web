@@ -647,6 +647,23 @@ export function ttlPinPoint(chip: TtlChip, pin: number): { x: number; y: number 
   return pin <= half ? { x: (pin - 1) * 20 + 10, y: ttlHeight(chip) } : { x: w - (pin - half - 1) * 20 - 10, y: 0 };
 }
 
+/**
+ * Evolution's physical pin for one of ours. Evolution's 7476 keeps the default VCC 16 / GND 8 (we use the real
+ * VCC 5 / GND 13), so there the pins are matched by name: its pins 5-7 and 13-15 are our 6-8 and 14-16.
+ */
+const EVO_PIN: Partial<Record<TtlChipId, Record<number, number>>> = {
+  '7476': { 5: 16, 6: 5, 7: 6, 8: 7, 13: 8, 14: 13, 15: 14, 16: 15 },
+};
+export const ttlEvoPin = (chip: TtlChip, pin: number) => EVO_PIN[chip.id]?.[pin] ?? pin;
+/** The chip's pins sit elsewhere in evolution (7476) */
+export const ttlEvoRemapped = (chip: TtlChip) => !!EVO_PIN[chip.id];
+
+/** Evolution connection point of one of our pins, relative to the .circ loc of an east-facing chip */
+export function ttlEvoOffset(chip: TtlChip, pin: number): { x: number; y: number } {
+  const p = ttlPinPoint(chip, ttlEvoPin(chip, pin));
+  return { x: p.x, y: p.y - 30 };
+}
+
 // ---- Evaluation ------------------------------------------------------------------------------------------
 
 /** A sequential chip's power-up state: stored values and clock levels 0 */

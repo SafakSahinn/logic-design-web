@@ -46,6 +46,11 @@ import {
   type LogisimRamLook,
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
+import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts } from './ttlChips';
+import { getTtlConfig } from './circuitEngine';
+
+/** Library number of evolution's #TTL in the exported file */
+const TTL_LIB = 6;
 
 /*
  * Logisim 2.7 (.circ) export.
@@ -142,6 +147,8 @@ interface SubcircuitInfo {
 
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
   const warnings: string[] = [];
+  // Evolution's TTL library is declared only when a chip uses it (Logisim 2.7.1 cannot load it)
+  let usesTtl = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
 
@@ -683,6 +690,33 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
+          if (isTtlType(c.type)) {
+            // Evolution's TTL library (2.7.1 has none): written facing east with its settings, a tunnel on
+            // each wired pin's evolution point (7476: evolution's pin of the same name). The flip-flop / counter
+            // contents are not stored (evolution keeps no such attribute).
+            const chip = ttlChipOf(c.type)!;
+            const vccGnd = getTtlConfig(c).vccGnd;
+            usesTtl = true;
+            const a = (name: string, val: string | boolean) => `<a name="${name}" val="${val}"/>`;
+            let attrs = a('VccGndPorts', vccGnd) + a('ShowInternalStructure', c.state.ttlInternal === true);
+            if (c.label?.trim()) attrs += a('label', xmlEsc(c.label.trim()));
+            const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+            const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+            for (const tp of ttlPorts(chip, vccGnd)) {
+              const o = byKey.get(tp.key);
+              const inp = tp.dir === 'inout' ? byKey.get(ttlInKey(tp.pin)) : tp.dir === 'input' ? o : undefined;
+              const outp = tp.dir === 'input' ? undefined : o;
+              // An in/out pin's two halves share the point and the net
+              const net = outp && isConn(outp.id) ? out(c.outputs.indexOf(outp)) : inp ? pinNet(inp.id) : OPEN;
+              ports.push({ off: ttlEvoOffset(chip, tp.pin), net, width: 1, sink: tp.dir === 'input' });
+            }
+            P.push({ kind: 'ram', part: c.type, attrs, ports, lib: TTL_LIB, name: chip.id });
+            if (ttlEvoRemapped(chip))
+              warnings.push(`${label}: Logisim-evolution'ın ${chip.id}'sı VCC/GND'yi varsayılan bacaklarda (${ttlEvoPin(chip, chip.vcc)}/${ttlEvoPin(chip, chip.gnd)}) tutuyor; bağlantılar evolution'daki aynı isimli bacaklara yazıldı.`);
+            if (chip.seq && c.state.ttlSeq)
+              warnings.push(`${label}: çipin içindeki saklı değerler dosyaya yazılmadı (Logisim saklamaz); dosya açılınca hepsi 0.`);
+            break;
+          }
           if (RAM_TYPES.has(c.type)) {
             // Logisim has the same part. A 2.7.1-rule RAM / ROM is written in the 2.7.1 layout; a ROM and the
             // random generator get tunnels on evolution's points too (evolution opens a file without an
@@ -1090,6 +1124,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
 
   const top = buildCircuit(components, wires, null, 0);
   const circuit = xmlEsc(topName);
+  if (usesTtl)
+    warnings.unshift(
+      "TTL çipleri Logisim-evolution'ın TTL kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
+    );
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project source="2.7.1" version="1.0">
   This file was exported by LogicDesign Studio.
@@ -1098,7 +1136,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}

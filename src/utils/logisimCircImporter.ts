@@ -15,6 +15,7 @@ import {
   IO_TYPES,
   type IoConfig,
   configureSplitter,
+  configureTtl,
   createComponentInstance,
   defaultRamConfig,
   flipFlopDataKeys,
@@ -35,6 +36,20 @@ import {
 import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance } from './subcircuitManager';
 import { repairWires } from './wiringEngine';
+import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts } from './ttlChips';
+
+/**
+ * Evolution TTL chip connection points relative to loc (east-facing), by our pin key; an in/out pin's input
+ * half shares the point. 7476: evolution's pins are matched to ours by name (ttlEvoOffset).
+ */
+function ttlImportPorts(type: string, vccGnd: boolean): Array<{ key: string; off: Pt }> {
+  const chip = ttlChipOf(type);
+  if (!chip) return [];
+  return ttlPorts(chip, vccGnd).flatMap((p) => {
+    const off = ttlEvoOffset(chip, p.pin);
+    return p.dir === 'inout' ? [{ key: p.key, off }, { key: ttlInKey(p.pin), off }] : [{ key: p.key, off }];
+  });
+}
 
 export interface ImportedCircuitSheet {
   name: string;
@@ -963,6 +978,12 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
   const circuitByName = new Map<string, Element>();
   circuits.forEach((c, i) => circuitByName.set(c.getAttribute('name') || `Devre ${i + 1}`, c));
+  // Library numbers of evolution's TTL library (its chips are named by number: "7400")
+  const ttlLibs = new Set(
+    Array.from(xmlDoc.getElementsByTagName('lib'))
+      .filter((l) => l.getAttribute('desc') === '#TTL')
+      .map((l) => l.getAttribute('name') ?? '')
+  );
   // Logisim parts that carry no logic
   const DECORATIVE = new Set(['text', 'probe text']);
 
@@ -1225,7 +1246,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
       // A part named after another circuit of the file (no library) is a subcircuit instance
       const isSub = !compNode.getAttribute('lib') && circuitByName.has(compName);
-      let nativeType = isSub ? 'subcircuit' : mapCircCompType(compName, isOutput, constVal);
+      const ttlType = ttlLibs.has(compNode.getAttribute('lib') ?? '') && isTtlType(`ttl${compName.trim()}`) ? (`ttl${compName.trim()}` as ComponentType) : null;
+      let nativeType = isSub ? 'subcircuit' : ttlType ?? mapCircCompType(compName, isOutput, constVal);
       let sub: SubcircuitInfo | undefined;
       if (isSub) {
         sub = subcircuitOf(compName) ?? undefined;
@@ -1254,7 +1276,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1275,6 +1297,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? ramSettings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
                 ? logisimIoSettings(nativeType, attr, evolutionFile).ports.map((p) => p.off)
+                : isTtlType(nativeType)
+                ? ttlImportPorts(nativeType, attr.VccGndPorts === 'true').map((p) => rotateOffset(p.off, rot))
                 : sub
                 ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
                 : [];
@@ -1516,6 +1540,31 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
         if (nativeType === 'counter' && !evolutionFile && wired('ud'))
           warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
+        continue;
+      }
+      if (isTtlType(nativeType)) {
+        // Evolution TTL chip: turned like its facing, every pin joined at its evolution connection point
+        const chip = ttlChipOf(nativeType)!;
+        const vccGnd = attr.VccGndPorts === 'true';
+        let inst = configureTtl(createComponentInstance(nativeType, 0, 0), { vccGnd });
+        inst = { ...inst, rotation: rot ? (rot as 90 | 180 | 270) : undefined };
+        if (attr.ShowInternalStructure === 'true') inst = { ...inst, state: { ...inst.state, ttlInternal: true } };
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const ports = ttlImportPorts(nativeType, vccGnd).map(({ key: k, off }) => ({ k, pt: at(loc, rotateOffset(off, rot)) }));
+        place(
+          inst,
+          idOf(ports[0].k)!,
+          ports[0].pt,
+          label,
+          ports.flatMap(({ k, pt }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, pt]] : [];
+          })
+        );
+        if (ttlEvoRemapped(chip))
+          warnings.push(
+            `${where}: Logisim-evolution'ın ${chip.id}'sı VCC/GND'yi ${ttlEvoPin(chip, chip.vcc)}/${ttlEvoPin(chip, chip.gnd)} bacaklarında tutuyor; burada gerçek dizilim (VCC ${chip.vcc}, GND ${chip.gnd}) kullanılır, bağlantılar aynı isimli bacaklara taşındı.`
+          );
         continue;
       }
       if (RAM_TYPES.has(nativeType)) {
