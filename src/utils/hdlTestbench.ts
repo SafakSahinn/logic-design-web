@@ -144,6 +144,9 @@ const msbText = (bits: Bit[]) =>
     .map((b) => (b === 0 || b === 1 ? String(b) : b === 'Z' ? 'z' : 'x'))
     .join('');
 
+// An input bit given as x is Logisim's unknown, i.e. floating: drive it as z (a pull on the net then wins)
+const driven = (bits: Bit[]): Bit[] => bits.map((b) => (b === 'X' ? 'Z' : b));
+
 // ---------------------------------------------------------------------------------------------------------
 // Verilog
 
@@ -221,7 +224,7 @@ export function generateVerilogTestbench(
       P.columns.forEach((col, i) => {
         if (col.role !== 'in') return;
         const cell = row.cells[i];
-        if (cell.kind === 'val') L.push(`    ${sig(g, col.name)} = ${vLit(cell.bits)};`);
+        if (cell.kind === 'val') L.push(`    ${sig(g, col.name)} = ${vLit(driven(cell.bits))};`);
         else if (cell.kind === 'float') L.push(`    ${sig(g, col.name)} = ${col.width}'b${'z'.repeat(col.width)};`);
       });
       L.push(`    #${STEP_NS};`);
@@ -357,7 +360,7 @@ export function generateVhdlTestbench(
       P.columns.forEach((col, i) => {
         if (col.role !== 'in') return;
         const cell = row.cells[i];
-        if (cell.kind === 'val') L.push(`    ${sig(g, col.name)} <= ${hLit(cell.bits)};`);
+        if (cell.kind === 'val') L.push(`    ${sig(g, col.name)} <= ${hLit(driven(cell.bits))};`);
         else if (cell.kind === 'float') L.push(`    ${sig(g, col.name)} <= ${hLit(Array<Bit>(col.width).fill('Z'))};`);
       });
       L.push(`    wait for ${STEP_NS} ns;`);

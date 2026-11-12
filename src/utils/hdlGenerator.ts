@@ -27,8 +27,11 @@ import {
   ramPinKeys,
   shifterDistBits,
   splitterThreads,
+  pinKey,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
+import { ttlChipOf, ttlPinOfKey } from './ttlChips';
+import { hasTtlHdl, renderTtlModule, ttlHdlPorts } from './ttlHdl';
 
 /*
  * Verilog / VHDL export.
@@ -189,10 +192,21 @@ const TRI_TYPES = ['triState', 'controlledInverter'];
 const plexerFloats = (c: CircuitComponentInstance) =>
   PLEXER_TYPES.has(c.type) &&
   ((c.state.plexDisabled === 'Z' && getPlexerConfig(c).enable) || ((c.type === 'demultiplexer' || c.type === 'decoder') && !!c.state.plexTristate));
-// Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers
+// TTL chips whose outputs can float: open collector, an in/out pin, or VCC/GND pins (no power = floating)
+const ttlFloats = (c: CircuitComponentInstance) => {
+  const chip = ttlChipOf(c.type);
+  return !!chip && (!!chip.openCollector || !!chip.inout || c.state.ttlVccGnd === true);
+};
+// Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers,
+// three-state input pins
 const canFloat = (c?: CircuitComponentInstance) =>
   !!c &&
-  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
+  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c) || ttlFloats(c) || (c.type === 'switch' && !!c.state.pinTristate));
+// TTL pin with a built-in pull-up (7447 BI'/RBO')
+const isTtlPullUp = (c: CircuitComponentInstance | undefined, pin: CircuitPin | undefined): boolean => {
+  const chip = c ? ttlChipOf(c.type) : undefined;
+  return !!chip?.pullUp && !!pin && chip.pullUp.includes(ttlPinOfKey(pinKey(c!, pin)));
+};
 
 /**
  * Verilog only: at time 0 a clock settling from x to 0 / 1 is not an edge (Logisim, the simulator and VHDL
@@ -248,7 +262,9 @@ function buildModule(
   spec: ModuleSpec,
   lang: Lang,
   subModules: Map<string, { def: CustomSubcircuit; moduleName: string }>,
-  moduleNames: NameTable
+  moduleNames: NameTable,
+  // TTL chip id -> its module name (filled as chips are met)
+  ttlModules: Map<string, string> = new Map()
 ): BuiltModule {
   const L = lang === 'verilog' ? VERILOG : VHDL;
   const names = new NameTable();
@@ -532,6 +548,17 @@ function buildModule(
       }
     }
   }
+  // A three-state input pin (a top-level port) on a net other parts drive too: the port feeds the shared
+  // signal and the net's readers read that signal
+  for (const [key, bn] of busSignal) {
+    for (const d of key.split('|')) {
+      const owner = pinOwner.get(d);
+      const pe = pinExpr.get(d);
+      if (owner?.type !== 'switch' || !owner.state.pinTristate || !pe || pe === bn) continue;
+      body.push(L.assign(bn, pe));
+      pinExpr.set(d, bn);
+    }
+  }
 
   // An input pin no part drives (and no IC port feeds)
   // Pull resistors on a net: the level the simulator pulls it to when nothing drives it
@@ -541,6 +568,7 @@ function buildModule(
     for (const id of netOfPin.get(pinId) || []) {
       const owner = pinOwner.get(id);
       if (owner?.type === 'pullResistor') levels.add(owner.state.pullValue === 1 ? 1 : owner.state.pullValue === 'X' ? 'E' : 0);
+      if (isTtlPullUp(owner, pinById.get(id))) levels.add(1);
     }
     return levels.size === 0 ? undefined : levels.size === 1 ? levels.values().next().value : 'E';
   };
@@ -581,12 +609,16 @@ function buildModule(
     }
   };
   for (const c of comps) {
-    if (c.type !== 'pullResistor' || !c.inputs[0] || !isScalarNet(c.inputs[0].id)) continue;
-    const drivers = netDrivers(c.inputs[0].id);
-    const level = pullOf(c.inputs[0].id);
-    if (level === undefined || drivers.length === 0 || !drivers.every((d) => canFloat(pinOwner.get(d)))) continue;
-    const sig = pinExpr.get(drivers[0]);
-    if (sig) emitPull(sig, level);
+    // Pull resistors, and TTL pins with a built-in pull-up (on the net of the pin's input half)
+    const pulled = c.type === 'pullResistor' ? c.inputs.slice(0, 1) : c.inputs.filter((p) => isTtlPullUp(c, p));
+    for (const pin of pulled) {
+      if (!isScalarNet(pin.id)) continue;
+      const drivers = netDrivers(pin.id);
+      const level = pullOf(pin.id);
+      if (level === undefined || drivers.length === 0 || !drivers.every((d) => canFloat(pinOwner.get(d)))) continue;
+      const sig = pinExpr.get(drivers[0]);
+      if (sig) emitPull(sig, level);
+    }
   }
   const floatingParts: string[] = [];
 
@@ -1789,6 +1821,28 @@ function buildModule(
         break;
       }
       default:
+        if (hasTtlHdl(c.type)) {
+          // TTL chip: an instance of its ttl<number> module, pins bound by their physical number
+          const chip = ttlChipOf(c.type)!;
+          if (!ttlModules.has(chip.id)) ttlModules.set(chip.id, moduleNames.make(`ttl${chip.id}`, 'ttl'));
+          const keyOf = (p: CircuitPin) => pinKey(c, p);
+          const inIdx = new Map(c.inputs.map((p, i) => [keyOf(p), i]));
+          const outIdx = new Map(c.outputs.map((p, i) => [keyOf(p), i]));
+          const power = c.state.ttlVccGnd === true;
+          const maps = ttlHdlPorts(chip).map((hp): [string, string] => {
+            if (hp.key === 'vcc' || hp.key === 'gnd') {
+              const k = `p${hp.key === 'vcc' ? chip.vcc : chip.gnd}`;
+              return [hp.name, power && inIdx.has(k) ? inp(inIdx.get(k)!) : hp.key === 'vcc' ? L.one : L.zero];
+            }
+            if (hp.dir === 'in') return [hp.name, inIdx.has(hp.key) ? inp(inIdx.get(hp.key)!) : L.zero];
+            return [hp.name, outIdx.has(hp.key) ? out[outIdx.get(hp.key)!] : lang === 'verilog' ? '' : 'open'];
+          });
+          const inst = names.make(`u_${nm}`, 'u_ttl');
+          const mod = ttlModules.get(chip.id)!;
+          if (lang === 'verilog') body.push(`  ${mod} ${inst} (`, maps.map(([pn, sig]) => `    .${pn}(${sig})`).join(',\n'), `  );`);
+          else body.push(`  ${inst} : entity work.${mod}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
+          break;
+        }
         warnings.push(`${c.label || c.type}: '${c.type}' bileşeni HDL'e çevrilemiyor, çıkışları 0 bırakıldı.`);
         out.forEach((o) => o && emit(o, L.zero));
         break;
@@ -2348,7 +2402,8 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
   const moduleNames = new NameTable();
   const topName = moduleNames.make(circuitName || 'digital_circuit', 'digital_circuit');
   const subModules = new Map<string, { def: CustomSubcircuit; moduleName: string }>();
-  const top = buildModule({ name: topName, components, wires }, lang, subModules, moduleNames);
+  const ttlModules = new Map<string, string>();
+  const top = buildModule({ name: topName, components, wires }, lang, subModules, moduleNames, ttlModules);
 
   // Sub-modules (custom ICs may themselves contain ICs: keep going until no new ones appear)
   const rendered: BuiltModule[] = [];
@@ -2364,7 +2419,8 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
           { name: sub.moduleName, components: sub.def.components, wires: sub.def.wires, subPorts: sub.def.ports, subDef: sub.def },
           lang,
           subModules,
-          moduleNames
+          moduleNames,
+          ttlModules
         )
       );
     }
@@ -2374,6 +2430,10 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
   const std = lang === 'verilog' ? 'IEEE 1364-2001 (Verilog HDL)' : 'IEEE 1076-2008 (VHDL)';
   const parts = [header(lang, topName, std), ''];
   if (lang === 'verilog') parts.push('`timescale 1ns / 1ps', '');
+  // TTL chip modules first (any module may instance them), in chip number order
+  for (const [id, name] of [...ttlModules].sort((a, b) => a[0].localeCompare(b[0], 'en', { numeric: true }))) {
+    parts.push(renderTtlModule(lang, ttlChipOf(`ttl${id}`)!, name), '');
+  }
   for (const m of rendered.reverse()) parts.push(render(m), '');
   parts.push(render(top), '');
   return parts.join('\n');
