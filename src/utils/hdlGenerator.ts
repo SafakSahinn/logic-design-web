@@ -61,12 +61,21 @@ const RESERVED = new Set(
     'always and assign begin buf case casex casez default defparam disable edge else end endcase endfunction endmodule ' +
     'endtask for force forever fork function if initial inout input integer join module nand negedge nor not or output ' +
     'parameter posedge real reg repeat signed supply0 supply1 task time tri wait while wire xnor xor logic bit ' +
+    // Verilog: the rest of the IEEE 1364-2005 keywords (configurations, generate, gate and switch primitives ...)
+    'automatic bufif0 bufif1 cell cmos config deassign design endconfig endgenerate endprimitive endspecify endtable ' +
+    'event genvar highz0 highz1 ifnone incdir include instance large liblist localparam macromodule medium nmos ' +
+    'noshowcancelled notif0 notif1 pmos primitive pull0 pull1 pulldown pullup pulsestyle_onevent pulsestyle_ondetect ' +
+    'rcmos realtime release rnmos rpmos rtran rtranif0 rtranif1 scalared showcancelled small specify specparam strong0 ' +
+    'strong1 table tran tranif0 tranif1 tri0 tri1 triand trior trireg uwire vectored wand weak0 weak1 wor ' +
     // VHDL
     'abs access after alias all architecture array assert attribute block body buffer bus component configuration ' +
     'constant disconnect downto elsif entity exit file generate generic group guarded impure in inertial is label ' +
     'library linkage literal loop map mod new next null of on open others out package port postponed procedure process ' +
     'pure range record register reject rem report return rol ror select severity shared sla sll sra srl subtype then to ' +
-    'transport type unaffected units until use variable when with std_logic std_logic_vector unsigned ieee work clk_in'
+    'transport type unaffected units until use variable when with std_logic std_logic_vector unsigned ieee work clk_in ' +
+    // VHDL: the rest of the IEEE 1076-2008 reserved words (PSL included)
+    'assume assume_guarantee context cover fairness parameter property protected restrict restrict_guarantee sequence ' +
+    'strong vmode vprop vunit'
   ).split(' ')
 );
 
@@ -184,6 +193,23 @@ const plexerFloats = (c: CircuitComponentInstance) =>
 const canFloat = (c?: CircuitComponentInstance) =>
   !!c &&
   (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c));
+
+/**
+ * Verilog only: at time 0 a clock settling from x to 0 / 1 is not an edge (Logisim, the simulator and VHDL
+ * rising_edge see none, but Verilog's posedge fires, e.g. on a ripple counter's ~q). The body of an
+ * edge-triggered block whose first event is its clock runs at time 0 only for an active asynchronous control.
+ * Simulation only: synthesis tools define SYNTHESIS.
+ */
+function vPowerUpGuard(events: string, lines: string[]): string[] {
+  const asyncs = events
+    .split(' or ')
+    .slice(1)
+    .map((e) => {
+      const [edge, sig] = e.trim().split(/\s+/);
+      return `${sig} === 1'b${edge === 'negedge' ? 0 : 1}`;
+    });
+  return ['`ifndef SYNTHESIS', `if (${['$time != 0', ...asyncs].join(' || ')}) begin`, '`endif', ...lines.map((l) => `  ${l}`), '`ifndef SYNTHESIS', 'end', '`endif'];
+}
 
 export interface PortDecl {
   name: string;
@@ -961,9 +987,10 @@ function buildModule(
           else body.push(`  ${lhs} <= ${live.map(([cond, val]) => `${val} when ${cond} else `).join('')}${last};`);
         };
         // A clocked / level process: Verilog always block, VHDL process with its sensitivity list
-        const proc = (sens: string[], lines: string[], vEvents?: string) => {
+        // `clocked`: the first Verilog event is the clock (power-up guard), else all are asynchronous controls
+        const proc = (sens: string[], lines: string[], vEvents?: string, clocked = true) => {
           if (!lines.length) return;
-          if (v) body.push(`  always @(${vEvents ?? '*'}) begin`, ...ind(ind(lines)), '  end');
+          if (v) body.push(`  always @(${vEvents ?? '*'}) begin`, ...ind(ind(vEvents && clocked ? vPowerUpGuard(vEvents, lines) : lines)), '  end');
           else body.push(`  process (${[...new Set(sens.map((s) => s.replace(/[[(].*$/, '')))].join(', ')})`, '  begin', ...ind(ind(lines)), '  end process;');
         };
         const sigs = (...xs: string[]) => xs.filter((x) => x !== L.one && x !== L.zero && x !== T && x !== F && /^[a-z]/.test(x));
@@ -1001,7 +1028,7 @@ function buildModule(
             }
           } else if (rst !== L.zero) {
             notes.push('saat girişi boşta: yalnız RST değeri tohuma döndürür');
-            if (v) proc([], reset, `posedge ${rst}`);
+            if (v) proc([], reset, `posedge ${rst}`, false);
             else proc([rst], ifs(is1c(rst), reset));
           } else notes.push('saat girişi boşta: değer hiç değişmez');
           const hi = (lo: number) => (w === 1 ? vecIndex(cur, lo) : v ? `${cur}[${lo + w - 1}:${lo}]` : `${cur}(${lo + w - 1} downto ${lo})`);
@@ -1144,7 +1171,7 @@ function buildModule(
               proc(sigs(...live.map((q) => q.clk), clr), ifElse(is1c(clr), clearAll(false), ws));
             }
           } else if (clr !== L.zero) {
-            if (v) proc([], clearAll(false), `posedge ${clr}`);
+            if (v) proc([], clearAll(false), `posedge ${clr}`, false);
             else proc([clr], ifs(is1c(clr), clearAll(false)));
           }
           // Outputs: q holds what the simulator's output shows (starts floating)
@@ -1187,7 +1214,7 @@ function buildModule(
                 ...(floatsOff && isSignalName(q.oe) ? [`negedge ${q.oe}`] : []),
               ];
               if (evs.length) {
-                proc([], ifs(is1c(clr), [`${qs} <= ${clrVal};`], ifs(is0c(q.oe), floatsOff ? [`${qs} <= ${allZ};`] : [], isSignalName(q.clk) ? capture() : [])), evs.join(' or '));
+                proc([], ifs(is1c(clr), [`${qs} <= ${clrVal};`], ifs(is0c(q.oe), floatsOff ? [`${qs} <= ${allZ};`] : [], isSignalName(q.clk) ? capture() : [])), evs.join(' or '), isSignalName(q.clk));
                 if (cfg.clearPin && floatsOff) notes.push(`port ${q.p}: CLR, OE 0 iken bırakılırsa simülatör çıkışı Z tutar; Verilog bir sonraki saat kenarına kadar 0 gösterebilir`);
               }
             } else {
@@ -1279,7 +1306,7 @@ function buildModule(
               proc(sigs(clk, clr), lines);
             }
           } else if (clr !== L.zero) {
-            if (v) proc([], clearAll(false), `posedge ${clr}`);
+            if (v) proc([], clearAll(false), `posedge ${clr}`, false);
             else proc([clr], ifs(is1c(clr), clearAll(false)));
           }
           if (clr === L.one) select(d, [[cOr(is0c(cs), is0c(oe)), allZ]], zeros);
@@ -1330,7 +1357,7 @@ function buildModule(
             proc(sigs(clk, clr), lines);
           }
         } else if (clr !== L.zero) {
-          if (v) proc([], clearAll(false), `posedge ${clr}`);
+          if (v) proc([], clearAll(false), `posedge ${clr}`, false);
           else proc([clr], ifs(is1c(clr), clearAll(false)));
         }
         // Output: q holds what the simulator's output shows (starts floating)
@@ -1363,7 +1390,7 @@ function buildModule(
             if (evs.length) {
               const chain = ifs(is1c(clr), [`${q} <= ${clrVal};`], ifs(is0c(oe), floatsOff ? [`${q} <= ${allZ};`] : [], isSignalName(clk) ? capIf(false) : []));
               // a negedge-only event list never reaches the capture branch; an 'else' with nothing to do drops out
-              proc([], chain, evs.join(' or '));
+              proc([], chain, evs.join(' or '), isSignalName(clk));
               if (cfg.clearPin && floatsOff) notes.push('CLR, OE 0 iken bırakılırsa simülatör çıkışı Z tutar; Verilog bir sonraki saat kenarına kadar 0 gösterebilir');
             }
           } else {
@@ -1527,7 +1554,7 @@ function buildModule(
               const edges = [`${trig === 'falling' ? 'negedge' : 'posedge'} ${clk}`, ...asyncs.map(([s]) => `posedge ${s}`)];
               let chain = actBody;
               for (const [s, val] of [...asyncs].reverse()) chain = ifs(s, [set(val)], chain);
-              body.push(`  always @(${edges.join(' or ')}) begin`, ...ind(ind(chain)), '  end');
+              body.push(`  always @(${edges.join(' or ')}) begin`, ...ind(ind(vPowerUpGuard(edges.join(' or '), chain))), '  end');
               if (asyncs.length === 2) notes.push('CLR 1 iken PRE de 1 ise, CLR bırakılınca simülatör hemen 1 olur; Verilog bunu bir sonraki saat kenarında yapar');
             } else {
               const sens = [clk, ...asyncs.map(([s]) => s)].map((s) => s.replace(/\(.*$/, ''));
@@ -2350,6 +2377,11 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
   for (const m of rendered.reverse()) parts.push(render(m), '');
   parts.push(render(top), '');
   return parts.join('\n');
+}
+
+// Name of the top-level module / entity exactly as generateVerilog / generateVHDL give it
+export function getTopModuleName(circuitName: string): string {
+  return new NameTable().make(circuitName || 'digital_circuit', 'digital_circuit');
 }
 
 // Top-level port list exactly as generateVerilog / generateVHDL name it
