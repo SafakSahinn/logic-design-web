@@ -195,7 +195,7 @@ const plexerFloats = (c: CircuitComponentInstance) =>
 // TTL chips whose outputs can float: open collector, an in/out pin, or VCC/GND pins (no power = floating)
 const ttlFloats = (c: CircuitComponentInstance) => {
   const chip = ttlChipOf(c.type);
-  return !!chip && (!!chip.openCollector || !!chip.inout || c.state.ttlVccGnd === true);
+  return !!chip && (!!chip.openCollector || !!chip.triState || !!chip.inout || c.state.ttlVccGnd === true);
 };
 // Parts that can leave their output net floating: tri-state parts, open collector / emitter gates, plexers,
 // three-state input pins

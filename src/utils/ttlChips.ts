@@ -55,6 +55,8 @@ export interface TtlChip {
   height?: number;
   /** Open-collector outputs: they pull low or float, never drive 1 */
   openCollector?: boolean;
+  /** Some outputs float (Z) for defined inputs: tri-state enables, an open-collector pin (74181 A=B) */
+  triState?: boolean;
   /**
    * In/out pins (evolution Port.INOUT, e.g. 7447 BI/RBO): the chip may drive them and reads back the net, so
    * the part has an output (key p<n>) and an input (key p<n>in) on the same point
@@ -197,6 +199,62 @@ function clockEdge(st: TtlSeqState, i: number, clk: SignalValue, falling = false
 const drive = (v: SignalValue): SignalValue => (unknown(v) ? FLOAT : v);
 /** Evolution Value.toLongValue of one bit: 0 / 1, anything else -1 */
 const toLong = (v: SignalValue): number => (v === 0 ? 0 : v === 1 ? 1 : -1);
+
+/** Evolution Value identity of one bit: x and floating are both Value.UNKNOWN */
+const same = (a: SignalValue, b: SignalValue) => a === b || (unknown(a) && unknown(b));
+
+/**
+ * Evolution's pal32L1 (74181 / 74381): an active-low sum of products; bit j of a product picks in[j]
+ */
+function pal(ins: boolean[], products: number[]): boolean {
+  const any = products.some((p) => ins.every((v, j) => !(p & (1 << j)) || v));
+  return !any;
+}
+
+/** 7442 / 7443 / 7444: BCD (excess-3, excess-3 Gray) -> one of ten active-low outputs */
+function decimalDecoder(id: TtlChipId, title: string, description: string, code: (d: number) => number) {
+  return msi({
+    id, pins: 16, out: [1, 2, 3, 4, 5, 6, 7, 9, 10, 11], vcc: 16, gnd: 8, title, description,
+    names: ['Y0\'', 'Y1\'', 'Y2\'', 'Y3\'', 'Y4\'', 'Y5\'', 'Y6\'', 'Y7\'', 'Y8\'', 'Y9\'', 'A3', 'A2', 'A1', 'A0'],
+    labels: ['Y0', 'Y1', 'Y2', 'Y3', 'Y4', 'Y5', 'Y6', 'Y7', 'Y8', 'Y9', 'A3', 'A2', 'A1', 'A0'],
+  }, (g, s) => {
+    // Evolution Ttl7442: any x / floating / E address bit leaves every output floating
+    const bits = [15, 14, 13, 12].map(g);
+    const outs = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11];
+    if (bits.some((b) => !lvl(b))) return outs.forEach((pin) => s(pin, FLOAT));
+    const n = code(bits.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0));
+    outs.forEach((pin, k) => s(pin, lvlOf(n !== k)));
+  });
+}
+
+/** 74240 / 74241 / 74244 pin pairs (A -> Y): channel 1 enabled by pin 1, channel 2 by pin 19 */
+const OCTAL_CH1 = [[2, 18], [4, 16], [6, 14], [8, 12]];
+const OCTAL_CH2 = [[11, 9], [13, 7], [15, 5], [17, 3]];
+/** Evolution AbstractOctalBuffers: a channel is off only while its enable reads exactly its inactive level */
+function octalBuffer(id: TtlChipId, invert: boolean, en2High: boolean, title: string, description: string) {
+  const y = invert ? 'Y\'' : 'Y';
+  return msi({
+    id, pins: 20, out: [3, 5, 7, 9, 12, 14, 16, 18], vcc: 20, gnd: 10, group: 'drivers', triState: true, title, description,
+    names: [
+      '1OE\'', '1A1', `2${y}4`, '1A2', `2${y}3`, '1A3', `2${y}2`, '1A4', `2${y}1`,
+      '2A1', `1${y}4`, '2A2', `1${y}3`, '2A3', `1${y}2`, '2A4', `1${y}1`, en2High ? '2OE' : '2OE\'',
+    ],
+    labels: ['1OE', '1A1', '2Y4', '1A2', '2Y3', '1A3', '2Y2', '1A4', '2Y1', '2A1', '1Y4', '2A2', '1Y3', '2A3', '1Y2', '2A4', '1Y1', '2OE'],
+  }, (g, s) => {
+    const channel = (en: number, off: SignalValue, pairs: number[][]) => {
+      const disabled = g(en) === off;
+      for (const [a, o] of pairs) s(o, disabled ? FLOAT : invert ? not(g(a)) : g(a));
+    };
+    channel(1, 1, OCTAL_CH1);
+    channel(19, en2High ? 0 : 1, OCTAL_CH2);
+  });
+}
+
+/** 74245 / 74640 bus pins: A1..A8 on 2..9, B1..B8 on 18..11 */
+const BUS_A = [2, 3, 4, 5, 6, 7, 8, 9];
+const BUS_B = [18, 17, 16, 15, 14, 13, 12, 11];
+const TRANSCEIVER_NAMES = ['DIR', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'B8', 'B7', 'B6', 'B5', 'B4', 'B3', 'B2', 'B1', 'OE\''];
+const TRANSCEIVER_LABELS = [...TRANSCEIVER_NAMES.slice(0, 17), 'OE'];
 
 /** Evolution DisplayDecoder.computeDisplayDecoderOutputs: segments a..g per digit, 1 = segment output high (off) */
 const SEG7_OFF = [
@@ -485,6 +543,252 @@ const CHIPS: TtlChip[] = [
     const num = (pins: number[]) => pins.reduce((n, pin, i) => n | (hi(g(pin)) ? 1 << i : 0), 0);
     const sum = num([5, 3, 14, 12]) + num([6, 2, 15, 11]) + (hi(g(7)) ? 1 : 0);
     [4, 1, 13, 10, 9].forEach((pin, i) => s(pin, ((sum >> i) & 1) as 0 | 1));
+  }),
+
+  // ---- 4g: remaining combinational chips -----------------------------------------------------------------
+  quad('747266', (a, b) => not(xor(a, b)), { title: 'Dörtlü 2 girişli XNOR', description: 'Dört adet 2 girişli ÖZEL VEYA DEĞİL kapısı (74HC7266), 7400 bacak dizilimi; çıkışlar normal (açık kollektör değil).' }),
+  msi({
+    id: '744075', pins: 14, out: [6, 9, 10], vcc: 14, gnd: 7, group: 'gates',
+    title: 'Üçlü 3 girişli OR', description: 'Üç adet 3 girişli VEYA kapısı (74HC4075).',
+    names: ['2A', '2B', '1A', '1B', '1C', '1Y', '2C', '2Y', '3Y', '3A', '3B', '3C'],
+  }, (g, s) => {
+    s(6, or(g(3), g(4), g(5)));
+    s(9, or(g(1), g(2), g(8)));
+    s(10, or(g(11), g(12), g(13)));
+  }),
+  decimalDecoder('7442', 'BCD → onluk kod çözücü (aktif-düşük)',
+    'A3..A0 girişindeki BCD sayıya (0-9) karşılık gelen Y0\'..Y9\' çıkışını 0 yapar; 10-15 için tüm çıkışlar 1. '
+    + 'Adres bitlerinden biri tanımsızsa çıkışlar boşta kalır.', (d) => d),
+  decimalDecoder('7443', 'Fazlalık-3 → onluk kod çözücü (aktif-düşük)',
+    'A3..A0 girişindeki fazlalık-3 kodlu rakama (3-12) karşılık gelen Y0\'..Y9\' çıkışını 0 yapar; diğer kodlarda tüm çıkışlar 1.',
+    (d) => d - 3),
+  decimalDecoder('7444', 'Fazlalık-3 Gray → onluk kod çözücü (aktif-düşük)',
+    'A3..A0 girişindeki fazlalık-3 Gray kodlu rakama karşılık gelen Y0\'..Y9\' çıkışını 0 yapar; diğer kodlarda tüm çıkışlar 1.',
+    (d) => [2, 6, 7, 5, 4, 12, 13, 15, 14, 10].indexOf(d)),
+  msi({
+    id: '74158', pins: 16, out: [4, 7, 9, 12], vcc: 16, gnd: 8,
+    title: 'Dörtlü 2 → 1 veri seçici (ters çıkışlı)',
+    description: 'Dört adet 2 → 1 veri seçici, çıkışlar ters: S = 0 iken nY\' = nI0\'nın tersi, S = 1 iken nI1\'in tersi. E\' = 1 iken tüm çıkışlar 1.',
+    names: ['S', '1I0', '1I1', '1Y\'', '2I0', '2I1', '2Y\'', '3Y\'', '3I1', '3I0', '4Y\'', '4I1', '4I0', 'E\''],
+    labels: ['S', '1I0', '1I1', '1Y', '2I0', '2I1', '2Y', '3Y', '3I1', '3I0', '4Y', '4I1', '4I0', 'E'],
+  }, (g, s) => {
+    const strobe = hi(g(15));
+    const sel = hi(g(1));
+    for (const [a, b, y] of [[2, 3, 4], [5, 6, 7], [11, 10, 9], [14, 13, 12]]) s(y, lvlOf(!(!strobe && hi(g(sel ? b : a)))));
+  }),
+  msi({
+    id: '74257', pins: 16, out: [4, 7, 9, 12], vcc: 16, gnd: 8, triState: true,
+    title: 'Dörtlü 2 → 1 veri seçici (3 durumlu)',
+    description: 'Dört adet 2 → 1 veri seçici: S = 0 iken nY = nI0, S = 1 iken nY = nI1. OE\' = 1 iken çıkışlar boşta (Z), böylece veri yoluna bağlanabilir.',
+    names: ['S', '1I0', '1I1', '1Y', '2I0', '2I1', '2Y', '3Y', '3I1', '3I0', '4Y', '4I1', '4I0', 'OE\''],
+    labels: ['S', '1I0', '1I1', '1Y', '2I0', '2I1', '2Y', '3Y', '3I1', '3I0', '4Y', '4I1', '4I0', 'OE'],
+  }, (g, s) => {
+    // Evolution Ttl74257.channelOutput / selected
+    const oe = g(15);
+    const sel = g(1);
+    for (const [a, b, y] of [[2, 3, 4], [5, 6, 7], [11, 10, 9], [14, 13, 12]]) {
+      const s0 = g(a);
+      const s1 = g(b);
+      let d: SignalValue;
+      if (sel === 1) d = s1;
+      else if (sel === 0) d = s0;
+      else if (same(s0, s1)) d = s0;
+      else d = sel === 'E' || s0 === 'E' || s1 === 'E' ? 'E' : FLOAT;
+      let v: SignalValue;
+      if (oe === 1) v = FLOAT;
+      else if (oe === 0) v = d;
+      else if (unknown(d) && unknown(oe)) v = FLOAT;
+      else v = oe === 'E' || d === 'E' ? 'E' : FLOAT;
+      s(y, v);
+    }
+  }),
+  msi({
+    id: '74125', pins: 14, out: [3, 6, 8, 11], vcc: 14, gnd: 7, group: 'drivers', triState: true,
+    title: 'Dörtlü 3 durumlu tampon (aktif-düşük OE)',
+    description: 'Dört adet tampon: nOE\' = 0 iken nY = nA, nOE\' = 1 iken çıkış boşta (Z).',
+    names: ['1OE\'', '1A', '1Y', '2OE\'', '2A', '2Y', '3Y', '3A', '3OE\'', '4Y', '4A', '4OE\''],
+    labels: ['1OE', '1A', '1Y', '2OE', '2A', '2Y', '3Y', '3A', '3OE', '4Y', '4A', '4OE'],
+  }, (g, s) => {
+    // Evolution Ttl74125: only an enable reading 1 turns the buffer off
+    for (const [oe, a, y] of [[1, 2, 3], [4, 5, 6], [10, 9, 8], [13, 12, 11]]) s(y, hi(g(oe)) ? FLOAT : g(a));
+  }),
+  msi({
+    id: '74365', pins: 16, out: [3, 5, 7, 9, 11, 13], vcc: 16, gnd: 8, group: 'drivers', triState: true,
+    title: 'Altılı 3 durumlu tampon (ortak OE)',
+    description: 'Altı adet tampon: OE1\' = OE2\' = 0 iken nY = nA, aksi halde tüm çıkışlar boşta (Z).',
+    names: ['OE1\'', '1A', '1Y', '2A', '2Y', '3A', '3Y', '4Y', '4A', '5Y', '5A', '6Y', '6A', 'OE2\''],
+    labels: ['OE1', '1A', '1Y', '2A', '2Y', '3A', '3Y', '4Y', '4A', '5Y', '5A', '6Y', '6A', 'OE2'],
+  }, (g, s) => {
+    const on = lo(g(1)) && lo(g(15));
+    for (const [a, y] of [[2, 3], [4, 5], [6, 7], [10, 9], [12, 11], [14, 13]]) s(y, on ? g(a) : FLOAT);
+  }),
+  octalBuffer('74240', true, false, 'Sekizli 3 durumlu evirici tampon',
+    'İki grup dörtlü evirici tampon: 1OE\' = 0 iken 1Yn\' = 1An\'nin tersi, 2OE\' = 0 iken 2Yn\' = 2An\'nin tersi; OE\' = 1 olan grubun çıkışları boşta (Z).'),
+  octalBuffer('74241', false, true, 'Sekizli 3 durumlu tampon (zıt OE)',
+    'İki grup dörtlü tampon: 1. grup 1OE\' = 0 iken, 2. grup 2OE = 1 iken çalışır (1Yn = 1An, 2Yn = 2An); kapalı grubun çıkışları boşta (Z).'),
+  octalBuffer('74244', false, false, 'Sekizli 3 durumlu tampon',
+    'İki grup dörtlü tampon: 1OE\' = 0 iken 1Yn = 1An, 2OE\' = 0 iken 2Yn = 2An; OE\' = 1 olan grubun çıkışları boşta (Z).'),
+  msi({
+    id: '74541', pins: 20, out: [11, 12, 13, 14, 15, 16, 17, 18], vcc: 20, gnd: 10, group: 'drivers', triState: true,
+    title: 'Sekizli 3 durumlu tampon (akış dizilimli)',
+    description: 'Sekiz tampon, girişler bir yanda çıkışlar karşı yanda: OE1\' = OE2\' = 0 iken Yn = An, aksi halde tüm çıkışlar boşta (Z).',
+    names: ['OE1\'', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'Y8', 'Y7', 'Y6', 'Y5', 'Y4', 'Y3', 'Y2', 'Y1', 'OE2\''],
+    labels: ['OE1', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'Y8', 'Y7', 'Y6', 'Y5', 'Y4', 'Y3', 'Y2', 'Y1', 'OE2'],
+  }, (g, s) => {
+    const on = lo(g(1)) && lo(g(19));
+    BUS_A.forEach((a, k) => s(BUS_B[k], on ? g(a) : FLOAT));
+  }),
+  msi({
+    id: '74245', pins: 20, out: [], inout: [...BUS_A, ...BUS_B], vcc: 20, gnd: 10, group: 'drivers',
+    title: 'Sekizli çift yönlü veri yolu alıcı-vericisi',
+    description:
+      'OE\' = 0 iken DIR = 1 A yolunu B\'ye (Bn = An), DIR = 0 B yolunu A\'ya (An = Bn) aktarır; karşı taraf boşta kalır. '
+      + 'OE\' = 1 iken iki yol da boşta (Z). Bütün A ve B bacakları hem giriş hem çıkıştır.',
+    names: TRANSCEIVER_NAMES, labels: TRANSCEIVER_LABELS,
+  }, (g, s) => {
+    // Evolution Ttl74245: only OE' reading 1 disables; DIR not reading 1 means B -> A
+    const off = hi(g(19));
+    const aToB = hi(g(1));
+    BUS_A.forEach((a, k) => {
+      const b = BUS_B[k];
+      s(a, off || aToB ? FLOAT : g(b));
+      s(b, off || !aToB ? FLOAT : g(a));
+    });
+  }),
+  msi({
+    id: '74640', pins: 20, out: [], inout: [...BUS_A, ...BUS_B], vcc: 20, gnd: 10, group: 'drivers',
+    title: 'Sekizli çift yönlü alıcı-verici (evirici)',
+    description:
+      'OE\' = 0 iken DIR = 1 A yolunu ters olarak B\'ye, DIR = 0 B yolunu ters olarak A\'ya aktarır; karşı taraf boşta kalır. '
+      + 'OE\' = 1 ya da DIR tanımsızken iki yol da boşta (Z).',
+    names: TRANSCEIVER_NAMES, labels: TRANSCEIVER_LABELS,
+  }, (g, s) => {
+    // Evolution Ttl74640: enabled only with OE' reading 0, direction only when DIR reads 0 / 1
+    const on = lo(g(19));
+    const dir = g(1);
+    BUS_A.forEach((a, k) => {
+      const b = BUS_B[k];
+      s(b, on && dir === 1 ? not(g(a)) : FLOAT);
+      s(a, on && dir === 0 ? not(g(b)) : FLOAT);
+    });
+  }),
+  msi({
+    id: '74688', pins: 20, out: [19], vcc: 20, gnd: 10, group: 'arith',
+    title: '8 bit eşitlik karşılaştırıcı',
+    description: 'E\' = 0 iken P7..P0 ile Q7..Q0 bit bit aynıysa P=Q\' çıkışı 0, aksi halde 1. Tanımsız bir bit eşit sayılmaz.',
+    names: ['E\'', 'P0', 'Q0', 'P1', 'Q1', 'P2', 'Q2', 'P3', 'Q3', 'P4', 'Q4', 'P5', 'Q5', 'P6', 'Q6', 'P7', 'Q7', 'P=Q\''],
+    labels: ['E', 'P0', 'Q0', 'P1', 'Q1', 'P2', 'Q2', 'P3', 'Q3', 'P4', 'Q4', 'P5', 'Q5', 'P6', 'Q6', 'P7', 'Q7', 'P=Q'],
+  }, (g, s) => {
+    const pairs = [[2, 3], [4, 5], [6, 7], [8, 9], [11, 12], [13, 14], [15, 16], [17, 18]];
+    const match = pairs.every(([p, q]) => lvl(g(p)) && g(p) === g(q));
+    s(19, lvlOf(!(lo(g(1)) && match)));
+  }),
+  msi({
+    id: '74181', pins: 24, out: [9, 10, 11, 13, 14, 15, 16, 17], vcc: 24, gnd: 12, group: 'arith', triState: true,
+    title: '4 bit aritmetik-mantık birimi (ALU)',
+    description:
+      'S3..S0 ve M ile 16 mantık (M = 1) ya da 16 aritmetik (M = 0) işlemden birini A3..A0, B3..B0 üzerinde yapar (aktif-yüksek veri); '
+      + 'Cn elde girişi aktif-düşüktür (Cn = 1: elde yok). Cn+4 elde çıkışı, P\' / G\' 74182 ile hızlı elde için; '
+      + 'A=B açık kollektör çıkışı F = 1111 iken boşta kalır (pull-up gerekir), aksi halde 0.',
+    names: ['B0', 'A0', 'S3', 'S2', 'S1', 'S0', 'Cn', 'M', 'F0', 'F1', 'F2', 'F3', 'A=B', 'P\'', 'Cn+4', 'G\'', 'B3', 'A3', 'B2', 'A2', 'B1', 'A1'],
+    labels: ['B0', 'A0', 'S3', 'S2', 'S1', 'S0', 'Cn', 'M', 'F0', 'F1', 'F2', 'F3', 'A=B', 'P', 'Cn4', 'G', 'B3', 'A3', 'B2', 'A2', 'B1', 'A1'],
+  }, (g, s) => {
+    // Evolution Ttl74181 (PAL form of the datasheet logic); every input reads as "is it 1"
+    const a = [2, 23, 21, 19].map((p) => hi(g(p)));
+    const b = [1, 22, 20, 18].map((p) => hi(g(p)));
+    const sel = [6, 5, 4, 3].map((p) => hi(g(p)));
+    const l1 = [...a, ...b, ...b.map((x) => !x), ...sel];
+    const x = [
+      [0x8011, 0x4101], [0x8022, 0x4202], [0x8044, 0x4404], [0x8088, 0x4808],
+    ].map((t) => pal(l1, t));
+    const y = [
+      [0x2100, 0x1010, 0x1], [0x2200, 0x1020, 0x2], [0x2400, 0x1040, 0x4], [0x2800, 0x1080, 0x8],
+    ].map((t) => pal(l1, t));
+    const l2 = [...x, ...y, !hi(g(8)), hi(g(7))];
+    const z = [
+      pal(l2, [0x300]),
+      pal(l2, [0x301, 0x110]),
+      pal(l2, [0x303, 0x112, 0x120]),
+      pal(l2, [0x307, 0x116, 0x124, 0x140]),
+    ];
+    const p = pal(l2, [0xf]);
+    const gg = pal(l2, [0x80, 0x48, 0x2c, 0x1e]);
+    const co = !pal(l2, [0x20f]) || !gg;
+    const f = [0, 1, 2, 3].map((i) => x[i] !== y[i] !== z[i]);
+    s(15, lvlOf(p));
+    s(17, lvlOf(gg));
+    s(16, lvlOf(co));
+    s(14, f.every(Boolean) ? FLOAT : 0);
+    [9, 10, 11, 13].forEach((pin, i) => s(pin, lvlOf(f[i])));
+  }),
+  msi({
+    id: '74182', pins: 16, out: [7, 9, 10, 11, 12], vcc: 16, gnd: 8, group: 'arith',
+    title: 'İleri bakan elde üreteci',
+    description:
+      'Dört ALU\'nun (74181) aktif-düşük P0\'..P3\' ve G0\'..G3\' çıkışlarından Cn girişiyle ara eldeleri (Cn+x, Cn+y, Cn+z) '
+      + 've grup P\' / G\' çıkışlarını tek kademede üretir.',
+    names: ['G1\'', 'P1\'', 'G0\'', 'P0\'', 'G3\'', 'P3\'', 'P\'', 'Cn+z', 'G\'', 'Cn+y', 'Cn+x', 'Cn', 'G2\'', 'P2\''],
+    labels: ['G1', 'P1', 'G0', 'P0', 'G3', 'P3', 'P', 'Cnz', 'G', 'Cny', 'Cnx', 'Cn', 'G2', 'P2'],
+  }, (g, s) => {
+    const p = [4, 2, 15, 6].map((pin) => !hi(g(pin)));
+    const gn = [3, 1, 14, 5].map((pin) => !hi(g(pin)));
+    const ci = hi(g(13));
+    const po = p[3] && p[2] && p[1] && p[0];
+    const go = gn[3] || (p[3] && gn[2]) || (p[3] && p[2] && gn[1]) || (p[3] && p[2] && p[1] && gn[0]);
+    const cx = gn[0] || (p[0] && ci);
+    const cy = gn[1] || (p[1] && gn[0]) || (p[1] && p[0] && ci);
+    const cz = gn[2] || (p[2] && gn[1]) || (p[2] && p[1] && gn[0]) || (p[2] && p[1] && p[0] && ci);
+    s(7, lvlOf(!po));
+    s(10, lvlOf(!go));
+    s(12, lvlOf(cx));
+    s(11, lvlOf(cy));
+    s(9, lvlOf(cz));
+  }),
+  msi({
+    id: '74381', pins: 20, out: [8, 9, 11, 12, 13, 14], vcc: 20, gnd: 10, group: 'arith',
+    title: '4 bit ALU / fonksiyon üreteci',
+    description:
+      'S2 S1 S0 ile 8 işlemden birini yapar: 000 F = 0000, 001 B eksi A, 010 A eksi B, 011 A artı B, 100 A XOR B, 101 A OR B, 110 A AND B, 111 F = 1111. '
+      + 'Cn elde girişi; P\' / G\' 74182 ile hızlı elde için.',
+    names: ['A1', 'B1', 'A0', 'B0', 'S0', 'S1', 'S2', 'F0', 'F1', 'F2', 'F3', 'G\'', 'P\'', 'Cn', 'B3', 'A3', 'B2', 'A2'],
+    labels: ['A1', 'B1', 'A0', 'B0', 'S0', 'S1', 'S2', 'F0', 'F1', 'F2', 'F3', 'G', 'P', 'Cn', 'B3', 'A3', 'B2', 'A2'],
+  }, (g, s) => {
+    // Evolution Ttl74381 (PAL form); every input reads as "is it 1"
+    const a = [3, 1, 19, 17].map((p) => hi(g(p)));
+    const b = [4, 2, 18, 16].map((p) => hi(g(p)));
+    const [s0, s1, s2] = [5, 6, 7].map((p) => hi(g(p)));
+    const ci = hi(g(15));
+    const u = s0 || s1;
+    const v = s1 || s2;
+    const w = s0 || !s1;
+    const xx = !(s0 && s1) || s2;
+    const yy = (s0 && s1) || !s2;
+    const zz = !s2 && u;
+    const l1 = [...a, ...a.map((q) => !q), ...b, ...b.map((q) => !q), yy, xx, w, v, u];
+    const j = [
+      [0x000c1010, 0x00161001, 0x000a0110],
+      [0x000c2020, 0x00162002, 0x000a0220],
+      [0x000c4040, 0x00164004, 0x000a0440],
+      [0x000c8080, 0x00168008, 0x000a0880],
+    ].map((t) => pal(l1, t));
+    const k = [
+      [0x00131010, 0x000c1001, 0x000c0110, 0x00120101],
+      [0x00132020, 0x000c2002, 0x000c0220, 0x00120202],
+      [0x00134040, 0x000c4004, 0x000c0440, 0x00120404],
+      [0x00138080, 0x000c8008, 0x000c0880, 0x00120808],
+    ].map((t) => pal(l1, t));
+    const l2 = [...j, ...k, zz, ci];
+    const l = [
+      pal(l2, [0x300]),
+      pal(l2, [0x301, 0x111]),
+      pal(l2, [0x303, 0x113, 0x122]),
+      pal(l2, [0x307, 0x117, 0x126, 0x144]),
+    ];
+    const p = pal(l2, [0xf]);
+    const gg = pal(l2, [0x88, 0x4c, 0x2e, 0x1f]);
+    s(14, lvlOf(p));
+    s(13, lvlOf(gg));
+    [8, 9, 11, 12].forEach((pin, i) => s(pin, lvlOf(l[i] !== k[i])));
   }),
 
   // ---- 4c: sequential (flip-flops, counter, shift register) ---------------------------------------------

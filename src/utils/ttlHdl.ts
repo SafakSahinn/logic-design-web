@@ -23,7 +23,8 @@ export type TExpr =
   | { k: 'and' | 'or' | 'xor'; xs: TExpr[] }
   | { k: 'mux'; s: TExpr; a: TExpr; b: TExpr } // s = 1 -> a, s = 0 -> b
   | { k: 'pick'; sel: TExpr[]; data: TExpr[] } // sel MSB first, data[index]
-  | { k: 'gt'; a: TExpr[]; b: TExpr[] }; // unsigned a > b, MSB first
+  | { k: 'gt'; a: TExpr[]; b: TExpr[] } // unsigned a > b, MSB first
+  | { k: 'is'; v: 0 | 1; a: TExpr }; // 1 while a is exactly v (evolution's == TRUE / == FALSE; x, z read as neither)
 
 export interface TtlModel {
   /** Intermediate wires in order (each may use the earlier ones) */
@@ -47,6 +48,8 @@ const xnor = (...xs: TExpr[]) => not(xor(...xs));
 const mux = (s: TExpr, a: TExpr, b: TExpr): TExpr => ({ k: 'mux', s, a, b });
 const pick = (sel: TExpr[], data: TExpr[]): TExpr => ({ k: 'pick', sel, data });
 const gt = (a: TExpr[], b: TExpr[]): TExpr => ({ k: 'gt', a, b });
+const is1 = (a: TExpr): TExpr => ({ k: 'is', v: 1, a });
+const is0 = (a: TExpr): TExpr => ({ k: 'is', v: 0, a });
 /** Open-collector output: pulls low while `low` is 1, floats otherwise */
 const oc = (low: TExpr): TExpr => mux(low, C0, CZ);
 
@@ -67,6 +70,109 @@ const SEG7_OFF = [
   '0000001', '1001111', '0010010', '0000110', '1001100', '0100100', '1100000', '0001111',
   '0000000', '0001100', '1110010', '1100110', '1011100', '0110100', '1110000', '1111111',
 ];
+
+/** 7442 / 7443 / 7444: output k (pins 1-7, 9-11) goes low for address code(k) on A3..A0 = 12 13 14 15 */
+const DEC10_OUT = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11];
+const decimal = (code: (k: number) => number): TtlModel => ({
+  out: Object.fromEntries(DEC10_OUT.map((pin, k) => [pin, nand(...[15, 14, 13, 12].map((a, i) => ((code(k) >> i) & 1 ? a : not(a))))])),
+});
+
+/** Evolution's pal32L1 as gates: active-low sum of products, bit j of a product picks ins[j] */
+const palT = (ins: TExpr[], products: number[]): TExpr =>
+  nor(...products.map((p) => and(...ins.filter((_, j) => (p & (1 << j)) !== 0))));
+
+/** 74240 / 74241 / 74244 channels: [enable pin, [A, Y] pairs] */
+const OCT1: [number, number][] = [[2, 18], [4, 16], [6, 14], [8, 12]];
+const OCT2: [number, number][] = [[11, 9], [13, 7], [15, 5], [17, 3]];
+const octal = (invert: boolean, en2High: boolean): TtlModel => ({
+  out: Object.fromEntries([
+    ...OCT1.map(([a, y]) => [y, mux(1, CZ, invert ? not(a) : a)]),
+    ...OCT2.map(([a, y]) => [y, en2High ? mux(19, a, CZ) : mux(19, CZ, invert ? not(a) : a)]),
+  ]),
+});
+/** 74245 / 74640: A1..A8 on 2..9, B1..B8 on 18..11; DIR 1, OE' 19 */
+const BUS_A = [2, 3, 4, 5, 6, 7, 8, 9];
+const BUS_B = [18, 17, 16, 15, 14, 13, 12, 11];
+// The direction / enable conditions are exact levels like the simulator's (74245: only OE' = 1 disables, DIR not 1
+// means B -> A; 74640: enabled only by OE' = 0, a direction only for DIR = 0 / 1). With an x / z control the two
+// directions never both open, so the two buses do not form a zero-delay loop in Verilog simulation.
+const transceiver = (invert: boolean): TtlModel => ({
+  wires: invert
+    ? [['ab', and(is0(19), is1(1))], ['ba', and(is0(19), is0(1))]]
+    : [['ab', and(not(is1(19)), is1(1))], ['ba', and(not(is1(19)), not(is1(1)))]],
+  out: Object.fromEntries(
+    BUS_A.flatMap((a, k) => {
+      const b = BUS_B[k];
+      const f = (x: number) => (invert ? not(x) : x);
+      return [
+        [a, mux(W('ba'), f(b), CZ)],
+        [b, mux(W('ab'), f(a), CZ)],
+      ];
+    })
+  ),
+});
+
+/** 74181: A0..A3 2 23 21 19, B0..B3 1 22 20 18, S0..S3 6 5 4 3, Cn 7, M 8; F0..F3 9 10 11 13, A=B 14, P' 15, Cn+4 16, G' 17 */
+function alu181(): TtlModel {
+  const l1: TExpr[] = [2, 23, 21, 19, 1, 22, 20, 18, not(1), not(22), not(20), not(18), 6, 5, 4, 3];
+  const xs = [[0x8011, 0x4101], [0x8022, 0x4202], [0x8044, 0x4404], [0x8088, 0x4808]];
+  const ys = [[0x2100, 0x1010, 0x1], [0x2200, 0x1020, 0x2], [0x2400, 0x1040, 0x4], [0x2800, 0x1080, 0x8]];
+  const wires: [string, TExpr][] = [
+    ...xs.map((t, i): [string, TExpr] => [`x${i}`, palT(l1, t)]),
+    ...ys.map((t, i): [string, TExpr] => [`y${i}`, palT(l1, t)]),
+  ];
+  const l2: TExpr[] = [W('x0'), W('x1'), W('x2'), W('x3'), W('y0'), W('y1'), W('y2'), W('y3'), not(8), 7];
+  const zs = [[0x300], [0x301, 0x110], [0x303, 0x112, 0x120], [0x307, 0x116, 0x124, 0x140]];
+  wires.push(...zs.map((t, i): [string, TExpr] => [`z${i}`, palT(l2, t)]));
+  wires.push(['g', palT(l2, [0x80, 0x48, 0x2c, 0x1e])]);
+  wires.push(...[0, 1, 2, 3].map((i): [string, TExpr] => [`f${i}`, xor(W(`x${i}`), W(`y${i}`), W(`z${i}`))]));
+  return {
+    wires,
+    out: {
+      9: W('f0'), 10: W('f1'), 11: W('f2'), 13: W('f3'),
+      14: mux(and(W('f0'), W('f1'), W('f2'), W('f3')), CZ, C0), // open collector: floats while F = 1111
+      15: palT(l2, [0xf]),
+      16: or(not(palT(l2, [0x20f])), not(W('g'))),
+      17: W('g'),
+    },
+  };
+}
+
+/** 74381: A0..A3 3 1 19 17, B0..B3 4 2 18 16, S0..S2 5 6 7, Cn 15; F0..F3 8 9 11 12, G' 13, P' 14 */
+function alu381(): TtlModel {
+  const a = [3, 1, 19, 17];
+  const b = [4, 2, 18, 16];
+  const wires: [string, TExpr][] = [
+    ['u', or(5, 6)],
+    ['v', or(6, 7)],
+    ['w', or(5, not(6))],
+    ['xs', or(not(and(5, 6)), 7)],
+    ['ys', or(and(5, 6), not(7))],
+    ['zs', and(not(7), or(5, 6))],
+  ];
+  const l1: TExpr[] = [...a, ...a.map(not), ...b, ...b.map(not), W('ys'), W('xs'), W('w'), W('v'), W('u')];
+  const js = [
+    [0x000c1010, 0x00161001, 0x000a0110], [0x000c2020, 0x00162002, 0x000a0220],
+    [0x000c4040, 0x00164004, 0x000a0440], [0x000c8080, 0x00168008, 0x000a0880],
+  ];
+  const ks = [
+    [0x00131010, 0x000c1001, 0x000c0110, 0x00120101], [0x00132020, 0x000c2002, 0x000c0220, 0x00120202],
+    [0x00134040, 0x000c4004, 0x000c0440, 0x00120404], [0x00138080, 0x000c8008, 0x000c0880, 0x00120808],
+  ];
+  wires.push(...js.map((t, i): [string, TExpr] => [`j${i}`, palT(l1, t)]));
+  wires.push(...ks.map((t, i): [string, TExpr] => [`k${i}`, palT(l1, t)]));
+  const l2: TExpr[] = [W('j0'), W('j1'), W('j2'), W('j3'), W('k0'), W('k1'), W('k2'), W('k3'), W('zs'), 15];
+  const ls = [[0x300], [0x301, 0x111], [0x303, 0x113, 0x122], [0x307, 0x117, 0x126, 0x144]];
+  wires.push(...ls.map((t, i): [string, TExpr] => [`l${i}`, palT(l2, t)]));
+  return {
+    wires,
+    out: {
+      8: xor(W('l0'), W('k0')), 9: xor(W('l1'), W('k1')), 11: xor(W('l2'), W('k2')), 12: xor(W('l3'), W('k3')),
+      13: palT(l2, [0x88, 0x4c, 0x2e, 0x1f]),
+      14: palT(l2, [0xf]),
+    },
+  };
+}
 
 const MODELS: Record<string, TtlModel> = {
   '7400': gates(nand, QUAD),
@@ -194,6 +300,55 @@ const MODELS: Record<string, TtlModel> = {
       9: or(and(12, 11), and(W('c3'), xor(12, 11))),
     },
   },
+
+  // ---- 4g ----
+  '747266': gates(xnor, QUAD),
+  // 1A 1B 1C 3 4 5 -> 1Y 6; 2A 2B 2C 1 2 8 -> 2Y 9; 3A 3B 3C 11 12 13 -> 3Y 10
+  '744075': { out: { 6: or(3, 4, 5), 9: or(1, 2, 8), 10: or(11, 12, 13) } },
+  '7442': decimal((k) => k),
+  '7443': decimal((k) => k + 3),
+  '7444': decimal((k) => [2, 6, 7, 5, 4, 12, 13, 15, 14, 10][k]),
+  // 74158: S 1, E' 15; (I0, I1 -> Y'): (2, 3 -> 4) (5, 6 -> 7) (11, 10 -> 9) (14, 13 -> 12)
+  '74158': { out: Object.fromEntries([[2, 3, 4], [5, 6, 7], [11, 10, 9], [14, 13, 12]].map(([a, b, y]) => [y, nand(not(15), mux(1, b, a))])) },
+  // 74257: as 74158 without inversion, OE' 15 = 1 floats the outputs
+  '74257': { out: Object.fromEntries([[2, 3, 4], [5, 6, 7], [11, 10, 9], [14, 13, 12]].map(([a, b, y]) => [y, mux(15, CZ, mux(1, b, a))])) },
+  // 74125: (OE', A -> Y): (1, 2 -> 3) (4, 5 -> 6) (10, 9 -> 8) (13, 12 -> 11)
+  '74125': { out: Object.fromEntries([[1, 2, 3], [4, 5, 6], [10, 9, 8], [13, 12, 11]].map(([oe, a, y]) => [y, mux(oe, CZ, a)])) },
+  // 74365: OE1' 1, OE2' 15; (A -> Y): (2 3) (4 5) (6 7) (10 9) (12 11) (14 13)
+  '74365': {
+    wires: [['en', nor(1, 15)]],
+    out: Object.fromEntries([[2, 3], [4, 5], [6, 7], [10, 9], [12, 11], [14, 13]].map(([a, y]) => [y, mux(W('en'), a, CZ)])),
+  },
+  '74240': octal(true, false),
+  '74241': octal(false, true),
+  '74244': octal(false, false),
+  // 74541: OE1' 1, OE2' 19; A1..A8 2..9 -> Y1..Y8 18..11
+  '74541': {
+    wires: [['en', nor(1, 19)]],
+    out: Object.fromEntries(BUS_A.map((a, k) => [BUS_B[k], mux(W('en'), a, CZ)])),
+  },
+  '74245': transceiver(false),
+  '74640': transceiver(true),
+  // 74688: E' 1; P0..P7 2 4 6 8 11 13 15 17, Q0..Q7 3 5 7 9 12 14 16 18; P=Q' 19
+  '74688': {
+    out: { 19: nand(not(1), ...[[2, 3], [4, 5], [6, 7], [8, 9], [11, 12], [13, 14], [15, 16], [17, 18]].map(([p, q]) => xnor(p, q))) },
+  },
+  '74181': alu181(),
+  // 74182: G0'..G3' 3 1 14 5, P0'..P3' 4 2 15 6, Cn 13; P' 7, G' 10, Cn+x 12, Cn+y 11, Cn+z 9
+  '74182': {
+    wires: [
+      ['p0', not(4)], ['p1', not(2)], ['p2', not(15)], ['p3', not(6)],
+      ['g0', not(3)], ['g1', not(1)], ['g2', not(14)], ['g3', not(5)],
+    ],
+    out: {
+      7: nand(W('p3'), W('p2'), W('p1'), W('p0')),
+      10: nor(W('g3'), and(W('p3'), W('g2')), and(W('p3'), W('p2'), W('g1')), and(W('p3'), W('p2'), W('p1'), W('g0'))),
+      12: or(W('g0'), and(W('p0'), 13)),
+      11: or(W('g1'), and(W('p1'), W('g0')), and(W('p1'), W('p0'), 13)),
+      9: or(W('g2'), and(W('p2'), W('g1')), and(W('p2'), W('p1'), W('g0')), and(W('p2'), W('p1'), W('p0'), 13)),
+    },
+  },
+  '74381': alu381(),
 };
 
 // ---- Sequential chips (Aşama 4e-2) -------------------------------------------------------------------------
@@ -580,6 +735,16 @@ export function renderTtlModule(lang: Lang, chip: TtlChip, moduleName: string): 
         assign(t, v ? `${a} > ${b}` : `'1' when unsigned(${a}) > unsigned(${b}) else '0'`);
         return t;
       }
+      case 'is': {
+        const t = `t${++tmp}`;
+        sig(t);
+        const a = r(e.a);
+        if (v) {
+          // Synthesis has no x / z: the pin itself; simulation: case equality (=== is not synthesizable everywhere)
+          body.push('`ifdef SYNTHESIS', `  assign ${t} = ${e.v ? a : `~${wrap(a)}`};`, '`else', `  assign ${t} = (${a} === 1'b${e.v});`, '`endif');
+        } else assign(t, `'1' when ${a} = '${e.v}' else '0'`);
+        return t;
+      }
     }
   };
 
@@ -702,6 +867,8 @@ export function evalTtlModel(chip: TtlChip, ins: Map<number, 0 | 1>): Map<number
         return ev(e.data[num(e.sel)]);
       case 'gt':
         return num(e.a) > num(e.b) ? 1 : 0;
+      case 'is':
+        return ev(e.a) === e.v ? 1 : 0;
     }
   };
   for (const [n, e] of model.wires ?? []) wires.set(n, ev(e));

@@ -68,6 +68,28 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '74153': 2 * (34 + 6), // 2 x (4:1 MUX + enable AND2)
   '74157': 4 * (14 + 6), // 4 x (2:1 MUX + enable AND2)
   '74283': 4 * 28, // 4 x full adder
+  // 4g
+  '747266': 4 * 8, // 4 x XNOR2
+  '744075': 3 * 8, // 3 x OR3
+  '7442': 4 * 2 + 10 * 8, // address inverters + 10 x NAND4
+  '7443': 4 * 2 + 10 * 8,
+  '7444': 4 * 2 + 10 * 8,
+  '74158': 4 * (14 + 6 + 2), // 4 x (2:1 MUX + enable AND2 + output NOT)
+  '74257': 4 * (14 + 6) + 2, // 4 x (2:1 MUX + tri-state buffer) + NOT for OE'
+  '74125': 4 * (6 + 2), // 4 x (tri-state buffer + NOT for OE')
+  '74365': 6 * 6 + 4, // 6 x tri-state buffer + NOR2 enable
+  '74240': 8 * 4 + 2 * 2, // 8 x controlled inverter + 2 x NOT for OE'
+  '74241': 8 * 6 + 2, // 8 x tri-state buffer + NOT for 1OE'
+  '74244': 8 * 6 + 2 * 2, // 8 x tri-state buffer + 2 x NOT for OE'
+  '74541': 8 * 6 + 4, // 8 x tri-state buffer + NOR2 enable
+  '74245': 16 * 6 + 2 * 6 + 2 * 2, // 16 x tri-state buffer + direction AND2 x 2 + NOT x 2
+  '74640': 16 * 4 + 2 * 6 + 2 * 2, // 16 x controlled inverter + direction logic
+  '74688': 8 * 8 + 18 + 2, // 8 x XNOR2 + NAND9 (E' inverted) + NOT
+  '74181': 280, // 4-bit ALU (the canvas ALU's count)
+  // inputs 8 x NOT; P' NAND4; G' AND2 + AND3 + AND4 + OR4 + NOT; Cn+x AND2 + OR2; Cn+y AND2 + AND3 + OR3;
+  // Cn+z AND2 + AND3 + AND4 + OR4
+  '74182': 8 * 2 + 8 + (6 + 8 + 10 + 10 + 2) + (6 + 6) + (6 + 8 + 8) + (6 + 8 + 10 + 10),
+  '74381': 4 * (28 + 8 + 6 + 6 + 34) + 40, // per bit full adder + XOR / OR / AND + 4:1 select, carry lookahead
   '7474': 2 * 28, // 2 x D flip-flop (preset / clear included)
   '7476': 2 * 42, // 2 x J-K flip-flop
   '74161': 82 * 4 + 20, // 4-bit counter

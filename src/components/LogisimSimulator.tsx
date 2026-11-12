@@ -6062,7 +6062,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         id: `ttl_${g}`,
         title: TTL_GROUP_TITLES[g],
         icon: '🧩',
-        types: Object.values(TTL_CHIPS).filter((c) => c.group === g).map((c) => `ttl${c.id}` as ComponentType),
+        // in number order (7400 ... 7487, 74107 ..., 744017 ...)
+        types: Object.values(TTL_CHIPS)
+          .filter((c) => c.group === g)
+          .sort((a, b) => Number(a.id) - Number(b.id))
+          .map((c) => `ttl${c.id}` as ComponentType),
       }))
       .filter((g) => g.types.length > 0),
   ], []);
