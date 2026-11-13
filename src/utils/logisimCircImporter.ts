@@ -16,6 +16,12 @@ import {
   type IoConfig,
   configureIo5,
   defaultIo5Config,
+  BFH_TYPES,
+  BIN_TO_BCD_DEFAULT_BITS,
+  BIN_TO_BCD_MAX_BITS,
+  BIN_TO_BCD_MIN_BITS,
+  binToBcdDigits,
+  configureBfh,
   IO5_TYPES,
   PORT_IO_MAX,
   KEYPAD_DEFAULT_CUSTOM,
@@ -121,6 +127,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'matrixkeypad') return 'matrixKeypad';
   if (n === 'portio') return 'portIo';
   if (n === 'realtimeclock') return 'realTimeClock';
+  // Logisim-evolution BFH library of Aşama 5b
+  if (n === 'binary_to_bcd_converter') return 'binToBcd';
+  if (n === 'bcd_to_7_segment_decoder') return 'bcdToSevenSegment';
   if (n.includes('rgb') || n.includes('video') || n.includes('screen')) return 'rgbMatrix16x16';
   if (n.includes('keyboard') || n === 'tty') return 'asciiKeyboard';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
@@ -978,6 +987,43 @@ export function logisimIo5Settings(
   return { cfg, state, ports: logisimIo5Ports(type, full, facing), rot: io5RotationOf(type, facing), notes };
 }
 
+// ---- Aşama 5b parts (evolution BFH library "#BFH-Praktika": Binary_to_BCD_converter, BCD_to_7_Segment_decoder) ----
+
+/** Evolution part name of each Aşama 5b part */
+export const LOGISIM_BFH_NAME: Partial<Record<ComponentType, string>> = {
+  binToBcd: 'Binary_to_BCD_converter',
+  bcdToSevenSegment: 'BCD_to_7_Segment_decoder',
+};
+
+/**
+ * Connection points of an Aşama 5b part relative to its evolution loc, with our pin keys (neither part has a facing):
+ * - binary to BCD converter (n digits): the input at (-30, 0), digit 10^k on the top edge at ((n - 1 - k) * 60, -20)
+ * - BCD to 7-segment decoder: g f a b at (0..30, 0), e d c at (0..20, 60), the BCD input at (10, 80)
+ */
+export function logisimBfhPorts(type: ComponentType, bits: number): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  if (type === 'binToBcd') {
+    const n = binToBcdDigits(bits);
+    return [P('bin', -30, 0), ...Array.from({ length: n }, (_, k) => P(`d${k}`, (n - 1 - k) * 60, -20))];
+  }
+  return [P('a', 20, 0), P('b', 30, 0), P('c', 20, 60), P('d', 10, 60), P('e', 0, 60), P('f', 10, 0), P('g', 0, 0), P('bcd', 10, 80)];
+}
+
+/** Settings of an Aşama 5b part from its evolution attributes (missing binvalue = evolution's default 9) */
+export function logisimBfhSettings(type: ComponentType, attr: Record<string, string>): { bits: number; ports: Array<{ key: string; off: Pt }>; notes: string[] } {
+  const notes: string[] = [];
+  let bits = BIN_TO_BCD_DEFAULT_BITS;
+  if (type === 'binToBcd' && attr.binvalue !== undefined) {
+    const n = parseInt(attr.binvalue, 10);
+    if (!Number.isFinite(n)) notes.push(`giriş genişliği "${attr.binvalue}" okunamadı, varsayılan ${bits} bit alındı.`);
+    else {
+      bits = Math.max(BIN_TO_BCD_MIN_BITS, Math.min(BIN_TO_BCD_MAX_BITS, n));
+      if (bits !== n) notes.push(`giriş ${n} bitlik; dönüştürücü ${BIN_TO_BCD_MIN_BITS}-${BIN_TO_BCD_MAX_BITS} bit alır, ${bits} bit olarak alındı.`);
+    }
+  }
+  return { bits, ports: logisimBfhPorts(type, bits), notes };
+}
+
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
   const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
   const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
@@ -1400,7 +1446,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1419,6 +1465,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? memSettings(nativeType, attr, loc).ports.map((p) => p.off)
                 : RAM_TYPES.has(nativeType)
                 ? ramSettings(nativeType, attr).ports.map((p) => p.off)
+                : BFH_TYPES.has(nativeType)
+                ? logisimBfhSettings(nativeType, attr).ports.map((p) => p.off)
                 : IO5_TYPES.has(nativeType)
                 ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
@@ -1745,6 +1793,25 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         );
         continue;
       }
+      if (BFH_TYPES.has(nativeType)) {
+        // Evolution BFH part (no facing): every pin on its evolution connection point, our part unrotated
+        const st = logisimBfhSettings(nativeType, attr);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        const inst = configureBfh(createComponentInstance(nativeType, 0, 0), { binBits: st.bits });
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const first = st.ports[0];
+        place(
+          inst,
+          idOf(first.key)!,
+          at(loc, first.off),
+          label,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
+        continue;
+      }
       if (IO_IMPORT.has(nativeType)) {
         // Every pin on its Logisim connection point; ours keeps its own drawing, turned like its facing (DIP switch,
         // Aşama 5a parts; a joystick's body too, although evolution's stays put: connections are wires anyway)
@@ -1894,13 +1961,20 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const taken = new Map<string, string>();
     const boxes: Array<ReturnType<typeof box>> = [];
     const overlaps = (b: ReturnType<typeof box>) => boxes.some((o) => b.x1 < o.x2 && o.x1 < b.x2 && b.y1 < o.y2 && o.y1 < b.y2);
+    const pinClash = (c: CircuitComponentInstance) =>
+      [...c.inputs, ...c.outputs].some((p) => {
+        const pt = pinPoint(p);
+        return taken.has(pt) && taken.get(pt) !== c.id;
+      });
     for (let k = 0; k < components.length; k++) {
       let comp = components[k];
       for (let tries = 0; tries < 400; tries++) {
-        const pts = [...comp.inputs, ...comp.outputs].map(pinPoint);
-        if (!pts.some((pt) => taken.has(pt) && taken.get(pt) !== comp.id) && !overlaps(box(comp))) break;
+        if (!pinClash(comp) && !overlaps(box(comp))) break;
         comp = updatePinPositions({ ...comp, y: comp.y + 10 });
       }
+      // A crowded column can leave no clear body spot within reach; covering a body only hides it, but a pin
+      // on another part's pin would join their nets, so never stop on one
+      while (pinClash(comp)) comp = updatePinPositions({ ...comp, y: comp.y + 10 });
       components[k] = comp;
       boxes.push(box(comp));
       for (const p of [...comp.inputs, ...comp.outputs]) taken.set(pinPoint(p), comp.id);

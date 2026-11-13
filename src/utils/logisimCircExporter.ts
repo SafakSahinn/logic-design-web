@@ -20,6 +20,7 @@ import {
   getTrigger,
   getIoConfig,
   getIo5Config,
+  binToBcdBits,
   KEYPAD_DEFAULT_CUSTOM,
   pinKey,
   ramPinWidth,
@@ -39,6 +40,8 @@ import {
   logisimIoPorts,
   logisimIo5Ports,
   io5FacingOf,
+  LOGISIM_BFH_NAME,
+  logisimBfhPorts,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
@@ -55,6 +58,8 @@ import { getTtlConfig } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
+/** Library number of evolution's #BFH-Praktika (Aşama 5b) in the exported file */
+const BFH_LIB = 7;
 
 /*
  * Logisim 2.7 (.circ) export.
@@ -153,6 +158,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   const warnings: string[] = [];
   // Evolution's TTL library is declared only when a chip uses it (Logisim 2.7.1 cannot load it)
   let usesTtl = false;
+  // Likewise evolution's BFH library (binary to BCD converter, BCD to 7-segment decoder)
+  let usesBfh = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
 
@@ -419,6 +426,26 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             warnings.push(`${label}: boşluklu kare nokta şekli yalnız Logisim-evolution'da var; Logisim 2.7.1 bu dosyayı açamaz.`);
           if (c.type === 'dotMatrix' && cfg.matrixInput === 'select' && (cfg.rows === 1 || cfg.cols === 1))
             warnings.push(`${label}: tek satırlı / tek sütunlu seçim girişli matris Logisim-evolution düzeninde yazıldı; Logisim 2.7.1'de tek girişi var.`);
+          break;
+        }
+        case 'binToBcd':
+        case 'bcdToSevenSegment': {
+          // Evolution's BFH part on its own connection points. It has no facing: written unrotated, a tunnel on
+          // each pin's evolution point (the exporter joins nets by tunnels, so our rotation changes nothing)
+          usesBfh = true;
+          const bits = binToBcdBits(c);
+          const attrs = c.type === 'binToBcd' ? `<a name="binvalue" val="${bits}"/>` : '';
+          const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+          const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+          for (const { key, off } of logisimBfhPorts(c.type, bits)) {
+            const p = byKey.get(key);
+            const isIn = !!p && c.inputs.includes(p);
+            const net = !p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN;
+            ports.push({ off, net, width: p?.width ?? 1, sink: isIn });
+          }
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: BFH_LIB, name: LOGISIM_BFH_NAME[c.type] });
+          if ((c.rotation ?? 0) % 360 !== 0)
+            warnings.push(`${label}: Logisim-evolution'daki parçanın yönü yok; döndürülmeden yazıldı (bağlantılar aynı).`);
           break;
         }
         case 'rgbLed':
@@ -1200,6 +1227,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     warnings.unshift(
       "TTL çipleri Logisim-evolution'ın TTL kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
     );
+  if (usesBfh)
+    warnings.unshift(
+      "İkili → BCD ve BCD → 7-segment parçaları Logisim-evolution'ın BFH kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
+    );
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project source="2.7.1" version="1.0">
   This file was exported by LogicDesign Studio.
@@ -1208,7 +1239,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}
