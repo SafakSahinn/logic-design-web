@@ -311,6 +311,9 @@ export interface CircuitComponentInstance {
     /** Port I/O: pins the user set by clicking (bit i known) and their levels (bit i = 1); unset = all floating */
     portPokeKnown?: number;
     portPokeVal?: number;
+    /** Port I/O, set by the simulator: bit 0 = enable input wired to nothing, bit 1 = data input wired to nothing
+     *  (evolution reads such a port as NIL, not as unknown); unset = both wired */
+    portOpen?: number;
     /** Real-time clock: evolution 'timeType' (epoch milliseconds / seconds); unset = ms */
     rtcType?: 'ms' | 's';
     /** Real-time clock: evolution 'porsize' (body size); unset = medium */

@@ -19,6 +19,8 @@ import {
   getSplitterConfig,
   getTrigger,
   getIoConfig,
+  getIo5Config,
+  KEYPAD_DEFAULT_CUSTOM,
   pinKey,
   ramPinWidth,
   splitterThreads,
@@ -35,6 +37,8 @@ import {
   LOGISIM_RAM_NAME,
   LOGISIM_IO_NAME,
   logisimIoPorts,
+  logisimIo5Ports,
+  io5FacingOf,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
@@ -415,6 +419,68 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             warnings.push(`${label}: boşluklu kare nokta şekli yalnız Logisim-evolution'da var; Logisim 2.7.1 bu dosyayı açamaz.`);
           if (c.type === 'dotMatrix' && cfg.matrixInput === 'select' && (cfg.rows === 1 || cfg.cols === 1))
             warnings.push(`${label}: tek satırlı / tek sütunlu seçim girişli matris Logisim-evolution düzeninde yazıldı; Logisim 2.7.1'de tek girişi var.`);
+          break;
+        }
+        case 'rgbLed':
+        case 'joystick':
+        case 'matrixKeypad':
+        case 'portIo':
+        case 'realTimeClock': {
+          // Logisim-evolution's part (lib 5 I/O) on its own connection points, facing as our rotation. A joystick
+          // turned away from east also gets tunnels on east's points, where Logisim 2.7.1 (no facing) has its
+          // ports. The clock's 64-bit output goes through a splitter that keeps the low 32 bits.
+          const cfg = getIo5Config(c);
+          const a = (name: string, val: string | number | boolean) => `<a name="${name}" val="${xmlEsc(String(val))}"/>`;
+          const facing = io5FacingOf(c.type, c.rotation);
+          let attrs = '';
+          if (c.type === 'rgbLed') {
+            attrs += a('facing', facing!);
+            if (c.state.ioActiveLow) attrs += a('active', false);
+          } else if (c.type === 'joystick') {
+            if (facing !== 'east') attrs += a('facing', facing!);
+            attrs += a('bits', cfg.joyBits);
+            if (c.state.ioOnColor) attrs += a('color', c.state.ioOnColor);
+          } else if (c.type === 'matrixKeypad') {
+            attrs += a('mode', cfg.keypadMode === 'pmod' ? 'pmod_kypd' : 'raw') + a('size', cfg.keypadSize);
+            const names = ['keyALabel', 'keyBLabel', 'keyCLabel', 'keyDLabel', 'keyStarLabel', 'keyHashLabel'];
+            names.forEach((n, i) => {
+              const k = c.state.keypadKeys?.[i];
+              if (k && k !== KEYPAD_DEFAULT_CUSTOM[i]) attrs += a(n, k);
+            });
+          } else if (c.type === 'portIo') {
+            const dir = { input: 'onlyinput', output: 'onlyOutput', inoutSingle: 'IOSingleEnable', inoutMulti: 'IOMultiEnable' }[cfg.portDir];
+            attrs += a('facing', facing!) + a('number', cfg.portSize) + a('direction', dir);
+          } else {
+            attrs += a('facing', facing!) + a('timeType', cfg.rtcType === 's' ? 2 : 1) + a('porsize', cfg.rtcSize === 'narrow' ? 2 : 1);
+          }
+          const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+          const netOf = (key: string) => {
+            const p = byKey.get(key);
+            const isIn = !!p && c.inputs.includes(p);
+            return { p, isIn, net: !p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN };
+          };
+          const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+          const sets = [logisimIo5Ports(c.type, cfg, facing)];
+          if (c.type === 'joystick' && facing !== 'east') sets.push(logisimIo5Ports(c.type, cfg, 'east'));
+          for (const set of sets) {
+            for (const { key, off } of set) {
+              const { p, isIn, net } = netOf(key);
+              if (c.type === 'realTimeClock' && net !== OPEN) {
+                const wide = newNet();
+                ports.push({ off, net: wide, width: 64, sink: false });
+                P.push({ kind: 'splitter', combined: wide, ends: [net], bitEnd: Array.from({ length: 64 }, (_, b) => (b < 32 ? 1 : 0)), appear: 'left', endWidth: [32] });
+                continue;
+              }
+              ports.push({ off, net, width: p?.width ?? 1, sink: isIn });
+            }
+          }
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: 5, name: LOGISIM_IO_NAME[c.type] });
+          if (c.type !== 'joystick')
+            warnings.push(`${label}: Logisim-evolution parçası (${LOGISIM_IO_NAME[c.type]}); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          if (c.type === 'realTimeClock')
+            warnings.push(`${label}: Logisim-evolution'ın saati 64 bit; çıkışı alt 32 biti alan bir ayırıcıyla (Splitter) bağlandı.`);
+          if (c.type === 'portIo' && (c.state.portPokeKnown ?? 0) !== 0)
+            warnings.push(`${label}: bacaklara verilen değerler dosyaya yazılmadı (Logisim saklamaz), dosya açılınca hepsi tanımsız.`);
           break;
         }
         case 'and':

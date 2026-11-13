@@ -14,6 +14,12 @@ import {
   defaultIoConfig,
   IO_TYPES,
   type IoConfig,
+  configureIo5,
+  defaultIo5Config,
+  IO5_TYPES,
+  PORT_IO_MAX,
+  KEYPAD_DEFAULT_CUSTOM,
+  type Io5Config,
   configureSplitter,
   configureTtl,
   createComponentInstance,
@@ -109,6 +115,12 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n.includes('buzzer') || n === 'speaker') return 'buzzer';
   if (n.includes('dot matrix') || n === 'dotmatrix') return 'dotMatrix';
   if (n === 'ledbar' || n === 'led bar') return 'ledBar';
+  // Logisim-evolution std/io parts of Aşama 5a (Joystick is in 2.7.1 too)
+  if (n === 'rgbled') return 'rgbLed';
+  if (n === 'joystick') return 'joystick';
+  if (n === 'matrixkeypad') return 'matrixKeypad';
+  if (n === 'portio') return 'portIo';
+  if (n === 'realtimeclock') return 'realTimeClock';
   if (n.includes('rgb') || n.includes('video') || n.includes('screen')) return 'rgbMatrix16x16';
   if (n.includes('keyboard') || n === 'tty') return 'asciiKeyboard';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
@@ -135,7 +147,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
 }
 
 // I/O parts placed on their exact Logisim connection points (Aşama 3g)
-const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment']);
+const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment', ...IO5_TYPES]);
 
 // Parts whose width is taken over from the file; any other Logisim part wider than 1 bit becomes 1 bit
 const WIDE_IMPORT = new Set<ComponentType>([
@@ -752,6 +764,11 @@ export const LOGISIM_IO_NAME: Partial<Record<ComponentType, string>> = {
   dotMatrix: 'DotMatrix',
   dipSwitch: 'DipSwitch',
   ledBar: 'LedBar',
+  rgbLed: 'RGBLED',
+  joystick: 'Joystick',
+  matrixKeypad: 'MatrixKeypad',
+  portIo: 'PortIO',
+  realTimeClock: 'RealTimeClock',
 };
 
 /**
@@ -854,6 +871,111 @@ export function logisimIoSettings(
   const full: IoConfig = { ...defaultIoConfig(), ...cfg };
   const rot = type === 'dipSwitch' ? FACING_ROTATION[facing ?? 'north'] ?? 270 : 0;
   return { cfg, state, ports: logisimIoPorts(type, full, { evolution, facing }), rot, notes };
+}
+
+// ---- Aşama 5a parts (evolution RGBLED, Joystick, MatrixKeypad, PortIO, RealTimeClock) ----
+
+/** Evolution's default facing of each Aşama 5a part (our rotation 0); the keypad has no facing */
+export const IO5_DEFAULT_FACING: Partial<Record<ComponentType, string>> = { rgbLed: 'west', joystick: 'east', portIo: 'east', realTimeClock: 'east' };
+
+/** Our rotation of an Aşama 5a part from its evolution facing (rotation 0 = the default facing) */
+export function io5RotationOf(type: ComponentType, facing: string | undefined): 0 | 90 | 180 | 270 {
+  const def = IO5_DEFAULT_FACING[type];
+  if (!def) return 0;
+  const r = FACING_ROTATION[facing ?? def] ?? FACING_ROTATION[def];
+  return ((((r - FACING_ROTATION[def]) % 360) + 360) % 360) as 0 | 90 | 180 | 270;
+}
+
+/** Evolution facing of an Aşama 5a part from our rotation (undefined: the keypad, which has none) */
+export function io5FacingOf(type: ComponentType, rotation: number | undefined): string | undefined {
+  const def = IO5_DEFAULT_FACING[type];
+  if (!def) return undefined;
+  const r = (FACING_ROTATION[def] + (rotation ?? 0)) % 360;
+  return (['east', 'south', 'west', 'north'] as const)[r / 90];
+}
+
+/**
+ * Connection points of an Aşama 5a part relative to its evolution loc, with our pin keys (evolution 5.0.0):
+ * - RGB LED: red at loc; facing west green (10,-10) blue (10,10), the pair turning with the facing
+ * - joystick: X / Y at (0,0) / (0,10) facing east, (-30,0) / (-30,10) west, (-20,-10) / (-10,-10) north,
+ *   (-20,20) / (-10,20) south; the body (-30,-10, 30 x 30) does not turn (Logisim 2.7.1: no facing, east's points)
+ * - matrix keypad (loc = centre, no facing): row i at (-30 + 10(i+1), 30), column i at (30, -30 + 10(i+1));
+ *   large size 60 instead of 30
+ * - port I/O facing east: enable (0,10), then the bus pins along the top edge 10 apart from (10,0) (the part's
+ *   input first); the other facings turn the points around loc. Evolution's widest bus is 64 bits, so the
+ *   points do not depend on the pin count
+ * - real-time clock: the output at loc
+ */
+export function logisimIo5Ports(type: ComponentType, cfg: Io5Config, facing?: string): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  const f = facing ?? IO5_DEFAULT_FACING[type];
+  if (type === 'rgbLed') {
+    const [cx, cy, dx, dy] = f === 'north' ? [0, 10, 10, 0] : f === 'east' ? [-10, 0, 0, 10] : f === 'south' ? [0, -10, -10, 0] : [10, 0, 0, -10];
+    return [P('r', 0, 0), P('g', cx + dx, cy + dy), P('b', cx - dx, cy - dy)];
+  }
+  if (type === 'joystick') {
+    const [x0, y0, x1, y1] = f === 'north' ? [-20, -10, -10, -10] : f === 'south' ? [-20, 20, -10, 20] : f === 'west' ? [-30, 0, -30, 10] : [0, 0, 0, 10];
+    return [P('x', x0, y0), P('y', x1, y1)];
+  }
+  if (type === 'matrixKeypad') {
+    const e = cfg.keypadSize === 'large' ? 60 : 30;
+    return [...[0, 1, 2, 3].map((i) => P(`r${i}`, -e + 10 * (i + 1), e)), ...[0, 1, 2, 3].map((i) => P(`c${i}`, e, -e + 10 * (i + 1)))];
+  }
+  if (type === 'portIo') {
+    const [dx, dy] = f === 'north' ? [0, -10] : f === 'south' ? [0, 10] : f === 'west' ? [-10, 0] : [10, 0];
+    if (cfg.portDir === 'input') return [P('out', dx, dy)];
+    if (cfg.portDir === 'output') return [P('in', dx, dy)];
+    return [P('en', -dy, dx), P('in', dx, dy), P('out', 2 * dx, 2 * dy)];
+  }
+  return [P('out', 0, 0)];
+}
+
+/**
+ * Settings of an Aşama 5a part from its evolution attributes (missing = evolution's default: RGB LED active high
+ * facing west, joystick 4 bits red, keypad raw normal, port I/O 8 pins single enable, clock milliseconds medium,
+ * the others facing east).
+ */
+export function logisimIo5Settings(
+  type: ComponentType,
+  attr: Record<string, string>
+): { cfg: Partial<Io5Config>; state: Partial<CircuitComponentInstance['state']>; ports: Array<{ key: string; off: Pt }>; rot: 0 | 90 | 180 | 270; notes: string[] } {
+  const notes: string[] = [];
+  const cfg: Partial<Io5Config> = {};
+  const state: Partial<CircuitComponentInstance['state']> = {};
+  const facing = type === 'matrixKeypad' ? undefined : attr.facing !== undefined && FACING_ROTATION[attr.facing] !== undefined ? attr.facing : IO5_DEFAULT_FACING[type];
+  if (type === 'rgbLed') {
+    if (attr.active === 'false') state.ioActiveLow = true;
+  } else if (type === 'joystick') {
+    const n = parseInt(attr.bits ?? '', 10);
+    cfg.joyBits = Number.isFinite(n) ? Math.max(2, Math.min(5, n)) : 4;
+    const color = /^#[0-9a-f]{6}$/i.test(attr.color ?? '') ? attr.color.toLowerCase() : undefined;
+    // evolution's default ball is Color.RED (#ff0000): our default red (#f00000, the red swatch) stands for it
+    if (color && color !== '#ff0000' && color !== '#f00000') state.ioOnColor = color;
+  } else if (type === 'matrixKeypad') {
+    cfg.keypadMode = attr.mode === 'pmod_kypd' ? 'pmod' : 'raw';
+    cfg.keypadSize = attr.size === 'large' ? 'large' : 'normal';
+    const names = ['keyALabel', 'keyBLabel', 'keyCLabel', 'keyDLabel', 'keyStarLabel', 'keyHashLabel'];
+    const keys = names.map((k, i) => {
+      const chars = [...(attr[k] ?? '').trim()];
+      if (chars.length > 1) notes.push(`"${KEYPAD_DEFAULT_CUSTOM[i]}" tuşunun etiketi "${attr[k]}" ilk karakteriyle ("${chars[0]}") alındı; burada tuş etiketi tek karakter.`);
+      const ch = chars[0] ?? '';
+      return ch === KEYPAD_DEFAULT_CUSTOM[i] ? '' : ch;
+    });
+    if (keys.some((k) => k !== '')) state.keypadKeys = keys;
+  } else if (type === 'portIo') {
+    const n = parseInt(attr.number ?? '', 10);
+    const size = Number.isFinite(n) ? Math.max(1, n) : 8;
+    if (size > PORT_IO_MAX)
+      notes.push(`${size} bacaklı; burada en çok ${PORT_IO_MAX} bacak olduğundan ${PORT_IO_MAX} bacak olarak alındı (bağlı ${size} bitlik teller genişlik uyuşmazlığı verir).`);
+    cfg.portSize = Math.min(size, PORT_IO_MAX);
+    cfg.portDir = attr.direction === 'onlyinput' ? 'input' : attr.direction === 'onlyOutput' ? 'output' : attr.direction === 'IOMultiEnable' ? 'inoutMulti' : 'inoutSingle';
+  } else if (type === 'realTimeClock') {
+    cfg.rtcType = attr.timeType === '2' ? 's' : 'ms';
+    cfg.rtcSize = attr.porsize === '2' ? 'narrow' : 'medium';
+    notes.push("Logisim-evolution'da çıkış 64 bit; burada zamanın alt 32 biti (64 bitlik bağlantılar genişlik uyuşmazlığı verir).");
+  }
+  const full: Io5Config = { ...defaultIo5Config(), ...cfg };
+  return { cfg, state, ports: logisimIo5Ports(type, full, facing), rot: io5RotationOf(type, facing), notes };
 }
 
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
@@ -1297,6 +1419,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? memSettings(nativeType, attr, loc).ports.map((p) => p.off)
                 : RAM_TYPES.has(nativeType)
                 ? ramSettings(nativeType, attr).ports.map((p) => p.off)
+                : IO5_TYPES.has(nativeType)
+                ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
                 ? logisimIoSettings(nativeType, attr, evolutionFile).ports.map((p) => p.off)
                 : isTtlType(nativeType)
@@ -1430,8 +1554,13 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           const e = parseInt(v, 10);
           return Number.isFinite(e) && e >= 0 && e < fanout ? e + 1 : 0;
         });
+        // Evolution splitters go up to 64 bits (a real-time clock's output): ours keep the low 32 with their ends
+        if (incoming > 32) {
+          warnings.push(`${where}: ${incoming} bitlik; burada en çok 32 bit olduğundan yalnız alt 32 bit (uçlarıyla birlikte) alındı.`);
+          bitEnd.length = 32;
+        }
         const appear = attr.appear === 'right' ? 'right' : attr.appear === 'center' || attr.appear === 'legacy' ? 'center' : 'left';
-        let inst = configureSplitter(createComponentInstance('splitter', 0, 0), { incoming, fanout, appear, bitEnd });
+        let inst = configureSplitter(createComponentInstance('splitter', 0, 0), { incoming: bitEnd.length, fanout, appear, bitEnd });
         inst.rotation = rot as 0 | 90 | 180 | 270;
         const ends = splitterEnds(attr);
         place(inst, inst.inputs[0].id, loc, label, [[inst.inputs[0].id, loc], ...inst.outputs.map((p, i): [string, Pt] => [p.id, at(loc, ends[i])])]);
@@ -1617,11 +1746,14 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         continue;
       }
       if (IO_IMPORT.has(nativeType)) {
-        // Every pin on its Logisim connection point; ours keeps its own drawing (a DIP switch turned like its facing)
-        const st = logisimIoSettings(nativeType, attr, evolutionFile);
+        // Every pin on its Logisim connection point; ours keeps its own drawing, turned like its facing (DIP switch,
+        // Aşama 5a parts; a joystick's body too, although evolution's stays put: connections are wires anyway)
+        const io5 = IO5_TYPES.has(nativeType);
+        const st = io5 ? logisimIo5Settings(nativeType, attr) : logisimIoSettings(nativeType, attr, evolutionFile);
         for (const n of st.notes) warnings.push(`${where}: ${n}`);
         let inst = createComponentInstance(nativeType, 0, 0);
-        inst = configureIo({ ...inst, rotation: st.rot || undefined, state: { ...inst.state, ...st.state } }, st.cfg);
+        inst = { ...inst, rotation: st.rot || undefined, state: { ...inst.state, ...st.state } };
+        inst = io5 ? configureIo5(inst, st.cfg as Partial<Io5Config>) : configureIo(inst, st.cfg as Partial<IoConfig>);
         const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
         const first = st.ports[0];
         place(

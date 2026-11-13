@@ -845,7 +845,9 @@ export function portPokeOf(comp: CircuitComponentInstance, i: number): SignalVal
 /**
  * Evolution PortState.getPinValue for every pin: output-only shows the circuit's value, input-only the user's;
  * in/out: enable x -> E, enable 1 -> the circuit's value (E if the user set a different level), any other
- * enable (0 or E) -> the user's level. Evolution's unknown comes out floating.
+ * enable (0 or E) -> the user's level. Evolution's unknown comes out floating. An input wired to nothing is NIL in
+ * evolution and NIL.get(i) is E (checked with evolution 5.0.0): an open enable acts like E (the user's level), an
+ * open data input gives E on every pin (state.portOpen, set by the simulator).
  */
 export function portIoPins(comp: CircuitComponentInstance): SignalValue[] {
   const cfg = getIo5Config(comp);
@@ -853,8 +855,10 @@ export function portIoPins(comp: CircuitComponentInstance): SignalValue[] {
   const byKey = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
   const unk = (v: SignalValue) => v === 'X' || v === 'Z';
   const norm = (v: SignalValue): SignalValue => (unk(v) ? 'Z' : v);
-  const data = cfg.portDir === 'input' ? [] : readBits(byKey('in'), n).map(norm);
-  const en = cfg.portDir === 'inoutSingle' ? readBits(byKey('en'), 1) : cfg.portDir === 'inoutMulti' ? readBits(byKey('en'), n) : [];
+  const open = comp.state.portOpen ?? 0;
+  const data = cfg.portDir === 'input' ? [] : open & 2 ? Array<SignalValue>(n).fill('E') : readBits(byKey('in'), n).map(norm);
+  const en: SignalValue[] =
+    open & 1 ? Array<SignalValue>(n).fill('E') : cfg.portDir === 'inoutSingle' ? readBits(byKey('en'), 1) : cfg.portDir === 'inoutMulti' ? readBits(byKey('en'), n) : [];
   const out: SignalValue[] = [];
   for (let i = 0; i < n; i++) {
     const poke = portPokeOf(comp, i);
@@ -3908,9 +3912,17 @@ export function simulateCircuitStep(
         cols.forEach((v, i) => setOut(i, v));
         break;
       }
-      case 'portIo':
+      case 'portIo': {
+        const pinOf = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+        const isOpen = (k: string) => {
+          const p = pinOf(k);
+          return !!p && !isPinConnected(p.id);
+        };
+        const open = (isOpen('en') ? 1 : 0) | (isOpen('in') ? 2 : 0);
+        if ((comp.state.portOpen ?? 0) !== open) comp.state = { ...comp.state, portOpen: open || undefined };
         if (comp.outputs.length) setBitsOut(0, portIoPins(comp));
         break;
+      }
       case 'realTimeClock':
         setBitsOut(0, numberToBits(rtcValue(getIo5Config(comp).rtcType), 32));
         break;
