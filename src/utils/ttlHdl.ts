@@ -10,7 +10,7 @@
  * The logic is the simulator's (ttlChips.ts eval) for defined inputs; `evalTtlModel` evaluates a model the same
  * way for the test rigs.
  */
-import { ttlChipOf, ttlPorts, type TtlChip } from './ttlChips';
+import { COUNT_DOWN_190, COUNT_UP_190, ttlChipOf, ttlPorts, type TtlChip } from './ttlChips';
 
 type Lang = 'verilog' | 'vhdl';
 
@@ -522,6 +522,76 @@ function flipFlop(
   seqOut(c, pins.qn, c.v ? `~${q}` : `not ${q}`);
 }
 
+/** A function both models use (Verilog: declared in each branch; VHDL: in the architecture) */
+function seqFn(c: SeqCtx, verilog: string[], vhdl: string[]) {
+  if (c.v) {
+    c.syn.decls.push(...verilog);
+    c.sim.decls.push(...verilog);
+  } else c.decls.push(...vhdl);
+}
+
+/**
+ * 74161 / 74163 parallel load D3..D0 (pins 6..3): a D bit that is neither 0 nor 1 counts as -1 (evolution's
+ * toLongValue), the sum taken mod 16. A function read inside the process: a signal in between would lag the
+ * clock by a delta in VHDL
+ */
+function loadSum(c: SeqCtx): string {
+  seqFn(
+    c,
+    ['  function [3:0] dv;', '    input b;', "    dv = (b === 1'b1) ? 4'd1 : (b === 1'b0) ? 4'd0 : 4'd15;", '  endfunction'],
+    [
+      '  function dv(b : std_logic) return unsigned is',
+      '  begin',
+      "    if b = '1' then",
+      '      return "0001";',
+      "    elsif b = '0' then",
+      '      return "0000";',
+      '    end if;',
+      '    return "1111";',
+      '  end function;',
+    ]
+  );
+  const [d0, d1, d2, d3] = [3, 4, 5, 6].map((pin) => `dv(${c.i(pin)})`);
+  return c.v ? `${d0} + (${d1} << 1) + (${d2} << 2) + (${d3} << 3)` : `${d0} + shift_left(${d1}, 1) + shift_left(${d2}, 2) + shift_left(${d3}, 3)`;
+}
+
+/** A stored bit of the structural model only (the Verilog simulation model keeps its own state) */
+function synReg(c: SeqCtx, name: string) {
+  if (c.v) c.syn.decls.push(`  reg ${name} = 1'b0;`);
+  else c.decls.push(`  signal ${name} : std_logic := '0';`);
+}
+
+/** A net both models drive (Verilog: declared once, assigned in each branch) */
+function seqWire(c: SeqCtx, name: string, width = 1) {
+  if (c.v) c.decls.push(`  wire ${width > 1 ? `[${width - 1}:0] ` : ''}${name};`);
+  else c.decls.push(`  signal ${name} : ${width > 1 ? `std_logic_vector(${width - 1} downto 0)` : 'std_logic'};`);
+}
+/** Continuous assignment of the structural model / of the Verilog simulation model */
+const synSet = (c: SeqCtx, lhs: string, rhs: string) => c.syn.body.push(c.v ? `  assign ${lhs} = ${rhs};` : `  ${lhs} <= ${rhs};`);
+const simSet = (c: SeqCtx, lhs: string, rhs: string) => {
+  if (c.v) c.sim.body.push(`  assign ${lhs} = ${rhs};`);
+};
+
+const idx = (c: SeqCtx, x: string, k: number) => (c.v ? `${x}[${k}]` : `${x}(${k})`);
+const zero = (c: SeqCtx, x: string, width: number, op: '<=' | '=' = '<=') =>
+  c.v ? `${x} ${op} ${width}'d0;` : `${x} <= (others => '0');`;
+
+/** n-bit binary counter `r` (unsigned), one step on the falling edge of pin `cp`, cleared while pin `mr` is 1 */
+function binCounter(c: SeqCtx, r: string, width: number, cp: number, mr: number) {
+  const [CP, MR] = [c.i(cp), c.i(mr)];
+  seqReg(c, r, width, `unsigned(${width - 1} downto 0)`);
+  seqClock(c, `ck_${r}`, CP);
+  seqFlag(c, `rst_${r}`, [isv(c, MR, 1)]);
+  seqProc(c, `ck_${r}`, true, [[`rst_${r}`, [zero(c, r, width)]]], [c.v ? `${r} <= ${r} + ${width}'d1;` : `${r} <= ${r} + 1;`]);
+  seqSim(c, [`s_${r} = 1'b0`, `e_${r}`], [
+    ...simEdge(c, `e_${r}`, `s_${r}`, CP, true),
+    ...seqIfs(c, [
+      [isv(c, MR, 1), [zero(c, r, width, '=')]],
+      [`e_${r}`, [`${r} = ${r} + ${width}'d1;`]],
+    ]),
+  ]);
+}
+
 const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
   // Two D flip-flops: (CLR', D, CLK, PRE', Q, Q') = (1, 2, 3, 4, 5, 6) and (13, 12, 11, 10, 9, 8)
   '7474': (c) => {
@@ -547,27 +617,7 @@ const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
   '74161': (c) => {
     const [mr, clk, cep, spe, cet] = [1, 2, 7, 9, 10].map(c.i);
     seqReg(c, 'cnt', 4, 'unsigned(3 downto 0)');
-    // A loaded D bit that is neither 0 nor 1 counts as -1 (evolution's toLongValue), the sum taken mod 16. A
-    // function read inside the process: a signal in between would lag the clock by a delta in VHDL
-    if (c.v) {
-      const fn = ['  function [3:0] dv;', '    input b;', "    dv = (b === 1'b1) ? 4'd1 : (b === 1'b0) ? 4'd0 : 4'd15;", '  endfunction'];
-      c.syn.decls.push(...fn);
-      c.sim.decls.push(...fn);
-    } else {
-      c.decls.push(
-        '  function dv(b : std_logic) return unsigned is',
-        '  begin',
-        "    if b = '1' then",
-        '      return "0001";',
-        "    elsif b = '0' then",
-        '      return "0000";',
-        '    end if;',
-        '    return "1111";',
-        '  end function;'
-      );
-    }
-    const [d0, d1, d2, d3] = [3, 4, 5, 6].map((pin) => `dv(${c.i(pin)})`);
-    const ld = c.v ? `${d0} + (${d1} << 1) + (${d2} << 2) + (${d3} << 3)` : `${d0} + shift_left(${d1}, 1) + shift_left(${d2}, 2) + shift_left(${d3}, 3)`;
+    const ld = loadSum(c);
     const count = (op: '<=' | '=') =>
       seqIfs(c, [
         [isv(c, spe, 0), [`cnt ${op} ${ld};`]],
@@ -608,7 +658,520 @@ const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
     ]);
     [15, 14, 13, 12].forEach((pin, k) => seqOut(c, pin, c.v ? `q[${k}]` : `q(${k})`));
   },
+
+  // ---- 4h: counters ----------------------------------------------------------------------------------------
+  // 7493: CKB 1, R0(1) 2, R0(2) 3; QC 8, QB 9, QD 11, QA 12; CKA 14. QA toggles on CKA's falling edge, QB..QD
+  // (qh[0] = QB) count on CKB's; R0(1) = R0(2) = 1 clears both
+  '7493': (c) => {
+    const [ckb, r1, r2, cka] = [1, 2, 3, 14].map(c.i);
+    seqReg(c, 'qa');
+    seqReg(c, 'qh', 3, 'unsigned(2 downto 0)');
+    seqClock(c, 'ca', cka);
+    seqClock(c, 'cb', ckb);
+    seqFlag(c, 'rst', [isv(c, r1, 1), isv(c, r2, 1)]);
+    seqProc(c, 'ca', true, [['rst', [`qa <= ${bit(c, 0)};`]]], [c.v ? 'qa <= ~qa;' : 'qa <= not qa;']);
+    seqProc(c, 'cb', true, [['rst', [zero(c, 'qh', 3)]]], [c.v ? "qh <= qh + 3'd1;" : 'qh <= qh + 1;']);
+    seqSim(c, ["s_ca = 1'b0", "s_cb = 1'b0", 'ea', 'eb'], [
+      ...simEdge(c, 'ea', 's_ca', cka, true),
+      ...simEdge(c, 'eb', 's_cb', ckb, true),
+      ...seqIfs(c, [[allIf(c, [isv(c, r1, 1), isv(c, r2, 1)]), ["qa = 1'b0;", "qh = 3'd0;"]]], [
+        ...seqIfs(c, [['ea', ['qa = ~qa;']]]),
+        ...seqIfs(c, [['eb', ["qh = qh + 3'd1;"]]]),
+      ]),
+    ]);
+    seqOut(c, 12, 'qa');
+    [9, 8, 11].forEach((pin, k) => seqOut(c, pin, idx(c, 'qh', k)));
+  },
+  // 74161 with a synchronous MR': everything happens on the clock edge
+  '74163': (c) => {
+    const [mr, clk, cep, spe, cet] = [1, 2, 7, 9, 10].map(c.i);
+    seqReg(c, 'cnt', 4, 'unsigned(3 downto 0)');
+    const ld = loadSum(c);
+    const count = (op: '<=' | '=') =>
+      seqIfs(c, [
+        [isv(c, mr, 0), [zero(c, 'cnt', 4, op)]],
+        [isv(c, spe, 0), [`cnt ${op} ${ld};`]],
+        [allIf(c, [isv(c, cep, 1), isv(c, cet, 1)]), [c.v ? `cnt ${op} cnt + 4'd1;` : 'cnt <= cnt + 1;']],
+      ]);
+    seqClock(c, 'ck', clk);
+    seqProc(c, 'ck', false, [], count('<='));
+    seqSim(c, ["s_ck = 1'b0", 'e'], [...simEdge(c, 'e', 's_ck', clk), ...seqIfs(c, [['e', count('=')]])]);
+    [14, 13, 12, 11].forEach((pin, k) => seqOut(c, pin, idx(c, 'cnt', k)));
+    seqOut(c, 15, c.v ? `${cet} & (&cnt)` : `${cet} and cnt(0) and cnt(1) and cnt(2) and cnt(3)`);
+  },
+  // 74190: D1 1, Q1 2, Q0 3, CE' 4, U'/D 5, Q2 6, Q3 7, D3 9, D2 10, PL' 11, TC 12, RC' 13, CP 14, D0 15.
+  // The simulator (evolution) tries every value its unknown inputs and stored bits could have and makes the bits
+  // that differ unknown. Verilog simulation: the same search. Structural model: one flip-flop per bit, PL' = 0
+  // sets / clears it at once (an unknown D or PL' leaves it x), counting on the clock edge while CE' is 0.
+  '74190': (c) => {
+    const [ce, du, pl, cp] = [4, 5, 11, 14].map(c.i);
+    const D = [15, 1, 10, 9].map(c.i);
+    const Q = [3, 2, 6, 7];
+    const tabV = (name: string, body: string[]) => ['  function [3:0] ' + name + ';', '    input [3:0] q;', '    input d;', ...body, '  endfunction'];
+    const nxV = tabV('nx190', [
+      '    case (q)',
+      ...COUNT_UP_190.map((u, k) => `      4'd${k}: nx190 = d ? 4'd${COUNT_DOWN_190[k]} : 4'd${u};`),
+      "      default: nx190 = 4'bxxxx;",
+      '    endcase',
+    ]);
+    seqWire(c, 'cq', 4);
+    seqWire(c, 'fl', 2);
+    if (c.v) {
+      c.syn.decls.push(...nxV, '  wire [3:0] nxt;');
+      c.sim.decls.push(
+        ...nxV,
+        // {Q3..Q0, D3..D0, U'/D, CE', PL'}: bit k of the mask m is the value tried for source k
+        '  function [3:0] cnt190;',
+        '    input [10:0] s;',
+        '    input t;',
+        '    integer m, k;',
+        '    reg ok, any;',
+        '    reg [3:0] r, first, diff;',
+        '    begin',
+        "      any = 1'b0; first = 4'd0; diff = 4'd0;",
+        '      for (m = 0; m < 2048; m = m + 1) begin',
+        "        ok = 1'b1;",
+        '        for (k = 0; k < 11; k = k + 1)',
+        "          if ((s[k] === 1'b1 && !m[k]) || (s[k] === 1'b0 && m[k])) ok = 1'b0;",
+        '        if (ok) begin',
+        '          if (!m[0]) r = m[6:3];',
+        '          else if (t && !m[1]) r = nx190(m[10:7], m[2]);',
+        '          else r = m[10:7];',
+        '          if (!any) first = r; else diff = diff | (r ^ first);',
+        "          any = 1'b1;",
+        '        end',
+        '      end',
+        "      for (k = 0; k < 4; k = k + 1) if (diff[k]) first[k] = 1'bx;",
+        '      cnt190 = first;',
+        '    end',
+        '  endfunction',
+        // {Q3..Q0, CP, U'/D, CE'} -> {RC', TC}
+        '  function [1:0] fl190;',
+        '    input [6:0] s;',
+        '    integer m, k;',
+        '    reg ok, any, tm;',
+        '    reg [1:0] r, first, diff;',
+        '    begin',
+        "      any = 1'b0; first = 2'd0; diff = 2'd0;",
+        '      for (m = 0; m < 128; m = m + 1) begin',
+        "        ok = 1'b1;",
+        '        for (k = 0; k < 7; k = k + 1)',
+        "          if ((s[k] === 1'b1 && !m[k]) || (s[k] === 1'b0 && m[k])) ok = 1'b0;",
+        '        if (ok) begin',
+        "          tm = m[1] ? (m[6:3] == 4'd0) : (m[3] && m[6]);",
+        '          r = {~(tm && !m[0] && !m[2]), tm};',
+        '          if (!any) first = r; else diff = diff | (r ^ first);',
+        "          any = 1'b1;",
+        '        end',
+        '      end',
+        "      for (k = 0; k < 2; k = k + 1) if (diff[k]) first[k] = 1'bx;",
+        '      fl190 = first;',
+        '    end',
+        '  endfunction',
+        "  reg [3:0] qs = 4'd0;"
+      );
+    } else {
+      c.decls.push(
+        '  type tab190 is array (0 to 15) of natural;',
+        `  constant UP190 : tab190 := (${COUNT_UP_190.join(', ')});`,
+        `  constant DN190 : tab190 := (${COUNT_DOWN_190.join(', ')});`,
+        '  -- m is a value the sources s could have: bit k of m stands for s(k), a 0 / 1 source must match it',
+        '  function fits(s : std_logic_vector; m : natural) return boolean is',
+        '  begin',
+        "    for k in s'range loop",
+        "      if (s(k) = '1' and (m / 2 ** k) mod 2 = 0) or (s(k) = '0' and (m / 2 ** k) mod 2 = 1) then",
+        '        return false;',
+        '      end if;',
+        '    end loop;',
+        '    return true;',
+        '  end function;',
+        '  function mrg(a, b : std_logic) return std_logic is',
+        '  begin',
+        "    if a = b and (a = '0' or a = '1') then",
+        '      return a;',
+        '    end if;',
+        "    return 'X';",
+        '  end function;',
+        "  -- next count; an unknown U'/D or stored bit: every value is tried, bits that differ read X",
+        '  function nxc(q : std_logic_vector(3 downto 0); d : std_logic) return std_logic_vector is',
+        '    variable s : std_logic_vector(4 downto 0);',
+        '    variable r, first, diff : std_logic_vector(3 downto 0);',
+        '    variable any : boolean;',
+        '  begin',
+        '    s := d & q;',
+        '    any := false;',
+        '    first := "0000";',
+        '    diff := "0000";',
+        '    for m in 0 to 31 loop',
+        '      if fits(s, m) then',
+        '        if m >= 16 then',
+        '          r := std_logic_vector(to_unsigned(DN190(m mod 16), 4));',
+        '        else',
+        '          r := std_logic_vector(to_unsigned(UP190(m mod 16), 4));',
+        '        end if;',
+        '        if any then',
+        '          diff := diff or (r xor first);',
+        '        else',
+        '          first := r;',
+        '          any := true;',
+        '        end if;',
+        '      end if;',
+        '    end loop;',
+        '    for k in 0 to 3 loop',
+        "      if diff(k) = '1' then",
+        "        first(k) := 'X';",
+        '      end if;',
+        '    end loop;',
+        '    return first;',
+        '  end function;',
+        "  -- (RC', TC), the same search",
+        '  function fl190(q : std_logic_vector(3 downto 0); ce, d, cp : std_logic) return std_logic_vector is',
+        '    variable s : std_logic_vector(6 downto 0);',
+        '    variable r, first, diff : std_logic_vector(1 downto 0);',
+        '    variable any, tm : boolean;',
+        '    variable code : natural;',
+        '  begin',
+        '    s := q & cp & d & ce;',
+        '    any := false;',
+        '    first := "00";',
+        '    diff := "00";',
+        '    for m in 0 to 127 loop',
+        '      if fits(s, m) then',
+        '        code := m / 8;',
+        '        if (m / 2) mod 2 = 1 then',
+        '          tm := code = 0;',
+        '        else',
+        '          tm := code mod 2 = 1 and code >= 8;',
+        '        end if;',
+        "        r := \"10\";",
+        '        if tm then',
+        "          r(0) := '1';",
+        '          if m mod 2 = 0 and (m / 4) mod 2 = 0 then',
+        "            r(1) := '0';",
+        '          end if;',
+        '        end if;',
+        '        if any then',
+        '          diff := diff or (r xor first);',
+        '        else',
+        '          first := r;',
+        '          any := true;',
+        '        end if;',
+        '      end if;',
+        '    end loop;',
+        '    for k in 0 to 1 loop',
+        "      if diff(k) = '1' then",
+        "        first(k) := 'X';",
+        '      end if;',
+        '    end loop;',
+        '    return first;',
+        '  end function;',
+        '  signal nxt : std_logic_vector(3 downto 0);'
+      );
+    }
+    // Structural model
+    const b = [0, 1, 2, 3].map((k) => `b${k}`);
+    b.forEach((n) => synReg(c, n));
+    synSet(c, 'cq', c.v ? `{b3, b2, b1, b0}` : 'b3 & b2 & b1 & b0');
+    seqClock(c, 'ck', cp);
+    synSet(c, 'nxt', c.v ? `nx190(cq, ${du})` : `nxc(cq, ${du})`);
+    const neither = (x: string) => [isv(c, x, 0, false), isv(c, x, 1, false)];
+    b.forEach((n, k) => {
+      const d = D[k];
+      const nk = idx(c, 'nxt', k);
+      seqFlag(c, `s${k}`, [isv(c, pl, 0), isv(c, d, 1)]);
+      seqFlag(c, `r${k}`, [isv(c, pl, 0), isv(c, d, 0)]);
+      if (c.v) {
+        // Synthesis has no x: PL' = 0 sets / clears at once, else the clock edge counts while CE' is 0
+        seqProc(c, 'ck', false, [[`s${k}`, [`${n} <= 1'b1;`]], [`r${k}`, [`${n} <= 1'b0;`]]], [`if (${ce} === 1'b0) ${n} <= ${nk};`]);
+        return;
+      }
+      // PL' = 0 with D neither 0 nor 1 loads x. PL' unknown: the bit becomes the merge of D with the bit (no
+      // edge) or with the counted value (edge); CE' unknown merges counting with holding.
+      seqFlag(c, `z${k}`, [isv(c, pl, 0), ...neither(d)]);
+      const count = (hold: string) => seqIfs(c, [[`${ce} = '0'`, [`${n} <= ${hold === n ? nk : `mrg(${d}, ${nk})`};`]], [`${ce} = '1'`, hold === n ? [] : [`${n} <= mrg(${d}, ${n});`]]], [`${n} <= ${hold === n ? `mrg(${n}, ${nk})` : `mrg(${d}, mrg(${n}, ${nk}))`};`]);
+      c.syn.body.push(
+        `  process (ck, z${k}, s${k}, r${k}, vcc, gnd, ${pl}, ${d})`,
+        '  begin',
+        `    if z${k} = '1' then`,
+        `      ${n} <= 'X';`,
+        `    elsif s${k} = '1' then`,
+        `      ${n} <= '1';`,
+        `    elsif r${k} = '1' then`,
+        `      ${n} <= '0';`,
+        // read from the pins like D (a flag would lag D by a delta)
+        `    elsif ${allIf(c, [...powered(c), ...neither(pl)])} then`,
+        '      if rising_edge(ck) then',
+        ...indent(count(d), 8),
+        '      else',
+        `        ${n} <= mrg(${d}, ${n});`,
+        '      end if;',
+        '    elsif rising_edge(ck) then',
+        ...indent(count(n), 6),
+        '    end if;',
+        '  end process;'
+      );
+    });
+    if (c.v) {
+      synSet(c, 'fl[0]', `(${du} === 1'b1) ? (cq == 4'd0) : (cq[3] & cq[0])`);
+      synSet(c, 'fl[1]', `~(fl[0] & ~${ce} & ~${cp})`);
+    } else synSet(c, 'fl', `fl190(cq, ${ce}, ${du}, ${cp})`);
+    // Verilog simulation model
+    seqSim(c, ["s_ck = 1'b0", 'e'], [...simEdge(c, 'e', 's_ck', cp), `qs = cnt190({qs, ${[...D].reverse().join(', ')}, ${du}, ${ce}, ${pl}}, e);`]);
+    simSet(c, 'cq', 'qs');
+    simSet(c, 'fl', `fl190({cq, ${cp}, ${du}, ${ce}})`);
+    Q.forEach((pin, k) => seqOut(c, pin, idx(c, 'cq', k)));
+    seqOut(c, 12, idx(c, 'fl', 0));
+    seqOut(c, 13, idx(c, 'fl', 1));
+  },
+  '74192': (c) => upDownHdl(c, 9),
+  '74193': (c) => upDownHdl(c, 15),
+  // 74390: two halves (CP0, CP1, MR, Q0..Q3) = (1, 4, 2, 3 5 6 7) and (15, 12, 14, 13 11 10 9); falling edges, Q0
+  // toggles on CP0, Q1..Q3 (a code 0..4) count on CP1
+  '74390': (c) => {
+    ([[1, 4, 2, [3, 5, 6, 7]], [15, 12, 14, [13, 11, 10, 9]]] as const).forEach(([p0, p1, pm, q], h) => {
+      const n = h + 1;
+      const [cp0, cp1, mr] = [p0, p1, pm].map(c.i);
+      const [a, b] = [`a${n}`, `b${n}`];
+      seqReg(c, a);
+      seqReg(c, b, 3, 'unsigned(2 downto 0)');
+      seqClock(c, `c0_${n}`, cp0);
+      seqClock(c, `c1_${n}`, cp1);
+      seqFlag(c, `rst${n}`, [isv(c, mr, 1)]);
+      const five = (op: '<=' | '=') =>
+        c.v
+          ? [`${b} ${op} (${b} == 3'd4) ? 3'd0 : (${b} < 3'd4) ? ${b} + 3'd1 : 3'bxxx;`]
+          : seqIfs(c, [[`${b} = 4`, [`${b} <= "000";`]], [`${b} < 4`, [`${b} <= ${b} + 1;`]]], [`${b} <= "XXX";`]);
+      seqProc(c, `c0_${n}`, true, [[`rst${n}`, [`${a} <= ${bit(c, 0)};`]]], [c.v ? `${a} <= ~${a};` : `${a} <= not ${a};`]);
+      seqProc(c, `c1_${n}`, true, [[`rst${n}`, [zero(c, b, 3)]]], five('<='));
+      seqSim(c, [`s0_${n} = 1'b0`, `s1_${n} = 1'b0`, `e0_${n}`, `e1_${n}`], [
+        ...simEdge(c, `e0_${n}`, `s0_${n}`, cp0, true),
+        ...simEdge(c, `e1_${n}`, `s1_${n}`, cp1, true),
+        ...seqIfs(c, [[isv(c, mr, 1), [`${a} = 1'b0;`, `${b} = 3'd0;`]]], [
+          ...seqIfs(c, [[`e0_${n}`, [`${a} = ~${a};`]]]),
+          ...seqIfs(c, [[`e1_${n}`, five('=')]]),
+        ]),
+      ]);
+      seqOut(c, q[0], a);
+      [1, 2, 3].forEach((k) => seqOut(c, q[k], idx(c, b, k - 1)));
+    });
+  },
+  // 74393: two 4-bit counters (CP, MR, Q0..Q3) = (1, 2, 3..6) and (13, 12, 11..8), falling edges
+  '74393': (c) => {
+    ([[1, 2, [3, 4, 5, 6]], [13, 12, [11, 10, 9, 8]]] as const).forEach(([cp, mr, q], h) => {
+      binCounter(c, `cnt${h + 1}`, 4, cp, mr);
+      q.forEach((pin, k) => seqOut(c, pin, idx(c, `cnt${h + 1}`, k)));
+    });
+  },
+  // 744017: Q0..Q9 on pins 3 2 4 7 10 1 5 6 9 11, Q5-9' 12, CP1' 13, CP0 14, MR 15. A step on CP0 rising while
+  // CP1' is 0 or on CP1' falling while CP0 is 1, i.e. a clean rising edge of CP0 · CP1'' (unknown unless one of
+  // them decides it)
+  '744017': (c) => {
+    const [cp1, cp0, mr] = [13, 14, 15].map(c.i);
+    seqReg(c, 'cnt', 4, 'unsigned(3 downto 0)');
+    if (c.v) {
+      c.syn.decls.push('  wire g;');
+      c.syn.body.push(`  assign g = (${cp0} === 1'b1 && ${cp1} === 1'b0) ? 1'b1 : (${cp0} === 1'b0 || ${cp1} === 1'b1) ? 1'b0 : 1'bx;`);
+    } else {
+      c.syn.decls.push('  signal g : std_logic;');
+      c.syn.body.push(`  g <= '1' when ${cp0} = '1' and ${cp1} = '0' else '0' when ${cp0} = '0' or ${cp1} = '1' else 'X';`);
+    }
+    seqClock(c, 'ck', 'g');
+    seqFlag(c, 'rst', [isv(c, mr, 1)]);
+    const next = (op: '<=' | '=') =>
+      c.v
+        ? [`cnt ${op} (cnt == 4'd9) ? 4'd0 : (cnt < 4'd9) ? cnt + 4'd1 : 4'bxxxx;`]
+        : seqIfs(c, [['cnt = 9', ['cnt <= "0000";']], ['cnt < 9', ['cnt <= cnt + 1;']]], ['cnt <= "XXXX";']);
+    seqProc(c, 'ck', false, [['rst', [zero(c, 'cnt', 4)]]], next('<='));
+    seqSim(c, ["s0 = 1'b0", "s1 = 1'b0", 'e0', 'e1'], [
+      ...simEdge(c, 'e0', 's0', cp0),
+      ...simEdge(c, 'e1', 's1', cp1, true),
+      ...seqIfs(c, [
+        [isv(c, mr, 1), ["cnt = 4'd0;"]],
+        [`(e0 && ${isv(c, cp1, 0)}) || (e1 && ${isv(c, cp0, 1)})`, next('=')],
+      ]),
+    ]);
+    [3, 2, 4, 7, 10, 1, 5, 6, 9, 11].forEach((pin, k) => {
+      if (c.v) seqOut(c, pin, `(cnt == 4'd${k})`);
+      else {
+        c.decls.push(`  signal d${k} : std_logic;`);
+        c.body.push(`  d${k} <= '1' when cnt = ${k} else '0';`);
+        seqOut(c, pin, `d${k}`);
+      }
+    });
+    if (c.v) seqOut(c, 12, "(cnt < 4'd5)");
+    else {
+      c.decls.push('  signal lo5 : std_logic;');
+      c.body.push("  lo5 <= '1' when cnt < 5 else '0';");
+      seqOut(c, 12, 'lo5');
+    }
+  },
+  // 744060: 14-bit counter, RS 11 (falling edge), MR 12; outputs (pin, stage Qn = cnt[n - 1])
+  '744060': (c) => {
+    binCounter(c, 'cnt', 14, 11, 12);
+    ([[1, 12], [2, 13], [3, 14], [4, 6], [5, 5], [6, 7], [7, 4], [13, 9], [14, 8], [15, 10]] as const).forEach(([pin, q]) =>
+      seqOut(c, pin, idx(c, 'cnt', q - 1))
+    );
+  },
 };
+
+/**
+ * 74192 / 74193: B 1, QB 2, QA 3, DOWN 4, UP 5, QC 6, QD 7, D 9, C 10, LOAD' 11, CO' 12, BO' 13, CLR 14, A 15.
+ * The simulator (evolution) counts on a rising UP while DOWN was and stays 1 (or the other way round), compares
+ * each with its value at the previous evaluation, and keeps CO' / BO' low from the falling edge at the end value
+ * / 0 until the next action. Structural model: see below (one register domain per input edge, no clock derived
+ * from both inputs). Verilog simulation: the simulator's step.
+ */
+function upDownHdl(c: SeqCtx, max: number) {
+  const [dn, up, ld, clr] = [4, 5, 11, 14].map(c.i);
+  const [A, B, C, D] = [15, 1, 10, 9].map(c.i);
+  seqWire(c, 'cq', 4);
+  seqWire(c, 'co');
+  seqWire(c, 'bo');
+  // The loaded value: an undefined D bit counts as -1 (evolution's toLongValue), a sum above the end value loads 0
+  seqFn(
+    c,
+    [
+      '  function integer tl;',
+      '    input b;',
+      "    tl = (b === 1'b1) ? 1 : (b === 1'b0) ? 0 : -1;",
+      '  endfunction',
+      '  function [3:0] ldv;',
+      '    input a, b, c, d;',
+      '    integer s;',
+      '    begin',
+      '      s = tl(a) + 2 * tl(b) + 4 * tl(c) + 8 * tl(d);',
+      `      ldv = (s > ${max}) ? 4'd0 : s[3:0];`,
+      '    end',
+      '  endfunction',
+      '  function [3:0] ud;',
+      '    input [3:0] q;',
+      '    input u;',
+      `    ud = u ? ((q >= 4'd${max}) ? 4'd0 : q + 4'd1) : ((q == 4'd0) ? 4'd${max} : q - 4'd1);`,
+      '  endfunction',
+    ],
+    [
+      '  function tl(b : std_logic) return integer is',
+      '  begin',
+      "    if b = '1' then",
+      '      return 1;',
+      "    elsif b = '0' then",
+      '      return 0;',
+      '    end if;',
+      '    return -1;',
+      '  end function;',
+      '  function ldv(a, b, c, d : std_logic) return std_logic_vector is',
+      '    variable s : integer;',
+      '  begin',
+      '    s := tl(a) + 2 * tl(b) + 4 * tl(c) + 8 * tl(d);',
+      `    if s > ${max} then`,
+      '      s := 0;',
+      '    end if;',
+      '    return std_logic_vector(to_unsigned(s mod 16, 4));',
+      '  end function;',
+      '  function ud(q : std_logic_vector(3 downto 0); u : std_logic) return std_logic_vector is',
+      '    variable n : natural;',
+      '  begin',
+      '    n := to_integer(unsigned(q));',
+      "    if u = '1' then",
+      `      if n >= ${max} then`,
+      '        n := 0;',
+      '      else',
+      '        n := n + 1;',
+      '      end if;',
+      '    elsif n = 0 then',
+      `      n := ${max};`,
+      '    else',
+      '      n := n - 1;',
+      '    end if;',
+      '    return std_logic_vector(to_unsigned(n, 4));',
+      '  end function;',
+    ]
+  );
+  // Structural model. Every register is clocked by one edge of one input and reads only what does not change at
+  // that edge (registers of the other domains, the other input, which a count requires to stay put):
+  // - UP rising (DOWN 1 before and after) counts up into qa, DOWN rising (UP held) counts down into qb; the newer
+  //   of the two is the count: qa while ta /= tb (an up count sets ta /= tb, a down count tb = ta);
+  // - UP falling (DOWN held) sets cf = (count = end value), DOWN falling (UP held) bf = (count = 0); CLR / LOAD'
+  //   clear them. A flag stands until the next count or the other input's falling-edge action: the falling edge
+  //   copies the tags of those three domains (ua <= pa, ub <= pb, uc <= pc), each of them sets its own apart (pa <=
+  //   not ua), so the flag is valid while all three pairs are equal.
+  // - "held": the other input is 1 now and was 1 a moment before (VHDL: a copy one delta behind; synthesis: the
+  //   input itself), so a simultaneous change does nothing, as in the simulator.
+  const qa = [0, 1, 2, 3].map((k) => `qa${k}`);
+  const qb = [0, 1, 2, 3].map((k) => `qb${k}`);
+  [...qa, ...qb, 'ta', 'tb', 'pa', 'pa2', 'pb', 'pb2', 'pc', 'pc2', 'cf', 'bf', 'ua', 'ub', 'uc', 'da', 'db', 'dc'].forEach((n) => synReg(c, n));
+  seqClock(c, 'su', up);
+  seqClock(c, 'sd', dn);
+  const vec = (xs: string[]) => (c.v ? `{${[...xs].reverse().join(', ')}}` : [...xs].reverse().join(' & '));
+  if (c.v) {
+    c.syn.decls.push('  wire [3:0] lv, nu, nd;', '  wire sud, sdd;');
+    c.syn.body.push('  assign sud = su;', '  assign sdd = sd;', `  assign cq = (ta != tb) ? ${vec(qa)} : ${vec(qb)};`);
+  } else {
+    c.syn.decls.push('  signal lv, nu, nd : std_logic_vector(3 downto 0);', "  signal sud, sdd : std_logic := '0';");
+    c.syn.body.push('  sud <= su;', '  sdd <= sd;', `  cq <= ${vec(qa)} when ta /= tb else ${vec(qb)};`);
+  }
+  synSet(c, 'lv', `ldv(${A}, ${B}, ${C}, ${D})`);
+  synSet(c, 'nu', `ud(cq, ${bit(c, 1)})`);
+  synSet(c, 'nd', `ud(cq, ${bit(c, 0)})`);
+  const or = c.v ? ' | ' : ' or ';
+  const not = (x: string) => (c.v ? `~${x}` : `not ${x}`);
+  const downHeld = allIf(c, [isv(c, 'sdd', 1), isv(c, 'sd', 1)]);
+  const upHeld = allIf(c, [isv(c, 'sud', 1), isv(c, 'su', 1)]);
+  seqFlag(c, 'act', [`(${isv(c, clr, 1)}${or}${isv(c, ld, 0)})`]);
+  [0, 1, 2, 3].forEach((k) => {
+    const lvk = idx(c, 'lv', k);
+    seqFlag(c, `s${k}`, [isv(c, clr, 1, false), isv(c, ld, 0), isv(c, lvk, 1)]);
+    seqFlag(c, `r${k}`, [`(${isv(c, clr, 1)}${or}(${allOf(c, [isv(c, ld, 0), isv(c, lvk, 0)])}))`]);
+    const async = (n: string): [string, string[]][] => [[`r${k}`, [`${n} <= ${bit(c, 0)};`]], [`s${k}`, [`${n} <= ${bit(c, 1)};`]]];
+    seqProc(c, 'su', false, async(qa[k]), seqIfs(c, [[downHeld, [`${qa[k]} <= ${idx(c, 'nu', k)};`]]]));
+    seqProc(c, 'sd', false, async(qb[k]), seqIfs(c, [[upHeld, [`${qb[k]} <= ${idx(c, 'nd', k)};`]]]));
+  });
+  // Tags (no asynchronous branch: during CLR / LOAD' the count halves hold the same value and the flags are clear)
+  seqProc(c, 'su', false, [], seqIfs(c, [[downHeld, [`ta <= ${not('tb')};`, `pa <= ${not('ua')};`, `pa2 <= ${not('da')};`]]]));
+  seqProc(c, 'sd', false, [], seqIfs(c, [[upHeld, ['tb <= ta;', `pb <= ${not('ub')};`, `pb2 <= ${not('db')};`]]]));
+  const at = (v: number) => (c.v ? `(cq == 4'd${v})` : `cq = "${v.toString(2).padStart(4, '0')}"`);
+  const flag = (f: string, v: number) => (c.v ? [`${f} <= ${at(v)};`] : seqIfs(c, [[at(v), [`${f} <= '1';`]]], [`${f} <= '0';`]));
+  seqProc(c, 'su', true, [['act', [`cf <= ${bit(c, 0)};`]]], seqIfs(c, [[downHeld, flag('cf', max)]]));
+  seqProc(c, 'sd', true, [['act', [`bf <= ${bit(c, 0)};`]]], seqIfs(c, [[upHeld, flag('bf', 0)]]));
+  seqProc(c, 'su', true, [], seqIfs(c, [[downHeld, ['ua <= pa;', 'ub <= pb;', 'uc <= pc;', `pc2 <= ${not('dc')};`]]]));
+  seqProc(c, 'sd', true, [], seqIfs(c, [[upHeld, ['da <= pa2;', 'db <= pb2;', 'dc <= pc2;', `pc <= ${not('uc')};`]]]));
+  if (c.v) {
+    synSet(c, 'co', '~(cf & (ua == pa) & (ub == pb) & (uc == pc))');
+    synSet(c, 'bo', '~(bf & (da == pa2) & (db == pb2) & (dc == pc2))');
+  } else {
+    synSet(c, 'co', "'0' when cf = '1' and ua = pa and ub = pb and uc = pc else '1'");
+    synSet(c, 'bo', "'0' when bf = '1' and da = pa2 and db = pb2 and dc = pc2 else '1'");
+  }
+  // Verilog simulation model: v = previous DOWN / UP levels, the count, CO' / BO'
+  const pd = 'pd';
+  const pu = 'pu';
+  seqSim(c, ["pd = 1'b0", "pu = 1'b0", "[3:0] qs = 4'd0", "car = 1'b1", "bor = 1'b1", 'c1', 'b1'], [
+    "c1 = 1'b1;",
+    "b1 = 1'b1;",
+    ...seqIfs(
+      c,
+      [
+        [isv(c, clr, 1), ["qs = 4'd0;"]],
+        [isv(c, ld, 0), [`qs = ldv(${A}, ${B}, ${C}, ${D});`]],
+        [allIf(c, [isv(c, pd, 0), isv(c, dn, 1), isv(c, pu, 1), isv(c, up, 1)]), ["qs = ud(qs, 1'b0);"]],
+        [allIf(c, [isv(c, pu, 0), isv(c, up, 1), isv(c, pd, 1), isv(c, dn, 1)]), ["qs = ud(qs, 1'b1);"]],
+        [allIf(c, [isv(c, pu, 1), isv(c, up, 0), isv(c, pd, 1), isv(c, dn, 1)]), [`if (qs == 4'd${max}) c1 = 1'b0;`]],
+        [allIf(c, [isv(c, pd, 1), isv(c, dn, 0), isv(c, pu, 1), isv(c, up, 1)]), ["if (qs == 4'd0) b1 = 1'b0;"]],
+      ],
+      ['c1 = car;', 'b1 = bor;']
+    ),
+    'car = c1;',
+    'bor = b1;',
+    `pd = ${dn};`,
+    `pu = ${up};`,
+  ]);
+  simSet(c, 'cq', 'qs');
+  simSet(c, 'co', 'car');
+  simSet(c, 'bo', 'bor');
+  [3, 2, 6, 7].forEach((pin, k) => seqOut(c, pin, idx(c, 'cq', k)));
+  seqOut(c, 12, 'co');
+  seqOut(c, 13, 'bo');
+}
 
 /** The chip types that have an HDL model */
 export const hasTtlHdl = (type: string): boolean => {

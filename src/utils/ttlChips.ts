@@ -66,8 +66,8 @@ export interface TtlChip {
   pullUp?: number[];
   /** Short labels for the "internal structure" view, port order (default: names) */
   labels?: string[];
-  /** Sequential chip: number of stored values and of clock inputs */
-  seq?: { v: number; clk: number };
+  /** Sequential chip: number of stored values and of clock inputs; `init` = power-up values (default all 0) */
+  seq?: { v: number; clk: number; init?: SignalValue[] };
   eval: TtlEval;
 }
 
@@ -209,6 +209,85 @@ const same = (a: SignalValue, b: SignalValue) => a === b || (unknown(a) && unkno
 function pal(ins: boolean[], products: number[]): boolean {
   const any = products.some((p) => ins.every((v, j) => !(p & (1 << j)) || v));
   return !any;
+}
+
+/**
+ * Evolution Ttl74190's Choice: `f` maps a bit mask of the sources (bit i = source i) to a `width`-bit result.
+ * Every mask the sources allow is tried (0 / 1 pin the bit; x, floating and E allow both); a result bit that
+ * differs between them reads 'X', or 'E' when a source is E.
+ */
+function choose(src: SignalValue[], width: number, f: (mask: number) => number): SignalValue[] {
+  const free = src.flatMap((v, i) => (lvl(v) ? [] : [i]));
+  const base = src.reduce<number>((m, v, i) => (v === 1 ? m | (1 << i) : m), 0);
+  const err = src.includes('E');
+  let first = -1;
+  let diff = 0;
+  for (let k = 0; k < 1 << free.length; k++) {
+    let mask = base;
+    free.forEach((i, j) => {
+      if ((k >> j) & 1) mask |= 1 << i;
+    });
+    const r = f(mask);
+    if (first < 0) first = r;
+    else diff |= r ^ first;
+  }
+  return Array.from({ length: width }, (_, i) => ((diff >> i) & 1 ? (err ? 'E' : 'X') : (((first >> i) & 1) as 0 | 1)));
+}
+
+/** Evolution Ttl74190 COUNT_UP / COUNT_DOWN: the next BCD code (codes 10-15 as the real chip leaves them) */
+export const COUNT_UP_190 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 9, 4, 9, 0, 9, 0];
+export const COUNT_DOWN_190 = [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 3, 4, 5, 6];
+
+/** Evolution 74393 / 744060 nextCount: +1 of a binary word; an E bit makes it all E, an unknown bit all unknown */
+function countUp(bits: SignalValue[]): SignalValue[] {
+  if (bits.includes('E')) return bits.map(() => 'E');
+  if (!bits.every(lvl)) return bits.map(() => 'X');
+  const n = bits.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0) + 1;
+  return bits.map((_, i) => ((n >> i) & 1) as 0 | 1);
+}
+
+/**
+ * 74192 / 74193 (evolution Ttl74192, UpDownCounterData): counts on a rising UP / DOWN while the other input
+ * stays 1 (both compared with their values at the previous evaluation); CO' / BO' go low on the falling edge at
+ * the end value / 0 and stay until the next action. v = Q0..Q3, CO', BO' (CO' / BO' start at 1); clk = DOWN, UP.
+ */
+function upDown(id: TtlChipId, max: number, title: string, description: string): TtlChip {
+  return msi({
+    id, pins: 16, out: [2, 3, 6, 7, 12, 13], vcc: 16, gnd: 8, group: 'sequential',
+    seq: { v: 6, clk: 2, init: [0, 0, 0, 0, 1, 1] },
+    title,
+    description,
+    names: ['B', 'QB', 'QA', 'DOWN', 'UP', 'QC', 'QD', 'D', 'C', 'LOAD\'', 'CO\'', 'BO\'', 'CLR', 'A'],
+    labels: ['B', 'QB', 'QA', 'DN', 'UP', 'QC', 'QD', 'D', 'C', 'LD', 'CO', 'BO', 'CLR', 'A'],
+  }, (g, s, st) => {
+    const [downPrev, upPrev] = st.clk;
+    const [down, up] = [g(4), g(5)];
+    const downHeld = downPrev === 1 && down === 1;
+    const upHeld = upPrev === 1 && up === 1;
+    let n = st.v.slice(0, 4).reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0);
+    let carry: SignalValue = 1;
+    let borrow: SignalValue = 1;
+    if (hi(g(14))) n = 0;
+    else if (lo(g(11))) {
+      const x = toLong(g(15)) + (toLong(g(1)) << 1) + (toLong(g(10)) << 2) + (toLong(g(9)) << 3);
+      n = x > max ? 0 : x;
+    } else if (downPrev === 0 && down === 1 && upHeld) n = n === 0 ? max : n - 1;
+    else if (upPrev === 0 && up === 1 && downHeld) n = n + 1 > max ? 0 : n + 1;
+    else if (upPrev === 1 && up === 0 && downHeld) {
+      if (n === max) carry = 0;
+    } else if (downPrev === 1 && down === 0 && upHeld) {
+      if (n === 0) borrow = 0;
+    } else {
+      carry = st.v[4];
+      borrow = st.v[5];
+    }
+    n &= 15;
+    st.clk = [down, up];
+    st.v = [...[0, 1, 2, 3].map((i) => ((n >> i) & 1) as 0 | 1), carry, borrow];
+    [3, 2, 6, 7].forEach((pin, i) => s(pin, st.v[i]));
+    s(12, carry);
+    s(13, borrow);
+  });
 }
 
 /** 7442 / 7443 / 7444: BCD (excess-3, excess-3 Gray) -> one of ten active-low outputs */
@@ -887,6 +966,195 @@ const CHIPS: TtlChip[] = [
     }
     [15, 14, 13, 12].forEach((pin, i) => s(pin, drive(st.v[i])));
   }),
+
+  // ---- 4h: counters ------------------------------------------------------------------------------------
+  msi({
+    // Evolution keeps the real 7493 supply pins (VCC 5, GND 10)
+    id: '7493', pins: 14, out: [8, 9, 11, 12], unused: [4, 6, 7, 13], vcc: 5, gnd: 10, group: 'sequential',
+    seq: { v: 4, clk: 2 },
+    title: '4 bit ikili dalgalı sayaç (÷2 ve ÷8)',
+    description:
+      'İki bağımsız bölüm, ikisi de düşen kenarda sayar: CKA QA\'yı tersine çevirir (÷2), CKB QB-QC-QD üçlüsünü bir artırır (÷8). '
+      + 'QA\'yı CKB\'ye bağlayınca 4 bitlik ÷16 sayaç olur. R0(1) = R0(2) = 1 iken saatten bağımsız sıfırlanır. '
+      + 'Besleme bacakları gerçek çipteki gibi 5 (VCC) ve 10 (GND).',
+    names: ['CKB', 'R0(1)', 'R0(2)', 'QC', 'QB', 'QD', 'QA', 'CKA'],
+    labels: ['CKB', 'R1', 'R2', 'QC', 'QB', 'QD', 'QA', 'CKA'],
+  }, (g, s, st) => {
+    // Evolution Ttl7493: both clocks are sampled first; v[0] = QA .. v[3] = QD
+    const ta = clockEdge(st, 0, g(14), true);
+    const tb = clockEdge(st, 1, g(1), true);
+    if (hi(g(2)) && hi(g(3))) st.v = [0, 0, 0, 0];
+    else {
+      const v = [...st.v];
+      if (ta) v[0] = not(v[0]);
+      if (tb) {
+        let carry: SignalValue = 1;
+        for (let i = 1; i < 4; i++) {
+          const old = v[i];
+          v[i] = xor(old, carry);
+          carry = and(old, carry);
+        }
+      }
+      st.v = v;
+    }
+    [12, 9, 8, 11].forEach((pin, i) => s(pin, drive(st.v[i])));
+  }),
+  msi({
+    id: '74163', pins: 16, out: [11, 12, 13, 14, 15], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 1 },
+    title: '4 bit senkron ikili sayaç (senkron sıfırlama)',
+    description:
+      'Yükselen kenarda çalışır: MR\' = 0 ise sıfırlanır, değilse SPE\' = 0 iken D3..D0 yüklenir, değilse CEP = CET = 1 iken bir artar '
+      + '(15\'ten sonra 0). 74161\'den farkı: sıfırlama da saatle olur. TC = CET · Q3·Q2·Q1·Q0.',
+    names: ['MR\'', 'CLK', 'D0', 'D1', 'D2', 'D3', 'CEP', 'SPE\'', 'CET', 'Q3', 'Q2', 'Q1', 'Q0', 'TC'],
+    labels: ['MR', 'CK', 'D0', 'D1', 'D2', 'D3', 'CEP', 'SPE', 'CET', 'Q3', 'Q2', 'Q1', 'Q0', 'TC'],
+  }, (g, s, st) => {
+    // Evolution Ttl74163: MR', SPE' and the enables count only on the edge (an undefined D bit loads as -1)
+    const triggered = clockEdge(st, 0, g(2));
+    let n = st.v.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0);
+    if (triggered) {
+      if (toLong(g(1)) === 0) n = 0;
+      else if (toLong(g(9)) === 0) n = (toLong(g(3)) + (toLong(g(4)) << 1) + (toLong(g(5)) << 2) + (toLong(g(6)) << 3)) & 15;
+      else if (and(g(7), g(10)) === 1) n = (n + 1) & 15;
+    }
+    st.v = [0, 1, 2, 3].map((i) => ((n >> i) & 1) as 0 | 1);
+    [14, 13, 12, 11].forEach((pin, i) => s(pin, st.v[i]));
+    s(15, and(g(10), st.v[0], st.v[1], st.v[2], st.v[3]));
+  }),
+  msi({
+    id: '74190', pins: 16, out: [2, 3, 6, 7, 12, 13], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 1 },
+    title: 'İleri/geri BCD (onlu) sayaç',
+    description:
+      'Yükselen kenarda CE\' = 0 iken sayar: U\'/D = 0 ileri (9\'dan sonra 0), 1 geri (0\'dan sonra 9). PL\' = 0 D3..D0\'ı saatten '
+      + 'bağımsız yükler. TC (MAX/MIN) ileride 9\'da, geride 0\'da 1 olur; RC\' = 0 ise TC = 1, CE\' = 0 ve saat 0 iken '
+      + '(sayaçları zincirlemek için).',
+    names: ['D1', 'Q1', 'Q0', 'CE\'', 'U\'/D', 'Q2', 'Q3', 'D3', 'D2', 'PL\'', 'TC', 'RC\'', 'CP', 'D0'],
+    labels: ['D1', 'Q1', 'Q0', 'CE', 'U/D', 'Q2', 'Q3', 'D3', 'D2', 'PL', 'TC', 'RC', 'CP', 'D0'],
+  }, (g, s, st) => {
+    // Evolution Ttl74190: every value an unknown input (or stored bit) could have is tried; bits that differ
+    // read unknown (E if an input is E). The load is asynchronous.
+    const triggered = clockEdge(st, 0, g(14));
+    const cnt = choose([g(11), g(4), g(5), g(15), g(1), g(10), g(9), ...st.v], 4, (m) => {
+      if (!(m & 1)) return (m >> 3) & 15;
+      if (triggered && !(m & 2)) return (m & 4 ? COUNT_DOWN_190 : COUNT_UP_190)[(m >> 7) & 15];
+      return (m >> 7) & 15;
+    });
+    st.v = cnt;
+    const flags = choose([g(4), g(5), g(14), ...cnt], 2, (m) => {
+      const code = (m >> 3) & 15;
+      const terminal = m & 2 ? code === 0 : (code & 9) === 9;
+      const rippleHigh = !(terminal && !(m & 1) && !(m & 4));
+      return (terminal ? 1 : 0) | (rippleHigh ? 2 : 0);
+    });
+    [3, 2, 6, 7].forEach((pin, i) => s(pin, drive(cnt[i])));
+    s(12, drive(flags[0]));
+    s(13, drive(flags[1]));
+  }),
+  upDown('74192', 9, 'İleri/geri BCD (onlu) sayaç, çift saatli',
+    'İki saat girişi: DOWN = 1 iken UP 0 → 1 olunca bir artar (9\'dan sonra 0), UP = 1 iken DOWN 0 → 1 olunca bir azalır '
+    + '(0\'dan sonra 9). CLR = 1 sıfırlar, LOAD\' = 0 D..A\'yı yükler (ikisi de saatten bağımsız; 9\'dan büyük değer 0 yüklenir). '
+    + 'CO\' 9\'dayken UP\'un düşen kenarında, BO\' 0\'dayken DOWN\'un düşen kenarında 0 olur.'),
+  upDown('74193', 15, 'İleri/geri 4 bit ikili sayaç, çift saatli',
+    'İki saat girişi: DOWN = 1 iken UP 0 → 1 olunca bir artar (15\'ten sonra 0), UP = 1 iken DOWN 0 → 1 olunca bir azalır '
+    + '(0\'dan sonra 15). CLR = 1 sıfırlar, LOAD\' = 0 D..A\'yı yükler (ikisi de saatten bağımsız). '
+    + 'CO\' 15\'teyken UP\'un düşen kenarında, BO\' 0\'dayken DOWN\'un düşen kenarında 0 olur.'),
+  msi({
+    id: '74390', pins: 16, out: [3, 5, 6, 7, 9, 10, 11, 13], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 8, clk: 4 },
+    title: 'Çift onlu dalgalı sayaç (÷2 ve ÷5)',
+    description:
+      'İki bağımsız sayaç, her biri iki bölüm, düşen kenarda sayar: CP0 Q0\'ı tersine çevirir (÷2), CP1 Q1-Q2-Q3\'ü 0..4 arasında '
+      + 'sayar (÷5). Q0\'ı CP1\'e bağlayınca BCD (÷10) sayaç olur. MR = 1 saatten bağımsız sıfırlar.',
+    names: ['1CP0', '1MR', '1Q0', '1CP1', '1Q1', '1Q2', '1Q3', '2Q3', '2Q2', '2Q1', '2CP1', '2Q0', '2MR', '2CP0'],
+  }, (g, s, st) => {
+    // Evolution Ttl74390: v[4h + i] = bit i of half h; clocks CP0, CP1 of half h are 2h, 2h + 1
+    ([[1, 4, 2, [3, 5, 6, 7]], [15, 12, 14, [13, 11, 10, 9]]] as const).forEach(([cp0, cp1, mr, q], h) => {
+      const div2 = clockEdge(st, 2 * h, g(cp0), true);
+      const div5 = clockEdge(st, 2 * h + 1, g(cp1), true);
+      let bits = st.v.slice(4 * h, 4 * h + 4);
+      if (hi(g(mr))) bits = [0, 0, 0, 0];
+      else {
+        if (div2) bits[0] = bits[0] === 1 ? 0 : bits[0] === 0 ? 1 : bits[0] === 'E' ? 'E' : 'X';
+        if (div5) {
+          const hiBits = bits.slice(1);
+          let next: SignalValue[];
+          if (hiBits.includes('E')) next = ['E', 'E', 'E'];
+          else if (!hiBits.every(lvl)) next = ['X', 'X', 'X'];
+          else {
+            const code = hiBits.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0);
+            next = code > 4 ? ['X', 'X', 'X'] : [0, 1, 2].map((i) => (((code === 4 ? 0 : code + 1) >> i) & 1) as 0 | 1);
+          }
+          bits = [bits[0], ...next];
+        }
+      }
+      st.v.splice(4 * h, 4, ...bits);
+      q.forEach((pin, i) => s(pin, drive(bits[i])));
+    });
+  }),
+  msi({
+    id: '74393', pins: 14, out: [3, 4, 5, 6, 8, 9, 10, 11], vcc: 14, gnd: 7, group: 'sequential', seq: { v: 8, clk: 2 },
+    title: 'Çift 4 bit ikili sayaç',
+    description:
+      'İki bağımsız 4 bit sayaç: CP\'nin düşen kenarında bir artar (15\'ten sonra 0), MR = 1 saatten bağımsız sıfırlar. '
+      + 'Birinin Q3\'ünü ötekinin CP\'sine bağlayınca 8 bitlik sayaç olur.',
+    names: ['1CP', '1MR', '1Q0', '1Q1', '1Q2', '1Q3', '2Q3', '2Q2', '2Q1', '2Q0', '2MR', '2CP'],
+  }, (g, s, st) => {
+    // Evolution Ttl74393: v[4h + i] = bit i of counter h; both clocks are sampled first
+    const t = [clockEdge(st, 0, g(1), true), clockEdge(st, 1, g(13), true)];
+    ([[2, [3, 4, 5, 6]], [12, [11, 10, 9, 8]]] as const).forEach(([mr, q], h) => {
+      let bits = st.v.slice(4 * h, 4 * h + 4);
+      if (hi(g(mr))) bits = [0, 0, 0, 0];
+      else if (t[h]) bits = countUp(bits);
+      st.v.splice(4 * h, 4, ...bits);
+      q.forEach((pin, i) => s(pin, drive(bits[i])));
+    });
+  }),
+  msi({
+    id: '744017', pins: 16, out: [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 2 },
+    title: 'Onlu Johnson sayacı (10 çıkışlı)',
+    description:
+      'CP1\' = 0 iken CP0\'ın yükselen kenarında ya da CP0 = 1 iken CP1\'in düşen kenarında bir sonraki adıma geçer; Q0..Q9\'dan '
+      + 'yalnız sıradaki 1 olur (9\'dan sonra Q0). Q5-9\' adım 0-4\'te 1, 5-9\'da 0 olur. MR = 1 saatten bağımsız Q0\'a döndürür.',
+    names: ['Q5', 'Q1', 'Q0', 'Q2', 'Q6', 'Q7', 'Q3', 'Q8', 'Q4', 'Q9', 'Q5-9\'', 'CP1\'', 'CP0', 'MR'],
+    labels: ['Q5', 'Q1', 'Q0', 'Q2', 'Q6', 'Q7', 'Q3', 'Q8', 'Q4', 'Q9', 'Q59', 'CP1', 'CP0', 'MR'],
+  }, (g, s, st) => {
+    // Evolution Ttl744017: the step is a 4-bit number; anything but 0..9 makes every output unknown
+    const cp0 = g(14);
+    const cp1 = g(13);
+    const rising0 = clockEdge(st, 0, cp0);
+    const falling1 = clockEdge(st, 1, cp1, true);
+    const next = (bits: SignalValue[]): SignalValue[] => {
+      if (bits.includes('E')) return ['E', 'E', 'E', 'E'];
+      const n = bits.every(lvl) ? bits.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0) : 99;
+      return n > 9 ? ['X', 'X', 'X', 'X'] : [0, 1, 2, 3].map((i) => ((((n + 1) % 10) >> i) & 1) as 0 | 1);
+    };
+    if (hi(g(15))) st.v = [0, 0, 0, 0];
+    else if ((rising0 && lo(cp1)) || (falling1 && hi(cp0))) st.v = next(st.v);
+    const decoded = [3, 2, 4, 7, 10, 1, 5, 6, 9, 11];
+    const n = st.v.every(lvl) ? st.v.reduce<number>((acc, b, i) => acc | (b === 1 ? 1 << i : 0), 0) : 99;
+    if (n > 9) {
+      const bad: SignalValue = st.v.includes('E') ? 'E' : FLOAT;
+      [...decoded, 12].forEach((pin) => s(pin, bad));
+    } else {
+      decoded.forEach((pin, k) => s(pin, lvlOf(k === n)));
+      s(12, lvlOf(n < 5));
+    }
+  }),
+  msi({
+    id: '744060', pins: 16, out: [1, 2, 3, 4, 5, 6, 7, 13, 14, 15], unused: [9, 10], vcc: 16, gnd: 8, group: 'sequential',
+    seq: { v: 14, clk: 1 },
+    title: '14 basamaklı ikili sayaç / bölücü',
+    description:
+      'RS\'nin düşen kenarında 14 bitlik sayaç bir artar; Q4..Q14 basamaklarının bir kısmı dışarı çıkar (Qn = girişin 2ⁿ\'e '
+      + 'bölümü; Q1-Q3 ve Q11 yok). MR = 1 saatten bağımsız sıfırlar. Osilatör bacakları (9, 10) bağlı değildir.',
+    names: ['Q12', 'Q13', 'Q14', 'Q6', 'Q5', 'Q7', 'Q4', 'RS', 'MR', 'Q9', 'Q8', 'Q10'],
+  }, (g, s, st) => {
+    // Evolution Ttl744060: v[i] = stage Q(i + 1)
+    const clocked = clockEdge(st, 0, g(11), true);
+    if (hi(g(12))) st.v = Array<SignalValue>(14).fill(0);
+    else if (clocked) st.v = countUp(st.v);
+    ([[1, 12], [2, 13], [3, 14], [4, 6], [5, 5], [6, 7], [7, 4], [13, 9], [14, 8], [15, 10]] as const).forEach(([pin, q]) =>
+      s(pin, drive(st.v[q - 1]))
+    );
+  }),
 ];
 
 export const TTL_CHIPS: Record<TtlChipId, TtlChip> = Object.fromEntries(CHIPS.map((c) => [c.id, c])) as Record<TtlChipId, TtlChip>;
@@ -970,9 +1238,9 @@ export function ttlEvoOffset(chip: TtlChip, pin: number): { x: number; y: number
 
 // ---- Evaluation ------------------------------------------------------------------------------------------
 
-/** A sequential chip's power-up state: stored values and clock levels 0 */
+/** A sequential chip's power-up state: stored values 0 (or `seq.init`), clock levels 0 */
 export const ttlSeqInit = (chip: TtlChip): TtlSeqState => ({
-  v: Array<SignalValue>(chip.seq?.v ?? 0).fill(0),
+  v: chip.seq?.init ? [...chip.seq.init] : Array<SignalValue>(chip.seq?.v ?? 0).fill(0),
   clk: Array<SignalValue>(chip.seq?.clk ?? 0).fill(0),
 });
 

@@ -94,6 +94,16 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '7476': 2 * 42, // 2 x J-K flip-flop
   '74161': 82 * 4 + 20, // 4-bit counter
   '74194': 4 * (28 + 34), // per stage D flip-flop + 4:1 mode MUX (hold / right / left / load)
+  '7493': 4 * 42 + 4, // 4 x J-K flip-flop (toggle) + reset NAND2
+  '74163': 82 * 4 + 20, // 4-bit counter
+  // per stage J-K flip-flop + up / down 2:1 MUX + asynchronous load NAND2 pair; terminal count / ripple logic
+  '74190': 4 * (42 + 14 + 8) + 40,
+  '74192': 4 * (42 + 14 + 8) + 40, // as 74190, two clocks steering the same stages
+  '74193': 4 * (42 + 14 + 8) + 40,
+  '74390': 2 * 4 * 42, // 2 x (÷2 + ÷5 stages) J-K flip-flops
+  '74393': 2 * 4 * 42, // 2 x 4 toggling J-K flip-flops
+  '744017': 5 * 28 + 10 * 6 + 2 + 6 + 2, // 5-stage Johnson counter, 10 x AND2 decode, Q5-9' NOT, clock gate AND2 + NOT
+  '744060': 14 * 42, // 14 toggling J-K flip-flops
 };
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
