@@ -127,6 +127,7 @@ export function generateFpgaConstraints(
   };
 
   let sevenSegUsed = false;
+  const notedRgb = new Set<string>();
   for (const p of ports) {
     const type = p.source?.type;
     if (type === 'clock') {
@@ -138,6 +139,34 @@ export function generateFpgaConstraints(
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
     } else if (type === 'led' || type === 'probe' || type === 'ledBar') {
       assign('LED çıkışları', pools.led, p);
+    } else if (type === 'rgbLed') {
+      // One LED per colour (evolution maps the RGB LED's three outputs like LEDs)
+      assign('LED çıkışları', pools.led, p);
+      const led = components.find((x) => x.id === p.source?.compId);
+      if (led && !notedRgb.has(led.id)) {
+        notedRgb.add(led.id);
+        notes.push(
+          `RGB LED "${led.label || 'RGB LED'}": kırmızı, yeşil, mavi portları sıradaki LED'lere atandı; kartta RGB LED varsa bu üç portu onun pinlerine taşıyın. ` +
+            (led.state.ioActiveLow
+              ? `Parça "0'da yanar" ayarlı: port girişin değerini taşır, kart LED'i aktif-yüksekse portu tersleyin.`
+              : `Ortak anotlu (aktif-düşük) bir RGB LED için portları tersleyin.`)
+        );
+      }
+    } else if (type === 'portIo' && p.dir === 'in') {
+      assign('Kayar anahtarlar (Switches)', pools.switch, p);
+    } else if (type === 'portIo' && p.dir === 'out') {
+      assign('LED çıkışları', pools.led, p);
+    } else if (type === 'portIo' || type === 'matrixKeypad' || type === 'joystick' || type === 'realTimeClock') {
+      for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
+      const what =
+        type === 'portIo'
+          ? `Port I/O "${p.name}" iki yönlü (üç durumlu) bir porttur: kartın genişleme konnektörü (Pmod / GPIO) pinlerine elle atayın.`
+          : type === 'matrixKeypad'
+            ? `Tuş takımı "${components.find((x) => x.id === p.source?.compId)?.label || 'Tuş takımı'}" satır / sütun portları bir Pmod KYPD gibi harici tuş takımına gider: satırları ve sütunları Pmod konnektörüne elle atayın (sütunlara pull-up gerekir).`
+            : type === 'joystick'
+              ? `Joystick "${components.find((x) => x.id === p.source?.compId)?.label || 'Joystick'}" X / Y portları kartta yok: harici bir joystick / ADC'nin sayısal çıkışına ya da anahtarlara elle atayın.`
+              : `Gerçek zaman saati portu ${p.name}: FPGA'da duvar saati yok; değeri harici bir RTC'den ya da kart saatiyle sayan bir sayaçtan verin.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'sevenSegment' && !sevenSegUsed) {
       sevenSegUsed = true;
       assign('7-segment ekran (a..g, dp)', [...board.sevenSegPins.segments], p);

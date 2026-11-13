@@ -138,6 +138,16 @@ const legacyOutputNames = (outputs: CircuitComponentInstance[]): Map<string, str
   return names;
 };
 
+// Input ports a test vector cannot drive (they show values set outside the circuit's pins)
+function unsupportedInput(type: string, dir: string): string | undefined {
+  if (dir === 'inout') return "Port I/O'nun giriş/çıkış portu test vektörüyle sürülemiyor (yön portun EN girişine bağlı)";
+  if (type === 'asciiKeyboard') return 'ASCII klavye test vektörüyle sürülemiyor';
+  if (type === 'joystick') return 'joystick test vektörüyle sürülemiyor (çubuğun konumu elle verilir)';
+  if (type === 'matrixKeypad') return 'tuş takımının sütunları test vektörüyle sürülemiyor (simülatörde satırlardan ve basılı tuşlardan gelir)';
+  if (type === 'realTimeClock') return 'gerçek zaman saati test vektörüyle sürülemiyor';
+  return undefined;
+}
+
 /** Every signal of the circuit a test can use, named as the HDL top-level ports */
 export function getTestSignals(components: CircuitComponentInstance[], wires: CircuitWire[]): TvSignal[] {
   return getTopLevelPorts('digital_circuit', components, wires)
@@ -149,7 +159,7 @@ export function getTestSignals(components: CircuitComponentInstance[], wires: Ci
       compId: p.source!.compId,
       type: p.source!.type,
       pins: p.source!.pins!,
-      unsupported: p.source!.type === 'asciiKeyboard' ? 'ASCII klavye test vektörüyle sürülemiyor' : undefined,
+      unsupported: p.dir === 'out' ? undefined : unsupportedInput(p.source!.type, p.dir),
     }));
 }
 
@@ -385,6 +395,19 @@ function driveInput(comps: CircuitComponentInstance[], sig: TvSignal, cell: TvCe
   if (c.type === 'dipSwitch') {
     if (!known) return `${sig.name}: DIP anahtar yalnız 0/1 alır`;
     st.dipBits = toNumber(bits as (0 | 1)[]);
+    return null;
+  }
+  if (c.type === 'portIo') {
+    // An input-only port: the levels the user sets on its pins (floating = not set)
+    let k = 0;
+    let v = 0;
+    bits.forEach((b, i) => {
+      if (b === 0 || b === 1) k += 2 ** i;
+      if (b === 1) v += 2 ** i;
+    });
+    if (bits.some((b) => b !== 0 && b !== 1 && b !== 'Z')) return `${sig.name}: Port I/O pini yalnız 0, 1 ya da boşta (Z) olur`;
+    st.portPokeKnown = k >>> 0;
+    st.portPokeVal = v >>> 0;
     return null;
   }
   if (c.type === 'switch' && sig.width > 1) {

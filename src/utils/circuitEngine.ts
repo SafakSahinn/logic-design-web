@@ -5729,6 +5729,10 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'constant' &&
       c.type !== 'dipSwitch' &&
       c.type !== 'asciiKeyboard' &&
+      c.type !== 'joystick' &&
+      c.type !== 'matrixKeypad' &&
+      c.type !== 'portIo' &&
+      c.type !== 'realTimeClock' &&
       c.type !== 'rgbMatrix16x16' &&
       c.type !== 'textLabel' &&
       c.type !== 'splitter' &&

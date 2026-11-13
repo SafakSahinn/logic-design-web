@@ -28,6 +28,10 @@ import {
   shifterDistBits,
   splitterThreads,
   pinKey,
+  getIo5Config,
+  joystickValue,
+  portPokeOf,
+  rtcValue,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { formatEng, formatMonoWidth, monoWidthNanos, ttlChipOf, ttlPinOfKey, ttlRcOf } from './ttlChips';
@@ -183,8 +187,10 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Netlist
 // ---------------------------------------------------------------------------
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbMatrix16x16'];
+// Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
+// and a port I/O are blocks (their pins go both ways), see their cases below
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbMatrix16x16', 'rgbLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -201,7 +207,7 @@ const ttlFloats = (c: CircuitComponentInstance) => {
 // three-state input pins
 const canFloat = (c?: CircuitComponentInstance) =>
   !!c &&
-  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c) || ttlFloats(c) || (c.type === 'switch' && !!c.state.pinTristate));
+  (TRI_TYPES.includes(c.type) || c.type === 'ram' || c.type === 'rom' || c.type === 'dualRam' || (OUTPUT_MODE_TYPES.includes(c.type) && !!c.state.outputMode && c.state.outputMode !== '01') || plexerFloats(c) || ttlFloats(c) || (c.type === 'switch' && !!c.state.pinTristate) || c.type === 'portIo' || (c.type === 'matrixKeypad' && getIo5Config(c).keypadMode === 'raw'));
 // TTL pin with a built-in pull-up (7447 BI'/RBO')
 const isTtlPullUp = (c: CircuitComponentInstance | undefined, pin: CircuitPin | undefined): boolean => {
   const chip = c ? ttlChipOf(c.type) : undefined;
@@ -227,7 +233,8 @@ function vPowerUpGuard(events: string, lines: string[]): string[] {
 
 export interface PortDecl {
   name: string;
-  dir: 'in' | 'out';
+  // inout: a port I/O's in/out pins (an FPGA three-state pin)
+  dir: 'in' | 'out' | 'inout';
   width: number; // 1 = scalar
   // Canvas part behind a top-level port (used by the FPGA pin constraints and the test vectors); pins = the
   // part's pin ids behind the port: one wide pin, or one 1-bit pin per port bit (LSB first)
@@ -445,6 +452,15 @@ function buildModule(
       c.outputs.forEach((p, i) => pinExpr.has(p.id) || pinExpr.set(p.id, (bits >>> i) & 1 ? L.one : L.zero));
       continue;
     }
+    if (spec.subPorts && (c.type === 'joystick' || c.type === 'realTimeClock')) {
+      // Inside an IC a joystick is a constant at its current stick position, a real-time clock at the time read
+      // now (an IC has no pins of its own for them)
+      if (c.type === 'joystick') {
+        const bits = getIo5Config(c).joyBits;
+        c.outputs.slice(0, 2).forEach((p, i) => pinExpr.has(p.id) || setWideConstant(p.id, joystickValue((i ? c.state.joyY : c.state.joyX) ?? 0, bits), bits));
+      } else if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) setWideConstant(c.outputs[0].id, rtcValue(getIo5Config(c).rtcType), 32);
+      continue;
+    }
     if (spec.subPorts && (c.type === 'switch' || c.type === 'pushbutton')) {
       // Inside an IC an unbound switch is a constant at its current position
       if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) {
@@ -463,6 +479,18 @@ function buildModule(
       const pn = names.make(`in_${label}`, 'in_dip');
       addPort({ name: pn, dir: 'in', width: c.outputs.length, source: { compId: c.id, type: c.type, pins: c.outputs.map((p) => p.id) } });
       c.outputs.forEach((p, i) => pinExpr.set(p.id, c.outputs.length === 1 ? pn : vecIndex(pn, i)));
+    } else if (c.type === 'joystick') {
+      // X and Y: one joyBits-wide input port each (evolution has no HDL for the joystick: a value from outside)
+      c.outputs.slice(0, 2).forEach((p, i) => {
+        const pn = names.make(`in_${label}_${i ? 'y' : 'x'}`, 'in_joy');
+        addPort({ name: pn, dir: 'in', width: p.width ?? 1, source: { compId: c.id, type: c.type, group: i ? 'y' : 'x', pins: [p.id] } });
+        pinExpr.set(p.id, pn);
+      });
+    } else if (c.type === 'realTimeClock') {
+      // The low 32 bits of the time, from outside (evolution has no HDL for the clock; an FPGA has no wall clock)
+      const pn = names.make(`in_${label}`, 'in_rtc');
+      addPort({ name: pn, dir: 'in', width: 32, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
     } else if (c.type === 'asciiKeyboard') {
       const pd = names.make(`kbd_${label}_data`, 'kbd_data');
       const ps = names.make(`kbd_${label}_strobe`, 'kbd_strobe');
@@ -1820,6 +1848,116 @@ function buildModule(
         }
         break;
       }
+      case 'matrixKeypad': {
+        const label = c.label || c.type;
+        const rowIdx = [0, 1, 2, 3].map((r) => c.inputs.findIndex((p) => pinKey(c, p) === `r${r}`));
+        const colOut = [0, 1, 2, 3].map((k) => {
+          const i = c.outputs.findIndex((p) => pinKey(c, p) === `c${k}`);
+          return i >= 0 ? { pin: c.outputs[i], sig: out[i] } : undefined;
+        });
+        if (!spec.subPorts) {
+          // The keypad is the board's (evolution maps it to a PmodKYPD): the rows leave as an output port the
+          // circuit drives, the columns come back as an input port (bit i = row / column i + 1)
+          const pr = names.make(`out_${label}_rows`, 'out_kp');
+          addPort({ name: pr, dir: 'out', width: 4, source: { compId: c.id, type: c.type, group: 'rows', pins: rowIdx.filter((i) => i >= 0).map((i) => c.inputs[i].id) } });
+          rowIdx.forEach((i, r) => emit(vecIndex(pr, r), i >= 0 ? inp(i) : L.zero));
+          const pc = names.make(`in_${label}_cols`, 'in_kp');
+          addPort({ name: pc, dir: 'in', width: 4, source: { compId: c.id, type: c.type, group: 'cols', pins: colOut.filter((x) => !!x).map((x) => x!.pin.id) } });
+          colOut.forEach((x, k) => x && emit(x.sig, vecIndex(pc, k)));
+          body.push(L.comment(`${label}: tuş takımı kartta (satırlar çıkış, sütunlar giriş); simülatördeki tuşlar burada yok`));
+          if (getIo5Config(c).keypadMode === 'raw') {
+            warnings.push(
+              `${label}: evolution tuş takımını yalnız PmodKYPD kipinde HDL'e çevirir; ham (raw) kip de aynı bağlantıyla (satırlar çıkış, sütunlar giriş portu) çıkarıldı, sütunları karttaki tuş takımı sürer.`
+            );
+          }
+          break;
+        }
+        // Inside an IC (no pins of its own): the columns from the rows through the keys held now, as in the
+        // simulator. PmodKYPD: 1 unless a held key's row is 0; raw: a held key passes its row, none floats. An open
+        // row is unknown there and changes no column, so it is left out.
+        const pressed = c.state.keypadPressed ?? 0;
+        const pmod = getIo5Config(c).keypadMode === 'pmod';
+        const rowOpen = rowIdx.map((i) => i < 0 || isFloating(c.inputs[i].id));
+        colOut.forEach((x, k) => {
+          if (!x) return;
+          const held = [0, 1, 2, 3].filter((r) => (pressed >>> (r * 4 + k)) & 1 && !rowOpen[r]).map((r) => inp(rowIdx[r]));
+          if (pmod) emit(x.sig, held.length ? L.and(held) : L.one);
+          else {
+            if (held.length > 1) warnings.push(`${label}: ${k + 1}. sütunda birden çok tuş basılı; simülatörde satırlar farklıysa E, burada ilk satır okundu.`);
+            emit(x.sig, held.length ? held[0] : L.hiZ);
+          }
+        });
+        break;
+      }
+      case 'portIo': {
+        // Evolution PortHdlGeneratorFactory: input-only = an input port, output-only = an output port, in/out = an
+        // FPGA three-state pin the circuit drives while the enable is 1 (the read-back is the pin itself)
+        const label = c.label || c.type;
+        const cfg = getIo5Config(c);
+        const n = cfg.portSize;
+        const idxOf = (k: string) => c.inputs.findIndex((p) => pinKey(c, p) === k);
+        const enI = idxOf('en');
+        const inI = idxOf('in');
+        const o = c.outputs.length ? { pin: c.outputs[0], sig: out[0] } : undefined;
+        const at = (sig: string, i: number) => (n === 1 ? sig : vecIndex(sig, i));
+        const dataBits = () => (inI >= 0 ? wideBits(inI).map(bitExpr) : Array<string>(n).fill(L.zero));
+        const enBits = (): string[] => {
+          if (enI < 0) return [];
+          if (cfg.portDir === 'inoutSingle' || n === 1) return Array<string>(n).fill(inp(enI));
+          return wideBits(enI).map(bitExpr);
+        };
+        const hiZn = n > 1 ? (lang === 'verilog' ? `${n}'bz` : "(others => 'Z')") : L.hiZ;
+        if (!spec.subPorts) {
+          if (cfg.portDir === 'input') {
+            const pn = names.make(`in_${label}`, 'in_port');
+            addPort({ name: pn, dir: 'in', width: n, source: { compId: c.id, type: c.type, pins: o ? [o.pin.id] : [] } });
+            if (o) emit(o.sig, pn);
+          } else if (cfg.portDir === 'output') {
+            const pn = names.make(`out_${label}`, 'out_port');
+            addPort({ name: pn, dir: 'out', width: n, source: { compId: c.id, type: c.type, pins: inI >= 0 ? [c.inputs[inI].id] : [] } });
+            emit(pn, n === 1 ? (inI >= 0 ? inp(inI) : L.zero) : compose(inI >= 0 ? wideBits(inI) : Array<Bit>(n).fill({ k: 'lit', v: 0 })));
+          } else {
+            const pn = names.make(`io_${label}`, 'io_port');
+            addPort({ name: pn, dir: 'inout', width: n, source: { compId: c.id, type: c.type, pins: o ? [o.pin.id] : [] } });
+            const enOpen = enI < 0 || !isConnected(c.inputs[enI].id);
+            const inOpen = inI < 0 || !isConnected(c.inputs[inI].id);
+            if (enOpen || inOpen) {
+              // As evolution: no drive when the enable or the data is unconnected (the pins stay inputs)
+              body.push(L.comment(`${label}: ${enOpen ? 'EN' : 'veri girişi'} boşta, port sürülmez (yalnız okunur)`));
+              // VHDL: an inout port nothing assigns drives its default 'U' (Verilog: an undriven wire is z already,
+              // and a constant z would let synthesis fold the read-back to z)
+              if (lang === 'vhdl') emit(pn, hiZn);
+              if (!enOpen) warnings.push(`${label}: veri girişi boşta, port sürülmez; simülatörde EN = 1 iken pinler E (çakışma) olur.`);
+            } else if (cfg.portDir === 'inoutSingle' || n === 1) {
+              const d = n === 1 ? inp(inI) : asName(compose(wideBits(inI)), n, `${nm}_d`);
+              emit(pn, L.mux(lang === 'vhdl' ? wrap(inp(enI)) : inp(enI), d, hiZn));
+            } else {
+              const d = dataBits();
+              enBits().forEach((e, i) => emit(vecIndex(pn, i), L.mux(lang === 'vhdl' ? wrap(e) : e, d[i], L.hiZ)));
+            }
+            if (o) emit(o.sig, pn);
+          }
+          break;
+        }
+        // Inside an IC (no pins of its own): the levels set on the pins are constants (floating = z); in/out shows
+        // the data while the enable is 1, else the set level, as in the simulator (an output-only port drives nothing)
+        if (!o) {
+          body.push(L.comment(`${label}: IC içinde yalnız çıkış portu dışarı bağlanmaz`));
+          break;
+        }
+        const poke = Array.from({ length: n }, (_, i) => {
+          const v = portPokeOf(c, i);
+          return v === 'Z' ? L.hiZ : v === 1 ? L.one : L.zero;
+        });
+        if (cfg.portDir === 'input') {
+          poke.forEach((v, i) => emit(at(o.sig, i), v));
+          break;
+        }
+        const d = dataBits();
+        const en = enBits();
+        poke.forEach((v, i) => emit(at(o.sig, i), L.mux(lang === 'vhdl' ? wrap(en[i]) : en[i], d[i], v)));
+        break;
+      }
       default:
         if (hasTtlHdl(c.type)) {
           // TTL chip: an instance of its ttl<number> module, pins bound by their physical number
@@ -1902,8 +2040,9 @@ function buildModule(
                   { suffix: 'en', pins: c.inputs.slice(0, 1) },
                   { suffix: 'note', pins: c.inputs.slice(1, 5) },
                 ]
-              : c.type === 'hexDigit' || c.type === 'dotMatrix'
-                ? // one port per input: the hex digit's 4-bit value and DP; each column / row / select vector of a matrix
+              : c.type === 'hexDigit' || c.type === 'dotMatrix' || c.type === 'rgbLed'
+                ? // one port per input: the hex digit's 4-bit value and DP; each column / row / select vector of a
+                  // matrix; an RGB LED's red, green and blue (the input level: lit on 1, active low is the board pin's)
                   c.inputs.map((p) => {
                     const k = p.id.startsWith(`${c.id}_`) ? p.id.slice(c.id.length + 1) : p.id;
                     return { suffix: c.type === 'hexDigit' ? (k === 'dp' ? 'dp' : '') : k, pins: [p] };
@@ -2355,7 +2494,7 @@ function header(lang: Lang, title: string, standard: string): string {
 
 function renderVerilog(m: BuiltModule): string {
   const portLines = m.ports.map(
-    (p) => `  ${p.dir === 'in' ? 'input' : 'output'} wire ${p.width > 1 ? `[${p.width - 1}:0] ` : ''}${p.name}`
+    (p) => `  ${p.dir === 'in' ? 'input' : p.dir === 'inout' ? 'inout' : 'output'} wire ${p.width > 1 ? `[${p.width - 1}:0] ` : ''}${p.name}`
   );
   const sigLines = m.signals.map((s) => {
     const reg = s.init !== undefined;

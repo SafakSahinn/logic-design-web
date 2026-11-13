@@ -126,9 +126,10 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '74123': 2 * (2 + 8 + 28 + 8 + 2),
 };
 
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
+// Board / outside I/O parts (a keypad's columns and a port's pins come from outside like a switch)
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock'];
 // Displays carry no logic (no transistors counted)
-const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbMatrix16x16'];
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbMatrix16x16', 'rgbLed'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [

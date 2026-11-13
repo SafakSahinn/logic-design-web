@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import { simulateCircuit } from './circuitEngine';
+import { portPokeOf, simulateCircuit } from './circuitEngine';
 import { getTopLevelPorts, getTopModuleName, type PortDecl } from './hdlGenerator';
 import { cellText, circuitHasState, parseTestVector, type TvRow, type TvSignal } from './testVectorRunner';
 
@@ -89,6 +89,7 @@ function plan(
     const pinOf = (id: string) => comp?.outputs.find((q) => q.id === id) ?? comp?.inputs.find((q) => q.id === id);
     let bits: Bit[];
     if (comp?.type === 'switch' && comp.state.pinTristate) bits = Array<Bit>(p.width).fill('Z');
+    else if (comp?.type === 'portIo') bits = Array.from({ length: p.width }, (_, k) => portPokeOf(comp, k) as Bit);
     else if (pins.length === 1 && p.width > 1) {
       const q = pinOf(pins[0]);
       bits = Array.from({ length: p.width }, (_, k) => (q?.bits?.[k] === 1 ? 1 : 0));
