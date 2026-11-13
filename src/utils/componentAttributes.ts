@@ -55,7 +55,7 @@ import {
   switchStateFor,
 } from './circuitEngine';
 import { snapPt10 } from './wiringEngine';
-import { isTtlType } from './ttlChips';
+import { ENG_PRESETS, formatEng, isTtlType, ttlRcOf, type EngUnit } from './ttlChips';
 
 export type AttrValue = string | number;
 
@@ -89,6 +89,7 @@ export type AttrKind =
   | 'buttons' // row of toggle buttons
   | 'hex' // hexadecimal text field
   | 'int' // decimal integer text field (32-bit signed)
+  | 'eng' // resistance / capacitance text field with presets (evolution EngineeringAttribute), see AttrDef.unit
   | 'info' // read-only value
   | 'bitMap' // splitter: one drop-down per incoming bit
   | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
@@ -108,6 +109,8 @@ export interface AttrDef {
   singleOnly?: boolean;
   /** Shown only for parts where this holds (e.g. settings of one rule set); every selected part must pass */
   visible?: (comp: CircuitComponentInstance) => boolean;
+  /** 'eng' fields: the stored unit (kΩ / pF) */
+  unit?: EngUnit;
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -862,6 +865,7 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
+  if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
   if (MEM_TYPES.has(type) && !list.includes(triggerAttr)) list.push(triggerAttr);
   // Adder, subtractor, negator, absolute, square root: data width only
   if (ARITH_TYPES.has(type) && !list.includes(arithWidthAttr)) list.push(arithWidthAttr);
@@ -1044,6 +1048,30 @@ const ttlInternalAttr: AttrDef = {
     return withState(c, { ttlInternal: on || undefined });
   },
 };
+
+/** 74123 external R / C of each half (evolution 1Rext / 1Cext / 2Rext / 2Cext), stored in kΩ / pF */
+const monoRcAttr = (half: 0 | 1, unit: EngUnit): AttrDef => {
+  const res = unit === 'kohm';
+  const key = res ? 'ttlRext' : 'ttlCext';
+  return {
+    key: `${key}${half + 1}`,
+    label: `${half + 1}${res ? 'Rext' : 'Cext'}`,
+    kind: 'eng',
+    unit,
+    title: res
+      ? `${half + 1}. yarının dış direnci (2 kΩ - 1 MΩ). Sade sayı kΩ'dur; 47k, 1M, 470kΩ gibi birimli de yazılabilir (tam kΩ olmalı). Darbe tW = 0,45 · R · C`
+      : `${half + 1}. yarının dış kondansatörü (10 nF - 1000 µF). Sade sayı pF'dir; 100n, 4.7u, 1000uF gibi birimli de yazılabilir. Darbe tW = 0,45 · R · C`,
+    options: ENG_PRESETS(unit).map((v) => ({ value: v, label: formatEng(v, unit) })),
+    get: (c) => ttlRcOf(c.state)[res ? 'rext' : 'cext'][half],
+    set: (c, v) => {
+      const pair = [...ttlRcOf(c.state)[res ? 'rext' : 'cext']] as [number, number];
+      if (pair[half] === Number(v)) return null;
+      pair[half] = Number(v);
+      return withState(c, { [key]: pair });
+    },
+  };
+};
+const MONO_RC_ATTRS = [monoRcAttr(0, 'kohm'), monoRcAttr(0, 'pf'), monoRcAttr(1, 'kohm'), monoRcAttr(1, 'pf')];
 
 const dipSizeAttr: AttrDef = {
   key: 'dipSize',

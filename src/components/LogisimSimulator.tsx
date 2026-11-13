@@ -153,7 +153,10 @@ import {
   type AttrValue,
 } from '../utils/componentAttributes';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
-import { TTL_CHIPS, TTL_GROUP_TITLES, ttlChipOf, ttlHeight, ttlPinPoint, ttlPorts, type TtlGroup } from '../utils/ttlChips';
+import {
+  TTL_CHIPS, TTL_GROUP_TITLES, formatEng, formatMonoWidth, monoWidthNanos, parseEng, setTtlRunning, ttlChipOf, ttlHeight,
+  ttlNextDeadline, ttlNow, ttlPinPoint, ttlPorts, ttlRcOf, type TtlGroup,
+} from '../utils/ttlChips';
 import { generateVerilogTestbench, generateVhdlTestbench } from '../utils/hdlTestbench';
 import {
   getAllSubcircuits,
@@ -904,6 +907,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     return () => clearInterval(timer);
   }, [isRunning, clockHz, clockRatesKey, wires]);
+
+  // 74123 pulses run on the run clock, which only advances while the simulation runs (evolution freezes them too)
+  useEffect(() => {
+    setTtlRunning(isRunning);
+  }, [isRunning]);
+
+  // When the soonest running 74123 pulse ends (subcircuits included), simulate again so it can end
+  useEffect(() => {
+    if (!isRunning) return;
+    let soonest = Infinity;
+    const scan = (list: CircuitComponentInstance[]) => {
+      for (const c of list) {
+        const chip = ttlChipOf(c.type);
+        const t = chip ? ttlNextDeadline(chip, c.state.ttlSeq) : undefined;
+        if (t !== undefined && t < soonest) soonest = t;
+        if (c.state.subcircuitInternal) scan(c.state.subcircuitInternal.components);
+      }
+    };
+    scan(components);
+    if (soonest === Infinity) return;
+    // Browser timers are coarse (a few ms); a shorter pulse ends on the first wake-up, as in evolution
+    const timer = setTimeout(() => {
+      setComponents((prev) => {
+        const sim = simulateCircuit(prev, wires);
+        setWires(sim.wires);
+        return sim.components;
+      });
+    }, Math.max(0, Math.ceil(soonest - ttlNow())));
+    return () => clearTimeout(timer);
+  }, [isRunning, components, wires]);
 
   // Read once at the first render: the mount effect removes it from the address (and may run twice in dev)
   const urlPresetIdRef = useRef<string | null>(
@@ -3829,7 +3862,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const top = at.y === 0;
         const nc = ttlChip.unused?.includes(n);
         const power = n === ttlChip.vcc ? 'Vcc' : n === ttlChip.gnd ? 'GND' : undefined;
-        const text = power ?? (internal ? (nc ? 'NC' : labels.get(n) ?? String(n)) : String(n));
+        const text = power ?? (internal ? (nc ? ttlChip.ncLabels?.[n] ?? 'NC' : labels.get(n) ?? String(n)) : String(n));
         legs.push(
           <g key={n}>
             <rect x={at.x - 5} y={top ? 0 : H - LEG} width={10} height={LEG} fill={nc ? '#a1a1aa' : '#d4d4d8'} stroke="#18181b" strokeWidth={0.8} />
@@ -3842,7 +3875,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             >
               {text}
             </text>
-            <title>{`${n}. bacak${power ? ` (${power})` : nc ? ' (boş)' : `: ${names.get(n) ?? ''}`}`}</title>
+            <title>{`${n}. bacak${power ? ` (${power})` : nc ? (ttlChip.ncLabels?.[n] ? ` (${ttlChip.ncLabels[n]}: zamanlama, mantık bacağı değil)` : ' (boş)') : `: ${names.get(n) ?? ''}`}`}</title>
           </g>
         );
       }
@@ -3851,9 +3884,25 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           <rect x={0} y={LEG} width={W} height={H - 2 * LEG} rx={5} fill={bodyFill} stroke={isSelected ? strokeColor : '#18181b'} strokeWidth={isSelected ? 2 : 1.2} />
           <path d={`M 0 ${H / 2 - 7} A 7 7 0 0 1 0 ${H / 2 + 7}`} fill={internal ? '#94a3b8' : '#18181b'} />
           {legs}
-          <text x={W / 2} y={H / 2 + 5} textAnchor="middle" fill={textFill} className={`${internal ? 'text-[11px]' : 'text-[14px]'} font-mono font-black select-none`}>
+          <text x={W / 2} y={H / 2 + (ttlChip.expire ? 1 : 5)} textAnchor="middle" fill={textFill} className={`${internal ? 'text-[11px]' : 'text-[14px]'} font-mono font-black select-none`}>
             {ttlChip.id}
           </text>
+          {ttlChip.expire && (() => {
+            // 74123: each half's pulse width under the number (evolution drawTiming), green while the pulse runs
+            const rc = ttlRcOf(comp.state);
+            return [0, 1].map((h) => (
+              <text
+                key={`tw${h}`}
+                x={W * (h ? 0.7 : 0.3)}
+                y={H / 2 + 10}
+                textAnchor="middle"
+                fill={comp.state.ttlSeq?.v[h] === 1 ? '#16a34a' : textFill}
+                className="text-[7px] font-mono font-bold select-none"
+              >
+                {formatMonoWidth(monoWidthNanos(rc.rext[h], rc.cext[h]))}
+              </text>
+            ));
+          })()}
           {ttlChip.openCollector && (
             <text x={W - 6} y={H / 2 + 4} textAnchor="end" className="text-[7px] font-mono font-black fill-amber-500 select-none">
               OC
@@ -10000,6 +10049,47 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       className={fieldCls}
                       title={def.title}
                     />
+                  );
+                }
+                case 'eng': {
+                  // Resistance / capacitance: free text (10k, 4.7uF; a bare number is the stored kΩ / pF) plus presets
+                  const unit = def.unit ?? 'kohm';
+                  const shown = common === undefined ? '' : formatEng(Number(common), unit);
+                  const listId = `eng-${def.key}`;
+                  return (
+                    <>
+                      <input
+                        key={`${ids.join('|')}:${shown}`}
+                        defaultValue={shown}
+                        list={listId}
+                        placeholder={common === undefined ? '—' : undefined}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          if (e.key === 'Escape') {
+                            (e.target as HTMLInputElement).value = shown;
+                            (e.target as HTMLInputElement).blur();
+                          }
+                        }}
+                        onBlur={(e) => {
+                          const text = e.target.value.trim();
+                          if (text === shown || (text === '' && common === undefined)) return;
+                          const n = parseEng(text, unit);
+                          if (n === undefined) {
+                            e.target.value = shown;
+                            showToast(unit === 'kohm' ? 'Geçersiz direnç: 2 kΩ - 1 MΩ (örnek 10k, 47k, 1M).' : 'Geçersiz kapasite: 10 nF - 1000 µF (örnek 100n, 4.7u).');
+                            return;
+                          }
+                          handleApplyAttribute(def, n, ids);
+                        }}
+                        className={fieldCls}
+                        title={def.title}
+                      />
+                      <datalist id={listId}>
+                        {options.map((o) => (
+                          <option key={String(o.value)} value={o.label} />
+                        ))}
+                      </datalist>
+                    </>
                   );
                 }
                 case 'flags': {

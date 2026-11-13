@@ -37,7 +37,7 @@ import {
 import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance } from './subcircuitManager';
 import { repairWires } from './wiringEngine';
-import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts } from './ttlChips';
+import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
 
 /**
  * Evolution TTL chip connection points relative to loc (east-facing), by our pin key; an in/out pin's input
@@ -1551,6 +1551,22 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         let inst = configureTtl(createComponentInstance(nativeType, 0, 0), { vccGnd });
         inst = { ...inst, rotation: rot ? (rot as 90 | 180 | 270) : undefined };
         if (attr.ShowInternalStructure === 'true') inst = { ...inst, state: { ...inst.state, ttlInternal: true } };
+        if (chip.expire) {
+          // 74123 R / C: kΩ / pF numbers (evolution also reads 10k, 4.7uF); an unreadable value keeps the default
+          const rc = ttlRcOf({});
+          const read = (name: string, unit: 'kohm' | 'pf', pair: [number, number], h: number) => {
+            const raw = attr[name];
+            if (raw === undefined) return;
+            const n = parseEng(raw, unit);
+            if (n === undefined) warnings.push(`${where}: ${name} = "${raw}" okunamadı (aralık dışı ya da geçersiz), varsayılan kullanıldı.`);
+            else pair[h] = n;
+          };
+          for (const h of [0, 1]) {
+            read(`${h + 1}Rext`, 'kohm', rc.rext, h);
+            read(`${h + 1}Cext`, 'pf', rc.cext, h);
+          }
+          inst = { ...inst, state: { ...inst.state, ttlRext: rc.rext, ttlCext: rc.cext } };
+        }
         const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
         const ports = ttlImportPorts(nativeType, vccGnd).map(({ key: k, off }) => ({ k, pt: at(loc, rotateOffset(off, rot)) }));
         place(

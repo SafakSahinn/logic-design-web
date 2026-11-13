@@ -594,6 +594,8 @@ function binCounter(c: SeqCtx, r: string, width: number, cp: number, mr: number)
 }
 
 const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
+  // 74123: two retriggerable monostables (pulse width not modelled, see monostableHdl)
+  '74123': (c) => monostableHdl(c),
   // Two D flip-flops: (CLR', D, CLK, PRE', Q, Q') = (1, 2, 3, 4, 5, 6) and (13, 12, 11, 10, 9, 8)
   '7474': (c) => {
     ([[1, 2, 3, 4, 5, 6], [13, 12, 11, 10, 9, 8]] as const).forEach(([clr, d, clk, pre, q, qn], k) =>
@@ -1597,6 +1599,56 @@ function upDownHdl(c: SeqCtx, max: number) {
   seqOut(c, 13, 'bo');
 }
 
+/**
+ * 74123 monostable, per half (A', B, RD', Q, Q'). The pulse width (an analog RC time) is not modelled: Q goes 1 on
+ * a trigger and only RD' = 0 brings it back. The simulator triggers when A' = 0, B = 1, RD' = 1 now ("tc") and the
+ * last powered evaluation had a clean opposite level on one of them (A' = 1, B = 0 or RD' = 0: "g"); a step through
+ * an undefined level ("n": neither) disarms it.
+ * Structural model: tl = tc sampled while powered (power returning into tc without a change is no edge), arm = g
+ * set / n cleared latch (Verilog synthesis: set by g's rising edge). arm only changes while tc is 0, so it is stable
+ * at tl's rising edge (no race).
+ */
+function monostableHdl(c: SeqCtx) {
+  const any = (xs: string[]) => `(${xs.join(c.v ? ' | ' : ' or ')})`;
+  const neg = (x: string) => (c.v ? `~${x}` : `not ${x}`);
+  ([[1, 2, 3, 13, 4], [9, 10, 11, 5, 12]] as const).forEach(([pa, pb, prd, pq, pqn], k) => {
+    const n = k + 1;
+    const [a, b, rd] = [c.i(pa), c.i(pb), c.i(prd)];
+    const q = `q${n}`;
+    const trig = [isv(c, a, 0), isv(c, b, 1), isv(c, rd, 1)];
+    const opp = any([isv(c, a, 1), isv(c, b, 0), isv(c, rd, 0)]);
+    seqReg(c, q);
+    seqFlag(c, `clr${n}`, [isv(c, rd, 0)]);
+    seqFlag(c, `tc${n}`, trig);
+    seqFlag(c, `g${n}`, [opp]);
+    // VHDL only: the Verilog synthesis model has no undefined level
+    if (!c.v) seqFlag(c, `n${n}`, [neg(opp), neg(`(${allOf(c, trig)})`)]);
+    seqClock(c, `tl${n}`, `tc${n}`);
+    synReg(c, `arm${n}`);
+    // Verilog synthesis has no undefined level, so no "n": arm is a flip-flop set by g's rising edge (as a g / n
+    // latch, synthesis rewrites it into "open while tc is 0, D = g", whose data and enable change together when the
+    // trigger state begins, and the unsimplified n glitches when it ends)
+    c.syn.body.push(
+      c.v
+        ? `  always @(posedge g${n}) arm${n} <= 1'b1;`
+        : `  arm${n} <= '1' when g${n} = '1' else '0' when n${n} = '1' else arm${n};`
+    );
+    seqProc(c, `tl${n}`, false, [[`clr${n}`, [`${q} <= ${bit(c, 0)};`]]], c.v ? [`if (arm${n}) ${q} <= 1'b1;`] : [`if arm${n} = '1' then`, `  ${q} <= '1';`, 'end if;']);
+    // Simulation model: the simulator's step, the last A', B, RD' unknown at power-up
+    seqSim(c, [`pa${n} = 1'bx`, `pb${n} = 1'bx`, `pr${n} = 1'bx`], [
+      ...seqIfs(c, [
+        [isv(c, rd, 0), [`${q} = 1'b0;`]],
+        [allIf(c, [...trig, `(${isv(c, `pb${n}`, 0)} || ${isv(c, `pa${n}`, 1)} || ${isv(c, `pr${n}`, 0)})`]), [`${q} = 1'b1;`]],
+      ]),
+      `pa${n} = ${a};`,
+      `pb${n} = ${b};`,
+      `pr${n} = ${rd};`,
+    ]);
+    seqOut(c, pq, q);
+    seqOut(c, pqn, neg(q));
+  });
+}
+
 /** The chip types that have an HDL model */
 export const hasTtlHdl = (type: string): boolean => {
   const chip = ttlChipOf(type);
@@ -1784,6 +1836,12 @@ export function renderTtlModule(lang: Lang, chip: TtlChip, moduleName: string): 
         'kenar: çipin son örneklediği saat seviyesinin temiz değişimi (açılışta 0)',
         ...(v
           ? ['simülasyonda (SYNTHESIS tanımsız) çip, girişleri oturduktan sonra simülatörün adımını uygulayan tek süreçtir; sentezde aynı davranışın yapısal modeli']
+          : []),
+        ...(chip.expire
+          ? [
+              'UYARI: darbe süresi (tW = 0,45 x R x C, dış RC ağı) HDL\'de modellenmez: Q tetiklenince 1 olur ve yalnız RD\' = 0 ile 0\'a döner',
+              'gerçek bir tasarımda süreyi saatli bir sayaçla üretin (simülatördeki süre ve R / C değerleri örnek satırındaki yorumda)',
+            ]
           : []),
       ]
     : [];

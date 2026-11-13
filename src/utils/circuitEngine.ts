@@ -11,7 +11,7 @@ import type {
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
-import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
+import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlRcOf, ttlNow, ttlSeqCopy, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
@@ -3552,8 +3552,11 @@ export function simulateCircuitStep(
       const byKey = new Map(comp.inputs.map((p) => [pinKey(comp, p), p]));
       // A sequential chip works on a copy of its stored state (the previous step's part may share the old object)
       const prev = comp.state.ttlSeq;
-      const st = ttlChip.seq ? (prev ? { ...prev, v: [...prev.v], clk: [...prev.clk] } : ttlSeqInit(ttlChip)) : undefined;
-      const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0], st);
+      const st = ttlChip.seq ? (prev ? ttlSeqCopy(prev) : ttlSeqInit(ttlChip)) : undefined;
+      const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0], st, {
+        ...ttlRcOf(comp.state),
+        now: ttlNow(),
+      });
       if (st) comp.state.ttlSeq = st;
       comp.outputs.forEach((p, i) => {
         const v = outs.get(pinKey(comp, p));

@@ -30,7 +30,7 @@ import {
   pinKey,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
-import { ttlChipOf, ttlPinOfKey } from './ttlChips';
+import { formatEng, formatMonoWidth, monoWidthNanos, ttlChipOf, ttlPinOfKey, ttlRcOf } from './ttlChips';
 import { hasTtlHdl, renderTtlModule, ttlHdlPorts } from './ttlHdl';
 
 /*
@@ -1839,6 +1839,13 @@ function buildModule(
           });
           const inst = names.make(`u_${nm}`, 'u_ttl');
           const mod = ttlModules.get(chip.id)!;
+          if (chip.expire) {
+            // 74123: the pulse width lives in the simulator only
+            const rc = ttlRcOf(c.state);
+            const tw = [0, 1].map((h) => `${h + 1}. yarı ${formatEng(rc.rext[h], 'kohm')} x ${formatEng(rc.cext[h], 'pf')} = ${formatMonoWidth(monoWidthNanos(rc.rext[h], rc.cext[h]))}`);
+            body.push(L.comment(`${c.label || chip.id}: darbe süresi simülatörde ${tw.join(', ')}; HDL'de modellenmez (Q yalnız RD' = 0 ile biter)`));
+            warnings.push(`${c.label || c.type}: 74123'ün darbe süresi (tW = 0,45 x R x C) HDL'de modellenmez; Q tetiklenince 1 olur, yalnız RD' = 0 ile 0'a döner.`);
+          }
           if (lang === 'verilog') body.push(`  ${mod} ${inst} (`, maps.map(([pn, sig]) => `    .${pn}(${sig})`).join(',\n'), `  );`);
           else body.push(`  ${inst} : entity work.${mod}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
           break;

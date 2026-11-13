@@ -46,7 +46,7 @@ import {
   type LogisimRamLook,
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
-import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts } from './ttlChips';
+import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
 import { getTtlConfig } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
@@ -701,6 +701,11 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             const a = (name: string, val: string | boolean) => `<a name="${name}" val="${val}"/>`;
             let attrs = a('VccGndPorts', vccGnd) + a('ShowInternalStructure', c.state.ttlInternal === true);
             if (c.label?.trim()) attrs += a('label', xmlEsc(c.label.trim()));
+            if (chip.expire) {
+              // 74123: evolution's 1Rext / 1Cext / 2Rext / 2Cext, plain numbers in kΩ / pF
+              const rc = ttlRcOf(c.state);
+              for (const h of [0, 1]) attrs += a(`${h + 1}Rext`, String(rc.rext[h])) + a(`${h + 1}Cext`, String(rc.cext[h]));
+            }
             const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
             const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
             for (const tp of ttlPorts(chip, vccGnd)) {

@@ -32,13 +32,24 @@ export interface TtlSeqState {
    * pins when it shifts: on the first powered evaluation they read unknown)
    */
   off?: boolean;
+  /** Timed chip (74123): when each pulse ends, in run-clock milliseconds (ttlNow) */
+  t?: number[];
+}
+
+/** What a chip may read besides its pins: the part's settings and the run clock */
+export interface TtlCtx {
+  /** 74123: R (kΩ) and C (pF) of each half */
+  rext: [number, number];
+  cext: [number, number];
+  /** Run-clock time (ttlNow), milliseconds */
+  now: number;
 }
 
 /**
  * Port values in evolution's port order; the chip returns the values of the output ports it sets. A sequential
  * chip also gets its state, which it updates in place.
  */
-export type TtlEval = (p: SignalValue[], st: TtlSeqState) => (SignalValue | undefined)[];
+export type TtlEval = (p: SignalValue[], st: TtlSeqState, ctx: TtlCtx) => (SignalValue | undefined)[];
 
 export interface TtlChip {
   /** Evolution tool id, also the .circ element name ("7400") */
@@ -71,8 +82,18 @@ export interface TtlChip {
   pullUp?: number[];
   /** Short labels for the "internal structure" view, port order (default: names) */
   labels?: string[];
-  /** Sequential chip: number of stored values and of clock inputs; `init` = power-up values (default all 0) */
-  seq?: { v: number; clk: number; init?: SignalValue[] };
+  /**
+   * Sequential chip: number of stored values and of clock inputs; `init` = power-up values (default all 0),
+   * `clkInit` = the remembered input levels at power-up (default all 0)
+   */
+  seq?: { v: number; clk: number; init?: SignalValue[]; clkInit?: SignalValue[]; timers?: number };
+  /** Labels of the NC pins in the "internal structure" view (74123's RC timing pins) */
+  ncLabels?: Record<number, string>;
+  /**
+   * Timed chip: ends the pulses whose time is up, with or without power (evolution's Swing timer); true when
+   * something changed
+   */
+  expire?: (st: TtlSeqState, now: number) => boolean;
   eval: TtlEval;
 }
 
@@ -164,7 +185,7 @@ type PinSet = (pin: number, v: SignalValue) => void;
 type MsiDef = Omit<TtlChip, 'eval' | 'group'> & { group?: TtlGroup };
 
 /** A chip whose logic reads / writes physical pins; the pin -> port index map skips NC and power pins */
-function msi(def: MsiDef, logic: (g: PinGet, s: PinSet, st: TtlSeqState) => void): TtlChip {
+function msi(def: MsiDef, logic: (g: PinGet, s: PinSet, st: TtlSeqState, ctx: TtlCtx) => void): TtlChip {
   const idx = new Map<number, number>();
   let k = 0;
   for (let pin = 1; pin <= def.pins; pin++) {
@@ -174,9 +195,9 @@ function msi(def: MsiDef, logic: (g: PinGet, s: PinSet, st: TtlSeqState) => void
   return {
     group: 'plexers',
     ...def,
-    eval: (p, st) => {
+    eval: (p, st, ctx) => {
       const o: SignalValue[] = [];
-      logic((pin) => p[idx.get(pin)!], (pin, v) => { o[idx.get(pin)!] = v; }, st);
+      logic((pin) => p[idx.get(pin)!], (pin, v) => { o[idx.get(pin)!] = v; }, st, ctx);
       return o;
     },
   };
@@ -399,6 +420,147 @@ const SEG7_OFF = [
   '0000001', '1001111', '0010010', '0000110', '1001100', '0100100', '1100000', '0001111',
   '0000000', '0001100', '1110010', '1100110', '1011100', '0110100', '1110000', '1111111',
 ];
+
+// ---- 74123 monostable: run clock, external R / C (evolution Ttl74123 + EngineeringAttribute) -----------------
+
+/**
+ * Run clock in milliseconds. Like evolution's pulses, it only advances while the simulation runs (Çalıştır):
+ * pausing freezes the time a pulse has left. Wall-clock based, so a saved pulse ends on time after a reload.
+ */
+const wallClock = () => (typeof performance !== 'undefined' ? performance.timeOrigin + performance.now() : Date.now());
+let rawClock: () => number = wallClock;
+let pausedAt: number | null = null;
+let pausedTotal = 0;
+
+export const ttlNow = (): number => (pausedAt ?? rawClock()) - pausedTotal;
+
+/** The simulation runs / stops: the run clock goes on / freezes */
+export function setTtlRunning(running: boolean): void {
+  if (!running && pausedAt === null) pausedAt = rawClock();
+  else if (running && pausedAt !== null) {
+    pausedTotal += rawClock() - pausedAt;
+    pausedAt = null;
+  }
+}
+
+/** Test rigs: replace the wall clock (milliseconds), or restore it with no argument; the run clock restarts running */
+export function setTtlClock(fn?: () => number): void {
+  rawClock = fn ?? wallClock;
+  pausedAt = null;
+  pausedTotal = 0;
+}
+
+export type EngUnit = 'kohm' | 'pf';
+const ENG: Record<EngUnit, { exp: number; min: number; max: number; presets: number[]; dims: number[] }> = {
+  kohm: { exp: 3, min: 2, max: 1000, presets: [2, 10, 100, 1000], dims: [0, 3, 6] },
+  pf: { exp: -12, min: 10_000, max: 1_000_000_000, presets: [10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000], dims: [-12, -9, -6] },
+};
+export const ENG_PRESETS = (unit: EngUnit) => ENG[unit].presets;
+export const MONO_DEFAULT_REXT = 10;
+export const MONO_DEFAULT_CEXT = 100_000;
+
+/** The part's R (kΩ) and C (pF) per half */
+export function ttlRcOf(state: { ttlRext?: [number, number]; ttlCext?: [number, number] }): Pick<TtlCtx, 'rext' | 'cext'> {
+  return {
+    rext: state.ttlRext ?? [MONO_DEFAULT_REXT, MONO_DEFAULT_REXT],
+    cext: state.ttlCext ?? [MONO_DEFAULT_CEXT, MONO_DEFAULT_CEXT],
+  };
+}
+
+const ENG_SYMBOL: Record<number, string> = { 0: 'Ω', 3: 'kΩ', 6: 'MΩ', [-12]: 'pF', [-9]: 'nF', [-6]: 'µF' };
+
+/** Evolution EngineeringAttribute display text: 10 kΩ, 100 nF, 1000 µF (largest prefix with a value of at least 1) */
+export function formatEng(stored: number, unit: EngUnit): string {
+  const { exp, dims } = ENG[unit];
+  let chosen = exp;
+  for (const e of dims) if (e > chosen && stored >= 10 ** (e - exp)) chosen = e;
+  const decimals = chosen - exp;
+  let text = String(stored);
+  if (decimals > 0) {
+    const digits = text.padStart(decimals + 1, '0');
+    const point = digits.length - decimals;
+    text = `${digits.slice(0, point)}.${digits.slice(point)}`.replace(/\.?0+$/, '');
+  }
+  return `${text} ${ENG_SYMBOL[chosen]}`;
+}
+
+/**
+ * Evolution EngineeringAttribute.parse: a bare number is the stored unit (kΩ / pF, as in the .circ file); a value
+ * with an SI prefix, a unit or an exponent is absolute (10k = 10 kΩ, 4.7uF, 2.2e-6F) and must land on a whole
+ * stored unit. Undefined when invalid or out of range.
+ */
+export function parseEng(raw: string, unit: EngUnit): number | undefined {
+  if (!raw || raw.length > 80) return undefined;
+  let text = raw.trim().replace(/[\s ]/g, '').replace(/[µμ]/g, 'u');
+  const res = unit === 'kohm';
+  if (text.includes('Ω')) {
+    if (!res) return undefined;
+    text = text.replace(/Ω/g, '');
+  }
+  let explicit = false;
+  const lower = text.toLowerCase();
+  if (res) {
+    if (lower.endsWith('farad') || lower.endsWith('farads')) return undefined;
+    for (const u of ['ohms', 'ohm']) if (!explicit && lower.endsWith(u)) { text = text.slice(0, -u.length); explicit = true; }
+  } else {
+    if (lower.endsWith('ohm') || lower.endsWith('ohms')) return undefined;
+    for (const u of ['farads', 'farad']) if (!explicit && lower.endsWith(u)) { text = text.slice(0, -u.length); explicit = true; }
+    if (!explicit && text.length >= 2 && text.endsWith('F')) { text = text.slice(0, -1); explicit = true; }
+  }
+  let prefix = 0;
+  let prefixed = false;
+  const PREFIX: Record<string, number> = { f: -15, p: -12, n: -9, u: -6, m: -3, k: 3, M: 6 };
+  if (text.toLowerCase().endsWith('meg')) { prefix = 6; text = text.slice(0, -3); prefixed = true; }
+  else if (text && PREFIX[text[text.length - 1]] !== undefined) { prefix = PREFIX[text[text.length - 1]]; text = text.slice(0, -1); prefixed = true; }
+  const m = /^([+-]?)(\d+\.?\d*|\.\d+)(?:[eE]([+-]?\d+))?$/.exec(text);
+  if (!m) return undefined;
+  const [int, frac = ''] = m[2].split('.');
+  const digits = BigInt((int || '0') + frac) * (m[1] === '-' ? -1n : 1n);
+  const bare = !explicit && !prefixed && m[3] === undefined;
+  const power = Number(m[3] ?? 0) + (bare ? 0 : prefix - ENG[unit].exp) - frac.length;
+  let stored: bigint;
+  if (power >= 0) stored = digits * 10n ** BigInt(power);
+  else {
+    const div = 10n ** BigInt(-power);
+    if (digits % div !== 0n) return undefined;
+    stored = digits / div;
+  }
+  const n = Number(stored);
+  return n >= ENG[unit].min && n <= ENG[unit].max ? n : undefined;
+}
+
+/** Evolution Ttl74123.widthNanos: tW(ns) = 0.45 x R(kΩ) x C(pF), at least 1 ns */
+export function monoWidthNanos(rext: number, cext: number): number {
+  const nanos = Math.round(0.45e-9 * rext * cext * 1_000_000_000.0);
+  return nanos < 1 ? 1 : nanos;
+}
+
+/** Evolution Ttl74123.formatWidth: 450 µs, 4.5 ms, 3 s */
+export function formatMonoWidth(nanos: number): string {
+  const trim = (x: number) => x.toFixed(3).replace(/\.?0+$/, '');
+  if (nanos >= 1e9) return `${trim(nanos / 1e9)} s`;
+  if (nanos >= 1e6) return `${trim(nanos / 1e6)} ms`;
+  if (nanos >= 1e3) return `${trim(nanos / 1e3)} µs`;
+  return `${nanos} ns`;
+}
+
+/** 74123 pins per half: A', B, RD', Q, Q' */
+const MONO = [
+  { a: 1, b: 2, rd: 3, q: 13, qn: 4 },
+  { a: 9, b: 10, rd: 11, q: 5, qn: 12 },
+];
+
+/** Evolution MonostableData.expire: a pulse whose time is up ends (v[h] = 1 while half h's pulse runs) */
+function monoExpire(st: TtlSeqState, now: number): boolean {
+  let changed = false;
+  for (let h = 0; h < 2; h++) {
+    if (st.v[h] === 1 && now >= (st.t?.[h] ?? 0)) {
+      st.v[h] = 0;
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 const CHIPS: TtlChip[] = [
   quad('7400', nand, { title: 'Dörtlü 2 girişli NAND', description: 'Dört adet 2 girişli VE DEĞİL kapısı.' }),
@@ -1451,6 +1613,36 @@ const CHIPS: TtlChip[] = [
     s(9, drive(st.v[7]));
     s(10, drive(st.v[16]));
   }),
+  msi({
+    id: '74123', pins: 16, out: [4, 5, 12, 13], unused: [6, 7, 14, 15], vcc: 16, gnd: 8, group: 'sequential',
+    seq: { v: 2, clk: 6, clkInit: Array<SignalValue>(6).fill('X'), timers: 2 },
+    expire: monoExpire,
+    title: 'İkili yeniden tetiklenebilir tek atımlı (monostable)',
+    description:
+      'RD\' = 1 iken A\' = 0 ve B 0 → 1, B = 1 ve A\' 1 → 0, ya da A\' = 0, B = 1 ve RD\' 0 → 1 olunca Q, tW = 0,45 · R · C '
+      + 'süresince 1 olur (R kΩ, C pF, sonuç ns; varsayılan 10 kΩ · 100 nF = 450 µs). Darbe sürerken gelen tetik süreyi '
+      + 'baştan başlatır, RD\' = 0 darbeyi hemen bitirir. Süre, simülasyon çalışırken gerçek zamanla işler; durdurulunca '
+      + 'kalan süre donar. R ve C ayar panelinden her yarı için ayrı seçilir (Cext / RC bacakları mantık bacağı değildir).',
+    names: ['1A\'', '1B', '1RD\'', '1Q\'', '2Q', '2A\'', '2B', '2RD\'', '2Q\'', '1Q'],
+    labels: ['1A', '1B', '1RD', '1nQ', '2Q', '2A', '2B', '2RD', '2nQ', '1Q'],
+    ncLabels: { 6: '2C', 7: '2RC', 14: '1C', 15: '1RC' },
+  }, (g, s, st, ctx) => {
+    // Evolution Ttl74123 (MonostableData.apply): RD' = 0 clears; with RD' = 1 a clean edge of the datasheet table
+    // starts the pulse (again); clk[3h..3h+2] = the last A', B, RD' of half h (unknown at power-up)
+    MONO.forEach(({ a, b, rd, q, qn }, h) => {
+      const [A, B, RD] = [g(a), g(b), g(rd)];
+      const [pa, pb, prd] = st.clk.slice(3 * h, 3 * h + 3);
+      const armed = lo(A) && hi(B);
+      if (lo(RD)) st.v[h] = 0;
+      else if (hi(RD) && armed && (pb === 0 || pa === 1 || prd === 0)) {
+        st.v[h] = 1;
+        st.t![h] = ctx.now + monoWidthNanos(ctx.rext[h], ctx.cext[h]) / 1e6;
+      }
+      st.clk.splice(3 * h, 3, A, B, RD);
+      s(q, st.v[h] === 1 ? 1 : 0);
+      s(qn, st.v[h] === 1 ? 0 : 1);
+    });
+  }),
 ];
 
 export const TTL_CHIPS: Record<TtlChipId, TtlChip> = Object.fromEntries(CHIPS.map((c) => [c.id, c])) as Record<TtlChipId, TtlChip>;
@@ -1537,9 +1729,28 @@ export function ttlEvoOffset(chip: TtlChip, pin: number): { x: number; y: number
 /** A sequential chip's power-up state: stored values 0 (or `seq.init`), clock levels 0, outputs not driven yet */
 export const ttlSeqInit = (chip: TtlChip): TtlSeqState => ({
   v: chip.seq?.init ? [...chip.seq.init] : Array<SignalValue>(chip.seq?.v ?? 0).fill(0),
-  clk: Array<SignalValue>(chip.seq?.clk ?? 0).fill(0),
+  clk: chip.seq?.clkInit ? [...chip.seq.clkInit] : Array<SignalValue>(chip.seq?.clk ?? 0).fill(0),
   off: true,
+  ...(chip.seq?.timers ? { t: Array<number>(chip.seq.timers).fill(0) } : {}),
 });
+
+/** Copy of a stored state that a chip may change in place (the previous step's part keeps the old one) */
+export const ttlSeqCopy = (st: TtlSeqState): TtlSeqState => ({
+  ...st,
+  v: [...st.v],
+  clk: [...st.clk],
+  ...(st.t ? { t: [...st.t] } : {}),
+});
+
+/** When the next running pulse of a timed chip ends (run-clock ms), or undefined */
+export function ttlNextDeadline(chip: TtlChip, st: TtlSeqState | undefined): number | undefined {
+  if (!chip.expire || !st?.t) return undefined;
+  let soonest: number | undefined;
+  st.t.forEach((t, h) => {
+    if (st.v[h] === 1 && (soonest === undefined || t < soonest)) soonest = t;
+  });
+  return soonest;
+}
 
 /**
  * Output values by pin key; `read` gives what an input pin reads (undriven = 'X'). A sequential chip updates `st`
@@ -1550,9 +1761,12 @@ export function evalTtl(
   vccGnd: boolean,
   read: (key: string) => SignalValue,
   st: TtlSeqState = ttlSeqInit(chip),
+  ctx: TtlCtx = { ...ttlRcOf({}), now: ttlNow() },
 ): Map<string, SignalValue> {
   const ports = ttlPorts(chip, false);
   const result = new Map<string, SignalValue>();
+  // Evolution's timer ends a pulse with or without power
+  chip.expire?.(st, ctx.now);
   if (vccGnd && (read(ttlPinKey(chip.gnd)) !== 0 || read(ttlPinKey(chip.vcc)) !== 1)) {
     for (const p of ports) if (p.dir !== 'input') result.set(p.key, FLOAT);
     if (chip.seq) st.off = true;
@@ -1560,7 +1774,7 @@ export function evalTtl(
   }
   // An in/out pin reads its net (the chip's own drive included, like evolution's getPortValue)
   const vals = ports.map((p) => read(p.dir === 'inout' ? ttlInKey(p.pin) : p.key));
-  const outs = chip.eval(vals, st);
+  const outs = chip.eval(vals, st, ctx);
   delete st.off;
   ports.forEach((p, i) => {
     if (p.dir !== 'input' && outs[i] !== undefined) result.set(p.key, outs[i]!);

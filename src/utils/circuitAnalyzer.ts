@@ -121,6 +121,9 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '74594': 16 * 28, // 8-stage shift register + 8-bit output register, D flip-flops with clear
   '74595': 16 * 28 + 8 * 6 + 2, // 8-stage shift register + output register, 8 tri-state buffers, OE' NOT
   '744094': 8 * 28 + 8 * 20 + 20 + 8 * 6, // 8-stage shift register, 8 D latches (STR), QS2 latch on the falling CP, 8 tri-state buffers
+  // 74123: per half A' inverter + 3-input AND trigger gate, D flip-flop (trigger edge), SR latch (pulse), Q' inverter;
+  // the RC timing network is analog and not counted
+  '74123': 2 * (2 + 8 + 28 + 8 + 2),
 };
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
