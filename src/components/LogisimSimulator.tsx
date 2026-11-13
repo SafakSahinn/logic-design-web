@@ -72,6 +72,7 @@ import {
   segmentsLit,
   toggleDipSwitch,
   getIo5Config,
+  binToBcdBits,
   setJoystick,
   setKeypadKey,
   keypadLabels,
@@ -322,7 +323,9 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   fullAdder: { label: 'Tam Toplayıcı', badge: 'FA' },
   halfSubtractor: { label: 'Yarım Çıkarıcı', badge: 'HS' },
   fullSubtractor: { label: 'Tam Çıkarıcı', badge: 'FS' },
-  bcdTo7Seg: { label: 'BCD/Hex → 7-Seg', badge: 'Hex' },
+  bcdTo7Seg: { label: 'Hex → 7-Seg', badge: 'Hex' },
+  binToBcd: { label: 'İkili → BCD', badge: 'BFH' },
+  bcdToSevenSegment: { label: 'BCD → 7-Seg', badge: 'BFH' },
   splitter4: { label: "4'lü Paralel Geçiş", badge: '4×1' },
   splitter: { label: 'Splitter', badge: 'Ayırıcı' },
   bitExtender: { label: 'Bit Genişletici', badge: 'Extend' },
@@ -5090,8 +5093,72 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               HEX→7SEG
             </text>
             <text x={48} y={60} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">
-              BCD={num % 16}
+              HEX={(num % 16).toString(16).toUpperCase()}
             </text>
+          </g>
+        );
+      }
+
+      case 'binToBcd': {
+        // Logisim-evolution BinToBcd.paintInstance (x2): plain box, "Bin" inside the left input, each digit's weight
+        // under its output on the top edge; the digit's current value is shown under the weight (not in evolution)
+        const n = comp.outputs.length;
+        const bits = binToBcdBits(comp);
+        const digitText = (i: number) => {
+          const v = comp.outputs[i]?.bits ? bitsToNumber(comp.outputs[i].bits!) : undefined;
+          return v === undefined ? '?' : v > 9 ? v.toString(16).toUpperCase() : String(v);
+        };
+        return (
+          <g>
+            <rect x={0} y={0} width={n * 120} height={80} fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <text x={6} y={45} fill={io5Stroke} style={{ fontSize: 13, fontFamily: 'sans-serif' }} className="select-none">
+              Bin
+            </text>
+            {Array.from({ length: n }, (_, k) => {
+              const x = (n - 1 - k) * 120 + 60;
+              return (
+                <g key={k}>
+                  <text x={x} y={18} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 13, fontFamily: 'sans-serif' }} className="select-none">
+                    {10 ** k}
+                  </text>
+                  <text x={x} y={46} textAnchor="middle" className="select-none fill-indigo-500" style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>
+                    {digitText(k)}
+                  </text>
+                </g>
+              );
+            })}
+            <text x={n * 120 - 6} y={72} textAnchor="end" fill={io5Stroke} style={{ fontSize: 10, fontFamily: 'monospace' }} className="select-none">
+              {`${bits} bit → BCD`}
+            </text>
+          </g>
+        );
+      }
+
+      case 'bcdToSevenSegment': {
+        // Logisim-evolution BcdToSevenSegmentDisplay.paintInstance (x2): outer box, inner box whose top and bottom
+        // edges carry the segment pins, "BCD" over the input; lit segment letters green, the decoded digit inside
+        const bcd = comp.inputs[0]?.bits ? bitsToNumber(comp.inputs[0].bits!) : undefined;
+        const letterAt: Record<string, [number, number]> = { g: [20, 56], f: [40, 56], a: [60, 56], b: [80, 56], e: [20, 152], d: [40, 152], c: [60, 152] };
+        return (
+          <g>
+            <rect x={0} y={0} width={100} height={200} fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <rect x={10} y={40} width={80} height={120} fill="none" stroke={io5Stroke} strokeWidth={2} />
+            {comp.outputs.map((p, i) => {
+              const key = ['a', 'b', 'c', 'd', 'e', 'f', 'g'][i];
+              const [x, y] = letterAt[key];
+              return (
+                <text key={key} x={x} y={y} textAnchor="middle" className={`select-none ${p.value === 1 ? 'fill-emerald-500' : 'fill-slate-400'}`} style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace' }}>
+                  {key}
+                </text>
+              );
+            })}
+            <text x={50} y={110} textAnchor="middle" className="select-none fill-indigo-500" style={{ fontSize: 30, fontWeight: 700, fontFamily: 'monospace' }}>
+              {bcd === undefined ? '?' : bcd > 9 ? 'x' : bcd}
+            </text>
+            <text x={40} y={190} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 12, fontFamily: 'sans-serif' }} className="select-none">
+              BCD
+            </text>
+            <title>{bcd === undefined ? 'BCD girişi tanımsız: bütün segmentler x' : bcd > 9 ? `BCD ${bcd} geçersiz (0-9 dışı): bütün segmentler x` : `BCD ${bcd}`}</title>
           </g>
         );
       }
@@ -6358,7 +6425,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'plexers',
       title: 'Plexers & Seçiciler',
       icon: '🔀',
-      types: ['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder', 'bcdTo7Seg', 'bitSelector'] as ComponentType[],
+      types: ['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder', 'bcdTo7Seg', 'binToBcd', 'bcdToSevenSegment', 'bitSelector'] as ComponentType[],
     },
     {
       id: 'arithmetic',

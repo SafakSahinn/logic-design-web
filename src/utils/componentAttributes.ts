@@ -24,6 +24,10 @@ import {
   configureRam,
   configureIo,
   configureIo5,
+  configureBfh,
+  binToBcdBits,
+  BIN_TO_BCD_MIN_BITS,
+  BIN_TO_BCD_MAX_BITS,
   configureTtl,
   getTtlConfig,
   getIoConfig,
@@ -886,6 +890,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'rgbLed':
       list.push(rgbActiveAttr);
       break;
+    case 'binToBcd':
+      list.push(binBitsAttr);
+      break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
@@ -1181,6 +1188,28 @@ const rgbActiveAttr: AttrDef = {
   ],
   get: (c) => (c.state.ioActiveLow ? 'low' : 'high'),
   set: (c, v) => ((c.state.ioActiveLow ? 'low' : 'high') === v ? null : withState(c, { ioActiveLow: v === 'low' })),
+};
+
+// ---- BFH parts of Aşama 5b: the binary to BCD converter's input width; digit outputs that go away leave their
+// wires as open ends (the top-left corner stays)
+const binBitsAttr: AttrDef = {
+  key: 'binBits',
+  label: 'Giriş bit',
+  kind: 'select',
+  title: 'İkili girişin genişliği (4-13, Logisim-evolution "Binary data bits"); çıkış sayısı 2^n sayısının basamak sayısı kadar (4-6 bit: 2, 7-9: 3, 10-13: 4)',
+  options: numberOptions(BIN_TO_BCD_MIN_BITS, BIN_TO_BCD_MAX_BITS),
+  get: (c) => binToBcdBits(c),
+  set: (c, v) => {
+    if (binToBcdBits(c) === Number(v)) return null;
+    const next = configureBfh(c, { binBits: Number(v) });
+    const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+    const remap = new Map<string, string | null>();
+    for (const p of [...c.outputs, ...c.inputs]) {
+      const sp = snapPt10(p);
+      remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+    }
+    return { comp: next, remap };
+  },
 };
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires

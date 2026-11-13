@@ -1460,7 +1460,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   },
   bcdTo7Seg: {
     type: 'bcdTo7Seg',
-    name: 'BCD/Hex → 7-Segment Kod Çözücü (aktif-yüksek)',
+    name: 'Hex → 7-Segment Kod Çözücü (aktif-yüksek)',
     category: 'combinational',
     width: 96,
     height: 104,
@@ -1479,7 +1479,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
       { id: 'outF', name: 'f', type: 'output', relX: 96, relY: 70 },
       { id: 'outG', name: 'g', type: 'output', relX: 96, relY: 80 },
     ],
-    description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir. Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
+    description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir (yalnız 0-9 çözen Logisim-evolution parçası: BCD → 7-Segment). Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
   },
   splitter4: {
     type: 'splitter4',
