@@ -897,6 +897,132 @@ export function rgbLedBits(comp: CircuitComponentInstance): number {
   return comp.state.ioActiveLow ? sum ^ 7 : sum;
 }
 
+// ---- Logisim-evolution BFH library of Aşama 5b -----------------------------------------------------------------
+// binToBcd = BinToBcd (Binary_to_BCD_converter), bcdToSevenSegment = BcdToSevenSegmentDisplay
+// (BCD_to_7_Segment_decoder). Drawn twice Logisim's size; evolution gives neither part a facing, so rotation 0 is
+// its only layout. Pin order and behaviour follow evolution 5.0.0's propagate().
+
+export const BFH_TYPES = new Set<ComponentType>(['binToBcd', 'bcdToSevenSegment']);
+export const BIN_TO_BCD_MIN_BITS = 4;
+export const BIN_TO_BCD_MAX_BITS = 13;
+export const BIN_TO_BCD_DEFAULT_BITS = 9;
+/** BCD to 7-segment output order (evolution SEGMENT_A .. SEGMENT_G) */
+export const BCD_SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+/** Evolution's segment patterns for 0-9, bit 0 = segment a */
+const BCD_7SEG_CODES = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
+
+/** Input width of a binary to BCD converter (4-13) */
+export function binToBcdBits(comp: CircuitComponentInstance): number {
+  return clampRange(comp.state.binBits ?? BIN_TO_BCD_DEFAULT_BITS, BIN_TO_BCD_MIN_BITS, BIN_TO_BCD_MAX_BITS);
+}
+
+/** Number of BCD digit outputs: the decimal digits of 2^bits (evolution (int) (log10(1 << bits) + 1)) */
+export function binToBcdDigits(bits: number): number {
+  return String(2 ** bits).length;
+}
+
+function bfhPinKeys(type: ComponentType, bits: number): { inputs: string[]; outputs: string[] } {
+  if (type === 'binToBcd') return { inputs: ['bin'], outputs: Array.from({ length: binToBcdDigits(bits) }, (_, k) => `d${k}`) };
+  if (type === 'bcdToSevenSegment') return { inputs: ['bcd'], outputs: [...BCD_SEGMENTS] };
+  return { inputs: [], outputs: [] };
+}
+
+function bfhPinWidth(type: ComponentType, key: string, bits: number): number {
+  if (type === 'binToBcd') return key === 'bin' ? bits : 4;
+  return key === 'bcd' ? 4 : 1;
+}
+
+function bfhPinLabel(type: ComponentType, key: string): string {
+  if (type === 'binToBcd') return key === 'bin' ? 'Bin' : String(10 ** Number(key.slice(1)));
+  return key === 'bcd' ? 'BCD' : key;
+}
+
+/** Body size and pin points (unrotated, relative to the top-left corner) of an Aşama 5b part */
+export function bfhGeometry(type: ComponentType, bits: number): { width: number; height: number; pins: Record<string, { x: number; y: number }> } {
+  if (type === 'binToBcd') {
+    // evolution: bounds (-30, -20, n * 60, 40); input at (-30, 0), digit 10^k on the top edge at ((n - 1 - k) * 60, -20)
+    const n = binToBcdDigits(bits);
+    const pins: Record<string, { x: number; y: number }> = { bin: { x: 0, y: 40 } };
+    for (let k = 0; k < n; k++) pins[`d${k}`] = { x: (n - 1 - k) * 120 + 60, y: 0 };
+    return { width: n * 120, height: 80, pins };
+  }
+  if (type === 'bcdToSevenSegment') {
+    // evolution: bounds (-10, -20, 50, 100); g f a b on the inner box's top edge (y 0), e d c on its bottom edge
+    // (y 60), the BCD input at the bottom (10, 80). The segment pins sit inside the body, as in evolution.
+    const at = (x: number, y: number) => ({ x: 2 * (x + 10), y: 2 * (y + 20) });
+    return {
+      width: 100,
+      height: 200,
+      pins: { a: at(20, 0), b: at(30, 0), c: at(20, 60), d: at(10, 60), e: at(0, 60), f: at(10, 0), g: at(0, 0), bcd: at(10, 80) },
+    };
+  }
+  return { width: 40, height: 40, pins: {} };
+}
+
+function bfhMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const bits = BIN_TO_BCD_DEFAULT_BITS;
+  const g = bfhGeometry(type, bits);
+  const keys = bfhPinKeys(type, bits);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = bfhPinWidth(type, id, bits);
+    return { id, name: bfhPinLabel(type, id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: 'combinational',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
+/** New input width of a binary to BCD converter; pins that still exist keep their ids (and wires) */
+export function configureBfh(comp: CircuitComponentInstance, patch: { binBits?: number }): CircuitComponentInstance {
+  const bits = clampRange(patch.binBits ?? binToBcdBits(comp), BIN_TO_BCD_MIN_BITS, BIN_TO_BCD_MAX_BITS);
+  const state = comp.type === 'binToBcd' ? { ...comp.state, binBits: bits } : comp.state;
+  const keys = bfhPinKeys(comp.type, bits);
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = bfhPinLabel(comp.type, key);
+    const prev = old.get(key);
+    const base = prev && prev.type === type ? prev : newPin(comp, key, name, type);
+    return { ...pinWithWidth(base, bfhPinWidth(comp.type, key, bits)), name };
+  };
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+/**
+ * Evolution BinToBcd.propagate: digit outputs (index 0 = ones), each a 4-bit number. An input that is not fully
+ * defined is read as -1, which Java's integer division leaves as 0 in the upper digits and -1 (1111) in the ones.
+ */
+export function binToBcdValues(input: SignalValue[], digits: number): number[] {
+  let v = bitsToNumber(input) ?? -1;
+  const out = new Array<number>(digits).fill(0);
+  for (let i = digits; i > 0; i--) {
+    const w = 10 ** (i - 1);
+    const n = Math.trunc(v / w);
+    out[i - 1] = n & 0xf;
+    v -= n * w;
+  }
+  return out;
+}
+
+/** Evolution BcdToSevenSegmentDisplay.propagate: segments a-g for 0-9; any other or undefined input makes all x */
+export function bcdSegmentValues(input: SignalValue[]): SignalValue[] {
+  const v = bitsToNumber(input) ?? -1;
+  if (v < 0 || v > 9) return new Array<SignalValue>(7).fill('X');
+  return BCD_SEGMENTS.map((_, i) => ((BCD_7SEG_CODES[v] >> i) & 1) as 0 | 1);
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -1007,6 +1133,8 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu (Logisim Joystick): X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
   matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı (Logisim-evolution MatrixKeypad): basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
   portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu (Logisim-evolution PortIO): yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
+  binToBcd: bfhMeta('binToBcd', 'İkili → BCD Dönüştürücü', 'İkili sayıyı (4-13 bit) ondalık basamaklarına ayırır (Logisim-evolution BinToBcd): her basamak 4 bitlik BCD çıkışı (1, 10, 100, 1000); giriş tanımsızsa birler basamağı 1111, diğerleri 0'),
+  bcdToSevenSegment: bfhMeta('bcdToSevenSegment', 'BCD → 7-Segment Kod Çözücü', '4 bitlik BCD girişi (0-9) 7-segment göstergenin a-g segment sinyallerine (aktif-yüksek) çevirir (Logisim-evolution BcdToSevenSegmentDisplay); 10-15 ya da tanımsız girişte bütün segmentler x'),
   realTimeClock: io5Meta('realTimeClock', 'Gerçek Zamanlı Saat', 'Bilgisayarın saatini veren 32 bitlik çıkış (Logisim-evolution RealTimeClock): 1970 yılından beri geçen milisaniye ya da saniye (evolution 64 bit verir, burada alt 32 biti)'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
@@ -1607,6 +1735,7 @@ export function createComponentInstance(
   if (RAM_TYPES.has(type)) return configureRam(inst, {});
   if (IO_TYPES.has(type)) return configureIo(inst, {});
   if (IO5_TYPES.has(type)) return configureIo5(inst, {});
+  if (BFH_TYPES.has(type)) return configureBfh(inst, {});
   if (isTtlType(type)) return configureTtl(inst, {});
   return inst;
 }
@@ -1655,6 +1784,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (IO5_TYPES.has(comp.type)) {
     const g = io5Geometry(comp.type, getIo5Config(comp));
+    return { width: g.width, height: g.height };
+  }
+  if (BFH_TYPES.has(comp.type)) {
+    const g = bfhGeometry(comp.type, binToBcdBits(comp));
     return { width: g.width, height: g.height };
   }
   const ttl = ttlChipOf(comp.type);
@@ -3235,14 +3368,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type)) {
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type) || BFH_TYPES.has(comp.type)) {
     const g = MEM_TYPES.has(comp.type)
       ? memLayout(comp)
       : RAM_TYPES.has(comp.type)
         ? ramGeometry(comp.type, getRamConfig(comp))
         : IO5_TYPES.has(comp.type)
           ? io5Geometry(comp.type, getIo5Config(comp))
-          : ioGeometry(comp.type, getIoConfig(comp));
+          : BFH_TYPES.has(comp.type)
+            ? bfhGeometry(comp.type, binToBcdBits(comp))
+            : ioGeometry(comp.type, getIoConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -3925,6 +4060,14 @@ export function simulateCircuitStep(
       }
       case 'realTimeClock':
         setBitsOut(0, numberToBits(rtcValue(getIo5Config(comp).rtcType), 32));
+        break;
+      case 'binToBcd': {
+        const bits = binToBcdBits(comp);
+        binToBcdValues(readBits(comp.inputs[0], bits), comp.outputs.length).forEach((v, i) => setBitsOut(i, numberToBits(v, 4)));
+        break;
+      }
+      case 'bcdToSevenSegment':
+        bcdSegmentValues(readBits(comp.inputs[0], 4)).forEach((v, i) => setOut(i, v));
         break;
       case 'not': {
         // Logisim NOT: each bit inverted, an undefined bit (or an open input) gives E

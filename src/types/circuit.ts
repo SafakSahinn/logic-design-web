@@ -66,6 +66,9 @@ export type ComponentType =
   | 'halfSubtractor'
   | 'fullSubtractor'
   | 'bcdTo7Seg'
+  // Logisim-evolution BFH library (Aşama 5b)
+  | 'binToBcd'
+  | 'bcdToSevenSegment'
   | 'multiplexer'
   | 'demultiplexer'
   | 'decoder'
@@ -318,6 +321,8 @@ export interface CircuitComponentInstance {
     rtcType?: 'ms' | 's';
     /** Real-time clock: evolution 'porsize' (body size); unset = medium */
     rtcSize?: 'medium' | 'narrow';
+    /** Binary to BCD converter: input width (evolution 'binvalue', 4-13); unset = 9 */
+    binBits?: number;
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;
