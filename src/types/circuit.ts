@@ -69,6 +69,10 @@ export type ComponentType =
   // Logisim-evolution BFH library (Aşama 5b)
   | 'binToBcd'
   | 'bcdToSevenSegment'
+  // Logisim-evolution keyboard, text terminal and Telnet (Aşama 5c)
+  | 'keyboard'
+  | 'tty'
+  | 'telnet'
   | 'multiplexer'
   | 'demultiplexer'
   | 'decoder'
@@ -323,6 +327,30 @@ export interface CircuitComponentInstance {
     rtcSize?: 'medium' | 'narrow';
     /** Binary to BCD converter: input width (evolution 'binvalue', 4-13); unset = 9 */
     binBits?: number;
+    /** Keyboard: buffer length (evolution 'buflen', 1-256); unset = 32 */
+    kbdBufLen?: number;
+    /** Keyboard: buffered characters (front = next out) and the editing cursor; unset = empty */
+    kbdBuf?: string;
+    kbdCursor?: number;
+    /** Terminal: rows 1-48 and columns 1-120 (evolution 'rows', 'cols'); unset = 8 x 32 */
+    ttyRows?: number;
+    ttyCols?: number;
+    /** Terminal contents (evolution TtyState): the rows - 1 rows above, the cursor's row index, the row being written */
+    ttyLines?: string[];
+    ttyRow?: number;
+    ttyLast?: string;
+    /** Telnet: TCP port (1-65535, unset = 8000), receive buffer length (unset = 1024), telnet negotiation ('telnetMode') */
+    telnetPort?: number;
+    telnetBufLen?: number;
+    telnetMode?: boolean;
+    /** Telnet: received bytes waiting (front = next out), one character per byte */
+    telnetRx?: string;
+    /** Telnet: the last bytes sent (one character per byte) and the number sent in all */
+    telnetTx?: string;
+    telnetTxCount?: number;
+    /** Telnet, set by the simulator: the inputs it last acted on, and whether it must act again (a byte arrived, a setting changed) */
+    telnetSig?: string;
+    telnetDirty?: boolean;
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;

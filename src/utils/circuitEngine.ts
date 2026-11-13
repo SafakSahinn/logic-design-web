@@ -1038,6 +1038,301 @@ export function bcdSegmentValues(input: SignalValue[]): SignalValue[] {
   return BCD_SEGMENTS.map((_, i) => ((BCD_7SEG_CODES[v] >> i) & 1) as 0 | 1);
 }
 
+// ---- Logisim-evolution std/io Keyboard, TTY and Telnet of Aşama 5c ---------------------------------------------
+// keyboard = Keyboard, tty = TTY, telnet = Telnet. Drawn twice Logisim's size; evolution gives none of them a
+// facing, so rotation 0 is their only layout. Pin order and behaviour follow evolution 5.0.0's propagate() and its
+// KeyboardData / TtyState / TelnetServer.ByteBuffer. The parts keep their contents in the component state: the
+// keyboard buffer and cursor, the terminal rows, the Telnet receive buffer and the bytes it sent.
+
+export const IO5C_TYPES = new Set<ComponentType>(['keyboard', 'tty', 'telnet']);
+export const KEYBOARD_BUFFER_MAX = 256;
+export const KEYBOARD_DEFAULT_BUFFER = 32;
+export const TTY_ROWS_MAX = 48;
+export const TTY_COLS_MAX = 120;
+export const TTY_DEFAULT_ROWS = 8;
+export const TTY_DEFAULT_COLS = 32;
+export const TELNET_DEFAULT_PORT = 8000;
+export const TELNET_DEFAULT_BUFFER = 1024;
+export const TELNET_BUFFER_MAX = 16 * 1024 * 1024;
+/** Sent Telnet bytes kept in the state for the terminal / network side to pick up (older ones are dropped) */
+export const TELNET_TX_KEEP = 4096;
+/** Evolution TTY column width (Tty.COL_WIDTH, the width of 'W' in its 11 pt monospaced font) and row height */
+const TTY_COL_WIDTH = 7;
+const TTY_ROW_HEIGHT = 15;
+const TTY_BORDER = 6;
+
+export interface Io5cConfig {
+  /** Keyboard buffer length, 1-256 (evolution 'buflen') */
+  kbdBufLen: number;
+  /** Terminal rows 1-48 and columns 1-120 (evolution 'rows', 'cols') */
+  ttyRows: number;
+  ttyCols: number;
+  /** Telnet TCP port 1-65535, receive buffer length (evolution 'port', 'buflen') and telnet negotiation ('telnetMode') */
+  telnetPort: number;
+  telnetBufLen: number;
+  telnetMode: boolean;
+}
+
+export function getIo5cConfig(comp: CircuitComponentInstance): Io5cConfig {
+  const st = comp.state;
+  return {
+    kbdBufLen: clampRange(st.kbdBufLen ?? KEYBOARD_DEFAULT_BUFFER, 1, KEYBOARD_BUFFER_MAX),
+    ttyRows: clampRange(st.ttyRows ?? TTY_DEFAULT_ROWS, 1, TTY_ROWS_MAX),
+    ttyCols: clampRange(st.ttyCols ?? TTY_DEFAULT_COLS, 1, TTY_COLS_MAX),
+    telnetPort: clampRange(st.telnetPort ?? TELNET_DEFAULT_PORT, 1, 65535),
+    telnetBufLen: clampRange(st.telnetBufLen ?? TELNET_DEFAULT_BUFFER, 1, TELNET_BUFFER_MAX),
+    telnetMode: st.telnetMode === true,
+  };
+}
+
+function io5cPinKeys(type: ComponentType): { inputs: string[]; outputs: string[] } {
+  if (type === 'keyboard') return { inputs: ['clr', 'clk', 'en'], outputs: ['avl', 'out'] };
+  if (type === 'tty') return { inputs: ['clr', 'clk', 'we', 'in'], outputs: [] };
+  if (type === 'telnet') return { inputs: ['in', 'clk', 'wr', 'rd'], outputs: ['out', 'av'] };
+  return { inputs: [], outputs: [] };
+}
+
+function io5cPinWidth(type: ComponentType, key: string): number {
+  if (key === 'out') return type === 'telnet' ? 8 : 7;
+  if (key === 'in') return type === 'telnet' ? 8 : 7;
+  return 1;
+}
+
+const IO5C_PIN_LABELS: Record<string, string> = { clr: 'CLR', clk: 'CK', en: 'RE', we: 'WE', avl: 'AV', av: 'AV', out: 'OUT', in: 'IN', wr: 'WR', rd: 'RD' };
+
+/** Body size and pin points (unrotated, relative to the top-left corner) of an Aşama 5c part */
+export function io5cGeometry(type: ComponentType, cfg: Io5cConfig): { width: number; height: number; pins: Record<string, { x: number; y: number }> } {
+  if (type === 'keyboard') {
+    // evolution: bounds (0, -15, 145, 25); clock (0, 0), CLR (20, 10), RE (10, 10), available (130, 10), data (140, 10)
+    return { width: 290, height: 50, pins: { clr: { x: 40, y: 50 }, clk: { x: 0, y: 30 }, en: { x: 20, y: 50 }, avl: { x: 260, y: 50 }, out: { x: 280, y: 50 } } };
+  }
+  if (type === 'tty') {
+    // evolution: bounds (0, 10 - h, w, h) with w = 12 + 7 * cols, h = 12 + 15 * rows (both at least 30); clock (0, 0),
+    // CLR (20, 10), WE (10, 10), data (0, -10). Ours is rounded up to the grid so the pins along the bottom stay on it.
+    const w = Math.max(30, 2 * TTY_BORDER + cfg.ttyCols * TTY_COL_WIDTH);
+    const h = Math.max(30, 2 * TTY_BORDER + cfg.ttyRows * TTY_ROW_HEIGHT);
+    const width = Math.ceil((2 * w) / 10) * 10;
+    const height = Math.ceil((2 * h) / 10) * 10;
+    return { width, height, pins: { clr: { x: 40, y: height }, clk: { x: 0, y: height - 20 }, we: { x: 20, y: height }, in: { x: 0, y: height - 40 } } };
+  }
+  if (type === 'telnet') {
+    // evolution: bounds (-30, -20, 40, 60); in (-30, 10), clock (-30, 20), write (-30, 30) on the left, out (10, 10),
+    // available (10, 20), read (10, 30) on the right
+    return {
+      width: 80,
+      height: 120,
+      pins: { in: { x: 0, y: 60 }, clk: { x: 0, y: 80 }, wr: { x: 0, y: 100 }, out: { x: 80, y: 60 }, av: { x: 80, y: 80 }, rd: { x: 80, y: 100 } },
+    };
+  }
+  return { width: 40, height: 40, pins: {} };
+}
+
+function io5cDefaultConfig(): Io5cConfig {
+  return getIo5cConfig({ state: {} } as CircuitComponentInstance);
+}
+
+function io5cMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const g = io5cGeometry(type, io5cDefaultConfig());
+  const keys = io5cPinKeys(type);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = io5cPinWidth(type, id);
+    return { id, name: IO5C_PIN_LABELS[id] ?? id, type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: type === 'tty' ? 'outputs' : 'inputs',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
+/**
+ * New settings of an Aşama 5c part, applied to its contents the way evolution does when the attribute changes:
+ * a shorter keyboard buffer drops the characters past its end (KeyboardData.updateBufferLength), a resized terminal
+ * keeps its last rows and cuts long ones (TtyState.updateSize), a new Telnet port or buffer length starts with an
+ * empty buffer (a new server / ByteBuffer; a new server also has no previous clock level).
+ */
+export function configureIo5c(comp: CircuitComponentInstance, patch: Partial<Io5cConfig>): CircuitComponentInstance {
+  const old = getIo5cConfig(comp);
+  const cfg: Io5cConfig = { ...old, ...patch };
+  cfg.kbdBufLen = clampRange(cfg.kbdBufLen, 1, KEYBOARD_BUFFER_MAX);
+  cfg.ttyRows = clampRange(cfg.ttyRows, 1, TTY_ROWS_MAX);
+  cfg.ttyCols = clampRange(cfg.ttyCols, 1, TTY_COLS_MAX);
+  cfg.telnetPort = clampRange(cfg.telnetPort, 1, 65535);
+  cfg.telnetBufLen = clampRange(cfg.telnetBufLen, 1, TELNET_BUFFER_MAX);
+  let state = { ...comp.state };
+  if (comp.type === 'keyboard') {
+    state.kbdBufLen = cfg.kbdBufLen;
+    const buf = state.kbdBuf ?? '';
+    if (buf.length > cfg.kbdBufLen) state.kbdBuf = buf.slice(0, cfg.kbdBufLen);
+    if ((state.kbdCursor ?? 0) > cfg.kbdBufLen) state.kbdCursor = cfg.kbdBufLen;
+  } else if (comp.type === 'tty') {
+    state.ttyRows = cfg.ttyRows;
+    state.ttyCols = cfg.ttyCols;
+    state = { ...state, ...ttyResize(ttyStateOf(comp.state, old), cfg.ttyRows, cfg.ttyCols) };
+  } else if (comp.type === 'telnet') {
+    state.telnetPort = cfg.telnetPort;
+    state.telnetBufLen = cfg.telnetBufLen;
+    state.telnetMode = cfg.telnetMode || undefined;
+    // a changed setting makes evolution run propagate() again
+    state.telnetDirty = true;
+    if (cfg.telnetPort !== old.telnetPort || cfg.telnetBufLen !== old.telnetBufLen) {
+      state.telnetRx = undefined;
+      if (cfg.telnetPort !== old.telnetPort) state.lastClk = undefined;
+    }
+  }
+  const keys = io5cPinKeys(comp.type);
+  const oldPins = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) oldPins.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = IO5C_PIN_LABELS[key] ?? key;
+    const prev = oldPins.get(key);
+    const base = prev && prev.type === type ? prev : newPin(comp, key, name, type);
+    return { ...pinWithWidth(base, io5cPinWidth(comp.type, key)), name };
+  };
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+// ---- keyboard: KeyboardData, a buffer with an editing cursor; the circuit takes characters from its front
+
+/** Whether evolution's keyboard takes a typed character (Keyboard.Poker.keyTyped): not a control character, except backspace, newline and form feed */
+export function keyboardAccepts(code: number): boolean {
+  const control = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  return !control || code === 8 || code === 10 || code === 12;
+}
+
+/** Characters inserted at the cursor (KeyboardData.insert); those that do not fit in the buffer are dropped */
+export function keyboardType(comp: CircuitComponentInstance, text: string): CircuitComponentInstance {
+  const cap = getIo5cConfig(comp).kbdBufLen;
+  let buf = comp.state.kbdBuf ?? '';
+  let pos = Math.min(comp.state.kbdCursor ?? 0, buf.length);
+  for (const ch of text.split('')) {
+    if (buf.length >= cap) break;
+    buf = buf.slice(0, pos) + ch + buf.slice(pos);
+    pos++;
+  }
+  return { ...comp, state: { ...comp.state, kbdBuf: buf, kbdCursor: pos } };
+}
+
+/** Editing keys of evolution's keyboard (Keyboard.Poker.keyPressed): delete at the cursor, cursor left / right / home / end */
+export function keyboardKey(comp: CircuitComponentInstance, key: 'delete' | 'left' | 'right' | 'home' | 'end'): CircuitComponentInstance {
+  const buf = comp.state.kbdBuf ?? '';
+  const pos = Math.min(comp.state.kbdCursor ?? 0, buf.length);
+  let next = { buf, pos };
+  if (key === 'delete') next = pos < buf.length ? { buf: buf.slice(0, pos) + buf.slice(pos + 1), pos } : next;
+  else if (key === 'left') next = pos > 0 ? { buf, pos: pos - 1 } : next;
+  else if (key === 'right') next = pos < buf.length ? { buf, pos: pos + 1 } : next;
+  else if (key === 'home') next = { buf, pos: 0 };
+  else next = { buf, pos: buf.length };
+  if (next.buf === buf && next.pos === pos) return comp;
+  return { ...comp, state: { ...comp.state, kbdBuf: next.buf, kbdCursor: next.pos } };
+}
+
+/** Keyboard buffer as evolution shows it: control characters as spaces (KeyboardData.toString), and the cursor */
+export function keyboardText(comp: CircuitComponentInstance): { text: string; cursor: number; specials: { at: number; code: number }[] } {
+  const buf = comp.state.kbdBuf ?? '';
+  const specials: { at: number; code: number }[] = [];
+  let text = '';
+  for (let i = 0; i < buf.length; i++) {
+    const code = buf.charCodeAt(i);
+    const control = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    if (control) specials.push({ at: i, code });
+    text += control ? ' ' : buf[i];
+  }
+  return { text, cursor: Math.min(comp.state.kbdCursor ?? 0, buf.length), specials };
+}
+
+// ---- terminal: TtyState, the rows above the cursor's row plus the row being written
+
+interface TtyContents {
+  ttyLines: string[];
+  ttyRow: number;
+  ttyLast: string;
+}
+
+function ttyStateOf(st: CircuitComponentInstance['state'], cfg: Io5cConfig): TtyContents {
+  const n = cfg.ttyRows - 1;
+  const lines = st.ttyLines && st.ttyLines.length === n ? st.ttyLines : Array.from({ length: n }, (_, i) => st.ttyLines?.[i] ?? '');
+  return { ttyLines: lines, ttyRow: Math.min(st.ttyRow ?? 0, n), ttyLast: st.ttyLast ?? '' };
+}
+
+/** TtyState.updateSize */
+function ttyResize(t: TtyContents, rows: number, cols: number): TtyContents {
+  let lines = t.ttyLines;
+  let row = t.ttyRow;
+  let last = t.ttyLast;
+  if (rows - 1 !== lines.length) {
+    if (rows - 1 > lines.length || row < rows - 1) {
+      lines = [...lines.slice(0, row), ...new Array<string>(rows - 1 - row).fill('')];
+    } else {
+      lines = lines.slice(row - rows + 1, row);
+      row = rows - 1;
+    }
+  }
+  lines = lines.map((s) => (s.length > cols ? s.slice(0, cols) : s));
+  if (last.length > cols) last = last.slice(0, cols);
+  return { ttyLines: lines, ttyRow: row, ttyLast: last };
+}
+
+/**
+ * TtyState.add: form feed clears the screen, backspace deletes the last character of the current row, newline /
+ * carriage return end the row, other control characters are ignored, a printable character starts a new row when
+ * the current one is full. At the bottom the rows scroll up. Evolution's one-row terminal throws an index error
+ * there (its commit() copies a negative length); ours scrolls the single row away instead.
+ */
+function ttyAdd(t: TtyContents, cols: number, code: number): TtyContents {
+  const commit = (s: TtyContents): TtyContents => {
+    const n = s.ttyLines.length;
+    if (s.ttyRow >= n) return { ttyLines: n === 0 ? s.ttyLines : [...s.ttyLines.slice(1), s.ttyLast], ttyRow: s.ttyRow, ttyLast: '' };
+    const lines = [...s.ttyLines];
+    lines[s.ttyRow] = s.ttyLast;
+    return { ttyLines: lines, ttyRow: s.ttyRow + 1, ttyLast: '' };
+  };
+  if (code === 12) return { ttyLines: t.ttyLines.map(() => ''), ttyRow: 0, ttyLast: '' };
+  if (code === 8) return t.ttyLast.length > 0 ? { ...t, ttyLast: t.ttyLast.slice(0, -1) } : t;
+  if (code === 10 || code === 13) return commit(t);
+  const control = code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+  if (control) return t;
+  const s = t.ttyLast.length === cols ? commit(t) : t;
+  return { ...s, ttyLast: s.ttyLast + String.fromCharCode(code) };
+}
+
+/** Rows of a terminal as evolution draws them (TtyState.getRowString) and the cursor */
+export function ttyScreen(comp: CircuitComponentInstance): { rows: string[]; cursorRow: number; cursorCol: number } {
+  const cfg = getIo5cConfig(comp);
+  const t = ttyStateOf(comp.state, cfg);
+  const rows = Array.from({ length: cfg.ttyRows }, (_, i) => (i < t.ttyRow ? t.ttyLines[i] : i === t.ttyRow ? t.ttyLast : ''));
+  return { rows, cursorRow: t.ttyRow, cursorCol: t.ttyLast.length };
+}
+
+// ---- Telnet: TelnetServer.ByteBuffer (bytes received from the client) and the bytes sent to it
+
+/** Bytes from the Telnet client (TelnetServer.dataReceived, after telnet escapes are removed): kept while the buffer has room */
+export function telnetReceive(comp: CircuitComponentInstance, bytes: number[]): CircuitComponentInstance {
+  const cap = getIo5cConfig(comp).telnetBufLen;
+  let rx = comp.state.telnetRx ?? '';
+  for (const b of bytes) if (rx.length < cap) rx += String.fromCharCode(b & 0xff);
+  return { ...comp, state: { ...comp.state, telnetRx: rx, telnetDirty: true } };
+}
+
+/** Bytes the circuit sent with index from `from` on (telnetTxCount counts every byte; the state keeps the last TELNET_TX_KEEP) */
+export function telnetSent(comp: CircuitComponentInstance, from: number): { bytes: number[]; count: number } {
+  const tx = comp.state.telnetTx ?? '';
+  const count = comp.state.telnetTxCount ?? 0;
+  const first = count - tx.length;
+  const start = Math.max(from, first) - first;
+  return { bytes: Array.from(tx.slice(start), (c) => c.charCodeAt(0)), count };
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -1150,6 +1445,9 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu (Logisim-evolution PortIO): yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
   binToBcd: bfhMeta('binToBcd', 'İkili → BCD Dönüştürücü', 'İkili sayıyı (4-13 bit) ondalık basamaklarına ayırır (Logisim-evolution BinToBcd): her basamak 4 bitlik BCD çıkışı (1, 10, 100, 1000); giriş tanımsızsa birler basamağı 1111, diğerleri 0'),
   bcdToSevenSegment: bfhMeta('bcdToSevenSegment', 'BCD → 7-Segment Kod Çözücü', '4 bitlik BCD girişi (0-9) 7-segment göstergenin a-g segment sinyallerine (aktif-yüksek) çevirir (Logisim-evolution BcdToSevenSegmentDisplay); 10-15 ya da tanımsız girişte bütün segmentler x'),
+  keyboard: io5cMeta('keyboard', 'Klavye', 'Yazılan karakterleri 1-256 karakterlik bir tamponda biriktirir (Logisim-evolution Keyboard): OUT tamponun ilk karakterinin 7 bitlik ASCII kodu, AV tampon boş değilken 1; RE açıkken saat kenarı ilk karakteri tampondan alır, CLR tamponu boşaltır. Parçayı seçip yazın (← → Home End Delete ile düzenlenir)'),
+  tty: io5cMeta('tty', 'Metin Terminali', 'Satır x sütun metin ekranı (Logisim-evolution TTY): WE açıkken her saat kenarında IN girişindeki 7 bitlik ASCII karakteri yazar; satır sonu (10/13) yeni satıra geçer, geri silme (8) son karakteri siler, form besleme (12) ve CLR ekranı temizler, en altta satırlar yukarı kayar'),
+  telnet: io5cMeta('telnet', 'Telnet', 'Devre ile bir Telnet istemcisi arasında bayt alıp verir (Logisim-evolution Telnet): istemciden gelen baytlar tamponda bekler, AV doluyken 1; RD = 1 iken OUT ilk baytı gösterir ve yükselen saat kenarı onu tampondan alır, WR = 1 iken saat kenarı IN baytını istemciye gönderir'),
   realTimeClock: io5Meta('realTimeClock', 'Gerçek Zamanlı Saat', 'Bilgisayarın saatini veren 32 bitlik çıkış (Logisim-evolution RealTimeClock): 1970 yılından beri geçen milisaniye ya da saniye (evolution 64 bit verir, burada alt 32 biti)'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
@@ -1751,6 +2049,7 @@ export function createComponentInstance(
   if (IO_TYPES.has(type)) return configureIo(inst, {});
   if (IO5_TYPES.has(type)) return configureIo5(inst, {});
   if (BFH_TYPES.has(type)) return configureBfh(inst, {});
+  if (IO5C_TYPES.has(type)) return configureIo5c(inst, {});
   if (isTtlType(type)) return configureTtl(inst, {});
   return inst;
 }
@@ -1803,6 +2102,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (BFH_TYPES.has(comp.type)) {
     const g = bfhGeometry(comp.type, binToBcdBits(comp));
+    return { width: g.width, height: g.height };
+  }
+  if (IO5C_TYPES.has(comp.type)) {
+    const g = io5cGeometry(comp.type, getIo5cConfig(comp));
     return { width: g.width, height: g.height };
   }
   const ttl = ttlChipOf(comp.type);
@@ -3383,7 +3686,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type) || BFH_TYPES.has(comp.type)) {
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type) || BFH_TYPES.has(comp.type) || IO5C_TYPES.has(comp.type)) {
     const g = MEM_TYPES.has(comp.type)
       ? memLayout(comp)
       : RAM_TYPES.has(comp.type)
@@ -3392,7 +3695,9 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
           ? io5Geometry(comp.type, getIo5Config(comp))
           : BFH_TYPES.has(comp.type)
             ? bfhGeometry(comp.type, binToBcdBits(comp))
-            : ioGeometry(comp.type, getIoConfig(comp));
+            : IO5C_TYPES.has(comp.type)
+              ? io5cGeometry(comp.type, getIo5cConfig(comp))
+              : ioGeometry(comp.type, getIoConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -4076,6 +4381,99 @@ export function simulateCircuitStep(
       case 'realTimeClock':
         setBitsOut(0, numberToBits(rtcValue(getIo5Config(comp).rtcType), 32));
         break;
+      case 'keyboard': {
+        // Keyboard.propagate: the clock level is always recorded; CLR = 1 empties the buffer, otherwise an edge
+        // (RE not 0) takes the first character; OUT = its low 7 bits, AV = 1 unless it is NUL (or the buffer is empty)
+        const pinOf = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+        const clk = readBits(pinOf('clk'), 1)[0];
+        const prev = comp.state.lastClk;
+        comp.state.lastClk = clk;
+        let buf = comp.state.kbdBuf ?? '';
+        if (readBits(pinOf('clr'), 1)[0] === 1) {
+          if (buf !== '' || comp.state.kbdCursor) {
+            comp.state.kbdBuf = '';
+            comp.state.kbdCursor = 0;
+          }
+          buf = '';
+        } else if (readBits(pinOf('en'), 1)[0] !== 0 && buf !== '') {
+          const go = comp.state.trigger === 'falling' ? prev === 1 && clk === 0 : prev === 0 && clk === 1;
+          if (go) {
+            buf = buf.slice(1);
+            comp.state.kbdBuf = buf;
+            if ((comp.state.kbdCursor ?? 0) > 0) comp.state.kbdCursor = (comp.state.kbdCursor ?? 0) - 1;
+          }
+        }
+        const c = buf === '' ? 0 : buf.charCodeAt(0);
+        comp.outputs.forEach((p, i) => {
+          if (pinKey(comp, p) === 'avl') setOut(i, c !== 0 ? 1 : 0);
+          else setBitsOut(i, numberToBits(c & 0x7f, 7));
+        });
+        break;
+      }
+      case 'tty': {
+        // Tty.propagate: CLR = 1 clears the screen, otherwise an edge (WE not 0) writes the input character, '?'
+        // when the input is not fully defined
+        const pinOf = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+        const cfg = getIo5cConfig(comp);
+        const clk = readBits(pinOf('clk'), 1)[0];
+        const prev = comp.state.lastClk;
+        comp.state.lastClk = clk;
+        if (readBits(pinOf('clr'), 1)[0] === 1) {
+          const t = ttyStateOf(comp.state, cfg);
+          if (t.ttyRow !== 0 || t.ttyLast !== '' || t.ttyLines.some((l) => l !== '')) {
+            comp.state.ttyLines = t.ttyLines.map(() => '');
+            comp.state.ttyRow = 0;
+            comp.state.ttyLast = '';
+          }
+        } else if (readBits(pinOf('we'), 1)[0] !== 0) {
+          const go = comp.state.trigger === 'falling' ? prev === 1 && clk === 0 : prev === 0 && clk === 1;
+          if (go) {
+            const code = bitsToNumber(readBits(pinOf('in'), 7)) ?? 63;
+            const t = ttyAdd(ttyStateOf(comp.state, cfg), cfg.ttyCols, code);
+            comp.state.ttyLines = t.ttyLines;
+            comp.state.ttyRow = t.ttyRow;
+            comp.state.ttyLast = t.ttyLast;
+          }
+        }
+        break;
+      }
+      case 'telnet': {
+        // Telnet.propagate. Evolution runs it only when an input changes, a byte arrives or a setting changes, and
+        // sets the outputs from the buffer BEFORE the clock edge acts, so after an edge they stay as they were until
+        // the next such event (here: the input signature or telnetDirty). It reads its trigger from StdAttr.TRIGGER,
+        // which its attribute set does not have (it has EDGE_TRIGGER), so it always acts on the rising edge.
+        // OUT is x while RD is not 1 (evolution sets a 1-bit unknown on the 8-bit port: a pin shows it unknown,
+        // while a splitter would read bits 1-7 as errors). Sent: the input byte; 0 for an input wired to nothing
+        // (NIL), 255 for an undefined one (toLongValue() = -1).
+        const pinOf = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+        const inPin = pinOf('in');
+        const inBits = readBits(inPin, 8);
+        const open = !inPin || !isPinConnected(inPin.id);
+        const clk = readBits(pinOf('clk'), 1)[0];
+        const wr = readBits(pinOf('wr'), 1)[0];
+        const rd = readBits(pinOf('rd'), 1)[0];
+        const sig = `${open ? 'N' : inBits.join('')}|${clk}|${wr}|${rd}`;
+        if (sig === comp.state.telnetSig && !comp.state.telnetDirty) break;
+        comp.state.telnetSig = sig;
+        comp.state.telnetDirty = undefined;
+        const prev = comp.state.lastClk;
+        comp.state.lastClk = clk;
+        const rx = comp.state.telnetRx ?? '';
+        comp.outputs.forEach((p, i) => {
+          if (pinKey(comp, p) === 'av') setOut(i, rx !== '' ? 1 : 0);
+          else setBitsOut(i, rd === 1 ? numberToBits(rx === '' ? 0xff : rx.charCodeAt(0), 8) : new Array<SignalValue>(8).fill('X'));
+        });
+        if (prev === 0 && clk === 1) {
+          if (wr === 1) {
+            const v = open ? 0 : (bitsToNumber(inBits) ?? 0xff);
+            const tx = (comp.state.telnetTx ?? '') + String.fromCharCode(v);
+            comp.state.telnetTx = tx.length > TELNET_TX_KEEP ? tx.slice(tx.length - TELNET_TX_KEEP) : tx;
+            comp.state.telnetTxCount = (comp.state.telnetTxCount ?? 0) + 1;
+          }
+          if (rd === 1 && rx !== '') comp.state.telnetRx = rx.slice(1);
+        }
+        break;
+      }
       case 'binToBcd': {
         const bits = binToBcdBits(comp);
         binToBcdValues(readBits(comp.inputs[0], bits), comp.outputs.length).forEach((v, i) => setBitsOut(i, numberToBits(v, 4)));
