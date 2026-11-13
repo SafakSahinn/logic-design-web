@@ -6,6 +6,9 @@ import {
   ARITH_PINS,
   GATE_WIDTH_TYPES,
   HEX_7SEG_MAP,
+  BCD_7SEG_CODES,
+  binToBcdAdd3Cells,
+  binToBcdBits,
   OUTPUT_MODE_TYPES,
   PLEXER_TYPES,
   bitAdderOutBits,
@@ -649,6 +652,16 @@ function buildModule(
     }
   }
   const floatingParts: string[] = [];
+  // Helper functions shared by every part of a kind in this module (BFH lookup tables), declared once
+  const sharedFns = new Map<string, string>();
+  const bfhFunction = (hint: string, lines: (f: string) => string[]): string => {
+    if (!sharedFns.has(hint)) {
+      const f = names.make(hint, 'f');
+      sharedFns.set(hint, f);
+      extraDecls.push(...lines(f));
+    }
+    return sharedFns.get(hint)!;
+  };
 
   // --- bit threads: the source of every bit of every multi-bit / splitter-linked net ---------------
   // A driver pin's bit b: constant bit, bit of its vector signal, or its 1-bit signal
@@ -939,6 +952,104 @@ function buildModule(
           }
           emit(out[bit], terms.length === 0 ? L.zero : terms.length === 16 ? L.one : L.or(terms));
         }
+        break;
+      }
+      case 'binToBcd': {
+        // Evolution BinToBcdHdlGeneratorFactory: combinational shift-and-add-3 (double dabble). The input bits are
+        // shifted in MSB first; before each shift a digit that can be 5 or more goes through an add-3 cell
+        // (0-4 stay, 5-9 get +3). Evolution writes this part only in VHDL; here both languages
+        const bits = binToBcdBits(c);
+        const pin = c.inputs[0];
+        const r = pin ? readBits(pin.id, bits) : undefined;
+        if (!r || r.floating || r.mismatch) {
+          // An input that is not fully defined is -1 in the simulator: ones 1111, upper digits 0 (Java division)
+          body.push(L.comment('giriş tam bağlı değil: simülatördeki gibi birler basamağı 1111, üst basamaklar 0'));
+          out.forEach((o, k) => o && emit(o, bitLiteral(k === 0 ? [1, 1, 1, 1] : [0, 0, 0, 0])));
+          break;
+        }
+        const fn = bfhFunction('bfh_add3', (f) => {
+          // 0-4 unchanged, 5-9 -> 8-12; 10-15 never occur in the chain and pass unchanged
+          const rows = [5, 6, 7, 8, 9].map((v) => [v, v + 3]);
+          const nib = (v: number) => v.toString(2).padStart(4, '0');
+          return lang === 'verilog'
+            ? [
+                `  function [3:0] ${f};`,
+                '    input [3:0] v;',
+                '    begin',
+                '      case (v)',
+                ...rows.map(([a, b]) => `        4'd${a}: ${f} = 4'd${b};`),
+                `        default: ${f} = v;`,
+                '      endcase',
+                '    end',
+                '  endfunction',
+              ]
+            : [
+                `  function ${f}(v : std_logic_vector(3 downto 0)) return std_logic_vector is`,
+                '  begin',
+                '    case v is',
+                ...rows.map(([a, b]) => `      when "${nib(a)}" => return "${nib(b)}";`),
+                '      when others => return v;',
+                '    end case;',
+                `  end function ${f};`,
+              ];
+        });
+        const digits = c.outputs.length;
+        let shifted = bits;
+        const shiftIn = (bitsNow: Bit[], b: Bit): Bit[] => [b, ...bitsNow.slice(0, -1)];
+        let reg: Bit[] = Array.from({ length: 4 * digits }, () => ({ k: 'lit', v: 0 }) as Bit);
+        const cells = binToBcdAdd3Cells(bits);
+        body.push(L.comment(`${bits} bit -> ${digits} BCD basamağı, ${cells.length} adet add-3 hücresi`));
+        cells.forEach((cell, n) => {
+          // Shift in the input bits above this cell's bit first
+          while (shifted > cell.bit + 1) reg = shiftIn(reg, r.bits[--shifted]);
+          const cs = names.make(`${nm}_c${n}`, 'c');
+          declare(cs, 4);
+          emit(cs, `${fn}(${compose(reg.slice(4 * cell.digit, 4 * cell.digit + 4))})`);
+          for (let b = 0; b < 4; b++) reg[4 * cell.digit + b] = { k: 'idx', sig: cs, i: b };
+        });
+        while (shifted > 0) reg = shiftIn(reg, r.bits[--shifted]);
+        out.forEach((o, k) => o && emit(o, compose(reg.slice(4 * k, 4 * k + 4))));
+        break;
+      }
+      case 'bcdToSevenSegment': {
+        // Evolution BcdToSevenSegmentDisplayHdlGeneratorFactory: a case table of the 0-9 patterns (bit 0 = segment a)
+        const pin = c.inputs[0];
+        const r = pin ? readBits(pin.id, 4) : undefined;
+        body.push(L.comment("10-15 ya da tanımsız girişte simülatörde tüm segmentler x; x sentezlenemez, burada 0 (evolution'ın Verilog'u gibi)"));
+        if (!r || r.floating || r.mismatch) {
+          body.push(L.comment('giriş tam bağlı değil: segmentler 0'));
+          out.forEach((o) => o && emit(o, L.zero));
+          break;
+        }
+        const fn = bfhFunction('bfh_bcd_7seg', (f) => {
+          const nib = (v: number) => v.toString(2).padStart(4, '0');
+          const seg = (v: number) => v.toString(2).padStart(7, '0');
+          return lang === 'verilog'
+            ? [
+                `  function [6:0] ${f};`,
+                '    input [3:0] v;',
+                '    begin',
+                '      case (v)',
+                ...BCD_7SEG_CODES.map((code, v) => `        4'd${v}: ${f} = 7'b${seg(code)};`),
+                `        default: ${f} = 7'b0000000;`,
+                '      endcase',
+                '    end',
+                '  endfunction',
+              ]
+            : [
+                `  function ${f}(v : std_logic_vector(3 downto 0)) return std_logic_vector is`,
+                '  begin',
+                '    case v is',
+                ...BCD_7SEG_CODES.map((code, v) => `      when "${nib(v)}" => return "${seg(code)}";`),
+                '      when others => return "0000000";',
+                '    end case;',
+                `  end function ${f};`,
+              ];
+        });
+        const segs = names.make(`${nm}_segs`, 'segs');
+        declare(segs, 7);
+        emit(segs, `${fn}(${compose(r.bits)})`);
+        out.forEach((o, i) => o && emit(o, vecIndex(segs, i)));
         break;
       }
       case 'srLatch': {

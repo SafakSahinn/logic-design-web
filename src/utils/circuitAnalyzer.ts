@@ -16,6 +16,8 @@ import {
   ramByteEnableCount,
   pinKey,
   shifterDistBits,
+  binToBcdAdd3Cells,
+  binToBcdBits,
 } from './circuitEngine';
 import { TTL_SEQ_TYPES, ttlChipOf } from './ttlChips';
 import type { TtlChipId } from '../types/circuit';
@@ -193,6 +195,8 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   demux1to2: 12,
   demux1to4: 28,
   bcdTo7Seg: 110,
+  // Evolution BCD to 7-segment: the same 4 -> 7 decoder scale
+  bcdToSevenSegment: 110,
   comparator4bit: 64,
   alu4bit: 280,
   splitter4: 0,
@@ -442,6 +446,11 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       // constant multiply (0x5DEECE66D has 23 one bits: an adder of 48 - k bits per shifted copy, 18004) and
       // + 0xB (48 half adders, 672); the output is bits of the state, whatever its width
       return 48 * 28 + 2 * 48 * 14 + 18004 + 48 * 14;
+    case 'binToBcd':
+      // Shift-and-add-3 array: one add-3 cell per binToBcdAdd3Cells entry. A cell is two-level NAND logic over
+      // the 4 bits with 10-15 as don't cares (S3 = A3 + A2A0 + A2A1, S2 = A3A0 + A2A1'A0', S1 = A2'A1 + A1A0 +
+      // A3A0', S0 = A3'A2'A0 + A2A1A0' + A3A0'): 4 inverters 8 + S3 14 + S2 14 + S1 18 + S0 22 = 76
+      return 76 * binToBcdAdd3Cells(binToBcdBits(c)).length;
     case 'subcircuit': {
       const def = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId) : undefined;
       if (!def || seen.has(def.id)) return 0;
@@ -524,9 +533,11 @@ export function analyzeCircuit(
                 ? withDetail(c.type.toUpperCase(), memGroupDetail(c, flipFlopEnableWired(c, wired)))
                 : RAM_TYPES.has(c.type)
                   ? withDetail(c.type.toUpperCase(), ramGroupDetail(c, wired))
-                  : ttlChipOf(c.type)
-                    ? `TTL ${ttlChipOf(c.type)!.id} (${ttlChipOf(c.type)!.title})`
-                    : c.type.toUpperCase();
+                  : c.type === 'binToBcd'
+                    ? `BINTOBCD (${binToBcdBits(c)} bit)`
+                    : ttlChipOf(c.type)
+                      ? `TTL ${ttlChipOf(c.type)!.id} (${ttlChipOf(c.type)!.title})`
+                      : c.type.toUpperCase();
     const g = groups.get(name) || { gateType: name, count: 0, transistorsPerUnit: t, totalTransistors: 0 };
     g.count++;
     g.totalTransistors += t;

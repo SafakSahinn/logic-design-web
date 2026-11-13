@@ -909,7 +909,7 @@ export const BIN_TO_BCD_DEFAULT_BITS = 9;
 /** BCD to 7-segment output order (evolution SEGMENT_A .. SEGMENT_G) */
 export const BCD_SEGMENTS = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
 /** Evolution's segment patterns for 0-9, bit 0 = segment a */
-const BCD_7SEG_CODES = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
+export const BCD_7SEG_CODES = [0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111];
 
 /** Input width of a binary to BCD converter (4-13) */
 export function binToBcdBits(comp: CircuitComponentInstance): number {
@@ -919,6 +919,21 @@ export function binToBcdBits(comp: CircuitComponentInstance): number {
 /** Number of BCD digit outputs: the decimal digits of 2^bits (evolution (int) (log10(1 << bits) + 1)) */
 export function binToBcdDigits(bits: number): number {
   return String(2 ** bits).length;
+}
+
+/**
+ * Add-3 cells of the combinational shift-and-add-3 (double dabble) converter, in order: before input bit `bit` is
+ * shifted in, BCD digit `digit` gets a cell when it can be 5 or more there (the bits shifted in so far are at most
+ * 2^(bits-1-bit) - 1). Evolution's BinToBcd HDL has the same cells (3 for 6 bits, 9 for 9, 21 for 13).
+ */
+export function binToBcdAdd3Cells(bits: number): { bit: number; digit: number }[] {
+  const cells: { bit: number; digit: number }[] = [];
+  const digits = binToBcdDigits(bits);
+  for (let bit = bits - 1; bit >= 0; bit--) {
+    const max = 2 ** (bits - 1 - bit) - 1;
+    for (let digit = 0; digit < digits; digit++) if (Math.floor(max / 10 ** digit) >= 5) cells.push({ bit, digit });
+  }
+  return cells;
 }
 
 function bfhPinKeys(type: ComponentType, bits: number): { inputs: string[]; outputs: string[] } {
