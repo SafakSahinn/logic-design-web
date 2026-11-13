@@ -104,6 +104,15 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '74393': 2 * 4 * 42, // 2 x 4 toggling J-K flip-flops
   '744017': 5 * 28 + 10 * 6 + 2 + 6 + 2, // 5-stage Johnson counter, 10 x AND2 decode, Q5-9' NOT, clock gate AND2 + NOT
   '744060': 14 * 42, // 14 toggling J-K flip-flops
+  // 4i
+  '74107': 2 * 42, // 2 x J-K flip-flop
+  '74173': 4 * (28 + 14 + 6) + 6 + 4 + 4, // per bit D flip-flop + load 2:1 MUX + tri-state buffer; G NOR2, M/N NOR2, CLR
+  '74175': 4 * 28, // 4 x D flip-flop (Q and Q')
+  '74259': 8 * (20 + 6) + 52 + 12, // 8 x D latch + set gating AND2, 3:8 decoder, mode logic
+  '74273': 8 * 28, // 8 x D flip-flop with clear
+  '74374': 8 * (28 + 6) + 2, // 8 x (D flip-flop + tri-state buffer) + NOT for OE'
+  '74377': 8 * (28 + 14) + 2, // 8 x (D flip-flop + hold 2:1 MUX) + NOT for E'
+  '74670': 16 * 20 + 2 * 24 + 4 * 34 + 4 * 6 + 2 + 2, // 16 latches, write + read 2:4 decoders, 4 x 4:1 MUX, tri-state, WE'/OE' NOT
 };
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];

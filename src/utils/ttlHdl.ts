@@ -1012,7 +1012,243 @@ const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
       seqOut(c, pin, idx(c, 'cnt', q - 1))
     );
   },
+
+  // ---- 4i: registers, latches, flip-flops ------------------------------------------------------------------
+  // 74107: two JK flip-flops, falling edge, (CLK, CLR', J, K, Q, Q') = (12, 13, 1, 4, 3, 2) and (9, 10, 8, 11, 5, 6).
+  // An unknown CLR' makes Q unknown at once; an unknown J / K leaves Q known only when both its values agree,
+  // which is what x-propagating J·Q' + K'·Q gives once J and K are not both clean.
+  '74107': (c) => {
+    ([[12, 13, 1, 4, 3, 2], [9, 10, 8, 11, 5, 6]] as const).forEach(([clk, clr, j, k, q, qn], i) => {
+      const n = i + 1;
+      const [CK, R, J, K, Q] = [c.i(clk), c.i(clr), c.i(j), c.i(k), `q${n}`];
+      const inv = (x: string) => (c.v ? `~${x}` : `not ${x}`);
+      seqReg(c, Q);
+      seqClock(c, `ck${n}`, CK);
+      seqFlag(c, `clr${n}`, [isv(c, R, 0)]);
+      seqFlag(c, `unk${n}`, [isv(c, R, 0, false), isv(c, R, 1, false)]);
+      const edge = (op: '<=' | '=') =>
+        seqIfs(c, [
+          [allIf(c, [isv(c, J, 1), isv(c, K, 1)]), [`${Q} ${op} ${inv(Q)};`]],
+          [allIf(c, [isv(c, J, 1), isv(c, K, 0)]), [`${Q} ${op} ${bit(c, 1)};`]],
+          [allIf(c, [isv(c, J, 0), isv(c, K, 1)]), [`${Q} ${op} ${bit(c, 0)};`]],
+          [allIf(c, [isv(c, J, 0), isv(c, K, 0)]), [`${Q} ${op} ${Q};`]],
+        ], [c.v ? `${Q} ${op} (${J} & ~${Q}) | (~${K} & ${Q});` : `${Q} <= (${J} and not ${Q}) or (not ${K} and ${Q});`]);
+      seqProc(c, `ck${n}`, true, [[`clr${n}`, [`${Q} <= ${bit(c, 0)};`]], [`unk${n}`, [`${Q} <= ${bit(c, 'x')};`]]], edge('<='));
+      seqSim(c, [`s_ck${n} = 1'b0`, `e${n}`], [
+        ...simEdge(c, `e${n}`, `s_ck${n}`, CK, true),
+        ...seqIfs(c, [
+          [isv(c, R, 0), [`${Q} = 1'b0;`]],
+          [allIf(c, [isv(c, R, 0, false), isv(c, R, 1, false)]), [`${Q} = 1'bx;`]],
+          [`e${n}`, edge('=')],
+        ]),
+      ]);
+      seqOut(c, q, Q);
+      seqOut(c, qn, inv(Q));
+    });
+  },
+  // 74173: M' 1, N' 2, Q1..Q4 3..6, CLK 7, G1' 9, G2' 10, D4..D1 11..14, CLR 15 (q[0] = Q1). The clock is sampled
+  // only while loading (CLR not 1, G1' = G2' = 0); the outputs float unless M' = N' = 0
+  '74173': (c) => {
+    const [m, nn, ck, g1, g2, clr] = [1, 2, 7, 9, 10, 15].map(c.i);
+    const load = octalLoad(c, [14, 13, 12, 11]);
+    seqReg(c, 'q', 4);
+    seqClock(c, 'ck', ck, [isv(c, clr, 1, false), isv(c, g1, 0), isv(c, g2, 0)]);
+    seqFlag(c, 'clr', [isv(c, clr, 1)]);
+    seqProc(c, 'ck', false, [['clr', [zero(c, 'q', 4)]]], load('<='));
+    seqSim(c, ["s_ck = 1'b0", 'e'], seqIfs(c, [
+      [isv(c, clr, 1), [zero(c, 'q', 4, '=')]],
+      [allIf(c, [isv(c, g1, 0), isv(c, g2, 0)]), [...simEdge(c, 'e', 's_ck', ck), ...seqIfs(c, [['e', load('=')]])]],
+    ]));
+    outEnable(c, [isv(c, m, 0), isv(c, nn, 0)]);
+    [3, 4, 5, 6].forEach((pin, k) => triOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74175: CLR' 1, (Q, Q', D) = (2, 3, 4), (7, 6, 5), (10, 11, 12), (15, 14, 13), CLK 9
+  '74175': (c) => {
+    dRegister(c, 1, 9, [4, 5, 12, 13], false);
+    ([[2, 3], [7, 6], [10, 11], [15, 14]] as const).forEach(([q, qn], k) => {
+      seqOut(c, q, idx(c, 'q', k));
+      seqOut(c, qn, c.v ? `~q[${k}]` : `not q(${k})`);
+    });
+  },
+  // 74259: A0..A2 1..3, Q0..Q7 4..7 9..12, D 13, LE' 14, MR' 15. A latch, no clock: LE' = 0 writes D to the
+  // addressed output (MR' = 0: the others clear, MR' = 1: they hold); LE' = 1, MR' = 0 clears all. Simulator /
+  // VHDL: an unknown address bit merges D with the idle value of every output it may select (equal -> that,
+  // else x). Verilog synthesis: one latch per output, enable and data written out.
+  '74259': (c) => {
+    const [a0, a1, a2, d, le, mr] = [1, 2, 3, 13, 14, 15].map(c.i);
+    seqReg(c, 'q', 8);
+    if (c.v) {
+      const fn = [
+        '  function lv259;',
+        '    input [2:0] k;',
+        '    input [2:0] a;',
+        '    input d, idle;',
+        '    integer j;',
+        '    reg ex, df;',
+        '    begin',
+        "      ex = 1'b0; df = 1'b1;",
+        '      for (j = 0; j < 3; j = j + 1) begin',
+        "        if ((a[j] === 1'b0 && k[j]) || (a[j] === 1'b1 && !k[j])) ex = 1'b1;",
+        "        if (a[j] !== 1'b0 && a[j] !== 1'b1) df = 1'b0;",
+        '      end',
+        '      if (ex) lv259 = idle;',
+        '      else if (df) lv259 = d;',
+        "      else if (d === idle && (d === 1'b0 || d === 1'b1)) lv259 = d;",
+        "      else lv259 = 1'bx;",
+        '    end',
+        '  endfunction',
+      ];
+      c.sim.decls.push(...fn, '  integer k;');
+      const pw = allOf(c, powered(c));
+      c.syn.decls.push('  wire [7:0] sel;', '  wire [7:0] len;', '  wire [7:0] ld;', '  integer k;');
+      c.syn.body.push(
+        `  assign sel = 8'd1 << {${a2}, ${a1}, ${a0}};`,
+        `  assign len = {8{${pw}}} & ({8{~${mr}}} | ({8{~${le}}} & sel));`,
+        // MR' = 1: the data is D itself, so an address change or LE' going high only closes the latch
+        `  assign ld = {8{${d}}} & ({8{${mr}}} | (sel & {8{~${le}}}));`,
+        '  always @(*) for (k = 0; k < 8; k = k + 1) if (len[k]) q[k] = ld[k];'
+      );
+    } else {
+      c.decls.push(
+        '  function lv259(k : natural; a0, a1, a2, d, idle : std_logic) return std_logic is',
+        '    variable a : std_logic_vector(2 downto 0);',
+        '    variable ex : boolean := false;',
+        '    variable df : boolean := true;',
+        '  begin',
+        '    a := a2 & a1 & a0;',
+        '    for j in 0 to 2 loop',
+        "      if (a(j) = '0' and (k / 2 ** j) mod 2 = 1) or (a(j) = '1' and (k / 2 ** j) mod 2 = 0) then",
+        '        ex := true;',
+        '      end if;',
+        "      if a(j) /= '0' and a(j) /= '1' then",
+        '        df := false;',
+        '      end if;',
+        '    end loop;',
+        '    if ex then',
+        '      return idle;',
+        '    elsif df then',
+        '      return d;',
+        "    elsif d = idle and (d = '0' or d = '1') then",
+        '      return d;',
+        '    end if;',
+        "    return 'X';",
+        '  end function;'
+      );
+    }
+    const write = (idle: string) =>
+      c.v
+        ? [`for (k = 0; k < 8; k = k + 1) q[k] = lv259(k, {${a2}, ${a1}, ${a0}}, ${d}, ${idle});`]
+        : ['for k in 0 to 7 loop', `  q(k) <= lv259(k, ${a0}, ${a1}, ${a2}, ${d}, ${idle});`, 'end loop;'];
+    const step = (op: '<=' | '=') =>
+      seqIfs(c, [
+        [allIf(c, [isv(c, mr, 0), isv(c, le, 1)]), [zero(c, 'q', 8, op)]],
+        [allIf(c, [isv(c, le, 0), isv(c, mr, 0)]), write(bit(c, 0))],
+        [allIf(c, [isv(c, le, 0), isv(c, mr, 1)]), write(c.v ? 'q[k]' : 'q(k)')],
+      ]);
+    seqSim(c, [], step('='));
+    if (!c.v) latchProc(c, [], step('<='));
+    [4, 5, 6, 7, 9, 10, 11, 12].forEach((pin, k) => seqOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74273: CLR' 1, CLK 11, D1..D8 3 4 7 8 13 14 17 18, Q1..Q8 2 5 6 9 12 15 16 19
+  '74273': (c) => {
+    dRegister(c, 1, 11, OCTAL_D, false);
+    OCTAL_Q.forEach((pin, k) => seqOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74374: OE' 1, CLK 11; outputs float unless OE' = 0
+  '74374': (c) => {
+    dRegister(c, 0, 11, OCTAL_D, false);
+    outEnable(c, [isv(c, c.i(1), 0)]);
+    OCTAL_Q.forEach((pin, k) => triOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74377: E' 1 (the edge loads only while it is 0), CLK 11
+  '74377': (c) => {
+    dRegister(c, 1, 11, OCTAL_D, true);
+    OCTAL_Q.forEach((pin, k) => seqOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74670: D2 1, D3 2, D4 3, RA1 4, RA0 5, Q4 6, Q3 7, Q2 9, Q1 10, OE' 11, WE' 12, WA1 13, WA0 14, D1 15.
+  // Four 4-bit words m0..m3 (bit 0 = D1), latches: WE' = 0 writes the word at WA1 WA0; Q shows the word at
+  // RA1 RA0 while OE' = 0. An address bit counts as 1 only when it is exactly 1.
+  '74670': (c) => {
+    const [ra1, ra0, oe, we, wa1, wa0] = [4, 5, 11, 12, 13, 14].map(c.i);
+    const D = [15, 1, 2, 3].map(c.i);
+    const data = c.v ? `{${[...D].reverse().join(', ')}}` : [...D].reverse().join(' & ');
+    const at = (a1: string, a0: string, w: number) => [isv(c, a1, 1, w >= 2), isv(c, a0, 1, (w & 1) === 1)];
+    for (let w = 0; w < 4; w++) seqReg(c, `m${w}`, 4);
+    const write = (op: '<=' | '=') =>
+      seqIfs(c, [0, 1, 2, 3].map((w) => [allIf(c, at(wa1, wa0, w)), [`m${w} ${op} ${data};`]] as [string, string[]]));
+    seqSim(c, [], seqIfs(c, [[isv(c, we, 0), write('=')]]));
+    if (c.v) {
+      for (let w = 0; w < 4; w++) c.syn.body.push(`  always @(*) if (${allIf(c, [...powered(c), isv(c, we, 0), ...at(wa1, wa0, w)])}) m${w} = ${data};`);
+    } else latchProc(c, [isv(c, we, 0)], write('<='));
+    seqWire(c, 'rd', 4);
+    if (c.v) {
+      const rd = `${isv(c, ra1, 1)} ? (${isv(c, ra0, 1)} ? m3 : m2) : (${isv(c, ra0, 1)} ? m1 : m0)`;
+      synSet(c, 'rd', rd);
+      simSet(c, 'rd', rd);
+    } else {
+      c.body.push(`  rd <= m3 when ${ra1} = '1' and ${ra0} = '1' else m2 when ${ra1} = '1' else m1 when ${ra0} = '1' else m0;`);
+    }
+    outEnable(c, [isv(c, oe, 0)]);
+    [10, 9, 7, 6].forEach((pin, k) => triOut(c, pin, idx(c, 'rd', k)));
+  },
 };
+
+/** 74273 / 74374 / 74377 D and Q pins, bit 0 = D1 / Q1 */
+const OCTAL_D = [3, 4, 7, 8, 13, 14, 17, 18];
+const OCTAL_Q = [2, 5, 6, 9, 12, 15, 16, 19];
+
+/** Statement loading register q from D pins (bit 0 first) */
+const octalLoad = (c: SeqCtx, pins: number[]) => {
+  const d = pins.map(c.i).reverse();
+  return (op: '<=' | '=') => [c.v ? `q ${op} {${d.join(', ')}};` : `q <= ${d.join(' & ')};`];
+};
+
+/**
+ * D register q on the rising edge of pin `clk` (sampled first); pin `ctl` (0 = none) is CLR' (clears at once
+ * while 0) or, with `enable`, E' (the edge loads only while it is 0)
+ */
+function dRegister(c: SeqCtx, ctl: number, clk: number, d: number[], enable: boolean) {
+  const CK = c.i(clk);
+  const CTL = ctl ? c.i(ctl) : '';
+  const w = d.length;
+  const load = octalLoad(c, d);
+  const edge = (op: '<=' | '=') => (enable ? seqIfs(c, [[isv(c, CTL, 0), load(op)]]) : load(op));
+  seqReg(c, 'q', w);
+  seqClock(c, 'ck', CK);
+  const clear = ctl && !enable;
+  if (clear) seqFlag(c, 'clr', [isv(c, CTL, 0)]);
+  seqProc(c, 'ck', false, clear ? [['clr', [zero(c, 'q', w)]]] : [], edge('<='));
+  seqSim(c, ["s_ck = 1'b0", 'e'], [
+    ...simEdge(c, 'e', 's_ck', CK),
+    ...(clear ? seqIfs(c, [[isv(c, CTL, 0), [zero(c, 'q', w, '=')]], ['e', edge('=')]]) : seqIfs(c, [['e', edge('=')]])),
+  ]);
+}
+
+/** Output enable `oe`: 1 while every condition holds (both models) */
+function outEnable(c: SeqCtx, conds: string[]) {
+  seqWire(c, 'oe');
+  if (c.v) {
+    synSet(c, 'oe', allOf(c, conds));
+    simSet(c, 'oe', allOf(c, conds));
+  } else c.body.push(`  oe <= '1' when ${allOf(c, conds)} else '0';`);
+}
+
+/** A tri-state output pin: `e` while powered and `oe` is 1, floating otherwise */
+function triOut(c: SeqCtx, pin: number, e: string) {
+  c.body.push(c.v ? `  assign ${c.o(pin)} = (pwr & oe) ? ${e} : 1'bz;` : `  ${c.o(pin)} <= ${e} when pwr = '1' and oe = '1' else 'Z';`);
+}
+
+/** VHDL latch: a process over every input that runs `st` while powered and the conditions hold */
+function latchProc(c: SeqCtx, conds: string[], st: string[]) {
+  c.syn.body.push(
+    `  process (${c.ins.join(', ')})`,
+    '  begin',
+    `    if ${allIf(c, [...powered(c), ...conds])} then`,
+    ...indent(st, 6),
+    '    end if;',
+    '  end process;'
+  );
+}
 
 /**
  * 74192 / 74193: B 1, QB 2, QA 3, DOWN 4, UP 5, QC 6, QD 7, D 9, C 10, LOAD' 11, CO' 12, BO' 13, CLR 14, A 15.

@@ -290,6 +290,33 @@ function upDown(id: TtlChipId, max: number, title: string, description: string):
   });
 }
 
+/** Evolution Ttl74107 complement: unlike Value.not, an unknown bit stays unknown (E stays E) */
+const complement = (v: SignalValue): SignalValue => (v === 1 ? 0 : v === 0 ? 1 : v === 'E' ? 'E' : 'X');
+
+/** 74273 / 74374 / 74377 D and Q pins, bit 0 = D1 / Q1 */
+const OCTAL_D = [3, 4, 7, 8, 13, 14, 17, 18];
+const OCTAL_Q = [2, 5, 6, 9, 12, 15, 16, 19];
+
+/**
+ * 74273 / 74377 (evolution AbstractOctalFlops, 80 high): the clock is sampled first; pin 1 is CLR' (74273, clears
+ * while 0) or E' (74377, the edge loads only while it is 0)
+ */
+function octalFlops(id: TtlChipId, enable: boolean, title: string, description: string) {
+  const first = enable ? 'E\'' : 'CLR\'';
+  return msi({
+    id, pins: 20, out: OCTAL_Q, vcc: 20, gnd: 10, group: 'sequential', seq: { v: 8, clk: 1 }, height: 80, title, description,
+    names: [first, 'Q1', 'D1', 'D2', 'Q2', 'Q3', 'D3', 'D4', 'Q4', 'CLK', 'Q5', 'D5', 'D6', 'Q6', 'Q7', 'D7', 'D8', 'Q8'],
+    labels: [enable ? 'E' : 'CLR', 'Q1', 'D1', 'D2', 'Q2', 'Q3', 'D3', 'D4', 'Q4', 'CK', 'Q5', 'D5', 'D6', 'Q6', 'Q7', 'D7', 'D8', 'Q8'],
+  }, (g, s, st) => {
+    const triggered = clockEdge(st, 0, g(11));
+    if (enable) {
+      if (triggered && lo(g(1))) st.v = OCTAL_D.map(g);
+    } else if (lo(g(1))) st.v = Array<SignalValue>(8).fill(0);
+    else if (triggered) st.v = OCTAL_D.map(g);
+    OCTAL_Q.forEach((pin, i) => s(pin, drive(st.v[i])));
+  });
+}
+
 /** 7442 / 7443 / 7444: BCD (excess-3, excess-3 Gray) -> one of ten active-low outputs */
 function decimalDecoder(id: TtlChipId, title: string, description: string, code: (d: number) => number) {
   return msi({
@@ -1154,6 +1181,133 @@ const CHIPS: TtlChip[] = [
     ([[1, 12], [2, 13], [3, 14], [4, 6], [5, 5], [6, 7], [7, 4], [13, 9], [14, 8], [15, 10]] as const).forEach(([pin, q]) =>
       s(pin, drive(st.v[q - 1]))
     );
+  }),
+
+  // ---- 4i: registers, latches, flip-flops ----------------------------------------------------------------
+  msi({
+    id: '74107', pins: 14, out: [2, 3, 5, 6], vcc: 14, gnd: 7, group: 'sequential', seq: { v: 2, clk: 2 },
+    title: 'Çift JK flip-flop (clear)',
+    description:
+      'İki adet düşen kenar tetiklemeli JK flip-flop: CLK 1 → 0 olurken J = 1, K = 0 → Q = 1; J = 0, K = 1 → Q = 0; '
+      + 'J = K = 1 → Q tersine döner; J = K = 0 → değişmez. CLR\' = 0 Q\'yu saatten bağımsız 0 yapar (preset yok).',
+    names: ['1J', '1Q\'', '1Q', '1K', '2Q', '2Q\'', '2J', '2CLK', '2CLR\'', '2K', '1CLK', '1CLR\''],
+    labels: ['1J', '1Q\'', '1Q', '1K', '2Q', '2Q\'', '2J', '2CK', '2CLR', '2K', '1CK', '1CLR'],
+  }, (g, s, st) => {
+    // Evolution Ttl74107: an unknown CLR' makes the state unknown (E: error); an unknown J / K matters only when
+    // its two values give different results
+    const t = [clockEdge(st, 0, g(12), true), clockEdge(st, 1, g(9), true)];
+    const levels = (v: SignalValue): boolean[] => (v === 1 ? [true] : v === 0 ? [false] : [false, true]);
+    const next = (q: SignalValue, j: boolean, k: boolean): SignalValue => (j && k ? complement(q) : j ? 1 : k ? 0 : q);
+    const ff = (i: number, clr: number, j: number, k: number) => {
+      const r = g(clr);
+      if (r === 0) st.v[i] = 0;
+      else if (r === 'E') st.v[i] = 'E';
+      else if (r !== 1) st.v[i] = 'X';
+      else if (t[i]) {
+        const [J, K, q] = [g(j), g(k), st.v[i]];
+        const agreed = next(q, levels(J)[0], levels(K)[0]);
+        const differs = levels(J).some((jh) => levels(K).some((kh) => !same(next(q, jh, kh), agreed)));
+        st.v[i] = differs ? (J === 'E' || K === 'E' ? 'E' : 'X') : agreed;
+      }
+    };
+    ff(0, 13, 1, 4);
+    ff(1, 10, 8, 11);
+    s(3, drive(st.v[0]));
+    s(2, drive(complement(st.v[0])));
+    s(5, drive(st.v[1]));
+    s(6, drive(complement(st.v[1])));
+  }),
+  msi({
+    id: '74173', pins: 16, out: [3, 4, 5, 6], vcc: 16, gnd: 8, group: 'sequential', triState: true, seq: { v: 4, clk: 1 },
+    title: '4 bit D yazmacı (3 durumlu çıkış)',
+    description:
+      'G1\' = G2\' = 0 iken CLK 0 → 1 olunca D1..D4 yüklenir, değilse yazmaç değerini korur. CLR = 1 saatten bağımsız sıfırlar. '
+      + 'Çıkışlar yalnız M\' = N\' = 0 iken sürülür, değilse boşta (Z) kalır; yazmaç bundan etkilenmez.',
+    names: ['M\'', 'N\'', 'Q1', 'Q2', 'Q3', 'Q4', 'CLK', 'G1\'', 'G2\'', 'D4', 'D3', 'D2', 'D1', 'CLR'],
+    labels: ['M', 'N', 'Q1', 'Q2', 'Q3', 'Q4', 'CK', 'G1', 'G2', 'D4', 'D3', 'D2', 'D1', 'CLR'],
+  }, (g, s, st) => {
+    // Evolution Ttl74173: the clock is sampled only while loading (CLR not 1, G1' = G2' = 0); v[i] = Q(i + 1)
+    if (hi(g(15))) st.v = [0, 0, 0, 0];
+    else if (lo(g(9)) && lo(g(10)) && clockEdge(st, 0, g(7))) st.v = [14, 13, 12, 11].map(g);
+    const enabled = lo(g(1)) && lo(g(2));
+    [3, 4, 5, 6].forEach((pin, i) => s(pin, enabled ? drive(st.v[i]) : FLOAT));
+  }),
+  msi({
+    id: '74175', pins: 16, out: [2, 3, 6, 7, 10, 11, 14, 15], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 4, clk: 1 },
+    title: 'Dörtlü D flip-flop (clear)',
+    description:
+      'Ortak saatli dört D flip-flop: CLK 0 → 1 olurken Q1..Q4 = D1..D4; her birinin Q\' çıkışı da var. '
+      + 'CLR\' = 0 saatten bağımsız sıfırlar.',
+    names: ['CLR\'', 'Q1', 'Q1\'', 'D1', 'D2', 'Q2\'', 'Q2', 'CLK', 'Q3', 'Q3\'', 'D3', 'D4', 'Q4\'', 'Q4'],
+    labels: ['CLR', 'Q1', 'Q1\'', 'D1', 'D2', 'Q2\'', 'Q2', 'CK', 'Q3', 'Q3\'', 'D3', 'D4', 'Q4\'', 'Q4'],
+  }, (g, s, st) => {
+    // Evolution Ttl74175: the clock is sampled first; Q' is Value.not (an unknown bit gives E)
+    const triggered = clockEdge(st, 0, g(9));
+    if (lo(g(1))) st.v = [0, 0, 0, 0];
+    else if (triggered) st.v = [4, 5, 12, 13].map(g);
+    ([[2, 3], [7, 6], [10, 11], [15, 14]] as const).forEach(([q, qn], i) => {
+      s(q, drive(st.v[i]));
+      s(qn, not(st.v[i]));
+    });
+  }),
+  msi({
+    id: '74259', pins: 16, out: [4, 5, 6, 7, 9, 10, 11, 12], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 8, clk: 0 },
+    title: '8 bit adreslenebilir mandal',
+    description:
+      'A2..A0 adresli çıkışa D yazılır (saat yok, mandal). LE\' = 0, MR\' = 1: seçili çıkış D\'yi izler, ötekiler korunur; '
+      + 'LE\' = 0, MR\' = 0: seçili çıkış D, ötekiler 0 (1-8 kod çözücü); LE\' = 1, MR\' = 0: hepsi 0; LE\' = MR\' = 1: hepsi korunur.',
+    names: ['A0', 'A1', 'A2', 'Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'D', 'LE\'', 'MR\''],
+    labels: ['A0', 'A1', 'A2', 'Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'D', 'LE', 'MR'],
+  }, (g, s, st) => {
+    // Evolution Ttl74259: with an unknown address bit the outputs it may select merge D with their idle value
+    const [mr, le, d] = [g(15), g(14), g(13)];
+    const a = [1, 2, 3].map(g);
+    const level = (k: number, idle: SignalValue): SignalValue => {
+      const excluded = a.some((b, j) => ((k >> j) & 1 ? b === 0 : b === 1));
+      if (excluded) return idle;
+      if (a.every(lvl)) return d;
+      if (same(d, idle)) return d;
+      if (d === 'E' || idle === 'E' || (lvl(d) && lvl(idle))) return 'E';
+      return 'X';
+    };
+    if (lo(mr) && hi(le)) st.v = Array<SignalValue>(8).fill(0);
+    else if (lo(le) && (lo(mr) || hi(mr))) st.v = st.v.map((q, k) => level(k, lo(mr) ? 0 : q));
+    [4, 5, 6, 7, 9, 10, 11, 12].forEach((pin, k) => s(pin, drive(st.v[k])));
+  }),
+  octalFlops('74273', false, 'Sekizli D flip-flop (clear)',
+    'Ortak saatli sekiz D flip-flop: CLK 0 → 1 olurken Q1..Q8 = D1..D8. CLR\' = 0 saatten bağımsız sıfırlar.'),
+  msi({
+    id: '74374', pins: 20, out: [2, 5, 6, 9, 12, 15, 16, 19], vcc: 20, gnd: 10, group: 'sequential', triState: true,
+    seq: { v: 8, clk: 1 },
+    title: 'Sekizli D flip-flop (3 durumlu çıkış)',
+    description:
+      'Ortak saatli sekiz D flip-flop: CLK 0 → 1 olurken D1..D8 saklanır. Çıkışlar yalnız OE\' = 0 iken sürülür, değilse '
+      + 'boşta (Z) kalır; saklanan değer bundan etkilenmez.',
+    names: ['OE\'', 'Q1', 'D1', 'D2', 'Q2', 'Q3', 'D3', 'D4', 'Q4', 'CLK', 'Q5', 'D5', 'D6', 'Q6', 'Q7', 'D7', 'D8', 'Q8'],
+    labels: ['OE', 'Q1', 'D1', 'D2', 'Q2', 'Q3', 'D3', 'D4', 'Q4', 'CK', 'Q5', 'D5', 'D6', 'Q6', 'Q7', 'D7', 'D8', 'Q8'],
+  }, (g, s, st) => {
+    // Evolution Ttl74374
+    if (clockEdge(st, 0, g(11))) st.v = OCTAL_D.map(g);
+    const enabled = lo(g(1));
+    OCTAL_Q.forEach((pin, i) => s(pin, enabled ? drive(st.v[i]) : FLOAT));
+  }),
+  octalFlops('74377', true, 'Sekizli D flip-flop (saat izinli)',
+    'Ortak saatli sekiz D flip-flop: E\' = 0 iken CLK 0 → 1 olunca Q1..Q8 = D1..D8; E\' = 1 iken değer korunur.'),
+  msi({
+    id: '74670', pins: 16, out: [6, 7, 9, 10], vcc: 16, gnd: 8, group: 'sequential', triState: true, seq: { v: 16, clk: 0 },
+    title: '4 x 4 yazmaç dosyası (3 durumlu çıkış)',
+    description:
+      'Dört adet 4 bitlik sözcük; yazma ve okuma ayrı adreslidir. WE\' = 0 iken D1..D4, WA1 WA0 adresli sözcüğe yazılır (saat yok, '
+      + 'WE\' = 0 boyunca izler). Q1..Q4, RA1 RA0 adresli sözcüğü OE\' = 0 iken gösterir, değilse boşta (Z) kalır.',
+    names: ['D2', 'D3', 'D4', 'RA1', 'RA0', 'Q4', 'Q3', 'Q2', 'Q1', 'OE\'', 'WE\'', 'WA1', 'WA0', 'D1'],
+    labels: ['D2', 'D3', 'D4', 'RA1', 'RA0', 'Q4', 'Q3', 'Q2', 'Q1', 'OE', 'WE', 'WA1', 'WA0', 'D1'],
+  }, (g, s, st) => {
+    // Evolution Ttl74670: an address bit counts as 1 only when it reads 1; v[4w + i] = bit D(i + 1) of word w
+    const addr = (msb: number, lsb: number) => (hi(g(msb)) ? 2 : 0) + (hi(g(lsb)) ? 1 : 0);
+    if (lo(g(12))) st.v.splice(4 * addr(13, 14), 4, ...[15, 1, 2, 3].map(g));
+    const r = addr(4, 5);
+    const enabled = lo(g(11));
+    [10, 9, 7, 6].forEach((pin, i) => s(pin, enabled ? drive(st.v[4 * r + i]) : FLOAT));
   }),
 ];
 
