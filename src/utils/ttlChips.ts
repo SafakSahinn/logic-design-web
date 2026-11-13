@@ -27,6 +27,11 @@ export const TTL_GROUP_TITLES: Record<TtlGroup, string> = {
 export interface TtlSeqState {
   v: SignalValue[];
   clk: SignalValue[];
+  /**
+   * The previous evaluation had no power, so the outputs still float (evolution's 74164 reads its own output
+   * pins when it shifts: on the first powered evaluation they read unknown)
+   */
+  off?: boolean;
 }
 
 /**
@@ -314,6 +319,33 @@ function octalFlops(id: TtlChipId, enable: boolean, title: string, description: 
     } else if (lo(g(1))) st.v = Array<SignalValue>(8).fill(0);
     else if (triggered) st.v = OCTAL_D.map(g);
     OCTAL_Q.forEach((pin, i) => s(pin, drive(st.v[i])));
+  });
+}
+
+/**
+ * 74594 / 74595 (evolution Ttl74594 / Ttl74595): QB..QH 1..7, QH' 9, SRCLR' 10, SRCLK 11, RCLK 12, pin 13 = RCLR'
+ * (74594) or OE' (74595), SER 14, QA 15. Both clocks are sampled first; a store edge together with a shift edge
+ * copies the stages from before the shift. v[0..7] = shift stages QA..QH, v[8..15] = the output register.
+ */
+function shiftStore(id: TtlChipId, oe: boolean, title: string, description: string) {
+  const ctl = oe ? 'OE\'' : 'RCLR\'';
+  return msi({
+    id, pins: 16, out: [1, 2, 3, 4, 5, 6, 7, 9, 15], vcc: 16, gnd: 8, group: 'sequential', triState: oe || undefined,
+    seq: { v: 16, clk: 2 }, title, description,
+    names: ['QB', 'QC', 'QD', 'QE', 'QF', 'QG', 'QH', 'QH\'', 'SRCLR\'', 'SRCLK', 'RCLK', ctl, 'SER', 'QA'],
+    labels: ['QB', 'QC', 'QD', 'QE', 'QF', 'QG', 'QH', 'QH\'', 'SCLR', 'SCK', 'RCK', oe ? 'OE' : 'RCLR', 'SER', 'QA'],
+  }, (g, s, st) => {
+    const shiftEdge = clockEdge(st, 0, g(11));
+    const storeEdge = clockEdge(st, 1, g(12));
+    const cleared = lo(g(10));
+    const before = st.v.slice(0, 8);
+    if (cleared) st.v.fill(0, 0, 8);
+    else if (shiftEdge) st.v.splice(0, 8, g(14), ...before.slice(0, 7));
+    if (!oe && lo(g(13))) st.v.fill(0, 8, 16);
+    else if (storeEdge) st.v.splice(8, 8, ...(shiftEdge && !cleared ? before : st.v.slice(0, 8)));
+    const enabled = !oe || lo(g(13));
+    [15, 1, 2, 3, 4, 5, 6, 7].forEach((pin, i) => s(pin, enabled ? drive(st.v[8 + i]) : FLOAT));
+    s(9, drive(st.v[7]));
   });
 }
 
@@ -1309,6 +1341,116 @@ const CHIPS: TtlChip[] = [
     const enabled = lo(g(11));
     [10, 9, 7, 6].forEach((pin, i) => s(pin, enabled ? drive(st.v[4 * r + i]) : FLOAT));
   }),
+
+  // ---- 4j: shift registers -------------------------------------------------------------------------------
+  msi({
+    id: '74164', pins: 14, out: [3, 4, 5, 6, 10, 11, 12, 13], vcc: 14, gnd: 7, group: 'sequential', seq: { v: 8, clk: 1 },
+    title: '8 bit seri giriş, paralel çıkış kaydırmalı yazmaç',
+    description:
+      'CLK 0 → 1 olurken A·B QA\'ya girer, QA..QG bir basamak kayar (QA → QB → … → QH). '
+      + 'CLR\' = 0 saatten bağımsız sıfırlar.',
+    names: ['A', 'B', 'QA', 'QB', 'QC', 'QD', 'CLK', 'CLR\'', 'QE', 'QF', 'QG', 'QH'],
+    labels: ['A', 'B', 'QA', 'QB', 'QC', 'QD', 'CK', 'CLR', 'QE', 'QF', 'QG', 'QH'],
+  }, (g, s, st) => {
+    // Evolution Ttl74164: the clock is sampled first; the shift reads the chip's own output pins (the stored
+    // values, unknown while they still float after a power-up); v[0] = QA .. v[7] = QH
+    const triggered = clockEdge(st, 0, g(8));
+    if (lo(g(9))) st.v = Array<SignalValue>(8).fill(0);
+    else if (triggered) st.v = [lvlOf(hi(g(1)) && hi(g(2))), ...st.v.slice(0, 7).map((q) => (st.off ? 'X' : q))];
+    [3, 4, 5, 6, 10, 11, 12, 13].forEach((pin, i) => s(pin, drive(st.v[i])));
+  }),
+  msi({
+    id: '74165', pins: 16, out: [7, 9], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 8, clk: 1 },
+    title: '8 bit paralel giriş, seri çıkış kaydırmalı yazmaç',
+    description:
+      'SH/LD\' = 0 iken P0..P7 saatten bağımsız yüklenir. SH/LD\' = 1 ve CLK INH = 0 iken CLK 0 → 1 olunca '
+      + 'SER P0 basamağına girer, değerler P7\'ye doğru kayar; Q7 son basamağı, Q7\' tersini gösterir.',
+    names: ['SH/LD\'', 'CLK', 'P4', 'P5', 'P6', 'P7', 'Q7\'', 'Q7', 'SER', 'P0', 'P1', 'P2', 'P3', 'CLK INH'],
+    labels: ['SL', 'CK', 'P4', 'P5', 'P6', 'P7', 'Q7\'', 'Q7', 'SER', 'P0', 'P1', 'P2', 'P3', 'INH'],
+  }, (g, s, st) => {
+    // Evolution Ttl74165: the clock is sampled first; v[0] = the Q7 stage .. v[7] = the P0 stage
+    const triggered = clockEdge(st, 0, g(2));
+    if (lo(g(1))) st.v = [6, 5, 4, 3, 14, 13, 12, 11].map(g);
+    else if (triggered && lo(g(15))) st.v = [...st.v.slice(1), g(10)];
+    s(7, not(st.v[0]));
+    s(9, drive(st.v[0]));
+  }),
+  msi({
+    id: '74166', pins: 16, out: [13], vcc: 16, gnd: 8, group: 'sequential', seq: { v: 8, clk: 1 },
+    title: '8 bit paralel/seri giriş, seri çıkış kaydırmalı yazmaç',
+    description:
+      'CLK INH = 0 iken CLK 0 → 1 olunca: SH/LD\' = 0 ise P0..P7 yüklenir, SH/LD\' = 1 ise SER P0 basamağına girer ve '
+      + 'değerler P7\'ye doğru kayar. Q7 son basamağı gösterir. CLR\' = 0 saatten bağımsız sıfırlar.',
+    names: ['SER', 'P0', 'P1', 'P2', 'P3', 'CLK INH', 'CLK', 'CLR\'', 'P4', 'P5', 'P6', 'Q7', 'P7', 'SH/LD\''],
+    labels: ['SER', 'P0', 'P1', 'P2', 'P3', 'INH', 'CK', 'CLR', 'P4', 'P5', 'P6', 'Q7', 'P7', 'SL'],
+  }, (g, s, st) => {
+    // Evolution Ttl74166: the clock is sampled first; only CLK INH reading 1 inhibits; v[0] = the Q7 stage
+    const triggered = clockEdge(st, 0, g(7));
+    if (lo(g(9))) st.v = Array<SignalValue>(8).fill(0);
+    else if (triggered && !hi(g(6))) {
+      if (lo(g(15))) st.v = [14, 12, 11, 10, 5, 4, 3, 2].map(g);
+      else if (hi(g(15))) st.v = [...st.v.slice(1), g(1)];
+    }
+    s(13, drive(st.v[0]));
+  }),
+  msi({
+    id: '74299', pins: 20, out: [8, 17], inout: [4, 5, 6, 7, 13, 14, 15, 16], vcc: 20, gnd: 10, group: 'sequential',
+    triState: true, seq: { v: 8, clk: 1 },
+    title: '8 bit evrensel kaydırmalı yazmaç (ortak G/Ç yolu)',
+    description:
+      'Yükselen kenarda S1 S0 kipine göre: 00 bekle, 01 sağa kaydır (SR → A → B → … → H), 10 sola kaydır '
+      + '(SL → H → G → … → A), 11 A..H bacaklarından paralel yükle. A..H hem giriş hem 3 durumlu çıkıştır: '
+      + 'OE1\' = OE2\' = 0 ve kip 11 değilken yazmacı sürer, değilse boşta (Z). QA ve QH uç basamakların seri çıkışlarıdır. '
+      + 'CLR\' = 0 saatten bağımsız sıfırlar.',
+    names: ['S0', 'OE1\'', 'OE2\'', 'G', 'E', 'C', 'A', 'QA', 'CLR\'', 'SR', 'CLK', 'B', 'D', 'F', 'H', 'QH', 'SL', 'S1'],
+    labels: ['S0', 'OE1', 'OE2', 'G', 'E', 'C', 'A', 'QA', 'CLR', 'SR', 'CK', 'B', 'D', 'F', 'H', 'QH', 'SL', 'S1'],
+  }, (g, s, st) => {
+    // Evolution Ttl74299: while CLR' reads 0 the register clears and the clock is not sampled; v[7] = A .. v[0] = H
+    const io = [16, 4, 15, 5, 14, 6, 13, 7];
+    if (lo(g(9))) st.v = Array<SignalValue>(8).fill(0);
+    else if (clockEdge(st, 0, g(12))) {
+      const mode = (hi(g(19)) ? 2 : 0) + (hi(g(1)) ? 1 : 0);
+      if (mode === 3) st.v = io.map(g);
+      else if (mode === 2) st.v = [g(18), ...st.v.slice(0, 7)];
+      else if (mode === 1) st.v = [...st.v.slice(1), g(11)];
+    }
+    s(8, drive(st.v[7]));
+    s(17, drive(st.v[0]));
+    const enabled = lo(g(2)) && lo(g(3)) && (lo(g(1)) || lo(g(19)));
+    io.forEach((pin, i) => s(pin, enabled ? drive(st.v[i]) : FLOAT));
+  }),
+  shiftStore('74594', false, '8 bit kaydırmalı yazmaç + çıkış yazmacı (iki clear)',
+    'SRCLK 0 → 1 olurken SER QA basamağına girer, kaydırma yazmacı QH\'ye doğru kayar; QH\' son basamağı gösterir. '
+    + 'RCLK 0 → 1 olurken kaydırma yazmacı çıkış yazmacına (QA..QH) kopyalanır; iki kenar birlikteyse kaymadan önceki değer '
+    + 'kopyalanır. SRCLR\' = 0 kaydırma yazmacını, RCLR\' = 0 çıkış yazmacını saatten bağımsız sıfırlar.'),
+  shiftStore('74595', true, '8 bit kaydırmalı yazmaç + çıkış yazmacı (3 durumlu çıkış)',
+    'SRCLK 0 → 1 olurken SER QA basamağına girer, kaydırma yazmacı QH\'ye doğru kayar; QH\' son basamağı gösterir. '
+    + 'RCLK 0 → 1 olurken kaydırma yazmacı çıkış yazmacına kopyalanır; iki kenar birlikteyse kaymadan önceki değer '
+    + 'kopyalanır. SRCLR\' = 0 kaydırma yazmacını sıfırlar. QA..QH yalnız OE\' = 0 iken sürülür, değilse boşta (Z).'),
+  msi({
+    id: '744094', pins: 16, out: [4, 5, 6, 7, 9, 10, 11, 12, 13, 14], vcc: 16, gnd: 8, group: 'sequential', triState: true,
+    seq: { v: 17, clk: 1 },
+    title: '8 bit kaydırmalı yazmaç + mandal (3 durumlu çıkış)',
+    description:
+      'CP 0 → 1 olurken D QP0 basamağına girer, kaydırma yazmacı QP7\'ye doğru kayar; QS1 son basamağı gösterir, QS2 onu '
+      + 'CP 1 → 0 olurken alır (yavaş saatli bir sonraki çipe zincir için). STR = 1 iken mandal kaydırma yazmacını izler, '
+      + 'STR = 0 iken tutar. QP0..QP7 yalnız OE = 1 iken sürülür, değilse boşta (Z).',
+    names: ['STR', 'D', 'CP', 'QP0', 'QP1', 'QP2', 'QP3', 'QS1', 'QS2', 'QP7', 'QP6', 'QP5', 'QP4', 'OE'],
+    labels: ['STR', 'D', 'CP', 'QP0', 'QP1', 'QP2', 'QP3', 'QS1', 'QS2', 'QP7', 'QP6', 'QP5', 'QP4', 'OE'],
+  }, (g, s, st) => {
+    // Evolution Ttl744094: one remembered CP level gives both edges; v[0..7] = shift stages QP0..QP7, v[8..15] =
+    // the latch, v[16] = QS2
+    const old = st.clk[0];
+    const cp = g(3);
+    st.clk[0] = cp;
+    if (old === 0 && cp === 1) st.v.splice(0, 8, g(2), ...st.v.slice(0, 7));
+    if (old === 1 && cp === 0) st.v[16] = st.v[7];
+    if (hi(g(1))) st.v.splice(8, 8, ...st.v.slice(0, 8));
+    const enabled = hi(g(15));
+    [4, 5, 6, 7, 14, 13, 12, 11].forEach((pin, i) => s(pin, enabled ? drive(st.v[8 + i]) : FLOAT));
+    s(9, drive(st.v[7]));
+    s(10, drive(st.v[16]));
+  }),
 ];
 
 export const TTL_CHIPS: Record<TtlChipId, TtlChip> = Object.fromEntries(CHIPS.map((c) => [c.id, c])) as Record<TtlChipId, TtlChip>;
@@ -1392,10 +1534,11 @@ export function ttlEvoOffset(chip: TtlChip, pin: number): { x: number; y: number
 
 // ---- Evaluation ------------------------------------------------------------------------------------------
 
-/** A sequential chip's power-up state: stored values 0 (or `seq.init`), clock levels 0 */
+/** A sequential chip's power-up state: stored values 0 (or `seq.init`), clock levels 0, outputs not driven yet */
 export const ttlSeqInit = (chip: TtlChip): TtlSeqState => ({
   v: chip.seq?.init ? [...chip.seq.init] : Array<SignalValue>(chip.seq?.v ?? 0).fill(0),
   clk: Array<SignalValue>(chip.seq?.clk ?? 0).fill(0),
+  off: true,
 });
 
 /**
@@ -1412,11 +1555,13 @@ export function evalTtl(
   const result = new Map<string, SignalValue>();
   if (vccGnd && (read(ttlPinKey(chip.gnd)) !== 0 || read(ttlPinKey(chip.vcc)) !== 1)) {
     for (const p of ports) if (p.dir !== 'input') result.set(p.key, FLOAT);
+    if (chip.seq) st.off = true;
     return result;
   }
   // An in/out pin reads its net (the chip's own drive included, like evolution's getPortValue)
   const vals = ports.map((p) => read(p.dir === 'inout' ? ttlInKey(p.pin) : p.key));
   const outs = chip.eval(vals, st);
+  delete st.off;
   ports.forEach((p, i) => {
     if (p.dir !== 'input' && outs[i] !== undefined) result.set(p.key, outs[i]!);
   });

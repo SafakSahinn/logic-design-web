@@ -12,6 +12,7 @@ export const TTL_CHIP_IDS = [
   '74381', '74541', '74640', '74688', '747266', '744075',
   '7493', '74163', '74190', '74192', '74193', '74390', '74393', '744017', '744060',
   '74107', '74173', '74175', '74259', '74273', '74374', '74377', '74670',
+  '74164', '74165', '74166', '74299', '74594', '74595', '744094',
 ] as const;
 export type TtlChipId = (typeof TTL_CHIP_IDS)[number];
 export type TtlType = `ttl${TtlChipId}`;
@@ -275,7 +276,7 @@ export interface CircuitComponentInstance {
     /** TTL chip: draw the gates / pin functions inside the package (evolution 'ShowInternalStructure'); unset = false */
     ttlInternal?: boolean;
     /** Sequential TTL chip: stored values (flip-flop Q, counter / register bits) and last clock levels (evolution ClockState) */
-    ttlSeq?: { v: SignalValue[]; clk: SignalValue[] };
+    ttlSeq?: { v: SignalValue[]; clk: SignalValue[]; off?: boolean };
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;

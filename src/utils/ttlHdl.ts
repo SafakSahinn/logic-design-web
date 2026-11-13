@@ -446,7 +446,7 @@ function seqProc(c: SeqCtx, ck: string, falling: boolean, asyncs: [string, strin
  * Verilog simulation model: after any input change and once the nets have settled, the simulator's evaluation
  * (`lines`, blocking assignments) runs while the chip is powered; `regs` are its sampled clock levels / temporaries
  */
-function seqSim(c: SeqCtx, regs: string[], lines: string[]) {
+function seqSim(c: SeqCtx, regs: string[], lines: string[], idle: string[] = []) {
   if (!c.v) return;
   c.sim.decls.push(...regs.map((r) => `  reg ${r};`));
   c.sim.body.push(
@@ -454,6 +454,7 @@ function seqSim(c: SeqCtx, regs: string[], lines: string[]) {
     '    #0; // girişler otursun',
     `    if (${allIf(c, powered(c))}) begin`,
     ...indent(lines, 6),
+    ...(idle.length ? ['    end else begin', ...indent(idle, 6)] : []),
     '    end',
     '  end'
   );
@@ -1191,7 +1192,194 @@ const SEQ: Partial<Record<string, (c: SeqCtx) => void>> = {
     outEnable(c, [isv(c, oe, 0)]);
     [10, 9, 7, 6].forEach((pin, k) => triOut(c, pin, idx(c, 'rd', k)));
   },
+
+  // ---- 4j: shift registers ---------------------------------------------------------------------------------
+  // 74164: A 1, B 2, QA..QD 3..6, CLK 8, CLR' 9, QE..QH 10..13 (q[0] = QA). The clock is sampled first. The
+  // simulator (evolution) shifts what its own output pins read: unknown on the first powered evaluation, while
+  // they still float. VHDL: drv = the outputs as driven (a delta behind q and the power); synthesis: q itself.
+  '74164': (c) => {
+    const [a, b, ck, clr] = [1, 2, 8, 9].map(c.i);
+    const ab = allIf(c, [isv(c, a, 1), isv(c, b, 1)]);
+    seqReg(c, 'q', 8);
+    seqClock(c, 'ck', ck);
+    seqFlag(c, 'clr', [isv(c, clr, 0)]);
+    const src = c.v ? 'q' : 'drv';
+    if (!c.v) {
+      c.syn.decls.push('  signal drv : std_logic_vector(7 downto 0);');
+      c.syn.body.push("  drv <= q when pwr = '1' else (others => 'X');");
+    }
+    const shift = (x: 0 | 1) => [`q <= ${cat(c, [sl(c, src, 6, 0), bit(c, x)])};`];
+    seqProc(c, 'ck', false, [['clr', [zero(c, 'q', 8)]]], seqIfs(c, [[ab, shift(1)]], shift(0)));
+    c.sim.decls.push("  reg off = 1'b1;");
+    seqSim(c, ["s_ck = 1'b0", 'e'], [
+      ...simEdge(c, 'e', 's_ck', ck),
+      ...seqIfs(c, [
+        [isv(c, clr, 0), ["q = 8'd0;"]],
+        ['e', [`q = {off ? 7'bxxxxxxx : q[6:0], (${ab}) ? 1'b1 : 1'b0};`]],
+      ]),
+      "off = 1'b0;",
+    ], ["off = 1'b1;"]);
+    [3, 4, 5, 6, 10, 11, 12, 13].forEach((pin, k) => seqOut(c, pin, idx(c, 'q', k)));
+  },
+  // 74165: SH/LD' 1, CLK 2, P4..P7 3..6, Q7' 7, Q7 9, SER 10, P0..P3 11..14, CLK INH 15 (q[0] = the Q7 stage,
+  // q[7] = the P0 stage). The clock is sampled first; SH/LD' = 0 loads at once (and follows P while it stays 0).
+  // VHDL: one process reading the pins; Verilog synthesis: per bit asynchronous set / clear flags.
+  '74165': (c) => {
+    const [shld, ck, ser, inh] = [1, 2, 10, 15].map(c.i);
+    const P = [11, 12, 13, 14, 3, 4, 5, 6].map(c.i); // MSB (q[7]) first
+    seqReg(c, 'q', 8);
+    seqClock(c, 'ck', ck);
+    const shift = (op: '<=' | '=') => [`q ${op} ${cat(c, [ser, sl(c, 'q', 7, 1)])};`];
+    if (c.v) {
+      P.forEach((p, j) => {
+        const k = 7 - j;
+        seqFlag(c, `s${k}`, [isv(c, shld, 0), isv(c, p, 1)]);
+        seqFlag(c, `r${k}`, [isv(c, shld, 0), isv(c, p, 0)]);
+        const next = k === 7 ? ser : `q[${k + 1}]`;
+        seqProc(c, 'ck', false, [[`s${k}`, [`q[${k}] <= 1'b1;`]], [`r${k}`, [`q[${k}] <= 1'b0;`]]], [`if (${isv(c, inh, 0)}) q[${k}] <= ${next};`]);
+      });
+    } else {
+      c.syn.body.push(
+        `  process (ck, vcc, gnd, ${shld}, ${P.join(', ')})`,
+        '  begin',
+        `    if ${allIf(c, [...powered(c), isv(c, shld, 0)])} then`,
+        `      q <= ${cat(c, P)};`,
+        '    elsif rising_edge(ck) then',
+        ...indent(seqIfs(c, [[isv(c, inh, 0), shift('<=')]]), 6),
+        '    end if;',
+        '  end process;'
+      );
+    }
+    seqSim(c, ["s_ck = 1'b0", 'e'], [
+      ...simEdge(c, 'e', 's_ck', ck),
+      ...seqIfs(c, [
+        [isv(c, shld, 0), [`q = ${cat(c, P)};`]],
+        [allIf(c, ['e', isv(c, inh, 0)]), shift('=')],
+      ]),
+    ]);
+    seqOut(c, 9, idx(c, 'q', 0));
+    seqOut(c, 7, c.v ? '~q[0]' : 'not q(0)');
+  },
+  // 74166: SER 1, P0..P3 2..5, CLK INH 6, CLK 7, CLR' 9, P4..P6 10..12, Q7 13, P7 14, SH/LD' 15 (q[0] = the Q7
+  // stage, q[7] = the P0 stage). The clock is sampled first; only CLK INH reading 1 inhibits the edge
+  '74166': (c) => {
+    const [ser, inh, ck, clr, shld] = [1, 6, 7, 9, 15].map(c.i);
+    const P = [2, 3, 4, 5, 10, 11, 12, 14].map(c.i);
+    seqReg(c, 'q', 8);
+    const edge = (op: '<=' | '=') =>
+      seqIfs(c, [[isv(c, inh, 1, false), seqIfs(c, [
+        [isv(c, shld, 0), [`q ${op} ${cat(c, P)};`]],
+        [isv(c, shld, 1), [`q ${op} ${cat(c, [ser, sl(c, 'q', 7, 1)])};`]],
+      ])]]);
+    seqClock(c, 'ck', ck);
+    seqFlag(c, 'clr', [isv(c, clr, 0)]);
+    seqProc(c, 'ck', false, [['clr', [zero(c, 'q', 8)]]], edge('<='));
+    seqSim(c, ["s_ck = 1'b0", 'e'], [
+      ...simEdge(c, 'e', 's_ck', ck),
+      ...seqIfs(c, [[isv(c, clr, 0), ["q = 8'd0;"]], ['e', edge('=')]]),
+    ]);
+    seqOut(c, 13, idx(c, 'q', 0));
+  },
+  // 74299: S0 1, OE1' 2, OE2' 3, G E C A 4..7, QA 8, CLR' 9, SR 11, CLK 12, B D F H 13..16, QH 17, SL 18, S1 19
+  // (q[7] = A .. q[0] = H). While CLR' is 0 the register clears and the clock is not sampled. The A..H pins are
+  // in/out: S1 S0 = 11 loads from them; they drive the register while OE1' = OE2' = 0 and S1 S0 is not 11.
+  '74299': (c) => {
+    const [s0, oe1, oe2, clr, sr, ck, sl1, s1] = [1, 2, 3, 9, 11, 12, 18, 19].map(c.i);
+    const io = [16, 4, 15, 5, 14, 6, 13, 7]; // q[0] = H .. q[7] = A
+    const data = [...io].reverse().map(c.i);
+    seqReg(c, 'q', 8);
+    const edge = (op: '<=' | '=') =>
+      seqIfs(c, [
+        [allIf(c, [isv(c, s1, 1), isv(c, s0, 1)]), [`q ${op} ${cat(c, data)};`]],
+        [allIf(c, [isv(c, s1, 1, false), isv(c, s0, 1)]), [`q ${op} ${cat(c, [sr, sl(c, 'q', 7, 1)])};`]],
+        [allIf(c, [isv(c, s1, 1), isv(c, s0, 1, false)]), [`q ${op} ${cat(c, [sl(c, 'q', 6, 0), sl1])};`]],
+      ]);
+    seqClock(c, 'ck', ck, [isv(c, clr, 0, false)]);
+    seqFlag(c, 'clr', [isv(c, clr, 0)]);
+    seqProc(c, 'ck', false, [['clr', [zero(c, 'q', 8)]]], edge('<='));
+    seqSim(c, ["s_ck = 1'b0", 'e'], seqIfs(c, [[isv(c, clr, 0), ["q = 8'd0;"]]], [
+      ...simEdge(c, 'e', 's_ck', ck),
+      ...seqIfs(c, [['e', edge('=')]]),
+    ]));
+    seqOut(c, 8, idx(c, 'q', 7));
+    seqOut(c, 17, idx(c, 'q', 0));
+    const notLoad = c.v ? `(${isv(c, s0, 0)} | ${isv(c, s1, 0)})` : `(${isv(c, s0, 0)} or ${isv(c, s1, 0)})`;
+    outEnable(c, [isv(c, oe1, 0), isv(c, oe2, 0), notLoad]);
+    io.forEach((pin, k) => triOut(c, pin, idx(c, 'q', k)));
+  },
+  '74594': (c) => shiftStoreHdl(c, false),
+  '74595': (c) => shiftStoreHdl(c, true),
+  // 744094: STR 1, D 2, CP 3, QP0..QP3 4..7, QS1 9, QS2 10, QP7..QP4 11..14, OE 15 (sh[0] = stage QP0). CP's
+  // rising edge shifts D in, its falling edge copies the last stage to QS2; while STR is 1 the latch sg follows
+  // the shift register. QP0..QP7 are driven only while OE is 1.
+  '744094': (c) => {
+    const [str, d, cp, oe] = [1, 2, 3, 15].map(c.i);
+    seqReg(c, 'sh', 8);
+    seqReg(c, 'sg', 8);
+    seqReg(c, 'q2');
+    const shift = (op: '<=' | '=') => [`sh ${op} ${cat(c, [sl(c, 'sh', 6, 0), d])};`];
+    seqClock(c, 'ck', cp);
+    seqProc(c, 'ck', false, [], shift('<='));
+    seqProc(c, 'ck', true, [], [`q2 <= ${idx(c, 'sh', 7)};`]);
+    if (c.v) c.syn.body.push(`  always @(*) if (${allIf(c, [...powered(c), isv(c, str, 1)])}) sg = sh;`);
+    else {
+      c.syn.body.push(
+        `  process (sh, ${str}, vcc, gnd)`,
+        '  begin',
+        `    if ${allIf(c, [...powered(c), isv(c, str, 1)])} then`,
+        '      sg <= sh;',
+        '    end if;',
+        '  end process;'
+      );
+    }
+    seqSim(c, ["s_ck = 1'b0", 'er', 'ef'], [
+      `er = ${isv(c, 's_ck', 0)} && ${isv(c, cp, 1)};`,
+      `ef = ${isv(c, 's_ck', 1)} && ${isv(c, cp, 0)};`,
+      `s_ck = ${cp};`,
+      ...seqIfs(c, [['er', shift('=')]]),
+      ...seqIfs(c, [['ef', ['q2 = sh[7];']]]),
+      ...seqIfs(c, [[isv(c, str, 1), ['sg = sh;']]]),
+    ]);
+    outEnable(c, [isv(c, oe, 1)]);
+    [4, 5, 6, 7, 14, 13, 12, 11].forEach((pin, k) => triOut(c, pin, idx(c, 'sg', k)));
+    seqOut(c, 9, idx(c, 'sh', 7));
+    seqOut(c, 10, 'q2');
+  },
 };
+
+/** Concatenation, MSB first */
+const cat = (c: SeqCtx, xs: string[]) => (c.v ? `{${xs.join(', ')}}` : xs.join(' & '));
+/** Bits hi..lo of a vector */
+const sl = (c: SeqCtx, x: string, hi: number, lo: number) => (c.v ? `${x}[${hi}:${lo}]` : `${x}(${hi} downto ${lo})`);
+
+/**
+ * 74594 / 74595: QB..QH 1..7, QH' 9, SRCLR' 10, SRCLK 11, RCLK 12, pin 13 RCLR' (74594) / OE' (74595), SER 14,
+ * QA 15 (sh[0] = stage QA). Both clocks are sampled first. A store edge copies the shift register as it was
+ * before a shift edge at the same moment (VHDL / Verilog synthesis: both registers sample at once), or 0 while
+ * SRCLR' is 0 (read from the pin, so a clear arriving with the edge counts too).
+ */
+function shiftStoreHdl(c: SeqCtx, oe: boolean) {
+  const [sclr, sck, rck, ctl, ser] = [10, 11, 12, 13, 14].map(c.i);
+  seqReg(c, 'sh', 8);
+  seqReg(c, 'sg', 8);
+  const store = (op: '<=' | '=', src: string) => seqIfs(c, [[isv(c, sclr, 0), [zero(c, 'sg', 8, op)]]], [`sg ${op} ${src};`]);
+  seqClock(c, 'cs', sck);
+  seqClock(c, 'cr', rck);
+  seqFlag(c, 'sclr', [isv(c, sclr, 0)]);
+  if (!oe) seqFlag(c, 'rclr', [isv(c, ctl, 0)]);
+  seqProc(c, 'cs', false, [['sclr', [zero(c, 'sh', 8)]]], [`sh <= ${cat(c, [sl(c, 'sh', 6, 0), ser])};`]);
+  seqProc(c, 'cr', false, oe ? [] : [['rclr', [zero(c, 'sg', 8)]]], store('<=', 'sh'));
+  seqSim(c, ["s_cs = 1'b0", "s_cr = 1'b0", 'es', 'er', '[7:0] b'], [
+    ...simEdge(c, 'es', 's_cs', sck),
+    ...simEdge(c, 'er', 's_cr', rck),
+    'b = sh;',
+    ...seqIfs(c, [[isv(c, sclr, 0), ["sh = 8'd0;"]], ['es', [`sh = {sh[6:0], ${ser}};`]]]),
+    ...seqIfs(c, [...(oe ? [] : [[isv(c, ctl, 0), ["sg = 8'd0;"]] as [string, string[]]]), ['er', store('=', 'es ? b : sh')]]),
+  ]);
+  if (oe) outEnable(c, [isv(c, ctl, 0)]);
+  [15, 1, 2, 3, 4, 5, 6, 7].forEach((pin, k) => (oe ? triOut(c, pin, idx(c, 'sg', k)) : seqOut(c, pin, idx(c, 'sg', k))));
+  seqOut(c, 9, idx(c, 'sh', 7));
+}
 
 /** 74273 / 74374 / 74377 D and Q pins, bit 0 = D1 / Q1 */
 const OCTAL_D = [3, 4, 7, 8, 13, 14, 17, 18];

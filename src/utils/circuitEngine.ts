@@ -3552,7 +3552,7 @@ export function simulateCircuitStep(
       const byKey = new Map(comp.inputs.map((p) => [pinKey(comp, p), p]));
       // A sequential chip works on a copy of its stored state (the previous step's part may share the old object)
       const prev = comp.state.ttlSeq;
-      const st = ttlChip.seq ? (prev ? { v: [...prev.v], clk: [...prev.clk] } : ttlSeqInit(ttlChip)) : undefined;
+      const st = ttlChip.seq ? (prev ? { ...prev, v: [...prev.v], clk: [...prev.clk] } : ttlSeqInit(ttlChip)) : undefined;
       const outs = evalTtl(ttlChip, comp.state.ttlVccGnd === true, (key) => readBits(byKey.get(key), 1)[0], st);
       if (st) comp.state.ttlSeq = st;
       comp.outputs.forEach((p, i) => {

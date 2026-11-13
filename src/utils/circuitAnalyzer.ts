@@ -113,6 +113,14 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
   '74374': 8 * (28 + 6) + 2, // 8 x (D flip-flop + tri-state buffer) + NOT for OE'
   '74377': 8 * (28 + 14) + 2, // 8 x (D flip-flop + hold 2:1 MUX) + NOT for E'
   '74670': 16 * 20 + 2 * 24 + 4 * 34 + 4 * 6 + 2 + 2, // 16 latches, write + read 2:4 decoders, 4 x 4:1 MUX, tri-state, WE'/OE' NOT
+  // 4j
+  '74164': 8 * 28 + 6, // 8 x D flip-flop with clear + serial input AND2
+  '74165': 8 * (28 + 14) + 2 + 6 + 2, // 8 x (D flip-flop + load/shift 2:1 MUX), clock inhibit NOR2 + NOT, Q7' NOT
+  '74166': 8 * (28 + 14) + 6 + 2, // 8 x (D flip-flop with clear + load/shift 2:1 MUX), clock inhibit NOR2 + NOT
+  '74299': 8 * (28 + 34 + 6) + 2 * 2 + 12 + 6, // 8 x (D flip-flop + 4:1 mode MUX + tri-state I/O), QA'/QH' buffers, OE logic, mode NOT
+  '74594': 16 * 28, // 8-stage shift register + 8-bit output register, D flip-flops with clear
+  '74595': 16 * 28 + 8 * 6 + 2, // 8-stage shift register + output register, 8 tri-state buffers, OE' NOT
+  '744094': 8 * 28 + 8 * 20 + 20 + 8 * 6, // 8-stage shift register, 8 D latches (STR), QS2 latch on the falling CP, 8 tri-state buffers
 };
 
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard'];
