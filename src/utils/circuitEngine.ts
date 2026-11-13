@@ -574,6 +574,325 @@ function ioMeta(type: ComponentType, name: string, description: string): Compone
   };
 }
 
+// ---- Logisim-evolution std/io parts of Aşama 5a ------------------------------------------------------------
+// rgbLed = RgbLed, joystick = Joystick, matrixKeypad = MatrixKeypad, portIo = PortIO, realTimeClock = RealTimeClock.
+// Drawn twice Logisim's size like the Aşama 3g parts; rotation 0 is evolution's default facing (RGB LED and
+// real-time clock: west, the others: east). Pin order and behaviour follow evolution 5.0.0's propagate().
+
+export interface Io5Config {
+  /** Joystick output width, 2-5 */
+  joyBits: number;
+  keypadMode: 'raw' | 'pmod';
+  keypadSize: 'normal' | 'large';
+  /** Port I/O pins, 1-32 (evolution allows 64 on one bus; ours stop at our widest wire) */
+  portSize: number;
+  portDir: 'input' | 'output' | 'inoutSingle' | 'inoutMulti';
+  rtcType: 'ms' | 's';
+  rtcSize: 'medium' | 'narrow';
+}
+
+export const IO5_TYPES = new Set<ComponentType>(['rgbLed', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock']);
+export const PORT_IO_MAX = 32;
+export const JOYSTICK_RANGE = 14;
+/** Matrix keypad key labels, row-major (evolution KEY_LABELS_RAW / KEY_LABELS_PMOD_KYPD) */
+export const KEYPAD_LABELS_RAW = ['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D'];
+export const KEYPAD_LABELS_PMOD = ['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '0', 'F', 'E', 'D'];
+/** Keys whose label is a setting in raw mode (A, B, C, D, *, #) and where they sit */
+export const KEYPAD_CUSTOM_KEYS = [3, 7, 11, 15, 12, 14];
+export const KEYPAD_DEFAULT_CUSTOM = ['A', 'B', 'C', 'D', '*', '#'];
+
+export function defaultIo5Config(): Io5Config {
+  return { joyBits: 4, keypadMode: 'raw', keypadSize: 'normal', portSize: 8, portDir: 'inoutSingle', rtcType: 'ms', rtcSize: 'medium' };
+}
+
+const clampRange = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
+
+export function getIo5Config(comp: CircuitComponentInstance): Io5Config {
+  const d = defaultIo5Config();
+  const st = comp.state;
+  return {
+    joyBits: clampRange(st.joyBits ?? d.joyBits, 2, 5),
+    keypadMode: st.keypadMode ?? d.keypadMode,
+    keypadSize: st.keypadSize ?? d.keypadSize,
+    portSize: clampRange(st.portSize ?? d.portSize, 1, PORT_IO_MAX),
+    portDir: st.portDir ?? d.portDir,
+    rtcType: st.rtcType ?? d.rtcType,
+    rtcSize: st.rtcSize ?? d.rtcSize,
+  };
+}
+
+function io5PinKeys(type: ComponentType, cfg: Io5Config): { inputs: string[]; outputs: string[] } {
+  switch (type) {
+    case 'rgbLed':
+      return { inputs: ['r', 'g', 'b'], outputs: [] };
+    case 'joystick':
+      return { inputs: [], outputs: ['x', 'y'] };
+    case 'matrixKeypad':
+      return { inputs: ['r0', 'r1', 'r2', 'r3'], outputs: ['c0', 'c1', 'c2', 'c3'] };
+    case 'portIo':
+      if (cfg.portDir === 'input') return { inputs: [], outputs: ['out'] };
+      if (cfg.portDir === 'output') return { inputs: ['in'], outputs: [] };
+      return { inputs: ['en', 'in'], outputs: ['out'] };
+    case 'realTimeClock':
+      return { inputs: [], outputs: ['out'] };
+    default:
+      return { inputs: [], outputs: [] };
+  }
+}
+
+function io5PinWidth(type: ComponentType, key: string, cfg: Io5Config): number {
+  if (type === 'joystick') return cfg.joyBits;
+  if (type === 'portIo') return key === 'en' && cfg.portDir === 'inoutSingle' ? 1 : cfg.portSize;
+  if (type === 'realTimeClock') return 32;
+  return 1;
+}
+
+function io5PinLabel(type: ComponentType, key: string): string {
+  if (type === 'matrixKeypad') return `${key[0].toUpperCase()}${Number(key.slice(1)) + 1}`;
+  if (type === 'realTimeClock') return 'T';
+  return key.toUpperCase();
+}
+
+/** Body size and pin points (unrotated, relative to the top-left corner) of an Aşama 5a part */
+export function io5Geometry(type: ComponentType, cfg: Io5Config): { width: number; height: number; pins: Record<string, { x: number; y: number }> } {
+  switch (type) {
+    case 'rgbLed':
+      // evolution facing west: red on the left, green on top, blue at the bottom (20 x 20)
+      return { width: 40, height: 40, pins: { r: { x: 0, y: 20 }, g: { x: 20, y: 0 }, b: { x: 20, y: 40 } } };
+    case 'joystick':
+      // evolution facing east: 30 x 30 body, X and Y 10px apart on the right side
+      return { width: 60, height: 60, pins: { x: { x: 60, y: 20 }, y: { x: 60, y: 40 } } };
+    case 'matrixKeypad': {
+      // evolution: row inputs along the bottom, column outputs down the right side, both from the top-left corner
+      const s = cfg.keypadSize === 'large' ? 240 : 120;
+      const pins: Record<string, { x: number; y: number }> = {};
+      for (let i = 0; i < 4; i++) {
+        pins[`r${i}`] = { x: 20 * (i + 1), y: s };
+        pins[`c${i}`] = { x: s, y: 20 * (i + 1) };
+      }
+      return { width: s, height: s, pins };
+    }
+    case 'portIo': {
+      // evolution facing east: (10 + ceil(n / 2) * 10) x 50 for n >= 8 pins; enable on the left side at 10, the
+      // bus pins along the top edge from 10 on (input-only / output-only: the one bus at 10)
+      const n = Math.max(cfg.portSize, 8);
+      const width = 2 * (10 + Math.floor((n + 1) / 2) * 10);
+      const pins: Record<string, { x: number; y: number }> =
+        cfg.portDir === 'input'
+          ? { out: { x: 20, y: 0 } }
+          : cfg.portDir === 'output'
+            ? { in: { x: 20, y: 0 } }
+            : { en: { x: 0, y: 20 }, in: { x: 20, y: 0 }, out: { x: 40, y: 0 } };
+      return { width, height: 100, pins };
+    }
+    case 'realTimeClock': {
+      // evolution facing west: the 64-bit output on the left side, body 40 x 40 (medium) or 20 x 20 (narrow)
+      const s = cfg.rtcSize === 'narrow' ? 40 : 80;
+      return { width: s, height: s, pins: { out: { x: 0, y: s / 2 } } };
+    }
+    default:
+      return { width: 40, height: 40, pins: {} };
+  }
+}
+
+function io5Meta(type: ComponentType, name: string, description: string): ComponentMetadata {
+  const cfg = defaultIo5Config();
+  const g = io5Geometry(type, cfg);
+  const keys = io5PinKeys(type, cfg);
+  const pin = (id: string, kind: 'input' | 'output') => {
+    const width = io5PinWidth(type, id, cfg);
+    return { id, name: io5PinLabel(type, id), type: kind, relX: g.pins[id].x, relY: g.pins[id].y, ...(width > 1 ? { width } : {}) };
+  };
+  return {
+    type,
+    name,
+    category: type === 'rgbLed' ? 'outputs' : 'inputs',
+    width: g.width,
+    height: g.height,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    description,
+  };
+}
+
+/**
+ * New settings of an Aşama 5a part; pins keep their ids (and wires), widths follow the settings. Port I/O pins
+ * that still exist keep the level the user gave them.
+ */
+export function configureIo5(comp: CircuitComponentInstance, patch: Partial<Io5Config>): CircuitComponentInstance {
+  const cfg: Io5Config = { ...getIo5Config(comp), ...patch };
+  cfg.joyBits = clampRange(cfg.joyBits, 2, 5);
+  cfg.portSize = clampRange(cfg.portSize, 1, PORT_IO_MAX);
+  const state = { ...comp.state };
+  if (comp.type === 'joystick') state.joyBits = cfg.joyBits;
+  else if (comp.type === 'matrixKeypad') {
+    state.keypadMode = cfg.keypadMode;
+    state.keypadSize = cfg.keypadSize;
+  } else if (comp.type === 'portIo') {
+    const mask = cfg.portSize >= 32 ? 0xffffffff : 2 ** cfg.portSize - 1;
+    state.portSize = cfg.portSize;
+    state.portDir = cfg.portDir;
+    state.portPokeKnown = ((state.portPokeKnown ?? 0) & mask) >>> 0;
+    state.portPokeVal = ((state.portPokeVal ?? 0) & mask) >>> 0;
+  } else if (comp.type === 'realTimeClock') {
+    state.rtcType = cfg.rtcType;
+    state.rtcSize = cfg.rtcSize;
+  }
+  const keys = io5PinKeys(comp.type, cfg);
+  const old = new Map<string, CircuitPin>();
+  for (const p of [...comp.inputs, ...comp.outputs]) old.set(pinKey(comp, p), p);
+  const pin = (key: string, type: 'input' | 'output'): CircuitPin => {
+    const name = io5PinLabel(comp.type, key);
+    const prev = old.get(key);
+    const fresh = newPin(comp, key, name, type);
+    const base = prev && prev.type === type ? prev : type === 'output' ? { ...fresh, value: 'Z' as SignalValue } : fresh;
+    return { ...pinWithWidth(base, io5PinWidth(comp.type, key, cfg)), name };
+  };
+  return updatePinPositions({
+    ...comp,
+    inputs: keys.inputs.map((k) => pin(k, 'input')),
+    outputs: keys.outputs.map((k) => pin(k, 'output')),
+    state,
+  });
+}
+
+/** Joystick: move the stick (evolution units from the centre, clamped to ±14); 0, 0 = released */
+export function setJoystick(comp: CircuitComponentInstance, dx: number, dy: number): CircuitComponentInstance {
+  const c = (v: number) => clampRange(v, -JOYSTICK_RANGE, JOYSTICK_RANGE);
+  return { ...comp, state: { ...comp.state, joyX: c(dx), joyY: c(dy) } };
+}
+
+/** Evolution Joystick.propagate: a position -14..14 as the output number (1 .. 2^bits - 1, centre about half) */
+export function joystickValue(pos: number, bits: number): number {
+  const steps = 2 ** bits - 1;
+  let v = Math.floor(((clampRange(pos, -JOYSTICK_RANGE, JOYSTICK_RANGE) + 14) * steps) / 29) + 1;
+  if (bits > 4 && v >= Math.floor(steps / 2)) v++;
+  return v;
+}
+
+/** Matrix keypad: press / release the key in row `row`, column `col` (0-3) */
+export function setKeypadKey(comp: CircuitComponentInstance, row: number, col: number, pressed: boolean): CircuitComponentInstance {
+  if (row < 0 || row > 3 || col < 0 || col > 3) return comp;
+  const bit = 1 << (row * 4 + col);
+  const cur = comp.state.keypadPressed ?? 0;
+  return { ...comp, state: { ...comp.state, keypadPressed: pressed ? cur | bit : cur & ~bit } };
+}
+
+/** Matrix keypad key labels as drawn (row-major): raw mode takes the custom A-D / * / # labels, first character only */
+export function keypadLabels(comp: CircuitComponentInstance): string[] {
+  if (getIo5Config(comp).keypadMode === 'pmod') return [...KEYPAD_LABELS_PMOD];
+  const labels = [...KEYPAD_LABELS_RAW];
+  const custom = comp.state.keypadKeys ?? [];
+  KEYPAD_CUSTOM_KEYS.forEach((k, i) => {
+    const l = custom[i];
+    if (l) labels[k] = l.slice(0, 1);
+  });
+  return labels;
+}
+
+/**
+ * Evolution MatrixKeypad.propagate: column outputs from the row inputs through the pressed keys.
+ * Raw: no pressed key floats; pressed keys pass their row's value, two different known values give E.
+ * PmodKYPD: 1 unless a pressed key's row is 0 (then 0); E on a row, or a 1 row against a 0 column, gives E.
+ * (Evolution's unknown is our x on an input and a floating output.)
+ */
+export function keypadColumns(pressed: number, mode: 'raw' | 'pmod', rows: SignalValue[]): SignalValue[] {
+  const U: SignalValue = 'Z';
+  const cols: SignalValue[] = [];
+  for (let col = 0; col < 4; col++) {
+    let v: SignalValue = mode === 'pmod' ? 1 : U;
+    for (let row = 0; row < 4; row++) {
+      if (!((pressed >>> (row * 4 + col)) & 1)) continue;
+      const r: SignalValue = rows[row] === 'X' || rows[row] === 'Z' ? U : rows[row];
+      if (mode === 'raw') {
+        if (v === U) v = r;
+        else if (r !== U && v !== r) v = 'E';
+      } else if (r === 0) {
+        if (v === 1) v = 0;
+        else if (v !== 0) v = 'E';
+      } else if (r === 'E') v = 'E';
+      else if (r === 1 && v === 0) v = 'E';
+    }
+    cols.push(v);
+  }
+  return cols;
+}
+
+/** Port I/O: a click on pin i cycles the level the user gives it: floating -> 0 -> 1 -> floating (evolution togglePokeValue) */
+export function togglePortPin(comp: CircuitComponentInstance, i: number): CircuitComponentInstance {
+  if (i < 0 || i >= getIo5Config(comp).portSize) return comp;
+  const bit = 2 ** i;
+  let k = comp.state.portPokeKnown ?? 0;
+  let v = comp.state.portPokeVal ?? 0;
+  const isKnown = Math.floor(k / bit) % 2 === 1;
+  const isOne = Math.floor(v / bit) % 2 === 1;
+  if (!isKnown) k += bit; // floating -> 0
+  else if (!isOne) v += bit; // 0 -> 1
+  else {
+    k -= bit; // 1 -> floating
+    v -= bit;
+  }
+  return { ...comp, state: { ...comp.state, portPokeKnown: k >>> 0, portPokeVal: v >>> 0 } };
+}
+
+/** The level the user gave Port I/O pin i: 0, 1 or 'Z' (floating, evolution's unknown) */
+export function portPokeOf(comp: CircuitComponentInstance, i: number): SignalValue {
+  const bit = 2 ** i;
+  if (Math.floor((comp.state.portPokeKnown ?? 0) / bit) % 2 === 0) return 'Z';
+  return Math.floor((comp.state.portPokeVal ?? 0) / bit) % 2 === 1 ? 1 : 0;
+}
+
+/**
+ * Evolution PortState.getPinValue for every pin: output-only shows the circuit's value, input-only the user's;
+ * in/out: enable x -> E, enable 1 -> the circuit's value (E if the user set a different level), any other
+ * enable (0 or E) -> the user's level. Evolution's unknown comes out floating.
+ */
+export function portIoPins(comp: CircuitComponentInstance): SignalValue[] {
+  const cfg = getIo5Config(comp);
+  const n = cfg.portSize;
+  const byKey = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+  const unk = (v: SignalValue) => v === 'X' || v === 'Z';
+  const norm = (v: SignalValue): SignalValue => (unk(v) ? 'Z' : v);
+  const data = cfg.portDir === 'input' ? [] : readBits(byKey('in'), n).map(norm);
+  const en = cfg.portDir === 'inoutSingle' ? readBits(byKey('en'), 1) : cfg.portDir === 'inoutMulti' ? readBits(byKey('en'), n) : [];
+  const out: SignalValue[] = [];
+  for (let i = 0; i < n; i++) {
+    const poke = portPokeOf(comp, i);
+    if (cfg.portDir === 'output') out.push(data[i]);
+    else if (cfg.portDir === 'input') out.push(poke);
+    else {
+      const input = data[i];
+      const e = en[cfg.portDir === 'inoutSingle' ? 0 : i];
+      const result: SignalValue = poke === 'Z' || poke === input ? input : 'E';
+      out.push(unk(e) ? 'E' : e === 1 ? result : poke);
+    }
+  }
+  return out;
+}
+
+/** Real-time clock time source (wall clock, milliseconds since 1970); test rigs replace it */
+let rtcClock: () => number = () => Date.now();
+// One simulateCircuit run reads the clock once, so a clock that ticks mid-run cannot keep the circuit from settling
+let rtcFrozen: number | null = null;
+export function setRtcClock(fn?: () => number): void {
+  rtcClock = fn ?? (() => Date.now());
+}
+/** The real-time clock's output: the low 32 bits of evolution's 64-bit epoch milliseconds / seconds */
+export function rtcValue(type: 'ms' | 's'): number {
+  const now = rtcFrozen ?? rtcClock();
+  const v = type === 's' ? Math.floor(now / 1000) : Math.floor(now);
+  return ((v % 2 ** 32) + 2 ** 32) % 2 ** 32;
+}
+
+/** RGB LED colour bits (bit 0 red, 1 green, 2 blue) as evolution paints them: an input lights only on a 1 (active low: inverted) */
+export function rgbLedBits(comp: CircuitComponentInstance): number {
+  let sum = 0;
+  comp.inputs.forEach((p, i) => {
+    if (i < 3 && readBits(p, 1)[0] === 1) sum |= 1 << i;
+  });
+  return comp.state.ioActiveLow ? sum ^ 7 : sum;
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -681,6 +1000,10 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     description: 'Bağlı olduğu hat hiçbir parça tarafından sürülmüyorsa (Hi-Z / x) hattı 0 (pull-down) ya da 1 (pull-up) seviyesine çeker',
   },
   dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
+  joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu (Logisim Joystick): X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
+  matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı (Logisim-evolution MatrixKeypad): basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
+  portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu (Logisim-evolution PortIO): yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
+  realTimeClock: io5Meta('realTimeClock', 'Gerçek Zamanlı Saat', 'Bilgisayarın saatini veren 32 bitlik çıkış (Logisim-evolution RealTimeClock): 1970 yılından beri geçen milisaniye ya da saniye (evolution 64 bit verir, burada alt 32 biti)'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
     name: 'ASCII Klavye Giriş Matrisi',
@@ -865,6 +1188,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   hexDigit: ioMeta('hexDigit', 'Hex Gösterge', '4 bitlik D girişini 0-F onaltılık rakamı olarak gösterir (Logisim Hex Digit Display); tanımsız bitli girişte tire. DP girişi ondalık noktayı yakar, ayardan kaldırılabilir'),
   ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk (Logisim-evolution LedBar): her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
   dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris (Logisim DotMatrix). Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
+  rgbLed: io5Meta('rgbLed', 'RGB LED', 'Kırmızı, yeşil ve mavi girişli LED (Logisim-evolution RgbLed): her renk girişi 1 iken yanar, karışımlar ara renkleri verir; ortak anotta (aktif düşük) 0 iken yanar'),
   rgbMatrix16x16: {
     type: 'rgbMatrix16x16',
     name: '16x16 RGB Video Matrisi (VRAM GPU Ekranı)',
@@ -1278,6 +1602,7 @@ export function createComponentInstance(
   if (MEM_TYPES.has(type)) return configureMem(inst, {});
   if (RAM_TYPES.has(type)) return configureRam(inst, {});
   if (IO_TYPES.has(type)) return configureIo(inst, {});
+  if (IO5_TYPES.has(type)) return configureIo5(inst, {});
   if (isTtlType(type)) return configureTtl(inst, {});
   return inst;
 }
@@ -1322,6 +1647,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (IO_TYPES.has(comp.type)) {
     const g = ioGeometry(comp.type, getIoConfig(comp));
+    return { width: g.width, height: g.height };
+  }
+  if (IO5_TYPES.has(comp.type)) {
+    const g = io5Geometry(comp.type, getIo5Config(comp));
     return { width: g.width, height: g.height };
   }
   const ttl = ttlChipOf(comp.type);
@@ -2902,12 +3231,14 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type)) {
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type)) {
     const g = MEM_TYPES.has(comp.type)
       ? memLayout(comp)
       : RAM_TYPES.has(comp.type)
         ? ramGeometry(comp.type, getRamConfig(comp))
-        : ioGeometry(comp.type, getIoConfig(comp));
+        : IO5_TYPES.has(comp.type)
+          ? io5Geometry(comp.type, getIo5Config(comp))
+          : ioGeometry(comp.type, getIoConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -3566,6 +3897,23 @@ export function simulateCircuitStep(
     }
 
     switch (comp.type) {
+      case 'joystick': {
+        const bits = getIo5Config(comp).joyBits;
+        setBitsOut(0, numberToBits(joystickValue(comp.state.joyX ?? 0, bits), bits));
+        setBitsOut(1, numberToBits(joystickValue(comp.state.joyY ?? 0, bits), bits));
+        break;
+      }
+      case 'matrixKeypad': {
+        const cols = keypadColumns(comp.state.keypadPressed ?? 0, getIo5Config(comp).keypadMode, comp.inputs.map((p) => readBits(p, 1)[0]));
+        cols.forEach((v, i) => setOut(i, v));
+        break;
+      }
+      case 'portIo':
+        if (comp.outputs.length) setBitsOut(0, portIoPins(comp));
+        break;
+      case 'realTimeClock':
+        setBitsOut(0, numberToBits(rtcValue(getIo5Config(comp).rtcType), 32));
+        break;
       case 'not': {
         // Logisim NOT: each bit inverted, an undefined bit (or an open input) gives E
         const w = getGateWidth(comp);
@@ -3922,6 +4270,27 @@ export function simulateCircuit(
   // the number of parts, so that many steps always settle it. Only feedback that keeps
   // oscillating (e.g. NAND(clock, q) after a clock edge) runs into the limit.
   if (maxIterations === undefined) maxIterations = components.length + 10;
+  // Real-time clocks read one time for the whole run (an IC's inner run keeps its caller's)
+  const ownsRtc = rtcFrozen === null;
+  if (ownsRtc) rtcFrozen = rtcClock();
+  try {
+    return simulateCircuitRun(components, wires, maxIterations);
+  } finally {
+    if (ownsRtc) rtcFrozen = null;
+  }
+}
+
+function simulateCircuitRun(
+  components: CircuitComponentInstance[],
+  wires: CircuitWire[],
+  maxIterations: number
+): {
+  components: CircuitComponentInstance[];
+  wires: CircuitWire[];
+  oscillating?: boolean;
+  oscillatingWireIds?: string[];
+  oscillatingCompIds?: string[];
+} {
   let curComps = components;
   let curWires = wires;
   // Like Logisim's Propagator: what still changes in the last quarter of the steps is reported as oscillating

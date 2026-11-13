@@ -31,6 +31,11 @@ export type ComponentType =
   // Parametric DIP switch (Logisim-evolution DipSwitch, Aşama 3g)
   | 'dipSwitch'
   | 'asciiKeyboard'
+  // Logisim-evolution std/io inputs (Aşama 5a)
+  | 'joystick'
+  | 'matrixKeypad'
+  | 'portIo'
+  | 'realTimeClock'
   // Basic Gates
   | 'not'
   | 'buffer'
@@ -53,6 +58,8 @@ export type ComponentType =
   | 'ledBar'
   | 'dotMatrix'
   | 'rgbMatrix16x16'
+  // Logisim-evolution RGB LED (Aşama 5a)
+  | 'rgbLed'
   // Combinational Blocks
   | 'halfAdder'
   | 'fullAdder'
@@ -284,6 +291,30 @@ export interface CircuitComponentInstance {
      */
     ttlRext?: [number, number];
     ttlCext?: [number, number];
+    /** Joystick: stick position in evolution's units, -14..14 each (0 = centre); unset = centre */
+    joyX?: number;
+    joyY?: number;
+    /** Joystick: output width (evolution 'bits', 2-5); unset = 4 */
+    joyBits?: number;
+    /** Matrix keypad: pressed keys, bit row * 4 + col; unset = none */
+    keypadPressed?: number;
+    /** Matrix keypad: evolution 'mode' (raw = pressed keys pass the row value, pmod = Digilent PmodKYPD active low); unset = raw */
+    keypadMode?: 'raw' | 'pmod';
+    /** Matrix keypad: evolution 'size' (large = twice the body); unset = normal */
+    keypadSize?: 'normal' | 'large';
+    /** Matrix keypad: labels of the A, B, C, D, *, # keys (evolution keyALabel ... keyHashLabel, raw mode); unset = the defaults */
+    keypadKeys?: string[];
+    /** Port I/O: number of pins (evolution 'number', ours 1-32); unset = 8 */
+    portSize?: number;
+    /** Port I/O: evolution 'direction'; unset = inoutSingle */
+    portDir?: 'input' | 'output' | 'inoutSingle' | 'inoutMulti';
+    /** Port I/O: pins the user set by clicking (bit i known) and their levels (bit i = 1); unset = all floating */
+    portPokeKnown?: number;
+    portPokeVal?: number;
+    /** Real-time clock: evolution 'timeType' (epoch milliseconds / seconds); unset = ms */
+    rtcType?: 'ms' | 's';
+    /** Real-time clock: evolution 'porsize' (body size); unset = medium */
+    rtcSize?: 'medium' | 'narrow';
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;
