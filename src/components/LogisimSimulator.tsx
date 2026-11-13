@@ -71,6 +71,14 @@ import {
   matrixDots,
   segmentsLit,
   toggleDipSwitch,
+  getIo5Config,
+  setJoystick,
+  setKeypadKey,
+  keypadLabels,
+  togglePortPin,
+  portIoPins,
+  portPokeOf,
+  rgbLedBits,
   splitterDistribution,
   splitterEndLabels,
   splitterThreads,
@@ -289,12 +297,17 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
   dipSwitch: { label: 'DIP Anahtar', badge: 'DIP' },
+  joystick: { label: 'Joystick', badge: 'Kol' },
+  matrixKeypad: { label: 'Matris Tuş Takımı', badge: '4x4' },
+  portIo: { label: 'Port G/Ç', badge: 'PIO' },
+  realTimeClock: { label: 'Gerçek Zamanlı Saat', badge: 'RTC' },
   clock: { label: 'Saat Sinyali', badge: 'CLK' },
   vcc: { label: 'Sabit 1 (High)', badge: 'VCC' },
   gnd: { label: 'Sabit 0 (Low)', badge: 'GND' },
   constant: { label: 'Sabit', badge: 'Const' },
   tunnel: { label: 'Kablosuz Tünel', badge: 'Net' },
   led: { label: 'LED Lamba' },
+  rgbLed: { label: 'RGB LED', badge: 'RGB' },
   sevenSegment: { label: '7-Segment', badge: 'LED' },
   sevenSeg: { label: '7-Segment', badge: 'LED' },
   hexDigit: { label: 'Hex Gösterge', badge: 'HEX' },
@@ -938,6 +951,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     return () => clearTimeout(timer);
   }, [isRunning, components, wires]);
 
+  // Real-time clocks (subcircuits included) read the wall clock on each run: run again while one exists. Evolution
+  // wakes every 10 ms; here milliseconds tick every 100 ms and seconds on each new second.
+  const rtcTick = useMemo(() => {
+    let tick: 'none' | 'ms' | 's' = 'none';
+    const scan = (list: CircuitComponentInstance[]) => {
+      for (const c of list) {
+        if (c.type === 'realTimeClock') {
+          if (getIo5Config(c).rtcType === 'ms') tick = 'ms';
+          else if (tick === 'none') tick = 's';
+        }
+        if (c.state.subcircuitInternal) scan(c.state.subcircuitInternal.components);
+      }
+    };
+    scan(components);
+    return tick as 'none' | 'ms' | 's';
+  }, [components]);
+
+  useEffect(() => {
+    if (rtcTick === 'none') return;
+    const delay = rtcTick === 'ms' ? 100 : 1000 - (Date.now() % 1000) + 5;
+    const timer = setTimeout(() => {
+      setComponents((prev) => {
+        const sim = simulateCircuit(prev, wires);
+        setWires(sim.wires);
+        return sim.components;
+      });
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [rtcTick, components, wires]);
+
   // Read once at the first render: the mount effect removes it from the address (and may run twice in dev)
   const urlPresetIdRef = useRef<string | null>(
     typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('preset')
@@ -1228,6 +1271,72 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setWires(sim.wires);
       return sim.components;
     });
+  };
+
+  // Aşama 5a pokes (evolution's poke tool): the part changes its own state, then the circuit runs again
+  const pokeComponent = (compId: string, fn: (c: CircuitComponentInstance) => CircuitComponentInstance) => {
+    setComponents((prev) => {
+      let changed = false;
+      const updated = prev.map((c) => {
+        if (c.id !== compId) return c;
+        const next = fn(c);
+        if (next !== c) changed = true;
+        return next;
+      });
+      if (!changed) return prev;
+      const sim = simulateCircuit(updated, wires);
+      setWires(sim.wires);
+      return sim.components;
+    });
+  };
+
+  // Port I/O pin click (first click selects the part): floating -> 0 -> 1 -> floating, as evolution's PortPoker
+  const handlePortPin = (e: React.MouseEvent, compId: string, pin: number) => {
+    e.stopPropagation();
+    if (!selectedCompIds.includes(compId)) {
+      setSelectedCompIds([compId]);
+      setSelectedWireIds([]);
+      return;
+    }
+    pokeComponent(compId, (c) => togglePortPin(c, pin));
+  };
+
+  // Matrix keypad: the key goes down on mouse down and up on the next mouse up anywhere (one key at a time, as evolution)
+  const handleKeypadDown = (e: React.MouseEvent, compId: string, row: number, col: number) => {
+    if (e.button !== 0 || !selectedCompIds.includes(compId)) return; // the first click selects / drags the part
+    e.stopPropagation();
+    pokeComponent(compId, (c) => setKeypadKey(c, row, col, true));
+    const release = () => {
+      window.removeEventListener('mouseup', release);
+      pokeComponent(compId, (c) => setKeypadKey(c, row, col, false));
+    };
+    window.addEventListener('mouseup', release);
+  };
+
+  // Joystick: drag the stick (evolution units = half our pixels, from the body centre, in screen directions); release
+  // puts it back in the middle. Like the other pokes, only a selected joystick takes the drag.
+  const handleJoystickDown = (e: React.MouseEvent, comp: CircuitComponentInstance) => {
+    if (e.button !== 0 || !selectedCompIds.includes(comp.id) || !svgRef.current) return;
+    e.stopPropagation();
+    const rect = svgRef.current.getBoundingClientRect();
+    const { width, height } = getComponentSize(comp);
+    const cx = comp.x + width / 2;
+    const cy = comp.y + height / 2;
+    const move = (ev: { clientX: number; clientY: number }) => {
+      const x = (ev.clientX - rect.left - panOffset.x) / zoom;
+      const y = (ev.clientY - rect.top - panOffset.y) / zoom;
+      const dx = Math.round((x - cx) / 2);
+      const dy = Math.round((y - cy) / 2);
+      pokeComponent(comp.id, (c) => (c.state.joyX === Math.max(-14, Math.min(14, dx)) && c.state.joyY === Math.max(-14, Math.min(14, dy)) ? c : setJoystick(c, dx, dy)));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      pokeComponent(comp.id, (c) => ((c.state.joyX ?? 0) === 0 && (c.state.joyY ?? 0) === 0 ? c : setJoystick(c, 0, 0)));
+    };
+    move(e);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
   };
 
   // Pushbutton Down/Up handler (anlık bas-bırak buton)
@@ -3257,7 +3366,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         }
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -3422,6 +3531,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const w = c.type === 'hexDigit' ? 4 : getIoConfig(c).size;
         const port = c.type === 'dipSwitch' ? 'Q' : 'D';
         list.push({ key: `${c.id}_io`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: c.type === 'dipSwitch' ? 'input' : 'output', width: w });
+      } else if (c.type === 'portIo') {
+        // the pin row as the port shows it (bit i = pin i)
+        const w = getIo5Config(c).portSize;
+        list.push({ key: `${c.id}_io`, name: `${name} PIO${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: getIo5Config(c).portDir === 'output' ? 'output' : 'input', width: w });
       } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
         list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
       } else if (c.type === 'asciiKeyboard') {
@@ -3476,6 +3589,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   ? [...c.inputs[0].bits]
                   : Array<SignalValue>(c.inputs[0]?.width ?? 1).fill('X');
           values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 0;
+        } else if (c.type === 'portIo') {
+          const bits = portIoPins(c);
+          values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 'Z';
         } else if (c.type === 'asciiKeyboard') {
           values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
           values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
@@ -3838,6 +3954,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       ? (cadTheme === 'dark' ? '#38bdf8' : '#2563eb')
       : (cadTheme === 'dark' ? '#64748b' : '#334155');
     const strokeWidth = isSelected ? 2.5 : 1.8;
+    // Aşama 5a parts: evolution's component colour (the outline), lighter on the dark canvas
+    const io5Stroke = cadTheme === 'dark' ? '#94a3b8' : '#1e293b';
     const fillColor = isSelected
       ? (cadTheme === 'dark' ? '#1e3a8a' : '#eff6ff')
       : 'url(#gateGrad)';
@@ -4978,6 +5096,170 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      case 'rgbLed': {
+        // Logisim-evolution RgbLed.paintInstance: the colour of the lit inputs (black when none), outlined circle
+        const bits = rgbLedBits(comp);
+        const fill = `rgb(${bits & 1 ? 255 : 0}, ${bits & 2 ? 255 : 0}, ${bits & 4 ? 255 : 0})`;
+        return (
+          <g>
+            <circle cx={20} cy={20} r={18} fill={fill} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} filter={bits ? `drop-shadow(0 0 5px ${fill})` : undefined} />
+            <title>{`R=${bits & 1 ? 1 : 0} G=${bits & 2 ? 1 : 0} B=${bits & 4 ? 1 : 0}`}</title>
+          </g>
+        );
+      }
+
+      case 'joystick': {
+        // Logisim Joystick.paintInstance / Poker.paint: rounded box, stick from the centre to the ball. The stick
+        // position is kept in screen directions; inside the rotated body it is turned back so the ball follows the mouse.
+        const rot = ((comp.rotation ?? 0) * Math.PI) / 180;
+        const sx = comp.state.joyX ?? 0;
+        const sy = comp.state.joyY ?? 0;
+        const dx = Math.round(sx * Math.cos(rot) + sy * Math.sin(rot));
+        const dy = Math.round(-sx * Math.sin(rot) + sy * Math.cos(rot));
+        const x0 = 30 + 2 * (dx > 5 ? 1 : dx < -5 ? -1 : 0);
+        const y0 = 30 + 2 * (dy > 5 ? 1 : dy < 0 ? -1 : 0);
+        const x1 = 30 + 2 * dx;
+        const y1 = 30 + 2 * dy;
+        const ball = comp.state.ioOnColor ?? '#f00000';
+        const bits = getIo5Config(comp).joyBits;
+        return (
+          <g onMouseDown={(e) => handleJoystickDown(e, comp)} className={isSelected ? 'cursor-move' : undefined}>
+            <rect x={0} y={0} width={60} height={60} rx={8} fill={cadTheme === 'dark' ? '#1e293b' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 2.5 : 2} />
+            <rect x={4} y={4} width={52} height={52} rx={4} fill="none" stroke={io5Stroke} strokeWidth={1.5} />
+            <circle cx={30} cy={30} r={8} fill={io5Stroke} />
+            {(sx !== 0 || sy !== 0) && <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={io5Stroke} strokeWidth={6} strokeLinecap="round" />}
+            <circle cx={x1} cy={y1} r={8} fill={ball} stroke={io5Stroke} strokeWidth={1.5} />
+            <title>{`X=${bitsToNumber(comp.outputs[0]?.bits ?? []) ?? '?'}  Y=${bitsToNumber(comp.outputs[1]?.bits ?? []) ?? '?'}  (${bits} bit; seçiliyken kolu sürükleyin)`}</title>
+          </g>
+        );
+      }
+
+      case 'matrixKeypad': {
+        // Logisim-evolution MatrixKeypad.paintInstance: dark body, 4 x 4 keys (raw: blue, A-D / * / # red; PmodKYPD: navy)
+        const cfg = getIo5Config(comp);
+        const sc = cfg.keypadSize === 'large' ? 2 : 1;
+        const s = 120 * sc;
+        const key = 24 * sc;
+        const step = 28 * sc;
+        const start = 6 * sc;
+        const labels = keypadLabels(comp);
+        const pressed = comp.state.keypadPressed ?? 0;
+        const pmod = cfg.keypadMode === 'pmod';
+        const RED_KEYS = [3, 7, 11, 12, 14, 15];
+        const shade = (rgb: number[], d: number) => `rgb(${rgb.map((v) => Math.max(0, Math.min(255, v + d))).join(',')})`;
+        return (
+          <g>
+            <rect x={0} y={0} width={s} height={s} rx={8} fill="rgb(50,50,50)" stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
+            {labels.map((lbl, k) => {
+              const row = Math.floor(k / 4);
+              const col = k % 4;
+              const on = ((pressed >>> k) & 1) === 1;
+              const base = pmod ? (on ? [15, 45, 85] : [30, 80, 140]) : RED_KEYS.includes(k) ? (on ? [170, 30, 30] : [220, 40, 40]) : on ? [0, 120, 170] : [0, 170, 220];
+              const x = start + col * step;
+              const y = start + row * step;
+              const hi = shade(base, 40);
+              const lo = shade(base, -40);
+              return (
+                <g key={k} onMouseDown={(e) => handleKeypadDown(e, comp.id, row, col)} className={isSelected ? 'cursor-pointer' : undefined}>
+                  <rect x={x} y={y} width={key} height={key} rx={2 * sc} fill={`rgb(${base.join(',')})`} />
+                  <path d={`M ${x + 0.5} ${y + key - 0.5} V ${y + 0.5} H ${x + key - 0.5}`} fill="none" stroke={on ? lo : hi} strokeWidth={1.5} />
+                  <path d={`M ${x + 1} ${y + key - 0.5} H ${x + key - 0.5} V ${y + 1}`} fill="none" stroke={on ? hi : lo} strokeWidth={1.5} />
+                  <text
+                    x={x + key / 2}
+                    y={y + key / 2 + (lbl === '*' ? 9 : 6) * sc}
+                    textAnchor="middle"
+                    fill="#ffffff"
+                    style={{ fontSize: 17 * sc, fontWeight: 700, fontFamily: 'sans-serif' }}
+                    className="select-none pointer-events-none"
+                  >
+                    {lbl}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        );
+      }
+
+      case 'portIo': {
+        // Logisim-evolution PortIo.paintInstance: grey body under the bus arrows, 2 rows of pin squares (pin n = 2i + j);
+        // a click on a square gives that pin floating -> 0 -> 1 (PortPoker)
+        const cfg = getIo5Config(comp);
+        const n = cfg.portSize;
+        const W = 2 * (10 + Math.floor((Math.max(n, 8) + 1) / 2) * 10);
+        const pins = portIoPins(comp);
+        const pinColor = (v: SignalValue) => (v === 1 ? '#00d200' : v === 0 ? '#006400' : v === 'E' ? '#c00000' : '#c0c0c0');
+        const dir = cfg.portDir;
+        const inout = dir === 'inoutSingle' || dir === 'inoutMulti';
+        const arrows: React.ReactNode[] = [];
+        let px = inout ? 0 : 20;
+        if (inout) {
+          arrows.push(<line key="en" x1={px} y1={20} x2={px + 12} y2={20} stroke={io5Stroke} strokeWidth={6} />);
+          px += 20;
+        }
+        if (dir !== 'input') {
+          // the circuit's value comes in: arrow pointing into the port
+          arrows.push(
+            <g key="in" stroke={io5Stroke} fill="none">
+              <line x1={px} y1={0} x2={px} y2={8} strokeWidth={6} />
+              <line x1={px} y1={30} x2={px} y2={40} strokeWidth={6} />
+              <polyline points={`${px},30 ${px - 8},10 ${px + 8},10 ${px},30`} strokeWidth={3} />
+            </g>
+          );
+          px += 20;
+        }
+        if (dir !== 'output') {
+          arrows.push(
+            <g key="out" stroke={io5Stroke} fill="none">
+              <line x1={px} y1={0} x2={px} y2={10} strokeWidth={6} />
+              <line x1={px} y1={32} x2={px} y2={40} strokeWidth={6} />
+              <polyline points={`${px},12 ${px - 8},32 ${px + 8},32 ${px},12`} strokeWidth={3} />
+            </g>
+          );
+        }
+        return (
+          <g>
+            <polygon points={`2,40 2,84 10,92 ${W - 12},92 ${W - 4},84 ${W - 4},40`} fill="#404040" stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 2.5 : 1.5} />
+            {arrows}
+            {pins.map((v, i) => {
+              const x = 14 + Math.floor(i / 2) * 20;
+              const y = 50 + (i % 2) * 20;
+              const poke = portPokeOf(comp, i);
+              return (
+                <g key={i} onClick={(e) => handlePortPin(e, comp.id, i)} className="cursor-pointer">
+                  <rect x={x - 4} y={y - 4} width={20} height={20} fill="transparent" />
+                  <rect x={x} y={y} width={12} height={12} fill={pinColor(v)} />
+                  <title>{`bacak ${i}: ${v === 'Z' ? 'boşta' : v === 'E' ? 'hata' : v}${dir !== 'output' ? ` (verilen: ${poke === 'Z' ? 'boşta' : poke})` : ''}`}</title>
+                </g>
+              );
+            })}
+          </g>
+        );
+      }
+
+      case 'realTimeClock': {
+        // Logisim-evolution RealTimeClock.paintInstance: white box, clock face, "Time" (drawn in evolution units, x2)
+        const narrow = getIo5Config(comp).rtcSize === 'narrow';
+        const eh = narrow ? 20 : 40;
+        const off = narrow ? 7 : 15;
+        const d = eh - 4 - off;
+        const cx = Math.floor((eh - d) / 2) + d / 2;
+        const cy = off + 1 + d / 2;
+        const v = comp.outputs[0]?.bits ? bitsToNumber(comp.outputs[0].bits) : undefined;
+        return (
+          <g>
+            <rect x={0} y={0} width={2 * eh} height={2 * eh} fill="#ffffff" stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <circle cx={2 * cx} cy={2 * cy} r={d} fill="none" stroke="#404040" strokeWidth={3} />
+            <line x1={2 * cx} y1={2 * cy} x2={2 * (cx - Math.trunc(d * 0.24))} y2={2 * (cy - Math.trunc(d * 0.24))} stroke="#404040" strokeWidth={2} />
+            <line x1={2 * cx} y1={2 * cy} x2={2 * (cx + Math.trunc(d * 0.18))} y2={2 * (cy - Math.trunc(d * 0.18))} stroke="#404040" strokeWidth={2} />
+            <text x={4} y={2 * (off - 1)} fill="#000000" style={{ fontSize: narrow ? 12 : 26, fontWeight: 700, fontFamily: 'sans-serif' }} className="select-none">
+              Time
+            </text>
+            <title>{`${getIo5Config(comp).rtcType === 's' ? 'saniye' : 'milisaniye'} (alt 32 bit): ${v ?? '?'}`}</title>
+          </g>
+        );
+      }
+
       case 'dipSwitch': {
         // Logisim-evolution DipSwitch facing east: switch i+1 on row i, its output on the right
         const n = getIoConfig(comp).size;
@@ -6064,7 +6346,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -6097,7 +6379,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
+      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
     },
     {
       id: 'audio',
@@ -10045,6 +10327,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                           return;
                         }
                         handleApplyAttribute(def, n, ids);
+                      }}
+                      className={fieldCls}
+                      title={def.title}
+                    />
+                  );
+                }
+                case 'text': {
+                  const shown = common === undefined ? '' : String(common);
+                  return (
+                    <input
+                      key={`${ids.join('|')}:${shown}`}
+                      defaultValue={shown}
+                      maxLength={def.maxLength}
+                      placeholder={common === undefined ? '—' : undefined}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        if (e.key === 'Escape') {
+                          (e.target as HTMLInputElement).value = shown;
+                          (e.target as HTMLInputElement).blur();
+                        }
+                      }}
+                      onBlur={(e) => {
+                        if (e.target.value === shown || (e.target.value.trim() === '' && common === undefined)) return;
+                        handleApplyAttribute(def, e.target.value, ids);
                       }}
                       className={fieldCls}
                       title={def.title}

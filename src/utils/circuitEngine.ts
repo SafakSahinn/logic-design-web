@@ -576,8 +576,8 @@ function ioMeta(type: ComponentType, name: string, description: string): Compone
 
 // ---- Logisim-evolution std/io parts of Aşama 5a ------------------------------------------------------------
 // rgbLed = RgbLed, joystick = Joystick, matrixKeypad = MatrixKeypad, portIo = PortIO, realTimeClock = RealTimeClock.
-// Drawn twice Logisim's size like the Aşama 3g parts; rotation 0 is evolution's default facing (RGB LED and
-// real-time clock: west, the others: east). Pin order and behaviour follow evolution 5.0.0's propagate().
+// Drawn twice Logisim's size like the Aşama 3g parts; rotation 0 is evolution's default facing (RGB LED:
+// west, the others: east). Pin order and behaviour follow evolution 5.0.0's propagate().
 
 export interface Io5Config {
   /** Joystick output width, 2-5 */
@@ -686,9 +686,9 @@ export function io5Geometry(type: ComponentType, cfg: Io5Config): { width: numbe
       return { width, height: 100, pins };
     }
     case 'realTimeClock': {
-      // evolution facing west: the 64-bit output on the left side, body 40 x 40 (medium) or 20 x 20 (narrow)
+      // evolution's default facing east: the 64-bit output on the right side, body 40 x 40 (medium) or 20 x 20 (narrow)
       const s = cfg.rtcSize === 'narrow' ? 40 : 80;
-      return { width: s, height: s, pins: { out: { x: 0, y: s / 2 } } };
+      return { width: s, height: s, pins: { out: { x: s, y: s / 2 } } };
     }
     default:
       return { width: 40, height: 40, pins: {} };

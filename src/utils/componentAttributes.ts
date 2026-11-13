@@ -23,9 +23,14 @@ import {
   configurePlexer,
   configureRam,
   configureIo,
+  configureIo5,
   configureTtl,
   getTtlConfig,
   getIoConfig,
+  getIo5Config,
+  type Io5Config,
+  KEYPAD_DEFAULT_CUSTOM,
+  PORT_IO_MAX,
   IO_MAX_SIZE,
   type IoConfig,
   getRamConfig,
@@ -90,6 +95,7 @@ export type AttrKind =
   | 'hex' // hexadecimal text field
   | 'int' // decimal integer text field (32-bit signed)
   | 'eng' // resistance / capacitance text field with presets (evolution EngineeringAttribute), see AttrDef.unit
+  | 'text' // free text field, see AttrDef.maxLength
   | 'info' // read-only value
   | 'bitMap' // splitter: one drop-down per incoming bit
   | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
@@ -111,6 +117,8 @@ export interface AttrDef {
   visible?: (comp: CircuitComponentInstance) => boolean;
   /** 'eng' fields: the stored unit (kΩ / pF) */
   unit?: EngUnit;
+  /** 'text' fields: the longest text */
+  maxLength?: number;
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -863,6 +871,21 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'sevenSegment':
       list.push(ioActiveAttr, ioDpAttr, ioColorAttr);
       break;
+    case 'joystick':
+      list.push(joyBitsAttr, joyColorAttr);
+      break;
+    case 'matrixKeypad':
+      list.push(keypadModeAttr, keypadSizeAttr, ...KEYPAD_KEY_ATTRS);
+      break;
+    case 'portIo':
+      list.push(portSizeAttr, portDirAttr);
+      break;
+    case 'realTimeClock':
+      list.push(rtcTypeAttr, rtcSizeAttr);
+      break;
+    case 'rgbLed':
+      list.push(rgbActiveAttr);
+      break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
@@ -1005,6 +1028,160 @@ function reconfigureIo(c: CircuitComponentInstance, patch: Partial<IoConfig>): A
 }
 
 const IO_SIZE_OPTIONS = numberOptions(1, IO_MAX_SIZE);
+
+// ---- I/O parts of Aşama 5a (Logisim-evolution RgbLed, Joystick, MatrixKeypad, PortIO, RealTimeClock): like the
+// Aşama 3g parts the top-left corner stays, pins that go away leave their wires as open ends
+function reconfigureIo5(c: CircuitComponentInstance, patch: Partial<Io5Config>): AttrEdit | null {
+  const cur = getIo5Config(c);
+  if ((Object.keys(patch) as (keyof Io5Config)[]).every((k) => cur[k] === patch[k])) return null;
+  const next = configureIo5(c, patch);
+  const kept = new Set([...next.inputs, ...next.outputs].map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.outputs, ...c.inputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, kept.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+}
+
+const joyBitsAttr: AttrDef = {
+  key: 'joyBits',
+  label: 'Veri bit',
+  kind: 'select',
+  title: 'X ve Y çıkışlarının genişliği (2-5, Logisim "Bit Width"); kol ortadayken yaklaşık yarı değer verir',
+  options: numberOptions(2, 5),
+  get: (c) => getIo5Config(c).joyBits,
+  set: (c, v) => reconfigureIo5(c, { joyBits: Number(v) }),
+};
+
+const joyColorAttr: AttrDef = {
+  key: 'ioOnColor',
+  label: 'Top rengi',
+  kind: 'buttons',
+  title: 'Kolun ucundaki topun rengi (Logisim "Color")',
+  options: (c) => {
+    const cur = c.state.ioOnColor;
+    const list: AttrOption[] = IO_ON_COLORS.map((o) => ({ ...o, swatch: o.value }));
+    if (cur && !list.some((o) => o.value === cur)) list.push({ value: cur, label: cur, swatch: cur });
+    return list;
+  },
+  get: (c) => c.state.ioOnColor ?? ioDefaultOnColor(c.type),
+  set: (c, v) => ((c.state.ioOnColor ?? ioDefaultOnColor(c.type)) === v ? null : withState(c, { ioOnColor: String(v) })),
+};
+
+const keypadModeAttr: AttrDef = {
+  key: 'keypadMode',
+  label: 'Mod',
+  kind: 'buttons',
+  title:
+    'Ham: basılı tuş, satır girişinin değerini sütun çıkışına geçirir; basılı tuş yoksa sütun boşta. ' +
+    'PmodKYPD: Digilent PmodKYPD gibi sütunlar 1, basılı tuşun satırı 0 ise 0 (aktif düşük); tuş etiketleri 0-F (Logisim-evolution "Mode")',
+  options: [
+    { value: 'raw', label: 'Ham' },
+    { value: 'pmod', label: 'PmodKYPD' },
+  ],
+  get: (c) => getIo5Config(c).keypadMode,
+  set: (c, v) => reconfigureIo5(c, { keypadMode: v as Io5Config['keypadMode'] }),
+};
+
+const keypadSizeAttr: AttrDef = {
+  key: 'keypadSize',
+  label: 'Boyut',
+  kind: 'buttons',
+  title: 'Gövde boyutu; büyükte tuşlar ve bacak aralığı iki katıdır (Logisim-evolution "Size")',
+  options: [
+    { value: 'normal', label: 'Normal' },
+    { value: 'large', label: 'Büyük' },
+  ],
+  get: (c) => getIo5Config(c).keypadSize,
+  set: (c, v) => reconfigureIo5(c, { keypadSize: v as Io5Config['keypadSize'] }),
+};
+
+/** Labels of the A, B, C, D, *, # keys (evolution keyALabel ... keyHashLabel), raw mode only; one character is drawn */
+const KEYPAD_KEY_ATTRS: AttrDef[] = KEYPAD_DEFAULT_CUSTOM.map((def, i) => ({
+  key: `keypadKey${i}`,
+  label: `${def} tuşu`,
+  kind: 'text' as const,
+  maxLength: 1,
+  title: `"${def}" tuşunun üstünde yazan tek karakterlik etiket (Logisim-evolution "${def === '*' ? 'Star' : def === '#' ? 'Hash' : def} key label"); boş bırakılırsa ${def}. Yalnız ham modda`,
+  visible: (c: CircuitComponentInstance) => getIo5Config(c).keypadMode === 'raw',
+  get: (c: CircuitComponentInstance) => c.state.keypadKeys?.[i] || def,
+  set: (c: CircuitComponentInstance, v: AttrValue) => {
+    const text = String(v).trim().slice(0, 1);
+    const label = text === '' || text === def ? '' : text;
+    const keys = [...(c.state.keypadKeys ?? [])];
+    while (keys.length < KEYPAD_DEFAULT_CUSTOM.length) keys.push('');
+    if (keys[i] === label) return null;
+    keys[i] = label;
+    return withState(c, { keypadKeys: keys.some((k) => k !== '') ? keys : undefined });
+  },
+}));
+
+const portSizeAttr: AttrDef = {
+  key: 'portSize',
+  label: 'Bacak sayısı',
+  kind: 'select',
+  title: `Porttaki bacak sayısı (1-${PORT_IO_MAX}, Logisim-evolution "Number of pins"; evolution 64'e kadar izin verir, burada en geniş tel ${PORT_IO_MAX} bit). Bütün bacaklar tek veriyolundadır`,
+  options: numberOptions(1, PORT_IO_MAX),
+  get: (c) => getIo5Config(c).portSize,
+  set: (c, v) => reconfigureIo5(c, { portSize: Number(v) }),
+};
+
+const portDirAttr: AttrDef = {
+  key: 'portDir',
+  label: 'Yön',
+  kind: 'select',
+  title:
+    'Yalnız giriş: bacaklara tıklayarak boşta / 0 / 1 verilir, OUT çıkışına gider. Yalnız çıkış: IN girişinin değerini bacaklarda gösterir. ' +
+    "Giriş-çıkış: EN 1 iken bacaklar IN'i gösterir, değilse tıklanan değerleri OUT'a verir (tek EN ya da her bacağa bir EN biti) (Logisim-evolution \"Direction\")",
+  options: [
+    { value: 'input', label: 'Yalnız giriş' },
+    { value: 'output', label: 'Yalnız çıkış' },
+    { value: 'inoutSingle', label: 'Giriş-çıkış (tek EN)' },
+    { value: 'inoutMulti', label: 'Giriş-çıkış (bacak başı EN)' },
+  ],
+  get: (c) => getIo5Config(c).portDir,
+  set: (c, v) => reconfigureIo5(c, { portDir: v as Io5Config['portDir'] }),
+};
+
+const rtcTypeAttr: AttrDef = {
+  key: 'rtcType',
+  label: 'Zaman',
+  kind: 'buttons',
+  title: "1 Ocak 1970'ten beri geçen milisaniye ya da saniye; evolution 64 bit verir, buradaki çıkış onun alt 32 biti (Logisim-evolution \"Time type\")",
+  options: [
+    { value: 'ms', label: 'Milisaniye' },
+    { value: 's', label: 'Saniye' },
+  ],
+  get: (c) => getIo5Config(c).rtcType,
+  set: (c, v) => reconfigureIo5(c, { rtcType: v as Io5Config['rtcType'] }),
+};
+
+const rtcSizeAttr: AttrDef = {
+  key: 'rtcSize',
+  label: 'Boyut',
+  kind: 'buttons',
+  title: 'Gövde boyutu (Logisim-evolution "Size")',
+  options: [
+    { value: 'medium', label: 'Orta' },
+    { value: 'narrow', label: 'Dar' },
+  ],
+  get: (c) => getIo5Config(c).rtcSize,
+  set: (c, v) => reconfigureIo5(c, { rtcSize: v as Io5Config['rtcSize'] }),
+};
+
+const rgbActiveAttr: AttrDef = {
+  key: 'ioActive',
+  label: 'Renk yanar',
+  kind: 'buttons',
+  title: "Her renk 1'de (ortak katot, aktif yüksek) ya da 0'da (ortak anot, aktif düşük) yanar (Logisim-evolution \"Active On High\")",
+  options: [
+    { value: 'high', label: "1'de (ortak katot)" },
+    { value: 'low', label: "0'da (ortak anot)" },
+  ],
+  get: (c) => (c.state.ioActiveLow ? 'low' : 'high'),
+  set: (c, v) => ((c.state.ioActiveLow ? 'low' : 'high') === v ? null : withState(c, { ioActiveLow: v === 'low' })),
+};
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires
 const ttlVccGndAttr: AttrDef = {
@@ -1207,8 +1384,8 @@ export const IO_ON_COLORS = [
   { value: '#f97316', label: 'Turuncu' },
   { value: '#f8fafc', label: 'Beyaz' },
 ];
-/** Default lit colour (Logisim: 7-segment / hex digit red 240,0,0; dot matrix / LED bar Color.GREEN) */
-export const ioDefaultOnColor = (type: ComponentType) => (type === 'sevenSegment' || type === 'hexDigit' ? '#f00000' : '#00ff00');
+/** Default lit colour (Logisim: 7-segment / hex digit red 240,0,0; dot matrix / LED bar Color.GREEN; joystick ball Color.RED) */
+export const ioDefaultOnColor = (type: ComponentType) => (type === 'sevenSegment' || type === 'hexDigit' || type === 'joystick' ? '#f00000' : '#00ff00');
 
 const ioColorAttr: AttrDef = {
   key: 'ioOnColor',
