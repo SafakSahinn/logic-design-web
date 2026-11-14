@@ -114,6 +114,8 @@ import {
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
 import { AppearanceShapesSvg } from './AppearanceShapes';
+import AppearanceEditor from './AppearanceEditor';
+import { APPEARANCE_STYLE_OPTIONS, appearanceWithStyle, relayoutInstances } from '../utils/appearanceEdit';
 import { IMAGE_FILE_ACCEPT, clipboardImageSource, fileToImageSource, optimizeImageSource, whiteTransparentSource } from '../utils/imageOps';
 import {
   Play,
@@ -121,6 +123,7 @@ import {
   StepForward,
   RotateCcw,
   Trash2,
+  Shapes,
   Cpu,
   Activity,
   Plus,
@@ -206,9 +209,10 @@ import {
   buildSubcircuitFromSelection,
   saveCustomSubcircuit,
   getSubcircuitDefinition,
+  peekSubcircuitDefinition,
   withPortWidths,
 } from '../utils/subcircuitManager';
-import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
+import type { CustomSubcircuit, SubcircuitAppearance, SubcircuitAppearanceStyle, SubcircuitPortDefinition } from '../types/circuit';
 import { bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
 import { generateVCD, type WaveformValue } from '../utils/vcdGenerator';
@@ -863,6 +867,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     wires: CircuitWire[];
     // Notes/frames are added and deleted through the same history, so undo must restore them too
     annotations?: CircuitAnnotation[];
+    // Appearances of the subcircuits used on the sheet (by reference: an appearance is never changed in place),
+    // so undoing an appearance change puts the old drawing back with the pin places the snapshot was made with
+    appearances?: Record<string, SubcircuitAppearance | undefined>;
   }
   const [historyStack, setHistoryStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
@@ -875,19 +882,69 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Subcircuit appearance editor (Logisim-evolution's appearance view) and the IC right-click menu
+  const [appearanceEditDefId, setAppearanceEditDefId] = useState<string | null>(null);
+  const [icMenu, setIcMenu] = useState<{ x: number; y: number; defId: string } | null>(null);
+
+  /** The appearances of the subcircuits used by these parts */
+  const usedAppearances = (comps: CircuitComponentInstance[]): Record<string, SubcircuitAppearance | undefined> => {
+    const out: Record<string, SubcircuitAppearance | undefined> = {};
+    for (const c of comps) {
+      const id = c.type === 'subcircuit' ? c.state.subcircuitId : undefined;
+      if (id && !(id in out)) out[id] = peekSubcircuitDefinition(id)?.appearance;
+    }
+    return out;
+  };
+
+  /**
+   * A new appearance for a subcircuit: saved as a new definition object (the layout cache is keyed by it), then
+   * every instance in every sheet and inside every other IC is re-laid (anchor kept in place, turned with the
+   * anchor's facing, as evolution) and its wires re-routed to the moved pins. The active sheet's change is one
+   * undo step that also brings the old appearance back.
+   */
+  const applySubcircuitAppearance = (defId: string, appearance: SubcircuitAppearance | undefined, opts?: { skipActive?: boolean }) => {
+    const oldDef = peekSubcircuitDefinition(defId);
+    if (!oldDef || oldDef.appearance === appearance) return;
+    if (!opts?.skipActive) recordHistory();
+    const newDef: CustomSubcircuit = { ...oldDef, appearance };
+    if (!appearance) delete newDef.appearance;
+    saveCustomSubcircuit(newDef);
+    for (const d of getAllSubcircuits()) {
+      if (d.id === defId) continue;
+      const r = relayoutInstances(d.components, d.wires, defId, oldDef, newDef);
+      if (r) saveCustomSubcircuit({ ...d, components: r.comps, wires: r.wires });
+    }
+    setCustomSubcircuits(getAllSubcircuits());
+    setSheets((prev) =>
+      prev.map((sh) => {
+        if (sh.id === activeSheetId) return sh;
+        const r = relayoutInstances(sh.components, sh.wires, defId, oldDef, newDef);
+        return r ? { ...sh, components: r.comps, wires: r.wires } : sh;
+      })
+    );
+    if (opts?.skipActive) return;
+    const r = relayoutInstances(components, wires, defId, oldDef, newDef);
+    if (r) {
+      const sim = simulateCircuit(r.comps, r.wires);
+      setComponents(sim.components);
+      setWires(sim.wires);
+    }
+  };
+
   // Record history snapshot helper
   const recordHistory = useCallback(
     (customComps?: CircuitComponentInstance[], customWires?: CircuitWire[]) => {
       const compsToSave = customComps || components;
       const wiresToSave = customWires || wires;
-      setHistoryStack((prev) => [
-        ...prev.slice(-30),
-        {
-          components: JSON.parse(JSON.stringify(compsToSave)),
-          wires: JSON.parse(JSON.stringify(wiresToSave)),
-          annotations: JSON.parse(JSON.stringify(annotations)),
-        },
-      ]);
+      // Built now, not inside the updater: that runs later, after the change being recorded (an appearance save
+      // changes the definition registry right after this call)
+      const snap: HistorySnapshot = {
+        components: JSON.parse(JSON.stringify(compsToSave)),
+        wires: JSON.parse(JSON.stringify(wiresToSave)),
+        annotations: JSON.parse(JSON.stringify(annotations)),
+        appearances: usedAppearances(compsToSave),
+      };
+      setHistoryStack((prev) => [...prev.slice(-30), snap]);
       setRedoStack([]);
     },
     [components, wires, annotations]
@@ -926,6 +983,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Undo / Redo: move one snapshot between the two stacks and put it on the canvas. Done outside the state
   // updaters (side effects inside an updater run twice under StrictMode and doubled the other stack)
   const restoreSnapshot = (snap: HistorySnapshot) => {
+    // An appearance changed since the snapshot: put it back (other sheets and ICs follow) before placing the pins
+    for (const [id, app] of Object.entries(snap.appearances ?? {})) {
+      const def = peekSubcircuitDefinition(id);
+      if (def && def.appearance !== app) applySubcircuitAppearance(id, app, { skipActive: true });
+    }
     const refreshedComps = snap.components.map(updatePinPositions);
     const sim = simulateCircuit(refreshedComps, snap.wires);
     setComponents(sim.components);
@@ -940,6 +1002,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     components: JSON.parse(JSON.stringify(components)),
     wires: JSON.parse(JSON.stringify(wires)),
     annotations: JSON.parse(JSON.stringify(annotations)),
+    appearances: usedAppearances(components),
   });
 
   // Undo Handler
@@ -947,7 +1010,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (historyStack.length === 0) return;
     const previous = historyStack[historyStack.length - 1];
     setHistoryStack(historyStack.slice(0, -1));
-    setRedoStack((prevRedo) => [...prevRedo, currentSnapshot()]);
+    const now = currentSnapshot();
+    setRedoStack((prevRedo) => [...prevRedo, now]);
     restoreSnapshot(previous);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyStack, components, wires, annotations]);
@@ -957,7 +1021,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack(redoStack.slice(0, -1));
-    setHistoryStack((prevHistory) => [...prevHistory, currentSnapshot()]);
+    const now = currentSnapshot();
+    setHistoryStack((prevHistory) => [...prevHistory, now]);
     restoreSnapshot(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [redoStack, components, wires, annotations]);
@@ -8208,8 +8273,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       title={sub.description}
                     >
                       <span className="font-medium truncate">{sub.name}</span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.2 bg-purple-600 text-white rounded font-bold">
-                        {sub.chipCode || 'IC'}
+                      <span className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAppearanceEditDefId(sub.id);
+                          }}
+                          className={`p-0.5 rounded cursor-pointer ${isDark ? 'text-purple-300 hover:bg-purple-800/60' : 'text-purple-700 hover:bg-purple-200'}`}
+                          title="Görünümü düzenle…"
+                          data-appear-edit={sub.id}
+                        >
+                          <Shapes className="w-3 h-3" />
+                        </button>
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 bg-purple-600 text-white rounded font-bold">
+                          {sub.chipCode || 'IC'}
+                        </span>
                       </span>
                     </div>
                   ))}
@@ -9359,6 +9437,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       <span className="text-[10px] text-slate-400 font-mono">
                         {sub.ports.filter((p) => p.type === 'input').length}in/{sub.ports.filter((p) => p.type === 'output').length}out
                       </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAppearanceEditDefId(sub.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-blue-300 text-slate-400 transition-opacity ml-1"
+                        title="Görünümü düzenle…"
+                      >
+                        <Shapes className="w-3 h-3" />
+                      </button>
                       {!sub.id.startsWith('sub_builtin_') && (
                         <button
                           onClick={(e) => handleDeleteSubcircuit(sub.id, e)}
@@ -10504,7 +10592,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <g
                   key={comp.id}
                   transform={`translate(${comp.x}, ${comp.y})`}
-                  onMouseDown={(e) => handleComponentMouseDown(e, comp)}
+                  onMouseDown={(e) => {
+                    if (e.button === 2) {
+                      e.stopPropagation();
+                      return;
+                    }
+                    handleComponentMouseDown(e, comp);
+                  }}
+                  onContextMenu={(e) => {
+                    if (comp.type !== 'subcircuit' || !comp.state.subcircuitId) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedCompIds([comp.id]);
+                    setSelectedWireIds([]);
+                    setIcMenu({ x: e.clientX, y: e.clientY, defId: comp.state.subcircuitId });
+                  }}
                   onDoubleClick={(e) => handleComponentDoubleClick(e, comp)}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -11248,6 +11350,48 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </div>
               );
             })();
+            const appearDef = first.type === 'subcircuit' && targets.every((c) => c.state.subcircuitId === first.state.subcircuitId)
+              ? customSubcircuits.find((d) => d.id === first.state.subcircuitId) ?? peekSubcircuitDefinition(first.state.subcircuitId)
+              : undefined;
+            const appearanceRows = appearDef && (
+              <>
+                <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                  <span className={`text-[11px] font-semibold ${rowLabel}`} title="Entegrenin gövdesinin çizimi (Logisim-evolution 'Görünüm'); entegrenin tüm örnekleri değişir">Görünüm</span>
+                  <select
+                    id="attr-appearance"
+                    value={appearDef.appearance?.style ?? 'chip'}
+                    onChange={(e) => applySubcircuitAppearance(appearDef.id, appearanceWithStyle(appearDef, e.target.value as SubcircuitAppearanceStyle))}
+                    className={fieldCls}
+                  >
+                    {APPEARANCE_STYLE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value} title={o.title}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {appearDef.appearance?.style === 'logisim_evolution' && (
+                  <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                    <span className={`text-[11px] font-semibold ${rowLabel}`}>Sabit boyut</span>
+                    <div className="flex gap-1" title="Logisim-evolution 'sabit boyutlu adlı kutu': genişlik 25 karakter, uzun etiketler kısaltılır">
+                      {[false, true].map((v) => (
+                        <button
+                          key={String(v)}
+                          onClick={() => applySubcircuitAppearance(appearDef.id, { ...appearDef.appearance!, fixedSize: v || undefined })}
+                          className={btnCls(!!appearDef.appearance?.fixedSize === v)}
+                        >
+                          {v ? 'Evet' : 'Hayır'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                  <span className={`text-[11px] font-semibold ${rowLabel}`}>Çizim</span>
+                  <button id="attr-appearance-edit" onClick={() => setAppearanceEditDefId(appearDef.id)} className={btnCls(false)} title="Görünüm düzenleyiciyi aç (sağ tık menüsünde de var)">
+                    Görünümü düzenle…
+                  </button>
+                </div>
+              </>
+            );
             const terminalRow = single && first.type === 'telnet' && (
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>Terminal</span>
@@ -11317,6 +11461,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         </div>
                       </React.Fragment>
                     ))}
+                    {appearanceRows}
                     {terminalRow}
                     {imageToolsRow}
                     {defs.length === 0 && !single && (
@@ -12856,6 +13001,74 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       )}
 
       {/* Subcircuit / Custom IC Packaging Modal */}
+      {icMenu && (() => {
+        const def = peekSubcircuitDefinition(icMenu.defId);
+        if (!def) return null;
+        const dark = cadTheme === 'dark';
+        const item = `w-full text-left px-3 py-1.5 text-xs cursor-pointer flex items-center gap-2 ${dark ? 'hover:bg-slate-700' : 'hover:bg-slate-100'}`;
+        const cur = def.appearance?.style ?? 'chip';
+        return (
+          <div
+            className="fixed inset-0 z-[70]"
+            onMouseDown={() => setIcMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setIcMenu(null);
+            }}
+          >
+            <div
+              id="ic-context-menu"
+              className={`absolute min-w-[13rem] py-1 rounded-xl border shadow-xl ${dark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-800'}`}
+              style={{ left: Math.min(icMenu.x, window.innerWidth - 230), top: Math.min(icMenu.y, window.innerHeight - 260) }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className={`px-3 py-1 text-[10px] font-bold uppercase tracking-wide ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{def.name}</div>
+              <button
+                className={item}
+                onClick={() => {
+                  setIcMenu(null);
+                  setAppearanceEditDefId(def.id);
+                }}
+              >
+                <Shapes className="w-3.5 h-3.5 text-blue-500" />
+                Görünümü düzenle…
+              </button>
+              <div className={`my-1 border-t ${dark ? 'border-slate-700' : 'border-slate-200'}`} />
+              <div className={`px-3 py-0.5 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>Görünüm</div>
+              {APPEARANCE_STYLE_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  className={item}
+                  title={o.title}
+                  onClick={() => {
+                    setIcMenu(null);
+                    applySubcircuitAppearance(def.id, appearanceWithStyle(def, o.value));
+                  }}
+                >
+                  <span className="w-3.5 text-center">{cur === o.value ? '●' : ''}</span>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {appearanceEditDefId && peekSubcircuitDefinition(appearanceEditDefId) && (
+        <AppearanceEditor
+          key={appearanceEditDefId}
+          def={peekSubcircuitDefinition(appearanceEditDefId)!}
+          dark={cadTheme === 'dark'}
+          onClose={() => setAppearanceEditDefId(null)}
+          onSave={(app) => {
+            const id = appearanceEditDefId;
+            setAppearanceEditDefId(null);
+            applySubcircuitAppearance(id, app);
+            showToast('Entegrenin görünümü kaydedildi; tüm örnekleri güncellendi.');
+          }}
+        />
+      )}
+
       {showSubcircuitModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5">
           <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[88vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
