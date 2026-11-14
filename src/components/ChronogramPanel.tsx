@@ -6,6 +6,11 @@ import { bitsToString, type Radix, type SignalValue } from '../types/logic';
 import type { WaveformSample, WaveformValue } from '../utils/vcdGenerator';
 import {
   CHRONO_LIMITS,
+  chronoLogHeader,
+  chronoLogLine,
+  chronoLogModeLine,
+  chronoLogRuns,
+  chronoLogText,
   chronoValueText,
   CHRONO_ZOOM_DEFAULT,
   CHRONO_ZOOM_MAX,
@@ -75,6 +80,11 @@ export interface ChronogramPanelProps {
   /** display base of wide signals by key; unset = hexadecimal */
   radix: Record<string, Radix>;
   onRadixChange: (key: string, radix: Radix) => void;
+  /** log file: write the header line of signal names */
+  fileHeader: boolean;
+  onFileHeaderChange: (on: boolean) => void;
+  /** base name of downloaded log files (no extension) */
+  fileBaseName: string;
 }
 
 type Seg = { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number };
@@ -356,6 +366,78 @@ function ChronoTable({
   );
 }
 
+// Line ends of log files: PrintWriter.println writes the system line separator, so CRLF on Windows
+const LOG_EOL = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? '\r\n' : '\n';
+/** lines shown in the file tab's preview (the newest ones) */
+const LOG_PREVIEW_LINES = 30;
+
+function downloadText(text: string, fileName: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// File tab (Logisim 2.7.1 / evolution FilePanel): the log file options and what the file holds
+function ChronoFileTab({
+  signals,
+  samples,
+  radixOf,
+  clockKey,
+  header,
+  onHeaderChange,
+  fileBaseName,
+}: {
+  signals: ChronoSignal[];
+  samples: WaveformSample[];
+  radixOf: (key: string) => Radix;
+  clockKey: string | null;
+  header: boolean;
+  onHeaderChange: (on: boolean) => void;
+  fileBaseName: string;
+}) {
+  const runs = chronoLogRuns(samples, signals, radixOf);
+  const shown = runs.slice(-LOG_PREVIEW_LINES);
+  const preview = [
+    chronoLogModeLine(clockKey),
+    ...(header ? [chronoLogHeader(signals)] : []),
+    ...(shown.length < runs.length ? [`… (${runs.length - shown.length} satır daha)`] : []),
+    ...shown.map(chronoLogLine),
+  ].join('\n');
+  return (
+    <div className="space-y-3" id="chrono-file">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer" title="Dosyanın başına sinyal adlarını sekmeyle ayrılmış bir satır olarak yaz">
+          <input type="checkbox" checked={header} onChange={(e) => onHeaderChange(e.target.checked)} className="accent-cyan-500" id="chrono-file-header" />
+          Başlık satırı ekle
+        </label>
+        <button
+          type="button"
+          id="chrono-file-history"
+          disabled={samples.length === 0 || signals.length === 0}
+          onClick={() => downloadText(chronoLogText(samples, signals, radixOf, clockKey, header, LOG_EOL), `${fileBaseName}_log.txt`)}
+          className="px-3 py-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 hover:text-white rounded-xl text-xs font-semibold border border-cyan-800 flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Eldeki geçmişi (en fazla seçili geçmiş uzunluğu kadar dilim) kayıt dosyası biçiminde indir"
+        >
+          <Download className="w-3.5 h-3.5" />
+          Geçmişi indir (.txt)
+        </button>
+        <span className="text-[11px] text-slate-500">
+          {runs.length} satır · {samples.length} dilim · sekmeyle ayrılmış, her dilim 5 µs
+        </span>
+      </div>
+      <pre
+        id="chrono-file-preview"
+        className="max-h-80 overflow-auto bg-slate-950/70 rounded-2xl border border-slate-800/80 p-3 text-[11px] leading-5 font-mono text-slate-300 whitespace-pre"
+      >
+        {preview}
+      </pre>
+    </div>
+  );
+}
+
 function TreeLevel({ node, selected, toggle, depth }: { node: ChronoTreeNode; selected: Set<string>; toggle: (k: string) => void; depth: number }) {
   const [open, setOpen] = useState(depth === 0);
   const count = node.signals.filter((s) => selected.has(s.key)).length;
@@ -481,7 +563,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   const lastValues = samples.length > 0 ? samples[samples.length - 1].values : {};
   const [pickerOpen, setPickerOpen] = useState(false);
   // tab: the waveforms or the value table (both show the same selection and history)
-  const [view, setView] = useState<'wave' | 'table'>('wave');
+  const [view, setView] = useState<'wave' | 'table' | 'file'>('wave');
   // right-click menu of a wide signal: its display base
   const [radixMenu, setRadixMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const radixOf = (key: string): Radix => props.radix[key] ?? '16';
@@ -717,6 +799,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
           [
             ['wave', 'Zamanlama'],
             ['table', 'Tablo'],
+            ['file', 'Dosya'],
           ] as const
         ).map(([v, label]) => (
           <button
@@ -745,7 +828,17 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
         )}
       </div>
 
-      {signals.length > 0 && view === 'table' ? (
+      {signals.length > 0 && view === 'file' ? (
+        <ChronoFileTab
+          signals={signals}
+          samples={samples}
+          radixOf={radixOf}
+          clockKey={clockKey}
+          header={props.fileHeader}
+          onHeaderChange={props.onFileHeaderChange}
+          fileBaseName={props.fileBaseName}
+        />
+      ) : signals.length > 0 && view === 'table' ? (
         <ChronoTable signals={signals} samples={samples} radixOf={radixOf} cursor={cur} onCursor={setCursorT} onRadixMenu={(key, x, y) => setRadixMenu({ key, x, y })} />
       ) : signals.length === 0 ? (
         <div className="p-8 text-center text-slate-500 text-xs font-mono">

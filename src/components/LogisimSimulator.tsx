@@ -11536,6 +11536,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           onSelectionChange={(keys) => updateChrono({ selection: keys === null ? null : editChronoSelection(chronoProbe.topLevel, keys) })}
           radix={chronoRadix ?? {}}
           onRadixChange={(key, r) => updateChrono({ radix: { ...chronoRadix, [key]: r } })}
+          fileHeader={activeChrono?.fileHeader ?? true}
+          onFileHeaderChange={(on) => updateChrono({ fileHeader: on ? undefined : false })}
+          fileBaseName={currentCircuitName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}
           samples={chronoLog.samples}
           paused={isWaveformPaused}
           clocks={chronoProbe.clocks}

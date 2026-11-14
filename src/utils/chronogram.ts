@@ -118,6 +118,8 @@ export interface ChronoSettings {
   clock?: string | null;
   /** display base of wide signals by key (evolution SignalInfo radix); unset = hexadecimal */
   radix?: Record<string, Radix>;
+  /** log file: write the header line of signal names (evolution Model.fileHeader); unset = yes */
+  fileHeader?: boolean;
 }
 
 /** Keys of the selected signals in display order */
@@ -180,6 +182,79 @@ export function chronoValueText(v: WaveformValue | undefined, radix: Radix = '16
   if (v === undefined) return '-';
   if (!Array.isArray(v)) return waveSymbol(v);
   return radix === '16' ? formatBits(v, '16').toUpperCase().replace(/X/g, 'x') : formatBits(v, radix);
+}
+
+// Log file text, as evolution's LogThread writes it:
+//   # mode: clocked granularity: coarse        (or "step"; once at the top)
+//   CLK<TAB>Q                                  (header line of display names, optional, default on)
+//   1<TAB>A<TAB># 5.0 µs                       (values in their display base, then the duration as a comment)
+// A line covers a run of slots in which no logged value changes (evolution's Signal merges equal values and writes
+// the shortest duration of all signals). In coarse mode a slot lasts evolution's default time scale: 5000 ns per
+// clock tick in clocked mode, per stable step in step mode.
+
+/** Length of one slot in the log file (evolution Model.timeScale default) */
+export const CHRONO_SLOT_NS = 5000;
+
+/** evolution Model.formatDuration (English strings: "%s ns", "%s µs", "%s ms", "%s s"; one decimal) */
+export function formatChronoDuration(t: number): string {
+  if (t < 1000 || t % 100 !== 0) return `${t} ns`;
+  if (t < 1000000 || t % 100000 !== 0) return `${(t / 1000).toFixed(1)} µs`;
+  if (t < 100000000 || t % 100000000 !== 0) return `${(t / 1000000).toFixed(1)} ms`;
+  return `${(t / 1000000000).toFixed(1)} s`;
+}
+
+/** The mode line at the top of a log file */
+export const chronoLogModeLine = (clockKey: string | null): string =>
+  `# mode: ${clockKey === null ? 'step' : 'clocked'} granularity: coarse`;
+
+/** The header line: the display names of the logged signals, tab separated */
+export const chronoLogHeader = (signals: ChronoSignal[]): string => signals.map((s) => s.name).join('\t');
+
+/** A run of slots with the same logged values: the formatted values and the number of slots */
+export interface ChronoLogRun {
+  texts: string[];
+  slots: number;
+}
+
+export const chronoLogLine = (run: ChronoLogRun): string =>
+  `${run.texts.join('\t')}\t# ${formatChronoDuration(run.slots * CHRONO_SLOT_NS)}`;
+
+/** The formatted values of the logged signals in one sample */
+export const chronoLogTexts = (
+  sample: WaveformSample,
+  signals: ChronoSignal[],
+  radixOf: (key: string) => Radix
+): string[] => signals.map((s) => chronoValueText(sample.values[s.key], radixOf(s.key)));
+
+/** Samples merged into runs of equal logged values, oldest first */
+export function chronoLogRuns(
+  samples: WaveformSample[],
+  signals: ChronoSignal[],
+  radixOf: (key: string) => Radix
+): ChronoLogRun[] {
+  const runs: ChronoLogRun[] = [];
+  for (const smp of samples) {
+    const texts = chronoLogTexts(smp, signals, radixOf);
+    const last = runs[runs.length - 1];
+    if (last && last.texts.every((t, i) => t === texts[i])) last.slots++;
+    else runs.push({ texts, slots: 1 });
+  }
+  return runs;
+}
+
+/** A whole log file for these samples (lines end with eol, the last one too, as PrintWriter.println does) */
+export function chronoLogText(
+  samples: WaveformSample[],
+  signals: ChronoSignal[],
+  radixOf: (key: string) => Radix,
+  clockKey: string | null,
+  header: boolean,
+  eol = '\n'
+): string {
+  const lines = [chronoLogModeLine(clockKey)];
+  if (header) lines.push(chronoLogHeader(signals));
+  for (const run of chronoLogRuns(samples, signals, radixOf)) lines.push(chronoLogLine(run));
+  return lines.map((l) => l + eol).join('');
 }
 
 /** Value of a signal in a sample, as a bit array (LSB first); a missing value counts as x */
