@@ -209,7 +209,19 @@ import {
 import type { CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import { bitsToNumber, bitsToString, formatBits, numberToBits, type LogicValue, type Radix, type SignalValue } from '../types/logic';
 import { solveKMap } from '../utils/kmapSolver';
-import { generateVCD, type WaveformSample, type WaveformValue } from '../utils/vcdGenerator';
+import { generateVCD, type WaveformValue } from '../utils/vcdGenerator';
+import {
+  CHRONO_DEFAULT_LIMIT,
+  emptyChronoLog,
+  limitChrono,
+  recordChrono,
+  selectedChronoSignals,
+  sortChronoGroups,
+  waveSymbol,
+  type ChronoLog,
+  type ChronoSignal,
+} from '../utils/chronogram';
+import { ChronogramPanel } from './ChronogramPanel';
 import MemoryHexEditor from './MemoryHexEditor';
 
 /**
@@ -250,20 +262,6 @@ export interface CircuitSheet {
 const pinDotFill = (v: SignalValue): string =>
   v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
 
-
-// Waveform segment colours for non-binary values, as in Logisim-evolution's chronogram
-// (x / z: orange box, E: red box)
-const WAVE_UNKNOWN_FILL = '#eaaa6c';
-const WAVE_ERROR_FILL = '#f97676';
-const waveSymbol = (v: SignalValue): string => (v === 'E' ? 'E' : v === 'Z' ? 'z' : v === 'X' ? 'x' : String(v));
-// A wide sample as one value: its hex text (x / E digits as Logisim shows them) and the colour class
-// of the bus segment: E if any bit is E, x if any bit is undefined / floating, else a normal value
-const waveBusText = (bits: SignalValue[]): string => formatBits(bits, '16').toUpperCase().replace(/X/g, 'x');
-const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
-  bits.includes('E') ? 'E' : bits.some((b) => b !== 0 && b !== 1) ? 'X' : 'ok';
-// Key that tells two samples apart (scalar value or the bit pattern)
-const waveKey = (v: WaveformValue | undefined): string =>
-  v === undefined ? '0' : Array.isArray(v) ? `b${v.join('')}` : String(v);
 
 // Waveform rows of the Keyboard / TTY / Telnet / RGB Video (pin key, row name, row kind): the data and strobe lines
 // the circuit exchanges with them (outputs read like a DIP switch, inputs like an LED bar). Sample key `${id}_${pin}`
@@ -665,9 +663,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Waveform / Timing Scope State (Zamanlama Diyagramı)
   const [showWaveform, setShowWaveform] = useState<boolean>(false);
-  const [waveformSamples, setWaveformSamples] = useState<WaveformSample[]>([]);
   const [isWaveformPaused, setIsWaveformPaused] = useState<boolean>(false);
-  const sampleTimeRef = useRef<number>(0);
+  const [chronoLog, setChronoLog] = useState<ChronoLog>(() => emptyChronoLog());
+  // Time source: undefined = automatic (the first clock by location, step mode without clocks), null = step mode
+  const [chronoClockChoice, setChronoClockChoice] = useState<string | null | undefined>(undefined);
+  // Selected signal keys in display order; null = automatic (every loggable signal in evolution's default order)
+  const [chronoSelection] = useState<string[] | null>(null);
+  const [chronoLimit, setChronoLimit] = useState<number>(CHRONO_DEFAULT_LIMIT);
 
   // Rename modal state
   const [renameModalCompId, setRenameModalCompId] = useState<string | null>(null);
@@ -2441,11 +2443,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // VCD Export Handler
   const handleExportVCD = () => {
-    if (waveformSamples.length === 0) {
-      showToast('Zamanlama kaydı henüz oluşmadı. Simülasyonu çalıştırın.');
+    if (chronoLog.samples.length === 0 || chronoSignals.length === 0) {
+      showToast('Zamanlama kaydı henüz oluşmadı.');
       return;
     }
-    const vcdContent = generateVCD(waveformSamples, components);
+    // the selected signals in their panel order
+    const vcdContent = generateVCD(chronoLog.samples, components, chronoSignals.map((s) => s.key));
     const blob = new Blob([vcdContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -3756,143 +3759,138 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast(`"${newSub.name}" (${newSub.chipCode}) kütüphaneye eklendi!`);
   };
 
-  const observableChannels = useMemo(() => {
-    const list: { key: string; name: string; color: string; type: string; width?: number }[] = [];
-    const colors = [
-      '#06b6d4', // cyan
-      '#10b981', // emerald
-      '#3b82f6', // blue
-      '#8b5cf6', // purple
-      '#f59e0b', // amber
-      '#ec4899', // pink
-      '#14b8a6', // teal
-      '#f43f5e', // rose
-    ];
-    let cIdx = 0;
-
+  // Chronogram: the loggable signals (one group of rows per part) and their current values, built in one pass so
+  // the signal list and the recorded values always agree. Order and time source as evolution's log Model.
+  const chronoProbe = useMemo(() => {
+    type Row = Omit<ChronoSignal, 'color'> & { value: WaveformValue; color?: string };
+    const groups: { id: string; x: number; y: number; input: boolean; clock: boolean; rows: Row[] }[] = [];
     const inputNames = getInputSignalNames(components);
+    const busOf = (p: CircuitPin | undefined): WaveformValue => {
+      const w = p?.width ?? 1;
+      return p?.bits ? [...p.bits] : Array<SignalValue>(w).fill('X');
+    };
+    const sfx = (w: number) => (w > 1 ? `[${w}]` : '');
+
     components.forEach((c) => {
       const name = inputNames.get(c.id) || c.label || c.type;
+      const rows: Row[] = [];
       if (c.type === 'clock') {
-        list.push({ key: c.id, name: `${name} (CLK)`, color: colors[cIdx++ % colors.length], type: 'clock' });
+        rows.push({ key: c.id, name: `${name} (CLK)`, kind: 'clock', width: 1, value: c.state.on ? 1 : 0 });
       } else if (c.type === 'switch' || c.type === 'pushbutton') {
-        // A wide switch is one bus row (Logisim-evolution chronogram), named with its width
+        // A wide switch is one bus row (evolution chronogram), named with its width
         const w = c.type === 'switch' ? c.outputs[0]?.width ?? 1 : 1;
-        list.push({
-          key: c.id,
-          name: `${name}${w > 1 ? `[${w}]` : ''} (${c.type === 'switch' ? 'SW' : 'BTN'})`,
-          color: colors[cIdx++ % colors.length],
-          type: c.type,
-          width: w,
-        });
+        const value: WaveformValue =
+          c.type === 'pushbutton'
+            ? c.state.on
+              ? 1
+              : 0
+            : w > 1
+              ? c.outputs[0].bits
+                ? [...c.outputs[0].bits]
+                : numberToBits(c.state.inputValue ?? 0, w)
+              : switchBits(c)[0];
+        rows.push({ key: c.id, name: `${name}${sfx(w)} (${c.type === 'switch' ? 'SW' : 'BTN'})`, kind: 'input', width: w, value });
       } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
         const w = c.inputs[0]?.width ?? 1;
-        list.push({ key: c.id, name: `${name}${w > 1 ? `[${w}]` : ''} (OUT)`, color: colors[cIdx++ % colors.length], type: 'output', width: w });
+        rows.push({ key: c.id, name: `${name}${sfx(w)} (OUT)`, kind: 'output', width: w, value: w > 1 ? busOf(c.inputs[0]) : c.inputs[0]?.value ?? 0 });
       } else if (c.type === 'srLatch' || FLIP_FLOP_TYPES.has(c.type)) {
-        list.push({ key: `${c.id}_q`, name: `${name} Q`, color: colors[cIdx++ % colors.length], type: 'state' });
+        rows.push({ key: `${c.id}_q`, name: `${name} Q`, kind: 'state', width: 1, value: c.outputs[0]?.value ?? 0 });
       } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
         // Register / counter / random generator: Q; shift register: OUT (the first output); RAM / ROM: D
-        const w = c.outputs[0]?.width ?? 1;
         const port = c.type === 'shiftRegister' ? 'OUT' : c.type === 'ram' || c.type === 'rom' ? 'D' : c.type === 'dualRam' ? 'D0' : 'Q';
-        list.push({ key: `${c.id}_q`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
-        if (c.type === 'dualRam') list.push({ key: `${c.id}_q1`, name: `${name} D1${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: 'state', width: w });
+        (c.type === 'dualRam' ? [0, 1] : [0]).forEach((oi) => {
+          const o = c.outputs[oi];
+          const w = o?.width ?? 1;
+          rows.push({
+            key: `${c.id}_q${oi ? oi : ''}`,
+            name: `${name} ${oi ? 'D1' : port}${sfx(w)}`,
+            kind: 'state',
+            width: w,
+            value: w > 1 ? busOf(o) : o?.value ?? 0,
+          });
+        });
       } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
         // one bus trace: the switches (bit i = switch i+1), the LED bar inputs (D0.. or D) or the hex digit's D
         const w = c.type === 'hexDigit' ? 4 : getIoConfig(c).size;
-        const port = c.type === 'dipSwitch' ? 'Q' : 'D';
-        list.push({ key: `${c.id}_io`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: c.type === 'dipSwitch' ? 'input' : 'output', width: w });
+        const bits: SignalValue[] =
+          c.type === 'dipSwitch'
+            ? c.outputs.map((p) => p.value)
+            : c.type === 'ledBar' && getIoConfig(c).ledBarMode === 'separated'
+              ? c.inputs.map((p) => p.value)
+              : c.inputs[0]?.bits
+                ? [...c.inputs[0].bits]
+                : Array<SignalValue>(c.inputs[0]?.width ?? 1).fill('X');
+        rows.push({
+          key: `${c.id}_io`,
+          name: `${name} ${c.type === 'dipSwitch' ? 'Q' : 'D'}${sfx(w)}`,
+          kind: c.type === 'dipSwitch' ? 'input' : 'output',
+          width: w,
+          value: bits.length > 1 ? bits : bits[0] ?? 0,
+        });
       } else if (c.type === 'portIo') {
         // the pin row as the port shows it (bit i = pin i)
         const w = getIo5Config(c).portSize;
-        list.push({ key: `${c.id}_io`, name: `${name} PIO${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: getIo5Config(c).portDir === 'output' ? 'output' : 'input', width: w });
+        const bits = portIoPins(c);
+        rows.push({
+          key: `${c.id}_io`,
+          name: `${name} PIO${sfx(w)}`,
+          kind: getIo5Config(c).portDir === 'output' ? 'output' : 'input',
+          width: w,
+          value: bits.length > 1 ? bits : bits[0] ?? 'Z',
+        });
       } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
-        list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
+        rows.push({ key: c.id, name: `${name} (KAPI)`, kind: 'gate', width: 1, value: c.outputs[0]?.value ?? 0 });
       } else if (IO5C_WAVE_PINS[c.type]) {
         // Keyboard / TTY / Telnet / RGB Video: one row per data or strobe pin, the wide data lines as bus rows
+        // (Telnet OUT is 8 x while RD is not 1: shown as the x box, not as 0)
         IO5C_WAVE_PINS[c.type]!.forEach(([k, port, kind]) => {
           const p = [...c.inputs, ...c.outputs].find((q) => plexerPinKey(c, q) === k);
           const w = p?.width ?? 1;
-          list.push({ key: `${c.id}_${k}`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: kind, width: w });
+          rows.push({ key: `${c.id}_${k}`, name: `${name} ${port}${sfx(w)}`, kind, width: w, value: pinWaveValue(p) });
         });
       } else if (c.type === 'asciiKeyboard') {
-        list.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, color: '#22c55e', type: 'input' });
-        list.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, color: colors[cIdx++ % colors.length], type: 'input' });
+        rows.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, kind: 'input', width: 1, value: c.outputs[7]?.value ?? 0, color: '#22c55e' });
+        rows.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, kind: 'input', width: 1, value: c.outputs[0]?.value ?? 0 });
       }
+      if (rows.length === 0) return;
+      // evolution counts Button, Clock, input Pin and Random as inputs
+      const input = rows[0].kind === 'clock' || rows[0].kind === 'input' || c.type === 'random';
+      groups.push({ id: c.id, x: c.x, y: c.y, input, clock: false, rows });
     });
 
-    return list;
-  }, [components]);
+    // Time source: the chosen clock, else (automatic) the first clock by location; no clock = step mode
+    const clockGroups = groups.filter((g) => g.rows[0].kind === 'clock').sort((a, b) => a.x - b.x || a.y - b.y);
+    const clocks = clockGroups.map((g) => ({ key: g.rows[0].key, name: g.rows[0].name.replace(/ \(CLK\)$/, '') }));
+    const clockKey =
+      chronoClockChoice === null
+        ? null
+        : clocks.find((c) => c.key === chronoClockChoice)?.key ?? clocks[0]?.key ?? null;
+    groups.forEach((g) => (g.clock = g.rows[0].key === clockKey));
 
-  // Record timing waveform samples continuously as circuit simulation runs
+    const colors = ['#06b6d4', '#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#14b8a6', '#f43f5e'];
+    let cIdx = 0;
+    const candidates: ChronoSignal[] = [];
+    const values: Record<string, WaveformValue> = {};
+    sortChronoGroups(groups).forEach((g) =>
+      g.rows.forEach(({ value, color, ...s }) => {
+        candidates.push({ ...s, color: color ?? colors[cIdx++ % colors.length] });
+        values[s.key] = value;
+      })
+    );
+    return { candidates, values, clocks, clockKey };
+  }, [components, chronoClockChoice]);
+
+  const chronoSignals = useMemo(
+    () => selectedChronoSignals(chronoProbe.candidates, chronoSelection),
+    [chronoProbe.candidates, chronoSelection]
+  );
+
+  // Record on every change of the circuit while the panel is open (evolution: every propagation that changed a
+  // value), also while the simulation is stopped (switch clicks, single steps)
   useEffect(() => {
-    if (!showWaveform || isWaveformPaused || !isRunning || observableChannels.length === 0) return;
-
-    const sampleRateMs = Math.max(100, Math.min(400, Math.floor(1000 / (clockHz * 2))));
-
-    const takeSample = () => {
-      const values: Record<string, WaveformValue> = {};
-      components.forEach((c) => {
-        const outW = c.outputs[0]?.width ?? 1;
-        const inW = c.inputs[0]?.width ?? 1;
-        if (c.type === 'switch' && outW > 1) {
-          values[c.id] = c.outputs[0].bits ? [...c.outputs[0].bits] : numberToBits(c.state.inputValue ?? 0, outW);
-        } else if ((c.type === 'led' || c.type === 'probe') && inW > 1) {
-          values[c.id] = c.inputs[0].bits ? [...c.inputs[0].bits] : Array<SignalValue>(inW).fill('X');
-        } else if (c.type === 'switch') {
-          values[c.id] = switchBits(c)[0];
-        } else if (c.type === 'clock' || c.type === 'pushbutton') {
-          values[c.id] = c.state.on ? 1 : 0;
-        } else if (c.type === 'led' || c.type === 'probe' || c.type === 'buzzer') {
-          values[c.id] = c.inputs[0]?.value ?? 0;
-        } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
-          values[c.id] = c.outputs[0]?.value ?? 0;
-        } else if (c.type === 'srLatch' || FLIP_FLOP_TYPES.has(c.type)) {
-          values[`${c.id}_q`] = c.outputs[0]?.value ?? 0;
-        } else if (MEM_TYPES.has(c.type) || RAM_TYPES.has(c.type)) {
-          (c.type === 'dualRam' ? [0, 1] : [0]).forEach((oi) => {
-            const o = c.outputs[oi];
-            const w = o?.width ?? 1;
-            values[`${c.id}_q${oi ? oi : ''}`] = w > 1 ? (o?.bits ? [...o.bits] : Array<SignalValue>(w).fill('X')) : o?.value ?? 0;
-          });
-        } else if (c.type === 'dipSwitch' || c.type === 'ledBar' || c.type === 'hexDigit') {
-          const bits: SignalValue[] =
-            c.type === 'dipSwitch'
-              ? c.outputs.map((p) => p.value)
-              : c.type === 'ledBar' && getIoConfig(c).ledBarMode === 'separated'
-                ? c.inputs.map((p) => p.value)
-                : c.inputs[0]?.bits
-                  ? [...c.inputs[0].bits]
-                  : Array<SignalValue>(c.inputs[0]?.width ?? 1).fill('X');
-          values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 0;
-        } else if (c.type === 'portIo') {
-          const bits = portIoPins(c);
-          values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 'Z';
-        } else if (IO5C_WAVE_PINS[c.type]) {
-          // Telnet OUT is 8 x while RD is not 1: shown as the x box, not as 0
-          IO5C_WAVE_PINS[c.type]!.forEach(([k]) => {
-            values[`${c.id}_${k}`] = pinWaveValue([...c.inputs, ...c.outputs].find((q) => plexerPinKey(c, q) === k));
-          });
-        } else if (c.type === 'asciiKeyboard') {
-          values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
-          values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
-        }
-      });
-
-      sampleTimeRef.current += 1;
-      const curT = sampleTimeRef.current;
-
-      setWaveformSamples((prev) => {
-        const next = [...prev, { time: curT, values }];
-        return next.length > 48 ? next.slice(next.length - 48) : next;
-      });
-    };
-
-    // Immediate sample
-    takeSample();
-
-    const timer = setInterval(takeSample, sampleRateMs);
-    return () => clearInterval(timer);
-  }, [showWaveform, isWaveformPaused, isRunning, clockHz, components, observableChannels]);
+    if (!showWaveform || isWaveformPaused) return;
+    setChronoLog((prev) => recordChrono(prev, chronoProbe.values, chronoProbe.clockKey, chronoLimit));
+  }, [showWaveform, isWaveformPaused, chronoProbe, chronoLimit]);
 
   // Global Keyboard shortcuts: Delete, Backspace, Ctrl+Z, Ctrl+Y, Escape, Ctrl+D, R
   useEffect(() => {
@@ -11477,269 +11475,25 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         </div>
       </div>
 
-      {/* Digital Timing Diagram / Oscilloscope Panel (Timing Scope) */}
+      {/* Chronogram (timing diagram) panel */}
       {showWaveform && (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-slate-100 shadow-xl space-y-4 animate-in fade-in slide-in-from-top-4 duration-200">
-          {/* Header & Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-cyan-950/80 text-cyan-400 rounded-xl border border-cyan-800/60 shadow-2xs">
-                <Activity className="w-5 h-5 animate-pulse" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-extrabold text-sm sm:text-base text-white tracking-wide">
-                    Sayısal Mantık Analizörü & Zamanlama Diyagramı
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
-                    {isWaveformPaused ? 'DURAKLATILDI' : 'CANLI ÇALIŞIYOR'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400">
-                  Devredeki saat (CLK), anahtar (SW), flip-flop ve çıkış sinyallerinin zaman içindeki mantık dalga şekilleri
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsWaveformPaused(!isWaveformPaused)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors ${
-                  isWaveformPaused
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                }`}
-              >
-                {isWaveformPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-                <span>{isWaveformPaused ? 'Örneklemeyi Sürdür' : 'Duraklat'}</span>
-              </button>
-
-              <button
-                onClick={() => setWaveformSamples([])}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="Tüm dalga şekli örneklerini temizle"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Temizle</span>
-              </button>
-
-              <button
-                onClick={handleExportVCD}
-                className="px-3 py-1.5 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 hover:text-white rounded-xl text-xs font-semibold border border-cyan-800 flex items-center gap-1.5 cursor-pointer transition-colors"
-                title="GTKWave ve ModelSim ile tam uyumlu VCD zamanlama döküm dosyasını indir"
-              >
-                <Download className="w-3.5 h-3.5 text-cyan-400" />
-                <span>VCD İndir (GTKWave)</span>
-              </button>
-
-              <button
-                onClick={() => setShowWaveform(false)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg cursor-pointer transition-colors"
-                title="Paneli Kapat"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Scope Traces Screen */}
-          {observableChannels.length === 0 ? (
-            <div className="p-8 text-center text-slate-500 text-xs font-mono">
-              Tuval üzerinde izlenecek aktif giriş veya çıkış elemanı (Anahtar, Saat, LED, Prob vb.) bulunamadı.
-            </div>
-          ) : (
-            <div className="overflow-x-auto space-y-3 pb-2">
-              {observableChannels.map((channel) => {
-                const sampleCount = waveformSamples.length;
-                const slotWidth = 24;
-                const svgWidth = Math.max(720, sampleCount * slotWidth + 40);
-                const svgHeight = 36;
-                const yHigh = 6;
-                const yLow = 28;
-
-                // Runs of equal samples; 0/1 runs form the step line, x / z / E runs are full-height
-                // boxes (Logisim-evolution chronogram)
-                const isBus = (channel.width ?? 1) > 1;
-                const segs: { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number }[] = [];
-                waveformSamples.forEach((smp, i) => {
-                  const raw = smp.values[channel.key];
-                  const key = waveKey(raw);
-                  const x1 = 10 + (i + 1) * slotWidth;
-                  const last = segs[segs.length - 1];
-                  if (last && last.key === key) last.x1 = x1;
-                  else if (Array.isArray(raw)) segs.push({ v: 0, bits: raw, key, x0: 10 + i * slotWidth, x1 });
-                  else segs.push({ v: raw ?? 0, key, x0: 10 + i * slotWidth, x1 });
-                });
-                let pathD = '';
-                let prevBinary = false;
-                segs.forEach((sg) => {
-                  if (isBus || (sg.v !== 0 && sg.v !== 1)) {
-                    prevBinary = false;
-                    return;
-                  }
-                  const y = sg.v === 1 ? yHigh : yLow;
-                  pathD += prevBinary ? ` V ${y} H ${sg.x1}` : ` M ${sg.x0},${y} H ${sg.x1}`;
-                  prevBinary = true;
-                });
-
-                const lastRaw = sampleCount > 0 ? waveformSamples[sampleCount - 1].values[channel.key] : undefined;
-                const lastBits = Array.isArray(lastRaw) ? lastRaw : undefined;
-                const lastBusKind = lastBits ? waveBusKind(lastBits) : undefined;
-                // A bus badge shows its hex value and takes the colour of a 1 / E / x sample
-                const lastSampleVal: SignalValue = lastBits
-                  ? lastBusKind === 'E'
-                    ? 'E'
-                    : lastBusKind === 'X'
-                    ? 'X'
-                    : lastBits.includes(1)
-                    ? 1
-                    : 0
-                  : Array.isArray(lastRaw)
-                  ? 0
-                  : lastRaw ?? 0;
-
-                return (
-                  <div
-                    key={channel.key}
-                    className="flex items-center gap-3 bg-slate-950/70 p-2.5 rounded-2xl border border-slate-800/80"
-                  >
-                    {/* Channel Label & Live Value Badge */}
-                    <div className="w-36 shrink-0 flex items-center justify-between gap-2 border-r border-slate-800 pr-3">
-                      <div className="flex items-center gap-2 truncate">
-                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: channel.color }} />
-                        <span className="font-mono text-xs font-bold text-slate-200 truncate" title={channel.name}>
-                          {channel.name}
-                        </span>
-                      </div>
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-extrabold shrink-0 ${
-                          lastSampleVal === 1
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                            : lastSampleVal === 'E'
-                            ? 'bg-red-950 text-red-400 border border-red-800'
-                            : lastSampleVal === 'X' || lastSampleVal === 'Z'
-                            ? 'bg-orange-950 text-orange-300 border border-orange-800'
-                            : 'bg-slate-900 text-slate-500 border border-slate-800'
-                        }`}
-                      >
-                        {lastBits ? waveBusText(lastBits) : waveSymbol(lastSampleVal)}
-                      </span>
-                    </div>
-
-                    {/* SVG Trace */}
-                    <div className="flex-1 overflow-x-auto">
-                      <svg width={svgWidth} height={svgHeight} className="block">
-                        {/* Background timing grid lines */}
-                        {Array.from({ length: Math.ceil(svgWidth / slotWidth) }).map((_, gIdx) => (
-                          <line
-                            key={gIdx}
-                            x1={10 + gIdx * slotWidth}
-                            y1={0}
-                            x2={10 + gIdx * slotWidth}
-                            y2={svgHeight}
-                            stroke="#1e293b"
-                            strokeWidth={1}
-                            strokeDasharray="2,3"
-                          />
-                        ))}
-
-                        {/* Baseline */}
-                        {!isBus && <line x1={10} y1={yLow} x2={svgWidth - 10} y2={yLow} stroke="#334155" strokeWidth={1} />}
-
-                        {/* Waveform Fill Area under the 1 runs */}
-                        {segs
-                          .filter((sg) => !isBus && sg.v === 1)
-                          .map((sg, k) => (
-                            <rect key={`a${k}`} x={sg.x0} y={yHigh} width={sg.x1 - sg.x0} height={yLow - yHigh} fill={channel.color} opacity={0.15} />
-                          ))}
-
-                        {/* Bus rows: one hexagon per run of equal values with its hex text; E red, x orange */}
-                        {isBus &&
-                          segs.map((sg, k) => {
-                            const bits = sg.bits ?? [];
-                            const kind = waveBusKind(bits);
-                            const col = kind === 'E' ? WAVE_ERROR_FILL : kind === 'X' ? WAVE_UNKNOWN_FILL : channel.color;
-                            const slope = Math.min(4, (sg.x1 - sg.x0) / 2);
-                            const yMid = (yHigh + yLow) / 2;
-                            const text = waveBusText(bits);
-                            return (
-                              <g key={`b${k}`}>
-                                <polygon
-                                  points={`${sg.x0},${yMid} ${sg.x0 + slope},${yHigh} ${sg.x1 - slope},${yHigh} ${sg.x1},${yMid} ${sg.x1 - slope},${yLow} ${sg.x0 + slope},${yLow}`}
-                                  fill={col}
-                                  fillOpacity={kind === 'ok' ? 0.15 : 0.55}
-                                  stroke={col}
-                                  strokeWidth={1.5}
-                                />
-                                {sg.x1 - sg.x0 >= text.length * 6.5 + 8 && (
-                                  <text
-                                    x={(sg.x0 + sg.x1) / 2}
-                                    y={yMid + 3.5}
-                                    textAnchor="middle"
-                                    className={`text-[10px] font-mono font-extrabold select-none ${kind === 'ok' ? 'fill-slate-100' : 'fill-slate-950'}`}
-                                  >
-                                    {text}
-                                  </text>
-                                )}
-                                <title>{`${channel.name}: ${bitsToString(bits)} = 0x${text}`}</title>
-                              </g>
-                            );
-                          })}
-
-                        {/* x / z / E runs */}
-                        {segs
-                          .filter((sg) => !isBus && sg.v !== 0 && sg.v !== 1)
-                          .map((sg, k) => (
-                            <g key={`u${k}`}>
-                              <rect
-                                x={sg.x0}
-                                y={yHigh}
-                                width={sg.x1 - sg.x0}
-                                height={yLow - yHigh}
-                                fill={sg.v === 'E' ? WAVE_ERROR_FILL : WAVE_UNKNOWN_FILL}
-                                fillOpacity={0.55}
-                                stroke={sg.v === 'E' ? WAVE_ERROR_FILL : WAVE_UNKNOWN_FILL}
-                                strokeWidth={1.5}
-                              />
-                              {sg.x1 - sg.x0 >= 14 && (
-                                <text
-                                  x={(sg.x0 + sg.x1) / 2}
-                                  y={(yHigh + yLow) / 2 + 3.5}
-                                  textAnchor="middle"
-                                  className="text-[10px] font-mono font-extrabold fill-slate-950 select-none"
-                                >
-                                  {waveSymbol(sg.v)}
-                                </text>
-                              )}
-                            </g>
-                          ))}
-
-                        {/* Waveform Stroke Line */}
-                        {pathD && (
-                          <path
-                            d={pathD}
-                            fill="none"
-                            stroke={channel.color}
-                            strokeWidth={2.2}
-                            strokeLinecap="square"
-                            strokeLinejoin="miter"
-                            filter="drop-shadow(0 0 3px rgba(6, 182, 212, 0.4))"
-                          />
-                        )}
-                      </svg>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* Time axis scale at bottom */}
-              <div className="flex items-center gap-3 pt-1 text-[10px] font-mono text-slate-500 pl-40">
-                <span>← Zaman / Örnek Döngüsü (t₋ₙ → t₀)</span>
-                <span>• Slot Genişliği: 24px/döngü</span>
-              </div>
-            </div>
-          )}
-        </div>
+        <ChronogramPanel
+          signals={chronoSignals}
+          samples={chronoLog.samples}
+          paused={isWaveformPaused}
+          clocks={chronoProbe.clocks}
+          clockKey={chronoProbe.clockKey}
+          limit={chronoLimit}
+          onTogglePause={() => setIsWaveformPaused(!isWaveformPaused)}
+          onClear={() => setChronoLog(recordChrono(emptyChronoLog(chronoProbe.clockKey), chronoProbe.values, chronoProbe.clockKey, chronoLimit))}
+          onExportVCD={handleExportVCD}
+          onClose={() => setShowWaveform(false)}
+          onClockChange={setChronoClockChoice}
+          onLimitChange={(n) => {
+            setChronoLimit(n);
+            setChronoLog((prev) => limitChrono(prev, n));
+          }}
+        />
       )}
 
       {/* Truth Table Modal */}

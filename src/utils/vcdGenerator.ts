@@ -30,15 +30,16 @@ function vcdIdentifier(index: number): string {
  */
 export function generateVCD(
   samples: WaveformSample[],
-  components: CircuitComponentInstance[]
+  components: CircuitComponentInstance[],
+  /** the signals to dump, in this order; unset = every key seen in any sample, in first-seen order */
+  only?: string[]
 ): string {
   const now = new Date().toISOString();
   const compById = new Map(components.map((c) => [c.id, c]));
 
-  // Every key seen in any sample, in first-seen order
-  const keys: string[] = [];
+  const keys: string[] = only ? [...new Set(only)] : [];
   const seen = new Set<string>();
-  for (const s of samples) {
+  if (!only) for (const s of samples) {
     for (const k of Object.keys(s.values)) {
       if (!seen.has(k)) {
         seen.add(k);
