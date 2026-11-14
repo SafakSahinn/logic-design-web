@@ -29,6 +29,8 @@ import {
   TTY_DEFAULT_ROWS,
   ttyScreen,
   getIo5Config,
+  getVideoConfig,
+  VIDEO_COLOR_MODELS,
   binToBcdBits,
   KEYPAD_DEFAULT_CUSTOM,
   pinKey,
@@ -54,6 +56,11 @@ import {
   LOGISIM_IO5C_NAME,
   logisimColor,
   logisimIo5cPorts,
+  LOGISIM_VIDEO_CURSOR,
+  LOGISIM_VIDEO_NAME,
+  LOGISIM_VIDEO_RESET,
+  logisimVideoBounds,
+  logisimVideoPorts,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
@@ -132,7 +139,16 @@ type Prim =
   // A real Logisim memory part (classic look); nets / widths / sinks in memPorts order
   | { kind: 'mem'; part: ComponentType; attrs: string; length: number; parallel: boolean; nets: string[]; widths: number[]; sinks: boolean[] }
   // A real Logisim RAM / ROM / random generator; its connection points relative to loc
-  | { kind: 'ram'; part: ComponentType; attrs: string; ports: Array<{ off: Pt; net: string; width: number; sink: boolean }>; lib?: number; name?: string };
+  // (box: a body reaching beyond its points, relative to loc, kept clear of the other parts)
+  | {
+      kind: 'ram';
+      part: ComponentType;
+      attrs: string;
+      ports: Array<{ off: Pt; net: string; width: number; sink: boolean }>;
+      lib?: number;
+      name?: string;
+      box?: { x0: number; y0: number; x1: number; y1: number };
+    };
 
 interface Pt {
   x: number;
@@ -421,6 +437,36 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             if (scr.cursorRow > 0 || scr.rows.some((r) => r !== ''))
               warnings.push(`${label}: ekrandaki yazı dosyaya yazılmadı (Logisim saklamaz), dosya açılınca ekran boş.`);
           }
+          break;
+        }
+        case 'rgbVideo': {
+          // Evolution's RGB Video (lib 5 I/O, 2.7.1 has none): no facing, so written unrotated with a tunnel on each
+          // pin's point; only the settings that differ from evolution's defaults (it leaves those out). Its body
+          // (above loc) is kept clear of the other parts.
+          const cfg = getVideoConfig(c);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${xmlEsc(String(val))}"/>`;
+          let attrs = '';
+          // in evolution's order (it writes attributes sorted by name)
+          if (cfg.color !== 'rgb888') attrs += a('color', VIDEO_COLOR_MODELS.find((m) => m.id === cfg.color)!.circ);
+          if (!cfg.cursor) attrs += a('cursor', LOGISIM_VIDEO_CURSOR[1]);
+          if (cfg.height !== 128) attrs += a('height', cfg.height);
+          if (cfg.reset === 'sync') attrs += a('reset', LOGISIM_VIDEO_RESET[1]);
+          if (cfg.scale !== 2) attrs += a('scale', cfg.scale);
+          if (cfg.width !== 128) attrs += a('width', cfg.width);
+          const byKey = new Map(c.inputs.map((p) => [pinKey(c, p), p]));
+          const ports = logisimVideoPorts().map(({ key, off }) => {
+            const p = byKey.get(key);
+            return { off, net: p ? pinNet(p.id) : OPEN, width: p?.width ?? 1, sink: true };
+          });
+          const b = logisimVideoBounds(cfg);
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: 5, name: LOGISIM_VIDEO_NAME, box: { x0: b.x, y0: b.y, x1: b.x + b.width, y1: 0 } });
+          if ((c.rotation ?? 0) % 360 !== 0)
+            warnings.push(`${label}: Logisim'deki parçanın yönü yok; döndürülmeden yazıldı (bağlantılar aynı).`);
+          warnings.push(`${label}: Logisim-evolution parçası (RGB Video); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          if (c.label?.trim() && c.label.trim() !== 'RGB Video')
+            warnings.push(`${label}: Logisim'deki RGB Video'nun etiketi yok; etiket dosyaya yazılmadı.`);
+          if (Object.values(c.state.videoPages ?? {}).some((pg) => pg.some((v) => v)))
+            warnings.push(`${label}: ekrandaki görüntü dosyaya yazılmadı (Logisim saklamaz), dosya açılınca ekran siyah.`);
           break;
         }
         case 'led':
@@ -1212,7 +1258,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
       }
       if (p.kind === 'ram') {
-        const ys = p.ports.map((q) => q.off.y);
+        const ys = [...p.ports.map((q) => q.off.y), ...(p.box ? [p.box.y0, p.box.y1] : [])];
         return Math.ceil((Math.max(...ys, 0) - Math.min(...ys, 0) + 40) / CELL_H);
       }
       return 1;
@@ -1221,7 +1267,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     // width needs (an ordinary part reaches up to 150 left of its cell's x)
     const ramSpan = (p: Prim) => {
       if (p.kind !== 'ram') return { cols: 1, shift: 0 };
-      const xs = p.ports.map((q) => q.off.x);
+      const xs = [...p.ports.map((q) => q.off.x), ...(p.box ? [p.box.x0, p.box.x1] : [])];
       const right = Math.max(...xs, 0);
       const span = right - Math.min(...xs, 0);
       const cols = 1 + Math.ceil(Math.max(0, span - 150) / CELL_W);
@@ -1254,7 +1300,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
                   : p.kind === 'mem'
                     ? -Math.min(0, ...memPorts(p.part, p.length, p.parallel).map((o) => o.off.y)) + 10
                     : p.kind === 'ram'
-                      ? -Math.min(0, ...p.ports.map((q) => q.off.y)) + 10
+                      ? -Math.min(0, ...p.ports.map((q) => q.off.y), p.box?.y0 ?? 0) + 10
                       : extraRows * 50;
         const cols = colsOf(p);
         if (cols > 1 && (cell % PER_ROW) + cols > PER_ROW) cell += PER_ROW - (cell % PER_ROW);

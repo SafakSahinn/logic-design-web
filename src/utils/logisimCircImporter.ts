@@ -24,6 +24,12 @@ import {
   configureBfh,
   configureIo5c,
   IO5C_TYPES,
+  configureVideo,
+  type VideoConfig,
+  VIDEO_COLOR_MODELS,
+  VIDEO_SCALE_MAX,
+  VIDEO_SIZE_MAX,
+  VIDEO_SIZE_MIN,
   type Io5cConfig,
   KEYBOARD_BUFFER_MAX,
   KEYBOARD_DEFAULT_BUFFER,
@@ -148,7 +154,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'keyboard') return 'keyboard';
   if (n === 'tty') return 'tty';
   if (n === 'telnet') return 'telnet';
-  if (n.includes('rgb') || n.includes('video') || n.includes('screen')) return 'rgbMatrix16x16';
+  // Evolution's RGB Video of Aşama 5d (2.7.1 has none)
+  if (n === 'rgb video') return 'rgbVideo';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
 
   // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
@@ -1125,6 +1132,76 @@ export function logisimIo5cSettings(
   return { cfg, state, ports: logisimIo5cPorts(type), notes };
 }
 
+// ---- Aşama 5d part (evolution's std/io RGB Video) ----
+
+/** Logisim-evolution part name of the RGB video screen (I/O library) */
+export const LOGISIM_VIDEO_NAME = 'RGB Video';
+
+/**
+ * Connection points of evolution's RGB Video relative to its loc (= RST), with our pin keys: RST, CLK, WE, X, Y, DATA
+ * along the bottom edge at x = 0, 10, 20, 40, 50, 60. No facing; the points do not depend on the settings.
+ */
+export function logisimVideoPorts(): Array<{ key: string; off: Pt }> {
+  return [
+    { key: 'rst', off: { x: 0, y: 0 } },
+    { key: 'clk', off: { x: 10, y: 0 } },
+    { key: 'we', off: { x: 20, y: 0 } },
+    { key: 'x', off: { x: 40, y: 0 } },
+    { key: 'y', off: { x: 50, y: 0 } },
+    { key: 'data', off: { x: 60, y: 0 } },
+  ];
+}
+
+/** Evolution's RGB Video body relative to its loc: bounds (-30, -bh, bw, bh), bw = max(scale * width + 14, 100), bh = max(scale * height + 14, 20) */
+export function logisimVideoBounds(cfg: Pick<VideoConfig, 'width' | 'height' | 'scale'>): { x: number; y: number; width: number; height: number } {
+  const width = Math.max(cfg.scale * cfg.width + 14, 100);
+  const height = Math.max(cfg.scale * cfg.height + 14, 20);
+  return { x: -30, y: -height, width, height };
+}
+
+/** Evolution's option texts of the cursor and reset attributes (the first one is the default) */
+export const LOGISIM_VIDEO_CURSOR = ['Blinking Dot', 'No Cursor'] as const;
+export const LOGISIM_VIDEO_RESET = ['Asynchronous', 'Synchronous'] as const;
+
+/**
+ * Settings of an RGB Video from its evolution attributes. A missing attribute is evolution's default (left out of
+ * the file): blinking cursor, asynchronous reset, 888 RGB, 128 x 128, scale 2. The resolution choice is not saved
+ * (evolution derives it from width / height); the image is not saved either.
+ */
+export function logisimVideoSettings(attr: Record<string, string>): { cfg: VideoConfig; ports: Array<{ key: string; off: Pt }>; notes: string[] } {
+  const notes: string[] = [];
+  const int = (name: string, what: string, dflt: number, min: number, max: number): number => {
+    const v = attr[name];
+    if (v === undefined) return dflt;
+    const n = /^-?\d+$/.test(v.trim()) ? parseInt(v, 10) : NaN;
+    if (!Number.isFinite(n)) {
+      notes.push(`${what} "${v}" okunamadı, varsayılan ${dflt} alındı.`);
+      return dflt;
+    }
+    const c = Math.max(min, Math.min(max, n));
+    if (c !== n) notes.push(`${what} ${n}; ${min}-${max} aralığında olmalı, ${c} alındı.`);
+    return c;
+  };
+  const option = <T extends string>(name: string, what: string, opts: readonly T[]): T => {
+    const v = attr[name];
+    if (v === undefined || opts.includes(v as T)) return (v as T) ?? opts[0];
+    notes.push(`${what} "${v}" tanınmadı, varsayılan "${opts[0]}" alındı.`);
+    return opts[0];
+  };
+  const cursor = option('cursor', 'imleç', LOGISIM_VIDEO_CURSOR);
+  const reset = option('reset', 'sıfırlama', LOGISIM_VIDEO_RESET);
+  const colorText = option('color', 'renk modeli', VIDEO_COLOR_MODELS.map((m) => m.circ));
+  const cfg: VideoConfig = {
+    color: VIDEO_COLOR_MODELS.find((m) => m.circ === colorText)!.id,
+    reset: reset === 'Synchronous' ? 'sync' : 'async',
+    cursor: cursor !== 'No Cursor',
+    width: int('width', 'genişlik', 128, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX),
+    height: int('height', 'yükseklik', 128, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX),
+    scale: int('scale', 'ölçek', 2, 1, VIDEO_SCALE_MAX),
+  };
+  return { cfg, ports: logisimVideoPorts(), notes };
+}
+
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
   const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
   const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
@@ -1541,7 +1618,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType))
+      // (the RGB Video's width is its screen width in pixels, not a bit width)
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
@@ -1570,6 +1648,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? logisimBfhSettings(nativeType, attr).ports.map((p) => p.off)
                 : IO5C_TYPES.has(nativeType)
                 ? logisimIo5cPorts(nativeType).map((p) => p.off)
+                : nativeType === 'rgbVideo'
+                ? logisimVideoPorts().map((p) => p.off)
                 : IO5_TYPES.has(nativeType)
                 ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
@@ -1929,6 +2009,26 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           idOf(first.key)!,
           at(loc, first.off),
           nativeType === 'telnet' ? label : undefined,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
+        continue;
+      }
+      if (nativeType === 'rgbVideo') {
+        // Evolution's RGB Video (no facing, no label): every pin on its connection point, our part unrotated, the
+        // screen black (evolution keeps no image in the file)
+        const st = logisimVideoSettings(attr);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        const inst = configureVideo(createComponentInstance('rgbVideo', 0, 0), st.cfg);
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const first = st.ports[0];
+        place(
+          inst,
+          idOf(first.key)!,
+          at(loc, first.off),
+          undefined,
           st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
             const id = idOf(k);
             return id ? [[id, at(loc, off)]] : [];
