@@ -28,6 +28,14 @@ import {
   configureIo5c,
   getIo5cConfig,
   type Io5cConfig,
+  configureVideo,
+  getVideoConfig,
+  type VideoConfig,
+  VIDEO_COLOR_MODELS,
+  VIDEO_RESOLUTIONS,
+  VIDEO_SIZE_MIN,
+  VIDEO_SIZE_MAX,
+  VIDEO_SCALE_MAX,
   KEYBOARD_BUFFER_MAX,
   TTY_ROWS_MAX,
   TTY_COLS_MAX,
@@ -912,6 +920,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       // evolution's Telnet has a trigger attribute but always acts on the rising edge, so it is not offered
       list.push(telnetPortAttr, telnetBufLenAttr, telnetModeAttr);
       break;
+    case 'rgbVideo':
+      list.push(videoResolutionAttr, videoWidthAttr, videoHeightAttr, videoColorAttr, videoResetAttr, videoCursorAttr, videoScaleAttr);
+      break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
@@ -1349,6 +1360,116 @@ const telnetModeAttr: AttrDef = {
   ],
   get: (c) => (getIo5cConfig(c).telnetMode ? 'on' : 'off'),
   set: (c, v) => reconfigureIo5c(c, { telnetMode: v === 'on' }),
+};
+
+// ---- RGB Video of Aşama 5d: a new size or scale moves the pins along the bottom edge (the top-left corner stays,
+// the pins keep their ids so their wires follow); a new colour model only changes DATA's width; reset and cursor
+// change nothing on the outside
+function reconfigureVideo(c: CircuitComponentInstance, patch: Partial<VideoConfig>): AttrEdit | null {
+  const cur = getVideoConfig(c);
+  if ((Object.keys(patch) as (keyof VideoConfig)[]).every((k) => cur[k] === patch[k])) return null;
+  let next = configureVideo(c, patch);
+  // a new size picks the matching list entry again (evolution adjustResolution)
+  if (('width' in patch || 'height' in patch) && next.state.videoCustom) next = { ...next, state: { ...next.state, videoCustom: undefined } };
+  if (!('width' in patch || 'height' in patch || 'scale' in patch || 'color' in patch)) return { comp: next, stateOnly: true };
+  return { comp: next };
+}
+
+/** Resolution choice: one of evolution's list or 'custom' (any other size; evolution "Custom") */
+const videoResolutionOf = (c: CircuitComponentInstance): string => {
+  const { width, height } = getVideoConfig(c);
+  return !c.state.videoCustom && VIDEO_RESOLUTIONS.some(([w, h]) => w === width && h === height) ? `${width}x${height}` : 'custom';
+};
+
+const videoResolutionAttr: AttrDef = {
+  key: 'videoResolution',
+  label: 'Çözünürlük',
+  kind: 'select',
+  title: `Ekranın piksel boyutu (Logisim-evolution "Resolution"); "Özel" ile genişlik ve yükseklik ayrı ayrı ${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX} seçilir. X ve Y girişleri boyuta yetecek kadar bit alır; boyut değişince iki boyutta da kalan pikseller korunur`,
+  options: [
+    ...VIDEO_RESOLUTIONS.map(([w, h]) => ({ value: `${w}x${h}`, label: `${w} × ${h}` })),
+    { value: 'custom', label: 'Özel' },
+  ],
+  get: videoResolutionOf,
+  set: (c, v) => {
+    if (v === videoResolutionOf(c)) return null;
+    // "Custom" keeps the size and offers the width / height fields
+    if (v === 'custom') return withState(c, { videoCustom: true });
+    const [w, h] = String(v).split('x').map(Number);
+    const base = c.state.videoCustom ? { ...c, state: { ...c.state, videoCustom: undefined } } : c;
+    return reconfigureVideo(base, { width: w, height: h }) ?? { comp: base, stateOnly: true };
+  },
+};
+
+const videoSizeAttr = (key: 'width' | 'height', label: string): AttrDef => ({
+  key: key === 'width' ? 'videoWidth' : 'videoHeight',
+  label,
+  kind: 'int',
+  title: `Ekranın ${key === 'width' ? 'genişliği' : 'yüksekliği'} piksel olarak (${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX}, Logisim-evolution "Custom ${key === 'width' ? 'Width' : 'Height'}")`,
+  visible: (c) => videoResolutionOf(c) === 'custom',
+  get: (c) => getVideoConfig(c)[key],
+  set: (c, v) => reconfigureVideo(c, { [key]: Math.min(VIDEO_SIZE_MAX, Math.max(VIDEO_SIZE_MIN, Math.round(Number(v)))) }),
+});
+const videoWidthAttr = videoSizeAttr('width', 'Genişlik');
+const videoHeightAttr = videoSizeAttr('height', 'Yükseklik');
+
+const VIDEO_COLOR_LABELS: Record<string, string> = {
+  rgb888: '24 bit RGB (8-8-8)',
+  rgb555: '15 bit RGB (5-5-5)',
+  rgb565: '16 bit RGB (5-6-5)',
+  rgb444: '12 bit RGB (4-4-4)',
+  rgb111: '8 renk (3 bit: R G B)',
+  atari: 'Atari 2600 (7 bit)',
+  xterm16: 'XTerm16 (4 bit)',
+  xterm256: 'XTerm256 (8 bit)',
+  gray4: 'Gri tonlar (4 bit)',
+  vga256: 'VGA256 (8 bit)',
+};
+
+const videoColorAttr: AttrDef = {
+  key: 'videoColor',
+  label: 'Renk modeli',
+  kind: 'select',
+  title: 'DATA girişinin bir pikseli nasıl tarif ettiği (Logisim-evolution "Color Model"); DATA bu modelin bit sayısı kadar geniştir. Doğrudan modellerde en yüksek alan kırmızı, en düşük mavidir; diğerleri bir renk tablosundan seçer. Ekrandaki pikseller değişmez',
+  options: VIDEO_COLOR_MODELS.map((m) => ({ value: m.id, label: VIDEO_COLOR_LABELS[m.id] ?? m.circ })),
+  get: (c) => getVideoConfig(c).color,
+  set: (c, v) => reconfigureVideo(c, { color: v as VideoConfig['color'] }),
+};
+
+const videoResetAttr: AttrDef = {
+  key: 'videoReset',
+  label: 'Sıfırlama',
+  kind: 'buttons',
+  title: 'RST 1 iken ekranın siyaha dönmesi: hemen (asenkron) ya da yalnız saatin yükselen kenarında WE de 1 iken (senkron) (Logisim-evolution "Reset Behavior")',
+  options: [
+    { value: 'async', label: 'Asenkron' },
+    { value: 'sync', label: 'Senkron' },
+  ],
+  get: (c) => getVideoConfig(c).reset,
+  set: (c, v) => reconfigureVideo(c, { reset: v === 'sync' ? 'sync' : 'async' }),
+};
+
+const videoCursorAttr: AttrDef = {
+  key: 'videoCursor',
+  label: 'İmleç',
+  kind: 'buttons',
+  title: 'Son yazılan (X, Y) konumunda saniyede bir yanıp sönen imleç (Logisim-evolution "Cursor"); rengi DATA girişindeki renktir',
+  options: [
+    { value: 'on', label: 'Açık' },
+    { value: 'off', label: 'Kapalı' },
+  ],
+  get: (c) => (getVideoConfig(c).cursor ? 'on' : 'off'),
+  set: (c, v) => reconfigureVideo(c, { cursor: v === 'on' }),
+};
+
+const videoScaleAttr: AttrDef = {
+  key: 'videoScale',
+  label: 'Ölçek',
+  kind: 'select',
+  title: `Bir pikselin ekranda kaç birim kare olduğu (1-${VIDEO_SCALE_MAX}, Logisim-evolution "Scale"); büyük çözünürlükte gövde çok büyür`,
+  options: numberOptions(1, VIDEO_SCALE_MAX),
+  get: (c) => getVideoConfig(c).scale,
+  set: (c, v) => reconfigureVideo(c, { scale: Number(v) }),
 };
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires

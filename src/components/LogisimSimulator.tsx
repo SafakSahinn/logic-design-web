@@ -85,6 +85,11 @@ import {
   ttyScreen,
   TTY_DEFAULT_BG,
   TTY_DEFAULT_COLOR,
+  getVideoConfig,
+  videoGeometry,
+  videoRgb,
+  VIDEO_PAGE_SIZE,
+  VIDEO_COLOR_MODELS,
   setJoystick,
   setKeypadKey,
   keypadLabels,
@@ -274,6 +279,39 @@ const pinWaveValue = (p: CircuitPin | undefined): WaveformValue => {
   return p?.value ?? 'Z';
 };
 
+// RGB video image as a PNG data URL, one <image> instead of a rect per pixel (1920 x 1080 stays fast). Pages are
+// copy on write, so the pages object identifies the picture; cached per pages object and size.
+const videoImageCache = new WeakMap<Record<string, number[]>, { w: number; h: number; url: string }>();
+const videoImageUrl = (pages: Record<string, number[]> | undefined, w: number, h: number): string | null => {
+  if (!pages || typeof document === 'undefined') return null;
+  const hit = videoImageCache.get(pages);
+  if (hit && hit.w === w && hit.h === h) return hit.url;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const img = ctx.createImageData(w, h);
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = 255;
+  const n = w * h;
+  for (const [k, page] of Object.entries(pages)) {
+    const base = Number(k) * VIDEO_PAGE_SIZE;
+    for (let j = 0; j < page.length; j++) {
+      const rgb = page[j];
+      const i = base + j;
+      if (!rgb || i >= n) continue;
+      d[i * 4] = (rgb >> 16) & 255;
+      d[i * 4 + 1] = (rgb >> 8) & 255;
+      d[i * 4 + 2] = rgb & 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const url = canvas.toDataURL('image/png');
+  videoImageCache.set(pages, { w, h, url });
+  return url;
+};
+
 // Header cells over the truth-table columns: one spanning the bits of each wide part (A[7..0]), an
 // empty one over each run of 1-bit columns
 const truthColumnGroups = (cols: TruthTableData['inputs']): { label: string; span: number }[] => {
@@ -344,7 +382,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
-  rgbMatrix16x16: { label: '16x16 RGB Matris', badge: 'GPU' },
+  rgbMatrix16x16: { label: '16x16 RGB Matris (eski)', badge: 'GPU' },
+  rgbVideo: { label: 'RGB Video', badge: 'VGA' },
   asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
   keyboard: { label: 'Klavye', badge: 'KBD' },
   tty: { label: 'Metin Terminali', badge: 'TTY' },
@@ -4092,7 +4131,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setClockHz(targetHz);
       setIsRunning(true);
       const isGpu = preset.id === 'rgb_matrix_gpu_painter';
-      showToast(isGpu ? `RGB VRAM Ekranı Yüklendi! Hız: ${targetHz} Hz (GPU Çiziyor 🎨)` : `Müzik Kiti Yüklendi! Tempo: ${targetHz} Hz (Çalıyor 🎵)`);
+      showToast(isGpu ? `RGB Video Ekranı Yüklendi! Hız: ${targetHz} Hz (Çiziyor 🎨)` : `Müzik Kiti Yüklendi! Tempo: ${targetHz} Hz (Çalıyor 🎵)`);
     }
   };
 
@@ -5439,6 +5478,46 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {pinText(74, 80, 'av', 'end')}
             {pinText(74, 100, 'rd', 'end')}
             <title>{`TCP port ${cfg.telnetPort}; tamponda ${waiting} bayt bekliyor${cfg.telnetMode ? '; telnet anlaşması açık' : ''}`}</title>
+          </g>
+        );
+      }
+
+      case 'rgbVideo': {
+        // Logisim-evolution Video.paintInstance (x2): rounded box, the screen frame 12 in and the image 14 in at
+        // 2 * scale units per pixel, the clock triangle at CLK pointing in, and the blinking cursor (1 s on, 1 s off,
+        // evolution blink()) on the last (X, Y) in the colour on DATA. Pin names are ours (evolution: tooltips only).
+        const cfg = getVideoConfig(comp);
+        const { width: W, height: H, pins } = videoGeometry(cfg);
+        const px = 2 * cfg.scale;
+        const SW = px * cfg.width;
+        const SH = px * cfg.height;
+        const url = videoImageUrl(comp.state.videoPages, cfg.width, cfg.height);
+        const vx = comp.state.videoX ?? -1;
+        const vy = comp.state.videoY ?? -1;
+        const showCursor = cfg.cursor && vx >= 0 && vx < cfg.width && vy >= 0 && vy < cfg.height;
+        const model = VIDEO_COLOR_MODELS.find((m) => m.id === cfg.color)?.circ ?? cfg.color;
+        const label = (key: string, t: string) => (
+          <text key={key} x={pins[key].x} y={H - 4} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 8, fontFamily: 'sans-serif' }} className="select-none">
+            {t}
+          </text>
+        );
+        return (
+          <g>
+            <rect x={0} y={0} width={W} height={H} rx={6} fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <rect x={12} y={12} width={SW + 4} height={SH + 4} fill="#000000" stroke={io5Stroke} strokeWidth={2} />
+            {url && <image href={url} x={14} y={14} width={SW} height={SH} preserveAspectRatio="none" style={{ imageRendering: 'pixelated' }} />}
+            {showCursor && (
+              <rect x={14 + vx * px} y={14 + vy * px} width={px} height={px} fill={`#${videoRgb(cfg.color, comp.state.videoData ?? -1).toString(16).padStart(6, '0')}`}>
+                <animate attributeName="opacity" values="1;0" dur="2s" calcMode="discrete" repeatCount="indefinite" />
+              </rect>
+            )}
+            <path d={`M${pins.clk.x - 6} ${H}L${pins.clk.x} ${H - 8}L${pins.clk.x + 6} ${H}`} fill="none" stroke={io5Stroke} strokeWidth={2} />
+            {label('rst', 'RST')}
+            {label('we', 'WE')}
+            {label('x', 'X')}
+            {label('y', 'Y')}
+            {label('data', 'DATA')}
+            <title>{`${cfg.width} × ${cfg.height} piksel, ${model}, ölçek ${cfg.scale}; son yazılan (${vx < 0 ? '?' : vx}, ${vy < 0 ? '?' : vy})`}</title>
           </g>
         );
       }
@@ -6790,7 +6869,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbMatrix16x16', 'textLabel'] as ComponentType[],
+      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel'] as ComponentType[],
     },
     {
       id: 'audio',

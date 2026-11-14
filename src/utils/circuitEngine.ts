@@ -5921,36 +5921,44 @@ function asciiKeyboardPreset(): CircuitPreset {
 }
 
 function rgbMatrixPreset(): CircuitPreset {
+  // Logisim-evolution RGB Video, 16 x 16 pixels at scale 8 in the 8-colour model (DATA bit 2 = R, 1 = G, 0 = B):
+  // the X / Y counters drive the 4-bit X / Y inputs directly and every clock edge paints (X, Y) in the switch colour
   const clk = busPart('clock', 40, 60, 'Piksel Saati (CLK)', 'clk_gpu', { state: { frequencyHz: 8 } });
   const cx = busPart('counter', 180, 60, 'X-Koordinat Sayacı', 'cnt_x', { configure: (c) => configureMem(c, { width: 4 }) });
   const cy = busPart('counter', 180, 240, 'Y-Koordinat Sayacı', 'cnt_y', { configure: (c) => configureMem(c, { width: 4 }) });
   const we = busPart('vcc', 40, 340, 'Yazma İzni (WE=1)', 'vcc_we');
+  const rst = busPart('pushbutton', 40, 640, 'Ekranı Temizle (RST)', 'btn_rst');
   const r = busPart('switch', 40, 410, 'Kırmızı Renk (R)', 'sw_r', { state: { on: true } });
   const g = busPart('switch', 40, 480, 'Yeşil Renk (G)', 'sw_g');
   const b = busPart('switch', 40, 550, 'Mavi Renk (B)', 'sw_b', { state: { on: true } });
-  const scr = busPart('rgbMatrix16x16', 500, 60, '16x16 RGB Video Matrisi', 'gpu_screen');
+  const scr = busPart('rgbVideo', 500, 40, '16x16 RGB Video Ekranı', 'gpu_screen', {
+    configure: (c) => configureVideo(c, { width: 16, height: 16, scale: 8, color: 'rgb111' }),
+    // the pins and their wires leave along the bottom edge
+    state: { labelPos: 'top' },
+  });
   const { wires, link } = busWires();
   link(clk, clk.outputs[0], cx, pk(cx, 'clk'));
   link(clk, clk.outputs[0], cy, pk(cy, 'clk'));
+  link(clk, clk.outputs[0], scr, pk(scr, 'clk'));
   // Y counts once per line: only on the clock edge where X wraps from 15 to 0 (X's carry = 1 at 15)
   link(cx, pk(cx, 'carry'), cy, pk(cy, 'ct'));
-  const sx = splitBits(link, 'split_x', 'X bitleri', 360, 60, 4, [cx, pk(cx, 'q')]);
-  const sy = splitBits(link, 'split_y', 'Y bitleri', 360, 240, 4, [cy, pk(cy, 'q')]);
-  for (let i = 0; i < 4; i++) {
-    link(sx, sx.outputs[i], scr, pk(scr, `inX${i}`));
-    link(sy, sy.outputs[i], scr, pk(scr, `inY${i}`));
-  }
-  link(we, we.outputs[0], scr, pk(scr, 'inWE'));
-  link(r, r.outputs[0], scr, pk(scr, 'inR'));
-  link(g, g.outputs[0], scr, pk(scr, 'inG'));
-  link(b, b.outputs[0], scr, pk(scr, 'inB'));
+  link(cx, pk(cx, 'q'), scr, pk(scr, 'x'));
+  link(cy, pk(cy, 'q'), scr, pk(scr, 'y'));
+  const rgb = joinBits(link, 'join_rgb', 'Renk (R G B)', 300, 480, [
+    [b, b.outputs[0]],
+    [g, g.outputs[0]],
+    [r, r.outputs[0]],
+  ]);
+  link(rgb, rgb.inputs[0], scr, pk(scr, 'data'));
+  link(we, we.outputs[0], scr, pk(scr, 'we'));
+  link(rst, rst.outputs[0], scr, pk(scr, 'rst'));
   return {
     id: 'rgb_matrix_gpu_painter',
-    name: '16x16 RGB VRAM Renkli Video Ekranı Kiti',
+    name: '16x16 RGB Video Ekranı Kiti',
     category: 'music_graphics',
     description:
-      "X ve Y koordinat sayaçları, RGB renk seçici ve Yazma İzni (WE) ile 256 piksellik renkli grafik ekranına çizim yapan GPU gösterim devresi. İki sayaç aynı saatle çalışır; X'in elde çıkışı (X = 15) Y'nin sayma iznine bağlı olduğu için Y her satır sonunda bir artar (senkron sayaç zinciri).",
-    components: [clk, cx, cy, sx, sy, we, r, g, b, scr],
+      "X ve Y koordinat sayaçları, RGB renk anahtarları ve Yazma İzni (WE) ile 16x16 piksellik RGB Video ekranına çizim yapan devre. Ekran 8 renk modelindedir: üç anahtar bir splitter'la 3 bitlik DATA'yı kurar (bit 2 kırmızı, bit 1 yeşil, bit 0 mavi). Her saat kenarında (X, Y) pikseli seçilen renge boyanır; X'in elde çıkışı (X = 15) Y'nin sayma iznine bağlı olduğu için Y her satır sonunda bir artar (senkron sayaç zinciri). Anahtarları değiştirip ekranı yeni renkle yeniden boyatın; düğme ekranı siyaha döndürür.",
+    components: [clk, cx, cy, we, rst, r, g, b, rgb, scr],
     wires,
   };
 }

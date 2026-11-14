@@ -363,6 +363,9 @@ export interface CircuitComponentInstance {
     videoWidth?: number;
     videoHeight?: number;
     videoScale?: number;
+    /** RGB video: "Custom" chosen in the resolution list while the size is one of the listed ones (evolution keeps
+     * that choice in an unsaved attribute; it only decides whether the width / height fields are offered) */
+    videoCustom?: boolean;
     /** RGB video: the image, 0xRRGGBB per pixel (index y * width + x) in pages of 1024; unset page / pixel = black */
     videoPages?: Record<string, number[]>;
     /** RGB video, set by the simulator: the X, Y and data values last read (-1 = undefined), for the cursor */
