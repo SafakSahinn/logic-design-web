@@ -2,10 +2,11 @@
 // current values on the left, the waveforms of every selected signal on one shared time axis on the right.
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Maximize2, Pause, Play, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { bitsToString, formatBits, type Radix, type SignalValue } from '../types/logic';
-import type { WaveformSample } from '../utils/vcdGenerator';
+import { bitsToString, type Radix, type SignalValue } from '../types/logic';
+import type { WaveformSample, WaveformValue } from '../utils/vcdGenerator';
 import {
   CHRONO_LIMITS,
+  chronoValueText,
   CHRONO_ZOOM_DEFAULT,
   CHRONO_ZOOM_MAX,
   CHRONO_ZOOM_MIN,
@@ -26,8 +27,7 @@ const WAVE_UNKNOWN_FILL = '#eaaa6c';
 const WAVE_ERROR_FILL = '#f97676';
 // A wide sample as one value: its hex text (x / E digits as Logisim shows them) and the colour class of the bus
 // segment: E if any bit is E, x if any bit is undefined / floating, else a normal value
-const waveBusText = (bits: SignalValue[], radix: Radix = '16'): string =>
-  radix === '16' ? formatBits(bits, '16').toUpperCase().replace(/X/g, 'x') : formatBits(bits, radix);
+const waveBusText = (bits: SignalValue[], radix: Radix = '16'): string => chronoValueText(bits, radix);
 
 // Display bases of wide signals (evolution RadixOption), as named in the signal's right-click menu
 const RADIX_OPTIONS: [Radix, string][] = [
@@ -226,6 +226,136 @@ function ValueBadge({ raw, radix = '16' }: { raw: SignalValue | SignalValue[] | 
   );
 }
 
+// Value table (Logisim 2.7.1 log TablePanel; evolution 5.0.0 has none): one row per time slot of the chronogram, a
+// column per selected signal in its display base. Rows are windowed, so an unlimited history stays fast.
+const TABLE_ROW_H = 24;
+const TABLE_HEAD_H = 28;
+const TABLE_VIEW_H = 360;
+
+const cellClass = (v: WaveformValue | undefined): string => {
+  const kind = v === undefined ? 'none' : Array.isArray(v) ? waveBusKind(v) : v === 'E' ? 'E' : v === 0 || v === 1 ? 'ok' : 'X';
+  if (kind === 'E') return 'text-red-400 font-bold';
+  if (kind === 'X') return 'text-orange-300';
+  if (kind === 'none') return 'text-slate-600';
+  return v === 1 ? 'text-emerald-400' : 'text-slate-200';
+};
+
+function ChronoTable({
+  signals,
+  samples,
+  radixOf,
+  cursor,
+  onCursor,
+  onRadixMenu,
+}: {
+  signals: ChronoSignal[];
+  samples: WaveformSample[];
+  radixOf: (key: string) => Radix;
+  cursor: number | null;
+  onCursor: (t: number) => void;
+  /** right-click on the header of a wide signal: its display base menu */
+  onRadixMenu: (key: string, x: number, y: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // follow the newest row while the view is at the bottom (like the chronogram follows the right end)
+  const atEndRef = useRef(true);
+  const [scrollTop, setScrollTop] = useState(0);
+  const rows = samples.length;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && atEndRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setScrollTop(el.scrollTop);
+    }
+  }, [rows, samples[0]?.time]);
+  // keep a row picked on the chronogram in view
+  const t0 = rows > 0 ? samples[0].time : 0;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || cursor === null) return;
+    const y = (cursor - t0) * TABLE_ROW_H;
+    if (y < el.scrollTop || y + TABLE_ROW_H > el.scrollTop + el.clientHeight - TABLE_HEAD_H) {
+      el.scrollTop = Math.max(0, y - (el.clientHeight - TABLE_HEAD_H) / 2);
+      atEndRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    }
+  }, [cursor]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    atEndRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    setScrollTop(el.scrollTop);
+  };
+  const first = Math.max(0, Math.floor(scrollTop / TABLE_ROW_H) - 5);
+  const last = Math.min(rows, first + Math.ceil(TABLE_VIEW_H / TABLE_ROW_H) + 10);
+  // wide enough for the name (up to 220 px) and for the widest value (a wide signal in binary: one digit per bit)
+  const colW = (s: ChronoSignal) => Math.max(64, Math.min(220, s.name.length * 7 + 28), s.width > 1 ? s.width * 8 + 20 : 0);
+  const gridCols = `72px ${signals.map((s) => `${colW(s)}px`).join(' ')}`;
+  return (
+    <div
+      ref={ref}
+      onScroll={onScroll}
+      className="overflow-auto bg-slate-950/70 rounded-2xl border border-slate-800/80"
+      style={{ maxHeight: TABLE_VIEW_H }}
+      id="chrono-table"
+    >
+      <div style={{ minWidth: 'max-content' }}>
+        <div
+          className="grid sticky top-0 z-10 bg-slate-900 border-b border-slate-700 text-[11px] font-bold text-slate-300"
+          style={{ gridTemplateColumns: gridCols, height: TABLE_HEAD_H }}
+        >
+          <div className="px-2 flex items-center text-slate-500" title="Zaman dilimi (diyagramdaki cetvel numarası)">
+            t
+          </div>
+          {signals.map((s) => (
+            <div key={s.key} className="px-2 flex items-center gap-1.5 truncate font-mono" title={s.width > 1 ? `${s.name} (sağ tık: sayı tabanı)` : s.name}
+              data-chrono-col={s.key}
+              onContextMenu={(e) => {
+                if (s.width <= 1) return;
+                e.preventDefault();
+                onRadixMenu(s.key, e.clientX, e.clientY);
+              }}
+            >
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+              <span className="truncate">{s.name}</span>
+            </div>
+          ))}
+        </div>
+        {rows === 0 ? (
+          <div className="p-6 text-center text-slate-500 text-xs font-mono">Henüz kayıt yok.</div>
+        ) : (
+          <div style={{ height: rows * TABLE_ROW_H, position: 'relative' }}>
+            {samples.slice(first, last).map((smp, i) => {
+              const at = cursor === smp.time;
+              return (
+                <div
+                  key={smp.time}
+                  onClick={() => onCursor(smp.time)}
+                  className={`grid absolute left-0 right-0 font-mono text-xs cursor-pointer border-b border-slate-900 ${
+                    at ? 'bg-cyan-950/80 outline outline-1 outline-cyan-600' : 'hover:bg-slate-800/60'
+                  }`}
+                  style={{ gridTemplateColumns: gridCols, top: (first + i) * TABLE_ROW_H, height: TABLE_ROW_H }}
+                  data-chrono-trow={smp.time}
+                  title="Tıkla: diyagram imlecini bu dilime taşı"
+                >
+                  <div className={`px-2 flex items-center ${at ? 'text-cyan-300 font-bold' : 'text-slate-500'}`}>{smp.time}</div>
+                  {signals.map((s) => {
+                    const v = smp.values[s.key];
+                    return (
+                      <div key={s.key} className={`px-2 flex items-center truncate ${cellClass(v)}`}>
+                        {chronoValueText(v, radixOf(s.key))}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TreeLevel({ node, selected, toggle, depth }: { node: ChronoTreeNode; selected: Set<string>; toggle: (k: string) => void; depth: number }) {
   const [open, setOpen] = useState(depth === 0);
   const count = node.signals.filter((s) => selected.has(s.key)).length;
@@ -350,6 +480,8 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   slotsRef.current = slots;
   const lastValues = samples.length > 0 ? samples[samples.length - 1].values : {};
   const [pickerOpen, setPickerOpen] = useState(false);
+  // tab: the waveforms or the value table (both show the same selection and history)
+  const [view, setView] = useState<'wave' | 'table'>('wave');
   // right-click menu of a wide signal: its display base
   const [radixMenu, setRadixMenu] = useState<{ key: string; x: number; y: number } | null>(null);
   const radixOf = (key: string): Radix => props.radix[key] ?? '16';
@@ -367,7 +499,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
       el.scrollLeft = Math.max(0, a.t * chronoTickWidth(zoom) - a.vx);
       atEndRef.current = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
     } else if (atEndRef.current) el.scrollLeft = el.scrollWidth;
-  }, [slots, t0, signals.length, zoom]);
+  }, [slots, t0, signals.length, zoom, view]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -398,7 +530,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
 
   // Ctrl + wheel zooms at the mouse (evolution ChronoPanel); a plain wheel scrolls as usual. Not a React handler:
   // those are passive, and the page must not zoom or scroll
-  const hasBody = signals.length > 0;
+  const hasBody = signals.length > 0 && view === 'wave';
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -515,6 +647,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
               ))}
             </select>
           </label>
+          {view === 'wave' && (
           <div className="flex items-center rounded-xl border border-slate-700 bg-slate-800 overflow-hidden" id="chrono-zoom">
             <button
               type="button"
@@ -546,6 +679,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
               <Maximize2 className="w-3.5 h-3.5" />
             </button>
           </div>
+          )}
           <button
             onClick={props.onTogglePause}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors ${
@@ -577,7 +711,43 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
         </div>
       </div>
 
-      {signals.length === 0 ? (
+      {/* Tabs (evolution LogFrame: one window, a tab per view of the shared selection) */}
+      <div className="flex items-center gap-1 -mt-1" role="tablist" id="chrono-tabs">
+        {(
+          [
+            ['wave', 'Zamanlama'],
+            ['table', 'Tablo'],
+          ] as const
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            type="button"
+            role="tab"
+            aria-selected={view === v}
+            data-chrono-tab={v}
+            onClick={() => setView(v)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+              view === v ? 'bg-cyan-900 text-white border border-cyan-700' : 'text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {view === 'table' && cur !== null && (
+          <button
+            type="button"
+            onClick={() => setCursorT(null)}
+            className="ml-auto text-[11px] text-cyan-300 hover:text-white cursor-pointer"
+            title="İmleci kaldır (Esc)"
+          >
+            t = {cur} seçili ✕
+          </button>
+        )}
+      </div>
+
+      {signals.length > 0 && view === 'table' ? (
+        <ChronoTable signals={signals} samples={samples} radixOf={radixOf} cursor={cur} onCursor={setCursorT} onRadixMenu={(key, x, y) => setRadixMenu({ key, x, y })} />
+      ) : signals.length === 0 ? (
         <div className="p-8 text-center text-slate-500 text-xs font-mono">
           {hasCandidates
             ? 'Hiç sinyal seçili değil. "Sinyaller" düğmesinden ekleyin.'

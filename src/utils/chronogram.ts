@@ -6,7 +6,7 @@
 //   changes between two edges replace the values of the current slot (back-dated to the last edge);
 // - step mode (no clock): every change of any logged value starts a new slot.
 // A sample holds the values of every candidate signal, so a signal added to the selection later has a history.
-import type { Radix, SignalValue } from '../types/logic';
+import { formatBits, type Radix, type SignalValue } from '../types/logic';
 import type { WaveformSample, WaveformValue } from './vcdGenerator';
 
 /** A loggable signal. key: `${componentId}` or `${componentId}_${port}` (also the VCD sample key). */
@@ -169,6 +169,17 @@ export function sortChronoGroups<T extends { x: number; y: number; input: boolea
     ...groups.filter((g) => !g.clock && g.input).sort(byLoc),
     ...groups.filter((g) => !g.clock && !g.input).sort(byLoc),
   ];
+}
+
+/**
+ * A logged value as text (chronogram bus label, table cell, log file field): one level as 0 / 1 / x / z / E, a wide
+ * value in its display base (hex digits upper case, x / E digits as Logisim shows them). Missing value: '-' as
+ * evolution's Signal.getFormattedValue writes it.
+ */
+export function chronoValueText(v: WaveformValue | undefined, radix: Radix = '16'): string {
+  if (v === undefined) return '-';
+  if (!Array.isArray(v)) return waveSymbol(v);
+  return radix === '16' ? formatBits(v, '16').toUpperCase().replace(/X/g, 'x') : formatBits(v, radix);
 }
 
 /** Value of a signal in a sample, as a bit array (LSB first); a missing value counts as x */
