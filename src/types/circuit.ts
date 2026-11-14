@@ -407,6 +407,17 @@ export interface SubcircuitPortDefinition {
   targetPinId: string; // internal pin id
   /** Bit width of the port, taken from the inner pin when packaged (Logisim: the inner Pin's width); unset = 1 */
   width?: number;
+  /**
+   * The inner pin's own label when it differs from name (an unlabelled Logisim Pin gets a made-up name but draws
+   * no label on the drawn appearances); unset = name
+   */
+  pinLabel?: string;
+  /**
+   * Where the inner pin sits and which way it points in the circuit the definition came from (a Logisim file):
+   * the default appearances sort and place the ports by it, as Logisim does; unset = the inner part's own
+   * position and turn
+   */
+  pinAt?: { x: number; y: number; facing: 'east' | 'west' | 'north' | 'south' };
 }
 
 export interface CustomSubcircuit {

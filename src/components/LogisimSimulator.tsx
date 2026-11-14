@@ -2637,7 +2637,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             // Circuits used as subcircuits become library ICs (ids follow the content: a re-import reuses them)
             let addedCircIcs = 0;
             for (const def of imported.subcircuits) {
-              if (!getSubcircuitDefinition(def.id)) {
+              // the importer makes each new definition (or an older one without an appearance) known for this run
+              const known = getSubcircuitDefinition(def.id);
+              if (!known || known === def) {
                 saveCustomSubcircuit({ ...def, createdAt: Date.now() });
                 addedCircIcs++;
               }

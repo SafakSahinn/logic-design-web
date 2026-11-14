@@ -294,10 +294,10 @@ export function subcircuitAppearancePins(def: CustomSubcircuit): AppearancePin[]
     return {
       portId: p.id,
       isOutput,
-      label: p.name ?? '',
+      label: p.pinLabel ?? p.name ?? '',
       width: p.width ?? 1,
-      loc: pin ? { x: pin.x, y: pin.y } : { x: 0, y: 0 },
-      facing: rotateFacing(isOutput ? 'west' : 'east', inner?.rotation ?? 0),
+      loc: p.pinAt ? { x: p.pinAt.x, y: p.pinAt.y } : pin ? { x: pin.x, y: pin.y } : { x: 0, y: 0 },
+      facing: p.pinAt ? p.pinAt.facing : rotateFacing(isOutput ? 'west' : 'east', inner?.rotation ?? 0),
     };
   });
 }
@@ -578,5 +578,186 @@ export function appearanceShapeToSvg(
       if (format === 'logisim')
         return { tag: 'circ-anchor', attrs: [['facing', s.facing], ['height', '6'], ['width', '6'], ['x', n(s.x - 3)], ['y', n(s.y - 3)]] };
       return { tag: 'circ-anchor', attrs: [['facing', s.facing], ['x', n(s.x)], ['y', n(s.y)]] };
+  }
+}
+
+// ---- Reading the SVG elements of an <appear> block, as evolution's SvgReader / AppearanceSvgReader do ----
+
+/** A circ-port element as read: its point and the inner pin it names (matched to a circuit pin by the caller) */
+export interface AppearanceSvgPort {
+  kind: 'svgPort';
+  x: number;
+  y: number;
+  pin: Pt;
+  isInput: boolean;
+}
+
+const JAVA_DOUBLE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+
+/** Java Integer.parseInt (optional sign, digits only) */
+function javaInt(v: string | null): number {
+  if (v === null || !/^[-+]?\d+$/.test(v)) throw new Error('bad integer');
+  return parseInt(v, 10);
+}
+/** Java Double.parseDouble (enough of it for coordinates; it ignores surrounding spaces) */
+function javaDouble(v: string | null): number {
+  const t = (v ?? '').trim().replace(/[dDfF]$/, '');
+  if (!JAVA_DOUBLE.test(t)) throw new Error('bad number');
+  return parseFloat(t);
+}
+/** Java Math.round */
+const javaRound = (v: number) => Math.floor(v + 0.5);
+
+/** SvgReader.getColor: #rrggbb (anything else reads as black) and an opacity -> #rrggbb or #rrggbbaa */
+function svgColor(hue: string, opacity: string): string {
+  const rgb = /^#[0-9a-fA-F]{6}$/.test(hue) ? hue.toLowerCase() : '#000000';
+  if (!opacity) return rgb;
+  let o = Number.NaN;
+  if (JAVA_DOUBLE.test(opacity.trim())) o = parseFloat(opacity);
+  else {
+    // a decimal comma (a locale that wrote "0,500")
+    const i = opacity.lastIndexOf(',');
+    const repl = i >= 0 ? (opacity.slice(0, i) + '.' + opacity.slice(i + 1)).trim() : '';
+    if (i >= 0 && JAVA_DOUBLE.test(repl)) o = parseFloat(repl);
+  }
+  if (Number.isNaN(o)) throw new Error('bad opacity');
+  const a = Math.min(255, Math.max(0, javaRound(o * 255)));
+  return a === 255 ? rgb : rgb + a.toString(16).padStart(2, '0');
+}
+
+/** SvgReader.parsePoints: separators are spaces, commas and line breaks; an odd last number is dropped */
+function svgPoints(points: string): Pt[] {
+  const toks = points.split(/[ ,\n\r\t]+/);
+  while (toks.length && toks[toks.length - 1] === '') toks.pop(); // Java's split drops trailing empty strings
+  const out: Pt[] = [];
+  for (let i = 0; i + 1 < toks.length; i += 2) out.push({ x: javaInt(toks[i]), y: javaInt(toks[i + 1]) });
+  return out;
+}
+
+/** AppearanceSvgReader.getLocation: a box (2.7.1: x, y, width, height) gives its rounded centre; snapped like evolution */
+function svgElementPoint(get: (name: string) => string | null): Pt {
+  if (get('width') !== null && get('height') !== null) {
+    const x = javaDouble(get('x'));
+    const y = javaDouble(get('y'));
+    return { x: snap5(javaRound(x + javaDouble(get('width')) / 2)), y: snap5(javaRound(y + javaDouble(get('height')) / 2)) };
+  }
+  return { x: snap5(javaInt(get('x'))), y: snap5(javaInt(get('y'))) };
+}
+
+type SvgPaint = { paint: 'stroke' | 'fill' | 'both'; strokeWidth?: number; stroke?: string; fill?: string };
+
+/**
+ * One element of an <appear> block. `get` returns an attribute (null when missing), `text` the element's text.
+ * Returns the shape, a port still to be matched to a pin, or null for an element evolution does not know (it
+ * reports it and goes on); throws where evolution's reader throws (bad numbers: evolution drops that element too).
+ */
+export function appearanceShapeFromSvg(
+  tag: string,
+  get: (name: string) => string | null,
+  text: string
+): AppearanceShape | AppearanceSvgPort | null {
+  const attr = (name: string) => get(name) ?? '';
+  if (tag === 'circ-anchor' || tag === 'circ-origin') {
+    const p = svgElementPoint(get);
+    const f = get('facing') === null ? 'east' : attr('facing').toLowerCase();
+    if (f !== 'east' && f !== 'west' && f !== 'north' && f !== 'south') throw new Error('bad facing');
+    return { kind: 'anchor', x: p.x, y: p.y, facing: f };
+  }
+  if (tag === 'circ-port') {
+    const p = svgElementPoint(get);
+    const parts = attr('pin').split(',');
+    if (parts.length < 2) throw new Error('bad pin');
+    const pin = { x: snap5(javaInt(parts[0].trim())), y: snap5(javaInt(parts[1].trim())) };
+    // AppearancePort.isInputAppearance: dir="in", or (2.7.1) a box of radius 4
+    const isInput = get('dir') !== null ? get('dir') === 'in' : javaRound(javaDouble(get('width')) / 2) === 4;
+    return { kind: 'svgPort', x: p.x, y: p.y, pin, isInput };
+  }
+  // SvgReader.createShape: paint type from stroke / fill, then stroke width, stroke colour and fill colour
+  const paint = (): SvgPaint => {
+    const stroke = attr('stroke');
+    const fill = attr('fill');
+    const out: SvgPaint = { paint: stroke === '' || stroke === 'none' ? 'fill' : fill === 'none' ? 'stroke' : 'both' };
+    if (get('stroke-width') !== null) out.strokeWidth = javaInt(get('stroke-width'));
+    if (stroke !== 'none') out.stroke = svgColor(stroke, attr('stroke-opacity'));
+    const f = fill === '' ? '#000000' : fill;
+    if (f !== 'none') out.fill = svgColor(f, attr('fill-opacity'));
+    return out;
+  };
+  switch (tag) {
+    case 'rect': {
+      const r = { x: javaInt(get('x')), y: javaInt(get('y')), width: javaInt(get('width')), height: javaInt(get('height')) };
+      if (get('rx') !== null) return { kind: 'rect', ...r, rx: javaInt(get('rx')), ...paint() };
+      return { kind: 'rect', ...r, ...paint() };
+    }
+    case 'ellipse': {
+      const cx = javaDouble(get('cx'));
+      const cy = javaDouble(get('cy'));
+      const rx = javaDouble(get('rx'));
+      const ry = javaDouble(get('ry'));
+      return { kind: 'oval', x: javaRound(cx - rx), y: javaRound(cy - ry), width: javaRound(rx * 2), height: javaRound(ry * 2), ...paint() };
+    }
+    case 'line': {
+      const s: Extract<AppearanceShape, { kind: 'line' }> = { kind: 'line', x1: javaInt(get('x1')), y1: javaInt(get('y1')), x2: javaInt(get('x2')), y2: javaInt(get('y2')) };
+      if (get('stroke-width') !== null) s.strokeWidth = javaInt(get('stroke-width'));
+      if (attr('stroke') !== 'none') s.stroke = svgColor(attr('stroke'), attr('stroke-opacity'));
+      return s;
+    }
+    case 'polygon':
+    case 'polyline':
+      return { kind: 'poly', closed: tag === 'polygon', points: svgPoints(attr('points')), ...paint() };
+    case 'path': {
+      // Only a quadratic curve: "M x0 y0 Q cx cy x1 y1" (q: control and end relative to the start)
+      const toks = attr('d').match(/[a-zA-Z]|[-\d.]+/g) ?? [];
+      let type = -1;
+      for (const t of toks) {
+        if (!/[a-zA-Z]/.test(t)) continue;
+        type = t === 'M' ? (type === -1 ? 0 : -2) : t === 'Q' || t === 'q' ? (type === 0 ? 1 : -2) : -2;
+        if (type === -2) throw new Error('bad path');
+      }
+      if (type !== 1 || toks.length !== 8 || toks[0] !== 'M' || toks[3].toUpperCase() !== 'Q') throw new Error('bad path');
+      const [x0, y0, c1, c2, e1, e2] = [1, 2, 4, 5, 6, 7].map((i) => javaInt(toks[i]));
+      const rel = toks[3] === 'q';
+      return {
+        kind: 'curve',
+        x0,
+        y0,
+        cx: rel ? c1 + x0 : c1,
+        cy: rel ? c2 + y0 : c2,
+        x1: rel ? e1 + x0 : e1,
+        y1: rel ? e2 + y0 : e2,
+        ...paint(),
+      };
+    }
+    case 'text': {
+      const valign = attr('dominant-baseline');
+      const anchorText = attr('text-anchor');
+      const s: Extract<AppearanceShape, { kind: 'text' }> = {
+        kind: 'text',
+        x: javaInt(get('x')),
+        y: javaInt(get('y')),
+        text,
+        // Java's Font("") is the Dialog font
+        fontFamily: attr('font-family') || 'Dialog',
+        fontSize: javaInt(get('font-size')),
+        halign: anchorText === 'start' ? 'left' : anchorText === 'end' ? 'right' : 'center',
+        valign: valign === 'top' ? 'top' : valign === 'bottom' ? 'bottom' : valign === 'alphabetic' ? 'baseline' : 'middle',
+      };
+      if (attr('font-style') === 'italic') s.italic = true;
+      if (attr('font-weight') === 'bold') s.bold = true;
+      const fill = attr('fill') === '' ? '#000000' : attr('fill');
+      if (fill !== 'none') s.fill = svgColor(fill, attr('fill-opacity'));
+      return s;
+    }
+    case 'image': {
+      const s: Extract<AppearanceShape, { kind: 'image' }> = { kind: 'image', x: javaInt(get('x')), y: javaInt(get('y')), width: javaInt(get('width')), height: javaInt(get('height')), src: '' };
+      if (attr('scale').trim()) s.scale = attr('scale');
+      if (attr('license').trim()) s.license = attr('license');
+      if (get('attribution') !== null) s.attribution = attr('attribution');
+      const href = attr('xlink:href').trim() ? attr('xlink:href') : attr('href');
+      if (href.trim()) s.src = href;
+      return s;
+    }
+    default:
+      return null;
   }
 }

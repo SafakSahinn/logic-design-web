@@ -1,4 +1,4 @@
-import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit } from '../types/circuit';
+import type { AppearanceShape, CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import {
   ALU_OP_BITS,
@@ -47,6 +47,7 @@ import {
   splitterThreads,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
+import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
 import { solveKMap } from './kmapSolver';
 import { memToRawText } from './memImage';
 import {
@@ -133,7 +134,8 @@ type Prim =
   | { kind: 'splitter'; combined: string; ends: string[]; bitEnd: number[]; appear: 'left' | 'right' | 'center'; endWidth: number[] }
   | { kind: 'extender'; in: string; ext: string | null; out: string; inW: number; outW: number; type: string }
   | { kind: 'selector'; data: string; sel: string; out: string; dataW: number; groupW: number }
-  | { kind: 'sub'; circuit: string; ins: string[]; outs: string[]; inW: number[]; outW: number[]; inOff: Pt[]; outOff: Pt[] }
+  // facing: the IC's default facing (its appearance's anchor), so the box is drawn as designed
+  | { kind: 'sub'; circuit: string; ins: string[]; outs: string[]; inW: number[]; outW: number[]; inOff: Pt[]; outOff: Pt[]; facing: string }
   // A real Logisim plexer (facing east, select bottom-left); nets / widths / sinks in Logisim's port order
   | {
       kind: 'plexer';
@@ -202,7 +204,14 @@ interface SubcircuitInfo {
   circuit: string;
   inOff: Pt[];
   outOff: Pt[];
+  facing: string;
 }
+
+/** One appearance element as a line of the file */
+const svgXml = (e: AppearanceSvgElement) => {
+  const attrs = e.attrs.map(([k, v]) => ` ${k}="${xmlEsc(v)}"`).join('');
+  return e.text === undefined ? `<${e.tag}${attrs}/>` : `<${e.tag}${attrs}>${xmlEsc(e.text)}</${e.tag}>`;
+};
 
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
   const warnings: string[] = [];
@@ -239,13 +248,65 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     const name = uniqueCircuitName(def.name || def.id);
     const inPorts = def.ports.filter((p) => p.type === 'input');
     const outPorts = def.ports.filter((p) => p.type === 'output');
-    const offsets = logisimDefaultPortOffsets([
-      ...inPorts.map((_, i) => ({ loc: { x: PORT_IN_X, y: portY(i) }, facing: 'east' })),
-      ...outPorts.map((_, i) => ({ loc: { x: PORT_OUT_X, y: portY(i) }, facing: 'west' })),
-    ]);
-    const info = { circuit: name, inOff: offsets.slice(0, inPorts.length), outOff: offsets.slice(inPorts.length) };
+    const style = def.appearance?.style ?? 'chip';
+    let info: SubcircuitInfo;
+    let head = '';
+    if (style === 'chip' || style === 'classic') {
+      // Logisim's default (classic) box, which both Logisim 2.7.1 and evolution build from the port Pins
+      const offsets = logisimDefaultPortOffsets([
+        ...inPorts.map((_, i) => ({ loc: { x: PORT_IN_X, y: portY(i) }, facing: 'east' })),
+        ...outPorts.map((_, i) => ({ loc: { x: PORT_OUT_X, y: portY(i) }, facing: 'west' })),
+      ]);
+      info = { circuit: name, inOff: offsets.slice(0, inPorts.length), outOff: offsets.slice(inPorts.length), facing: 'east' };
+    } else {
+      // The appearance as the readers build it from the Pins written here (labelled with the port names), and
+      // its drawing in 2.7.1's format: evolution follows the appearance attribute (and ignores a drawing next to
+      // a default style), Logisim 2.7.1 knows no such attribute and draws the drawing, so both show the same box
+      const xdef: CustomSubcircuit = {
+        ...def,
+        ports: def.ports.map((p) => {
+          const input = p.type === 'input';
+          const i = (input ? inPorts : outPorts).indexOf(p);
+          const q: SubcircuitPortDefinition = {
+            ...p,
+            width: subcircuitPortWidth(def, p),
+            pinAt: { x: input ? PORT_IN_X : PORT_OUT_X, y: portY(i), facing: input ? 'east' : 'west' },
+          };
+          delete q.pinLabel;
+          return q;
+        }),
+      };
+      const lay = subcircuitLayout(xdef)!;
+      const off = (p: SubcircuitPortDefinition) => {
+        const at = lay.ports.get(p.id) ?? lay.anchor;
+        return { x: at.x - lay.anchor.x, y: at.y - lay.anchor.y };
+      };
+      info = { circuit: name, inOff: inPorts.map(off), outOff: outPorts.map(off), facing: lay.anchor.facing };
+      const portInfo = (id: string) => {
+        const p = xdef.ports.find((q) => q.id === id);
+        return p?.pinAt ? { pin: { x: p.pinAt.x, y: p.pinAt.y }, isInput: p.type === 'input' } : undefined;
+      };
+      // Logisim 2.7.1 has no vertical text alignment (its text stands on y): the default boxes' texts are moved to
+      // their baseline, with Java's font metrics (ascent size + 1, descent a quarter of the size); only 2.7.1 reads
+      // this drawing (a custom one is evolution's too, so it stays as drawn)
+      const baselined = (sh: AppearanceShape): AppearanceShape => {
+        if (sh.kind !== 'text' || sh.valign === 'baseline') return sh;
+        const ascent = sh.fontSize + 1;
+        const descent = Math.floor(sh.fontSize / 4 + 0.5);
+        const dy = sh.valign === 'top' ? ascent : sh.valign === 'bottom' ? -descent : Math.round((ascent - descent) / 2);
+        return { ...sh, y: sh.y + dy, valign: 'baseline' };
+      };
+      const drawing = (subcircuitAppearanceShapes(xdef) ?? []).flatMap((sh) => {
+        const e = appearanceShapeToSvg(style === 'custom' ? sh : baselined(sh), portInfo, 'logisim');
+        return e ? [`      ${svgXml(e)}`] : [];
+      });
+      head =
+        `    <a name="appearance" val="${style}"/>\n` +
+        (def.appearance?.fixedSize ? '    <a name="circuitnamedboxfixedsize" val="true"/>\n' : '') +
+        `    <appear>\n${drawing.join('\n')}\n    </appear>\n`;
+    }
     const body = buildCircuit(def.components, def.wires, def, depth + 1);
-    circuitXml.push(`  <circuit name="${xmlEsc(name)}">\n${body}\n  </circuit>`);
+    circuitXml.push(`  <circuit name="${xmlEsc(name)}">\n${head}${body}\n  </circuit>`);
     building.delete(def.id);
     subInfo.set(def.id, info);
     return info;
@@ -871,6 +932,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             outW: outPorts.map((p) => subcircuitPortWidth(sdef, p)),
             inOff: info.inOff,
             outOff: info.outOff,
+            facing: info.facing,
           });
           break;
         }
@@ -1311,7 +1373,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           for (const q of p.ports) tunnel(x + q.off.x, y + q.off.y, q.net, q.sink, q.width);
           break;
         case 'sub':
-          xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"/>`);
+          xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"${p.facing === 'east' ? '/>' : `><a name="facing" val="${p.facing}"/></comp>`}`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
           p.outOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.outs[i], false, p.outW[i]));
           break;
@@ -1344,9 +1406,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     };
     // A RAM / ROM / random generator: its rightmost point goes on the x of its last cell, as many cells as its
     // width needs (an ordinary part reaches up to 150 left of its cell's x)
+    // A drawn IC box likewise (its ports may lie right of its loc, or far left of it)
     const ramSpan = (p: Prim) => {
-      if (p.kind !== 'ram') return { cols: 1, shift: 0 };
-      const xs = [...p.ports.map((q) => q.off.x), ...(p.box ? [p.box.x0, p.box.x1] : [])];
+      if (p.kind !== 'ram' && p.kind !== 'sub') return { cols: 1, shift: 0 };
+      const xs = p.kind === 'sub' ? [...p.inOff, ...p.outOff].map((o) => o.x) : [...p.ports.map((q) => q.off.x), ...(p.box ? [p.box.x0, p.box.x1] : [])];
       const right = Math.max(...xs, 0);
       const span = right - Math.min(...xs, 0);
       const cols = 1 + Math.ceil(Math.max(0, span - 150) / CELL_W);
@@ -1356,7 +1419,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     // as its length needs, so no tunnel lands on another part's pin
     const SHIFT_LEFT = 150;
     const colsOf = (p: Prim) => {
-      if (p.kind === 'ram') return ramSpan(p).cols;
+      if (p.kind === 'ram' || p.kind === 'sub') return ramSpan(p).cols;
       if (p.kind !== 'mem' || p.part !== 'shiftRegister') return 1;
       const w = Math.max(...memPorts(p.part, p.length, p.parallel).map((o) => o.off.x));
       return Math.max(1, Math.ceil((w - 50 + 1) / CELL_W));

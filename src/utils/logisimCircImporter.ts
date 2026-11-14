@@ -1,4 +1,13 @@
-import type { CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
+import type {
+  AppearanceShape,
+  CircuitComponentInstance,
+  CircuitWire,
+  ComponentType,
+  CustomSubcircuit,
+  SubcircuitAppearance,
+  SubcircuitAppearanceStyle,
+  SubcircuitPortDefinition,
+} from '../types/circuit';
 import type { Radix } from '../types/logic';
 import {
   ARITH_PINS,
@@ -87,7 +96,8 @@ import {
   floatingSwitchState,
 } from './circuitEngine';
 import { rawTextToMem } from './memImage';
-import { createSubcircuitInstance } from './subcircuitManager';
+import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from './subcircuitManager';
+import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, type Facing } from './subcircuitAppearance';
 import { repairWires } from './wiringEngine';
 import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
 
@@ -239,6 +249,13 @@ const GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
 const FACING_ROTATION: Record<string, 0 | 90 | 180 | 270> = { east: 0, south: 90, west: 180, north: 270 };
 
 // Local (east-facing) offset -> canvas offset for a facing
+/**
+ * How far a subcircuit instance is turned (our clockwise degrees): its facing relative to the default facing of
+ * its appearance's anchor (evolution SubcircuitFactory rotates the appearance from the one to the other)
+ */
+const subRotation = (sub: { anchorFacing: string }, facing: string): 0 | 90 | 180 | 270 =>
+  ((((FACING_ROTATION[facing] ?? 0) - (FACING_ROTATION[sub.anchorFacing] ?? 0)) % 360) + 360) % 360 as 0 | 90 | 180 | 270;
+
 const rotateOffset = (p: Pt, rot: number): Pt => {
   if (rot === 90) return { x: -p.y, y: p.x };
   if (rot === 180) return { x: -p.x, y: -p.y };
@@ -1406,9 +1423,11 @@ interface CircPin {
 
 interface SubcircuitInfo {
   def: CustomSubcircuit;
-  // Logisim port locations relative to the instance's loc (facing east), in our port order
+  // Logisim port locations relative to the instance's loc (the appearance as drawn), in our port order
   inOffsets: Pt[];
   outOffsets: Pt[];
+  // The anchor's default facing: an instance is turned by its facing relative to this one
+  anchorFacing: Facing;
 }
 
 /**
@@ -1462,54 +1481,123 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     if (!r) return null;
     const elem = circuitByName.get(name)!;
 
-    // Port locations: the circuit's own appearance when the file has one, else Logisim's default
-    let offsets = logisimDefaultPortOffsets(r.pins);
-    const appear = elem.getElementsByTagName('appear')[0];
-    if (appear) {
-      const centre = (e: Element): Pt => ({
-        x: Number(e.getAttribute('x')) + Number(e.getAttribute('width')) / 2,
-        y: Number(e.getAttribute('y')) + Number(e.getAttribute('height')) / 2,
-      });
-      const anchorElem = appear.getElementsByTagName('circ-anchor')[0];
-      const ports = Array.from(appear.getElementsByTagName('circ-port'));
-      if (anchorElem && ports.length) {
-        const a = centre(anchorElem);
-        const custom = r.pins.map((p) => {
-          const port = ports.find((e) => {
-            // Logisim writes the pin location as "x,y" here (no parentheses)
-            const m = (e.getAttribute('pin') || '').match(/(-?\d+)\s*,\s*(-?\d+)/);
-            const at = m ? { x: Number(m[1]), y: Number(m[2]) } : null;
-            return at && at.x === p.loc.x && at.y === p.loc.y;
-          });
-          if (!port) return null;
-          const c = centre(port);
-          return { x: c.x - a.x, y: c.y - a.y };
-        });
-        if (custom.every((c) => c)) offsets = custom as Pt[];
-      }
+    // The IC's appearance, read like evolution (XmlReader.loadAppearance, XmlCircuitReader.buildCircuit): the
+    // circuit's appearance attribute when it has one (a drawing next to another style is ignored: our exports
+    // keep one there for Logisim 2.7.1); without it an <appear> drawing makes a custom appearance, else an older
+    // evolution file with the named box attribute gives logisim_evolution, a Holy Cross file its box
+    // ("evolution"), anything else (Logisim 2.7.1, early evolution) the classic box; the named box attribute
+    // (older evolution) decides before all of them
+    const notes = r.sheet.warnings;
+    const cattr: Record<string, string> = {};
+    const elems = (e: Element) => Array.from(e.childNodes).filter((k): k is Element => k.nodeType === 1);
+    const kids = (e: Element, tag: string) => elems(e).filter((k) => k.tagName === tag);
+    for (const a of kids(elem, 'a')) {
+      const k = a.getAttribute('name');
+      if (k) cattr[k] = a.hasAttribute('val') ? a.getAttribute('val') ?? '' : a.textContent ?? '';
     }
+    const used = r.pins.map(() => false);
+    const drawn: AppearanceShape[] = [];
+    let dynamic = 0;
+    for (const ap of kids(elem, 'appear'))
+      for (const e of elems(ap)) {
+        if (e.tagName.startsWith('visible-')) {
+          dynamic++;
+          continue;
+        }
+        let s: ReturnType<typeof appearanceShapeFromSvg>;
+        try {
+          s = appearanceShapeFromSvg(e.tagName, (n) => (e.hasAttribute(n) ? e.getAttribute(n) : null), e.textContent ?? '');
+        } catch {
+          notes.push(`IC görünümü: <${e.tagName}> öğesi okunamadı, atlandı.`);
+          continue;
+        }
+        if (!s) {
+          notes.push(`IC görünümü: <${e.tagName}> öğesi tanınmadı, atlandı.`);
+          continue;
+        }
+        if (s.kind !== 'svgPort') {
+          drawn.push(s);
+          continue;
+        }
+        // AppearanceSvgReader: the first unused circuit Pin at that location with the same direction
+        const port = s;
+        const i = r.pins.findIndex((p, k) => !used[k] && p.loc.x === port.pin.x && p.loc.y === port.pin.y && !p.isOutput === port.isInput);
+        if (i < 0) {
+          notes.push(`IC görünümü: (${port.pin.x},${port.pin.y}) pinine bağlı port devrede bulunamadı, atlandı.`);
+          continue;
+        }
+        used[i] = true;
+        drawn.push({ kind: 'port', portId: `pin_${i}`, x: port.x, y: port.y });
+      }
+    if (dynamic) notes.push(`IC görünümü: ${dynamic} dinamik öğe (visible-…) henüz desteklenmiyor, çizilmedi.`);
+    const STYLES: SubcircuitAppearanceStyle[] = ['classic', 'evolution', 'logisim_evolution', 'custom'];
+    let style: SubcircuitAppearanceStyle;
+    if (cattr.circuitnamedbox !== undefined) style = drawn.length ? 'custom' : 'logisim_evolution';
+    else if (cattr.appearance === undefined) style = drawn.length ? 'custom' : /-HC$/.test(fileSource) ? 'evolution' : 'classic';
+    else if (STYLES.includes(cattr.appearance as SubcircuitAppearanceStyle)) style = cattr.appearance as SubcircuitAppearanceStyle;
+    else {
+      notes.push(`IC görünümü "${cattr.appearance}" tanınmadı, klasik kutu alındı.`);
+      style = 'classic';
+    }
+    const appearance: SubcircuitAppearance = { style };
+    if (style === 'custom') appearance.shapes = drawn;
+    if (cattr.circuitnamedboxfixedsize === 'true') appearance.fixedSize = true;
 
-    // Our IC: inputs on the left, outputs on the right, each in the order they appear on the Logisim box
-    const order = r.pins.map((_, i) => i).sort((a, b) => offsets[a].y - offsets[b].y || offsets[a].x - offsets[b].x);
-    const ins = order.filter((i) => !r.pins[i].isOutput);
-    const outs = order.filter((i) => r.pins[i].isOutput);
-    const port = (i: number, k: number): SubcircuitPortDefinition => {
+    // Where each port is (relative to the anchor, facing as drawn): from the appearance's own layout
+    const portOf = (i: number, id: string, name: string): SubcircuitPortDefinition => {
       const p = r.pins[i];
       const def: SubcircuitPortDefinition = {
-        id: `port_${p.isOutput ? 'out' : 'in'}_${k}`,
-        name: p.label || `${p.isOutput ? 'out' : 'in'}${k}`,
+        id,
+        name,
         type: p.isOutput ? 'output' : 'input',
         targetCompId: p.compId,
         targetPinId: p.pinId,
+        pinAt: { x: p.loc.x, y: p.loc.y, facing: (['east', 'west', 'north', 'south'].includes(p.facing) ? p.facing : 'east') as Facing },
       };
+      if (name !== p.label) def.pinLabel = p.label;
       // Logisim takes a port's width from its Pin
       if (p.width > 1) def.width = p.width;
       return def;
     };
-    const ports = [...ins.map(port), ...outs.map(port)];
     const components: CircuitComponentInstance[] = JSON.parse(JSON.stringify(r.sheet.components));
+    const draft: CustomSubcircuit = {
+      id: '',
+      name,
+      description: '',
+      category: 'custom',
+      width: 120,
+      height: 60,
+      ports: r.pins.map((p, i) => portOf(i, `pin_${i}`, p.label)),
+      components,
+      wires: [],
+      createdAt: 0,
+      appearance,
+    };
+    // A drawing keeps the ports it lacked (added next to it) and an anchor, like evolution's PortManager adds them
+    if (appearance.shapes) appearance.shapes = subcircuitAppearanceShapes(draft)!;
+    const lay = subcircuitLayout(draft)!;
+    const offsets = r.pins.map((_, i) => {
+      const at = lay.ports.get(`pin_${i}`) ?? lay.anchor;
+      return { x: at.x - lay.anchor.x, y: at.y - lay.anchor.y };
+    });
+
+    // Our ports: inputs first, then outputs, each in the order they appear on the box (top to bottom)
+    const order = r.pins.map((_, i) => i).sort((a, b) => offsets[a].y - offsets[b].y || offsets[a].x - offsets[b].x);
+    const ins = order.filter((i) => !r.pins[i].isOutput);
+    const outs = order.filter((i) => r.pins[i].isOutput);
+    const idOf = new Map<string, string>();
+    const port = (i: number, k: number): SubcircuitPortDefinition => {
+      const p = r.pins[i];
+      const id = `port_${p.isOutput ? 'out' : 'in'}_${k}`;
+      idOf.set(`pin_${i}`, id);
+      return portOf(i, id, p.label || `${p.isOutput ? 'out' : 'in'}${k}`);
+    };
+    const ports = [...ins.map(port), ...outs.map(port)];
+    if (appearance.shapes) appearance.shapes = appearance.shapes.map((s) => (s.kind === 'port' ? { ...s, portId: idOf.get(s.portId)! } : s));
+    // A drawing or a non-classic box is part of what the IC is (the same circuit drawn otherwise is another IC)
+    const look = style === 'classic' && !appearance.fixedSize ? '' : `|appear:${JSON.stringify(appearance)}`;
     const def: CustomSubcircuit = {
-      id: `sub_circ_${hash32(name + '|' + r.signature)}`,
+      id: `sub_circ_${hash32(name + '|' + r.signature + look)}`,
       name,
       chipCode: 'IC-CIRC',
       description: `Logisim .circ dosyasından içe aktarıldı ("${name}" devresi).`,
@@ -1520,8 +1608,19 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       components,
       wires: repairWires(JSON.parse(JSON.stringify(r.sheet.wires)), components),
       createdAt: 0,
+      appearance,
     };
-    const info = { def, inOffsets: ins.map((i) => offsets[i]), outOffsets: outs.map((i) => offsets[i]) };
+    // Known before the app keeps the definitions, so the instances below get the drawn geometry; a definition
+    // the library already holds with an appearance stays (it may have been redrawn here), an older one without
+    // one is replaced
+    const known = peekSubcircuitDefinition(def.id);
+    if (!known || !known.appearance) registerSubcircuit(def);
+    const info: SubcircuitInfo = {
+      def,
+      inOffsets: ins.map((i) => offsets[i]),
+      outOffsets: outs.map((i) => offsets[i]),
+      anchorFacing: lay.anchor.facing,
+    };
     subInfo.set(name, info);
     subcircuits.push(def);
     return info;
@@ -1773,7 +1872,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 : isTtlType(nativeType)
                 ? ttlImportPorts(nativeType, attr.VccGndPorts === 'true').map((p) => rotateOffset(p.off, rot))
                 : sub
-                ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, rot))
+                ? [...sub.inOffsets, ...sub.outOffsets].map((o) => rotateOffset(o, subRotation(sub, facing)))
                 : [];
       for (const off of extra) occupied.add(key({ x: loc.x + off.x, y: loc.y + off.y }));
     }
@@ -2196,17 +2295,23 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         continue;
       }
       if (nativeType === 'subcircuit' && part.sub) {
+        // Drawn like the file draws it, turned by its facing relative to the anchor's, the anchor on the (scaled) loc
         const { def, inOffsets, outOffsets } = part.sub;
-        const inst = createSubcircuitInstance(def, 0, 0, label || def.name);
-        const anchorPin = inst.outputs[0] ?? inst.inputs[0];
-        if (!anchorPin) {
-          components.push(updatePinPositions({ ...inst, x: anchor.x, y: anchor.y }));
-          continue;
+        const turn = subRotation(part.sub, part.facing);
+        const inst = { ...createSubcircuitInstance(def, 0, 0, label || def.name), rotation: turn || undefined };
+        const lay = subcircuitLayout(def);
+        let a = { x: 0, y: 0 };
+        if (lay) {
+          // the anchor's body point after the turn, as updatePinPositions turns the pins (about the body centre)
+          const [cx, cy] = [lay.width / 2, lay.height / 2];
+          const [dx, dy] = [lay.anchor.x - cx, lay.anchor.y - cy];
+          const t = turn === 90 ? { x: cx - dy, y: cy + dx } : turn === 180 ? { x: cx - dx, y: cy - dy } : turn === 270 ? { x: cx + dy, y: cy - dx } : lay.anchor;
+          a = { x: Math.round(t.x / 10) * 10, y: Math.round(t.y / 10) * 10 };
         }
-        place(inst, anchorPin.id, loc, undefined, [
-          ...inst.inputs.map((p, k): [string, Pt] => [p.id, at(loc, rotateOffset(inOffsets[k], rot))]),
-          ...inst.outputs.map((p, k): [string, Pt] => [p.id, at(loc, rotateOffset(outOffsets[k], rot))]),
-        ]);
+        const placed = updatePinPositions({ ...inst, x: anchor.x - a.x, y: anchor.y - a.y });
+        components.push(placed);
+        placed.inputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(inOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: false }));
+        placed.outputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(outOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: true }));
         continue;
       }
 
