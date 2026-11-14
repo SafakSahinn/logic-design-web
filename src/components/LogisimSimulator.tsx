@@ -227,6 +227,7 @@ import {
   type ChronoTreeNode,
 } from '../utils/chronogram';
 import { ChronogramPanel } from './ChronogramPanel';
+import { useChronoLogFile } from './useChronoLogFile';
 import MemoryHexEditor from './MemoryHexEditor';
 
 /**
@@ -3944,6 +3945,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (!showWaveform || isWaveformPaused) return;
     setChronoLog((prev) => recordChrono(prev, chronoProbe.values, chronoProbe.clockKey, chronoLimit));
   }, [showWaveform, isWaveformPaused, chronoProbe, chronoLimit]);
+
+  // Log file output (evolution FilePanel + LogThread): kept here, so closing the panel does not lose it
+  const chronoLogFile = useChronoLogFile({
+    samples: chronoLog.samples,
+    signals: chronoSignals,
+    radix: chronoRadix,
+    clockKey: chronoProbe.clockKey,
+    header: activeChrono?.fileHeader ?? true,
+    fileBaseName: currentCircuitName.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+  });
 
   // Global Keyboard shortcuts: Delete, Backspace, Ctrl+Z, Ctrl+Y, Escape, Ctrl+D, R
   useEffect(() => {
@@ -11539,6 +11550,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           fileHeader={activeChrono?.fileHeader ?? true}
           onFileHeaderChange={(on) => updateChrono({ fileHeader: on ? undefined : false })}
           fileBaseName={currentCircuitName.toLowerCase().replace(/[^a-z0-9_]/g, '_')}
+          logFile={chronoLogFile}
           samples={chronoLog.samples}
           paused={isWaveformPaused}
           clocks={chronoProbe.clocks}

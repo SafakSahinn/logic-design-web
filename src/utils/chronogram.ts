@@ -192,6 +192,9 @@ export function chronoValueText(v: WaveformValue | undefined, radix: Radix = '16
 // the shortest duration of all signals). In coarse mode a slot lasts evolution's default time scale: 5000 ns per
 // clock tick in clocked mode, per stable step in step mode.
 
+/** Line end of log files: PrintWriter.println writes the system line separator, so CRLF on Windows */
+export const CHRONO_LOG_EOL = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? '\r\n' : '\n';
+
 /** Length of one slot in the log file (evolution Model.timeScale default) */
 export const CHRONO_SLOT_NS = 5000;
 
@@ -255,6 +258,77 @@ export function chronoLogText(
   if (header) lines.push(chronoLogHeader(signals));
   for (const run of chronoLogRuns(samples, signals, radixOf)) lines.push(chronoLogLine(run));
   return lines.map((l) => l + eol).join('');
+}
+
+/**
+ * A log being written as the history grows (evolution LogThread). It starts with the whole history held when the
+ * logging is switched on, as LogThread's cursors start at time 0. The newest slot is not written yet, since in
+ * clocked mode it can still change until the next edge; `final` writes it too (logging switched off).
+ */
+export interface ChronoLogStream {
+  /** time of the last slot written into a run, -1 = none */
+  lastTime: number;
+  /** that slot's sample: a cleared log has new samples at the same times */
+  lastSample: WaveformSample | null;
+  /** the run being extended, not written yet */
+  pending: ChronoLogRun | null;
+  /** the mode line written last (null = none yet) */
+  mode: string | null;
+  /** the signals the last header was written for (null = none yet) */
+  signalsKey: string | null;
+}
+
+export const newChronoLogStream = (): ChronoLogStream => ({ lastTime: -1, lastSample: null, pending: null, mode: null, signalsKey: null });
+
+/** New lines for the slots added since the last call, and the stream after them */
+export function advanceChronoLogStream(
+  stream: ChronoLogStream,
+  samples: WaveformSample[],
+  signals: ChronoSignal[],
+  radixOf: (key: string) => Radix,
+  clockKey: string | null,
+  header: boolean,
+  final = false
+): { stream: ChronoLogStream; lines: string[] } {
+  const lines: string[] = [];
+  let { lastTime, lastSample, pending } = stream;
+  const flush = () => {
+    if (pending) lines.push(chronoLogLine(pending));
+    pending = null;
+  };
+  const mode = chronoLogModeLine(clockKey);
+  const signalsKey = signals.map((s) => `${s.key}\u0001${s.name}`).join('\u0000');
+  const newest = samples.length > 0 ? samples[samples.length - 1].time : -1;
+  // A new time source starts a new log (evolution writes the mode line again); a cleared log starts again at
+  // time 0 (evolution signalsReset: writing goes on from time 0)
+  if (stream.mode !== null && stream.mode !== mode) lastTime = -1;
+  else if (lastTime >= 0) {
+    // finished slots are never replaced, so the slot written last is still the same sample unless the log was
+    // cleared; it can be missing when the history limit dropped it, then newer slots follow it
+    const at = samples.find((smp) => smp.time === lastTime);
+    if (at ? at !== lastSample : newest < lastTime) lastTime = -1;
+  }
+  if (stream.mode !== mode || stream.signalsKey !== signalsKey || lastTime !== stream.lastTime) flush();
+  if (stream.mode !== mode) lines.push(mode);
+  // the header goes again after the selection changes (evolution selectionChanged -> headerDirty)
+  if (stream.signalsKey !== signalsKey && header && signals.length > 0) lines.push(chronoLogHeader(signals));
+  if (signals.length > 0) {
+    for (const smp of samples) {
+      if (smp.time <= lastTime) continue;
+      if (!final && smp.time >= newest) break;
+      const texts = chronoLogTexts(smp, signals, radixOf);
+      if (pending && pending.texts.every((t, i) => t === texts[i])) pending.slots++;
+      else {
+        flush();
+        pending = { texts, slots: 1 };
+      }
+      lastTime = smp.time;
+      lastSample = smp;
+    }
+  }
+  if (final) flush();
+  if (lastTime < 0) lastSample = null;
+  return { stream: { lastTime, lastSample, pending, mode, signalsKey }, lines };
 }
 
 /** Value of a signal in a sample, as a bit array (LSB first); a missing value counts as x */

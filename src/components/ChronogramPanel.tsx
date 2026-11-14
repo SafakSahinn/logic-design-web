@@ -4,8 +4,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Maximize2, Pause, Play, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { bitsToString, type Radix, type SignalValue } from '../types/logic';
 import type { WaveformSample, WaveformValue } from '../utils/vcdGenerator';
+import type { ChronoLogFile } from './useChronoLogFile';
 import {
   CHRONO_LIMITS,
+  CHRONO_LOG_EOL,
   chronoLogHeader,
   chronoLogLine,
   chronoLogModeLine,
@@ -85,6 +87,8 @@ export interface ChronogramPanelProps {
   onFileHeaderChange: (on: boolean) => void;
   /** base name of downloaded log files (no extension) */
   fileBaseName: string;
+  /** log file output (desktop: a file; web: held lines downloaded at the end) */
+  logFile: ChronoLogFile;
 }
 
 type Seg = { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number };
@@ -366,8 +370,7 @@ function ChronoTable({
   );
 }
 
-// Line ends of log files: PrintWriter.println writes the system line separator, so CRLF on Windows
-const LOG_EOL = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? '\r\n' : '\n';
+const LOG_EOL = CHRONO_LOG_EOL;
 /** lines shown in the file tab's preview (the newest ones) */
 const LOG_PREVIEW_LINES = 30;
 
@@ -389,6 +392,8 @@ function ChronoFileTab({
   header,
   onHeaderChange,
   fileBaseName,
+  logFile,
+  paused,
 }: {
   signals: ChronoSignal[];
   samples: WaveformSample[];
@@ -397,7 +402,12 @@ function ChronoFileTab({
   header: boolean;
   onHeaderChange: (on: boolean) => void;
   fileBaseName: string;
+  logFile: ChronoLogFile;
+  paused: boolean;
 }) {
+  const btn =
+    'px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+  const lf = logFile;
   const runs = chronoLogRuns(samples, signals, radixOf);
   const shown = runs.slice(-LOG_PREVIEW_LINES);
   const preview = [
@@ -408,6 +418,72 @@ function ChronoFileTab({
   ].join('\n');
   return (
     <div className="space-y-3" id="chrono-file">
+      {/* Continuous logging: desktop into a picked file (evolution FilePanel), web held and downloaded at the end */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-3 space-y-2" id="chrono-file-output">
+        {lf.canStream ? (
+          <>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-400 shrink-0">Dosya:</span>
+              <input
+                readOnly
+                value={lf.file ?? ''}
+                placeholder="Seçilmedi"
+                className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 font-mono text-[11px] text-slate-300"
+                id="chrono-file-path"
+                title={lf.file ?? undefined}
+              />
+              <button type="button" onClick={lf.choose} className={`${btn} bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700`} id="chrono-file-choose">
+                Seç…
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <span className={lf.enabled ? 'text-emerald-400 font-semibold' : 'text-slate-400'} id="chrono-file-status">
+                {lf.enabled ? '● Dosyaya yazma açık.' : 'Dosyaya yazma kapalı.'}
+              </span>
+              <button
+                type="button"
+                disabled={!lf.file}
+                onClick={() => lf.setEnabled(!lf.enabled)}
+                className={`${btn} ${lf.enabled ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700' : 'bg-emerald-700 hover:bg-emerald-600 text-white border-emerald-600'}`}
+                id="chrono-file-toggle"
+              >
+                {lf.enabled ? 'Devre dışı bırak' : 'Etkinleştir'}
+              </button>
+              {lf.file && <span className="text-slate-500">{lf.lineCount} satır yazıldı</span>}
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {lf.enabled ? (
+              <>
+                <span className="text-emerald-400 font-semibold" id="chrono-file-status">
+                  ● Kayıt sürüyor · {lf.lineCount} satır
+                </span>
+                <button type="button" onClick={lf.stopMemory} className={`${btn} bg-cyan-700 hover:bg-cyan-600 text-white border-cyan-600`} id="chrono-file-stop">
+                  <Download className="w-3.5 h-3.5" />
+                  Durdur ve indir
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" onClick={lf.startMemory} className={`${btn} bg-emerald-700 hover:bg-emerald-600 text-white border-emerald-600`} id="chrono-file-start">
+                  <Play className="w-3.5 h-3.5" />
+                  Kaydı başlat
+                </button>
+                <span className="text-slate-500">
+                  Tarayıcı dosyaya doğrudan yazamaz: satırlar biriktirilir, durdurunca .txt olarak inilir. (Masaüstü uygulaması dosyaya sürekli yazar.)
+                </span>
+              </>
+            )}
+          </div>
+        )}
+        {lf.error && <div className="text-xs text-red-400">{lf.error}</div>}
+        {lf.enabled && (
+          <div className="text-[11px] text-slate-500">
+            Kayıt, mevcut geçmişin başından başladı; yeni dilimler panel açıkken {paused ? '(şu an DURAKLATILDI) ' : ''}eklenir.
+          </div>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer" title="Dosyanın başına sinyal adlarını sekmeyle ayrılmış bir satır olarak yaz">
           <input type="checkbox" checked={header} onChange={(e) => onHeaderChange(e.target.checked)} className="accent-cyan-500" id="chrono-file-header" />
@@ -676,6 +752,15 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
               <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
                 {paused ? 'DURAKLATILDI' : 'KAYIT'}
               </span>
+              {props.logFile.enabled && (
+                <span
+                  className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800"
+                  title={props.logFile.file ?? 'Kayıt dosyası satırları biriktiriliyor'}
+                  id="chrono-file-badge"
+                >
+                  ● DOSYA
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-400">
               Devre her değiştiğinde kaydedilir; saat kaynağı seçiliyse her kenar yeni bir zaman dilimidir
@@ -837,6 +922,8 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
           header={props.fileHeader}
           onHeaderChange={props.onFileHeaderChange}
           fileBaseName={props.fileBaseName}
+          logFile={props.logFile}
+          paused={paused}
         />
       ) : signals.length > 0 && view === 'table' ? (
         <ChronoTable signals={signals} samples={samples} radixOf={radixOf} cursor={cur} onCursor={setCursorT} onRadixMenu={(key, x, y) => setRadixMenu({ key, x, y })} />
