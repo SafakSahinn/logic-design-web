@@ -36,6 +36,15 @@ import {
   VIDEO_SIZE_MIN,
   VIDEO_SIZE_MAX,
   VIDEO_SCALE_MAX,
+  configureImage,
+  getImageConfig,
+  imageDataSize,
+  imageWithSize,
+  imageWithSource,
+  IMAGE_LICENSES,
+  IMAGE_SCALES,
+  type ImageConfig,
+  type ImageScale,
   KEYBOARD_BUFFER_MAX,
   TTY_ROWS_MAX,
   TTY_COLS_MAX,
@@ -117,7 +126,8 @@ export type AttrKind =
   | 'int' // decimal integer text field (32-bit signed)
   | 'eng' // resistance / capacitance text field with presets (evolution EngineeringAttribute), see AttrDef.unit
   | 'text' // free text field, see AttrDef.maxLength
-  | 'info' // read-only value
+  | 'info' // read-only value (a number is shown as a bit width)
+  | 'image' // picture chooser (data URL value)
   | 'bitMap' // splitter: one drop-down per incoming bit
   | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
 
@@ -923,6 +933,10 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'rgbVideo':
       list.push(videoResolutionAttr, videoWidthAttr, videoHeightAttr, videoColorAttr, videoResetAttr, videoCursorAttr, videoScaleAttr);
       break;
+    case 'image':
+      // evolution's order; the image has no label
+      list.push(imageSrcAttr, imageWidthAttr, imageHeightAttr, imageScaleAttr, imageDataSizeAttr, imageLicenseAttr, imageAttributionAttr);
+      break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
@@ -930,7 +944,7 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
   // Adder, subtractor, negator, absolute, square root: data width only
   if (ARITH_TYPES.has(type) && !list.includes(arithWidthAttr)) list.push(arithWidthAttr);
   if (type === 'led') list.push(ledColorAttr);
-  if (type !== 'textLabel') list.push(labelPosAttr);
+  if (type !== 'textLabel' && type !== 'image') list.push(labelPosAttr);
   return list;
 }
 
@@ -1470,6 +1484,100 @@ const videoScaleAttr: AttrDef = {
   options: numberOptions(1, VIDEO_SCALE_MAX),
   get: (c) => getVideoConfig(c).scale,
   set: (c, v) => reconfigureVideo(c, { scale: Number(v) }),
+};
+
+// ---- Image of Aşama 5e (evolution std/base Image): no pins, so every edit is state only; the frame grows from its
+// top-left corner
+const imageEdit = (c: CircuitComponentInstance, next: CircuitComponentInstance): AttrEdit | null => {
+  const a = getImageConfig(c);
+  const b = getImageConfig(next);
+  return (Object.keys(a) as (keyof ImageConfig)[]).every((k) => a[k] === b[k]) ? null : { comp: next, stateOnly: true };
+};
+
+/** The picture: a data URL from the file chooser / clipboard, '' = none (evolution "Image") */
+export const imageSrcAttr: AttrDef = {
+  key: 'imageSrc',
+  label: 'Resim',
+  kind: 'image',
+  title: 'Gösterilen resim (Logisim-evolution "Image"): PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Çerçeve elle boyutlandırılmadıysa resmin boyutunu alır (2048 pikselden büyük resim 2048\'e sığacak kadar küçültülerek)',
+  get: (c) => getImageConfig(c).src,
+  set: (c, v) => imageEdit(c, imageWithSource(c, String(v))),
+};
+
+/** Panel tools (evolution's menu items "Reset size", "Optimize", "Make white transparent"): JSON {src?, width?, height?}
+ * applied in that order like evolution's mutation; not listed in the attribute table */
+export const imageEditAttr: AttrDef = {
+  key: 'imageEdit',
+  label: 'Resim',
+  kind: 'image',
+  get: () => '',
+  set: (c, v) => {
+    let cmd: { src?: unknown; width?: unknown; height?: unknown };
+    try {
+      cmd = JSON.parse(String(v));
+    } catch {
+      return null;
+    }
+    let next = c;
+    if (typeof cmd.src === 'string') next = imageWithSource(next, cmd.src);
+    if (typeof cmd.width === 'number') next = imageWithSize(next, 'width', cmd.width);
+    if (typeof cmd.height === 'number') next = imageWithSize(next, 'height', cmd.height);
+    return imageEdit(c, next);
+  },
+};
+
+const imageSizeAttr = (key: 'width' | 'height', label: string): AttrDef => ({
+  key: key === 'width' ? 'imageWidth' : 'imageHeight',
+  label,
+  kind: 'int',
+  title: `Çerçevenin ${key === 'width' ? 'genişliği' : 'yüksekliği'} (Logisim-evolution "${key === 'width' ? 'Width' : 'Height'}"); 0 ya da eksi değer resmin kendi boyutuna döndürür. Elle boyut verildikten sonra yeni resim çerçeveyi değiştirmez`,
+  get: (c) => getImageConfig(c)[key],
+  set: (c, v) => imageEdit(c, imageWithSize(c, key, Number(v))),
+});
+const imageWidthAttr = imageSizeAttr('width', 'Genişlik');
+const imageHeightAttr = imageSizeAttr('height', 'Yükseklik');
+
+const imageScaleAttr: AttrDef = {
+  key: 'imageScale',
+  label: 'Yerleşim',
+  kind: 'select',
+  title: 'Resmin çerçeveye nasıl yerleştiği (Logisim-evolution "Scale"): sığdır en-boy oranını korur ve ortalar, uzat çerçeveyi tam doldurur, kapla oranı koruyarak doldurur ve taşanı kırpar',
+  options: [
+    { value: 'fit', label: 'Sığdır' },
+    { value: 'stretch', label: 'Uzat' },
+    { value: 'cover', label: 'Kapla (kırp)' },
+  ],
+  get: (c) => getImageConfig(c).scale,
+  set: (c, v) => imageEdit(c, configureImage(c, { scale: IMAGE_SCALES.includes(v as ImageScale) ? (v as ImageScale) : 'fit' })),
+};
+
+const imageDataSizeAttr: AttrDef = {
+  key: 'imageDataSize',
+  label: 'Veri boyutu',
+  kind: 'info',
+  title: 'Gömülü resmin devre dosyasında kapladığı yer (Logisim-evolution "Data Size"; dosyaya yazılmaz)',
+  get: (c) => imageDataSize(getImageConfig(c).src),
+};
+
+const IMAGE_LICENSE_LABELS: Record<string, string> = { Unspecified: 'Belirtilmemiş', Other: 'Diğer' };
+
+const imageLicenseAttr: AttrDef = {
+  key: 'imageLicense',
+  label: 'Lisans',
+  kind: 'select',
+  title: 'Resmin lisansı (Logisim-evolution "License"); yalnız bilgi, devreyi etkilemez',
+  options: IMAGE_LICENSES.map((l) => ({ value: l, label: IMAGE_LICENSE_LABELS[l] ?? l })),
+  get: (c) => getImageConfig(c).license,
+  set: (c, v) => imageEdit(c, configureImage(c, { license: IMAGE_LICENSES.includes(String(v)) ? String(v) : 'Unspecified' })),
+};
+
+const imageAttributionAttr: AttrDef = {
+  key: 'imageAttribution',
+  label: 'Atıf',
+  kind: 'text',
+  title: 'Resmin sahibi ya da kaynağı (Logisim-evolution "Attribution"); yalnız bilgi',
+  get: (c) => getImageConfig(c).attribution,
+  set: (c, v) => imageEdit(c, configureImage(c, { attribution: String(v) })),
 };
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires

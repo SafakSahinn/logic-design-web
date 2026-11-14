@@ -104,7 +104,12 @@ import {
   nextSwitchBit,
   switchBits,
   switchStateFor,
+  configureImage,
+  getImageConfig,
+  imageDrawRect,
+  imageShownSize,
 } from '../utils/circuitEngine';
+import { IMAGE_FILE_ACCEPT, clipboardImageSource, fileToImageSource, optimizeImageSource, whiteTransparentSource } from '../utils/imageOps';
 import {
   Play,
   Pause,
@@ -175,6 +180,8 @@ import {
   parseIntAttr,
   memSizeText,
   resolveAttrOptions,
+  imageEditAttr,
+  imageSrcAttr,
   type AttrDef,
   type AttrValue,
 } from '../utils/componentAttributes';
@@ -379,6 +386,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   tty: { label: 'Metin Terminali', badge: 'TTY' },
   telnet: { label: 'Telnet', badge: 'NET' },
   textLabel: { label: 'Metin Etiketi' },
+  image: { label: 'Resim', badge: 'IMG' },
   halfAdder: { label: 'Yarım Toplayıcı', badge: 'HA' },
   fullAdder: { label: 'Tam Toplayıcı', badge: 'FA' },
   halfSubtractor: { label: 'Yarım Çıkarıcı', badge: 'HS' },
@@ -1155,6 +1163,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const autosaveSnapshotRef = useRef({ components, wires, annotations, sheets, activeSheetId });
   autosaveSnapshotRef.current = { components, wires, annotations, sheets, activeSheetId };
   const lastAutosaveRef = useRef(Date.now());
+  const autosaveFullRef = useRef(false);
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
   const writeAutosave = useCallback(() => {
     const snap = autosaveSnapshotRef.current;
     lastAutosaveRef.current = Date.now();
@@ -1168,8 +1179,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
       localStorage.setItem('logic_workspace_autosave', JSON.stringify({ ...snap, timestamp: Date.now() }));
-    } catch {
-      // quota exceeded or private mode
+      autosaveFullRef.current = false;
+    } catch (err) {
+      // quota exceeded or private mode; a full storage (big pictures in Image parts) is said once until a save works
+      const full = err instanceof DOMException && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+      if (full && !autosaveFullRef.current) {
+        autosaveFullRef.current = true;
+        showToastRef.current(
+          'Otomatik kayıt tarayıcı belleğine sığmadı (büyük resimler?); son değişiklikler yeniden açılışta gelmeyebilir. Devreyi dosyaya kaydedin.',
+          8000
+        );
+      }
     }
   }, []);
   useEffect(() => {
@@ -1282,6 +1302,81 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     if (res.rewire && sim.wires.filter((w) => w.hasConflict).length > wires.filter((w) => w.hasConflict).length) {
       showToast('Yeni pin konumları çevredeki bir tele değdi ve kısa devre oluştu; Ctrl+Z ile geri alabilir ya da telleri düzeltebilirsiniz.', 6000);
     }
+  };
+
+  // ---- Image (Aşama 5e): the file chooser, the panel tools and pasting a picture work asynchronously, so they apply
+  // through refs to the newest state (a running clock changes the parts meanwhile)
+  const applyAttrRef = useRef(handleApplyAttribute);
+  applyAttrRef.current = handleApplyAttribute;
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
+  const imagePickTargetsRef = useRef<string[]>([]);
+  const openImagePicker = (ids: string[]) => {
+    imagePickTargetsRef.current = ids;
+    const el = imageFileInputRef.current;
+    if (!el) return;
+    el.value = '';
+    el.click();
+  };
+  const handleImageFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const src = await fileToImageSource(file);
+      if (!imageShownSize(src)) {
+        showToast('Bu dosya PNG, JPEG, GIF ya da BMP resmi olarak okunamadı.');
+        return;
+      }
+      applyAttrRef.current(imageSrcAttr, src, imagePickTargetsRef.current);
+    } catch {
+      showToast('Resim dosyası okunamadı.');
+    }
+  };
+  const imageToolRef = useRef<Record<string, boolean>>({});
+  const runImageTool = async (compId: string, tool: 'reset' | 'optimize' | 'white') => {
+    const comp = components.find((c) => c.id === compId);
+    if (!comp || imageToolRef.current[compId]) return;
+    const cfg = getImageConfig(comp);
+    const shown = imageShownSize(cfg.src);
+    if (!shown) return;
+    if (tool === 'reset') {
+      applyAttrRef.current(imageEditAttr, JSON.stringify({ width: shown.width, height: shown.height }), [compId]);
+      return;
+    }
+    imageToolRef.current[compId] = true;
+    try {
+      if (tool === 'optimize') {
+        const r = await optimizeImageSource(cfg.src, cfg.width, cfg.height, cfg.scale);
+        if (r === 'same') {
+          showToast(`Resim zaten çerçeveye uygun boyutta (${shown.width} × ${shown.height} piksel).`);
+          return;
+        }
+        // evolution: the picture is replaced; in fit mode the frame takes the new picture size
+        const cmd = cfg.scale === 'fit' ? { src: r.src, width: r.to.width, height: r.to.height } : { src: r.src };
+        applyAttrRef.current(imageEditAttr, JSON.stringify(cmd), [compId]);
+        showToast(`Resim ${r.from.width} × ${r.from.height} pikselden ${r.to.width} × ${r.to.height} piksele yeniden örneklendi (Ctrl+Z geri alır).`, 5000);
+      } else {
+        const src = await whiteTransparentSource(cfg.src);
+        applyAttrRef.current(imageSrcAttr, src, [compId]);
+        showToast('Kenara bağlı beyaz zemin saydam yapıldı (Ctrl+Z geri alır).');
+      }
+    } catch {
+      showToast('Resim çözülemedi.');
+    } finally {
+      delete imageToolRef.current[compId];
+    }
+  };
+  // A picture pasted from the clipboard becomes a new Image at (100, 100) or the nearest free spot (evolution
+  // pasteSystemClipboardImage: PNG, the frame set to the picture size)
+  const addPastedImage = (src: string, width: number, height: number) => {
+    recordHistory();
+    const probe = configureImage(createComponentInstance('image', 0, 0), { src, width, height, sized: true });
+    const spot = findFreeSpot(probe, { x: 100, y: 100 });
+    const comp = { ...probe, x: spot.x, y: spot.y };
+    commitCircuit([...components, comp], wires);
+    setSelectedCompIds([comp.id]);
+    setSelectedWireIds([]);
+    showToast(`Panodaki resim eklendi (${width} × ${height} piksel).`);
   };
 
   // Attribute panel label field (single part)
@@ -2041,11 +2136,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Latest versions of plain handlers the keyboard shortcuts call; the key listener effect
   // is not re-created on every render, so it reads them from here instead of a stale closure
+  const pendingPasteRef = useRef(0);
   const shortcutActionsRef = useRef({
     step: () => {},
     resetView: () => {},
     selectedKeyboard: (): string | null => null,
     pokeKeyboard: (_id: string, _fn: (c: CircuitComponentInstance) => CircuitComponentInstance) => {},
+    addPastedImage: (_src: string, _w: number, _h: number) => {},
+    pasteParts: (): boolean => false,
   });
   shortcutActionsRef.current = {
     step: handleSingleStep,
@@ -2057,6 +2155,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return c && c.type === 'keyboard' ? c.id : null;
     },
     pokeKeyboard: pokeComponent,
+    addPastedImage: (src, w, h) => addPastedImage(src, w, h),
+    pasteParts: () => handlePasteClipboard(),
   };
 
   // ---- Telnet parts (Aşama 5c-2b). Desktop: each part asks the main process for the TCP server on its port
@@ -3511,6 +3611,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           return;
         }
       }
+      // Image: double-click chooses its picture (it has no label)
+      if (comp.type === 'image') {
+        openImagePicker([comp.id]);
+        return;
+      }
       // Telnet: double-click opens its terminal window (the label stays editable in the attribute panel)
       if (comp.type === 'telnet') {
         openTerminalWindow(comp.id);
@@ -3524,6 +3629,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setRenameInputVal(comp.label || '');
       setRenameLabelPos(comp.state.labelPos || 'bottom');
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [sheets, handleSwitchSheet, showToast, openTerminalWindow]
   );
 
@@ -3880,7 +3986,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'v' || e.key === 'V')) {
-        if (handlePasteClipboard()) e.preventDefault();
+        // A picture on the system clipboard wins over copied parts (evolution); only the paste event can see it, so
+        // the copied parts are pasted there, or here shortly after when the browser sends no paste event
+        if (pendingPasteRef.current) clearTimeout(pendingPasteRef.current);
+        pendingPasteRef.current = window.setTimeout(() => {
+          pendingPasteRef.current = 0;
+          shortcutActionsRef.current.pasteParts();
+        }, 150);
         return;
       }
 
@@ -3983,12 +4095,30 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
     };
 
-    // Pasted text goes into a selected keyboard, newlines as 10, characters it does not take dropped
+    // Pasted text goes into a selected keyboard, newlines as 10, characters it does not take dropped; otherwise a
+    // picture on the clipboard becomes an Image, else the copied parts are pasted
     const handlePaste = (e: ClipboardEvent) => {
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
       const kbdId = shortcutActionsRef.current.selectedKeyboard();
-      if (!kbdId) return;
+      const pending = pendingPasteRef.current !== 0;
+      if (pending) {
+        clearTimeout(pendingPasteRef.current);
+        pendingPasteRef.current = 0;
+      }
+      if (!kbdId) {
+        const item = Array.from(e.clipboardData?.items ?? []).find((it) => it.kind === 'file' && it.type.startsWith('image/'));
+        const blob = item?.getAsFile();
+        if (blob) {
+          e.preventDefault();
+          clipboardImageSource(blob)
+            .then((r) => shortcutActionsRef.current.addPastedImage(r.src, r.width, r.height))
+            .catch(() => {});
+          return;
+        }
+        if (pending && shortcutActionsRef.current.pasteParts()) e.preventDefault();
+        return;
+      }
       e.preventDefault();
       const text = (e.clipboardData?.getData('text') ?? '').replace(/\r\n?/g, '\n');
       const chars = text
@@ -4969,6 +5099,53 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             >
               (Çift tıkla veya Etiket ile düzenle)
             </text>
+          </g>
+        );
+      }
+
+      case 'image': {
+        // evolution Image.paintGhost: the picture placed in the frame (fit / stretch / cover, cover clipped); without a
+        // picture it could decode, a light grey box with a cross
+        const cfg = getImageConfig(comp);
+        const { width: w, height: h } = cfg;
+        const isData = cfg.src.startsWith('data:image/');
+        const r = isData ? imageDrawRect(cfg) : null;
+        const clipId = `imgclip_${comp.id}`;
+        const tip = !cfg.src
+          ? 'Resim (resim seçilmedi): çift tıklayın ya da Özellikler panelinden seçin'
+          : isData
+            ? `Resim ${w} × ${h}${cfg.attribution ? ` · ${cfg.attribution}` : ''}`
+            : `Resim: "${cfg.src}" dosya yolu olarak kayıtlı; tarayıcı bu dosyayı okuyamaz`;
+        return (
+          <g>
+            <title>{tip}</title>
+            <rect x={0} y={0} width={w} height={h} fill="transparent" />
+            {isData ? (
+              <>
+                {cfg.scale === 'cover' && (
+                  <clipPath id={clipId}>
+                    <rect x={0} y={0} width={w} height={h} />
+                  </clipPath>
+                )}
+                <image
+                  href={cfg.src}
+                  x={r?.x ?? 0}
+                  y={r?.y ?? 0}
+                  width={r?.width ?? w}
+                  height={r?.height ?? h}
+                  preserveAspectRatio={r || cfg.scale === 'stretch' ? 'none' : cfg.scale === 'cover' ? 'xMidYMid slice' : 'xMidYMid meet'}
+                  clipPath={cfg.scale === 'cover' ? `url(#${clipId})` : undefined}
+                  className="select-none"
+                />
+              </>
+            ) : (
+              <g className="pointer-events-none">
+                <rect x={0} y={0} width={w} height={h} fill="#c0c0c0" />
+                <rect x={0.5} y={0.5} width={Math.max(0, w - 1)} height={Math.max(0, h - 1)} fill="none" stroke="#808080" strokeWidth={1} />
+                <line x1={0} y1={0} x2={w - 1} y2={h - 1} stroke="#808080" strokeWidth={1} />
+                <line x1={0} y1={h - 1} x2={w - 1} y2={0} stroke="#808080" strokeWidth={1} />
+              </g>
+            )}
           </g>
         );
       }
@@ -6770,7 +6947,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel'] as ComponentType[],
+      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel', 'image'] as ComponentType[],
     },
     {
       id: 'audio',
@@ -10523,9 +10700,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 {/* Actions: Rename, Rotate, Duplicate, Delete */}
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={handleOpenRename}
+                    onClick={selectedComp.type === 'image' ? () => openImagePicker([selectedComp.id]) : handleOpenRename}
                     className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer transition-colors"
-                    title="Yeniden Adlandır / Etiket Değiştir"
+                    title={selectedComp.type === 'image' ? 'Resim seç' : 'Yeniden Adlandır / Etiket Değiştir'}
                   >
                     <Edit3 className="w-3.5 h-3.5" />
                   </button>
@@ -10813,9 +10990,37 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 case 'info':
                   return (
                     <span className={`text-[11px] font-mono ${dark ? 'text-slate-300' : 'text-slate-700'}`} title={def.title}>
-                      {common === undefined ? '—' : `${common} bit`}
+                      {common === undefined ? '—' : typeof common === 'number' ? `${common} bit` : common}
                     </span>
                   );
+                case 'image': {
+                  // evolution ImageSourceAttribute.toDisplayString: none / "[PNG Data]" / the file's name
+                  const src = common === undefined ? undefined : String(common);
+                  const shown =
+                    src === undefined
+                      ? '—'
+                      : src === ''
+                        ? 'Yok'
+                        : src.startsWith('data:image/')
+                          ? `[${(src.slice(11, Math.max(11, src.indexOf(';'))) || 'resim').toUpperCase()} verisi]`
+                          : (src.split(/[\\/]/).pop() ?? src);
+                  return (
+                    <div className="flex items-center gap-1 min-w-0" title={def.title}>
+                      <span className={`text-[11px] font-mono truncate flex-1 min-w-0 ${dark ? 'text-slate-300' : 'text-slate-700'}`}>{shown}</span>
+                      <button onClick={() => openImagePicker(ids)} className={btnCls(false)} title="PNG, JPEG, GIF ya da BMP dosyası seç">
+                        Seç…
+                      </button>
+                      <button
+                        onClick={() => handleApplyAttribute(def, '', ids)}
+                        disabled={values.every((v) => v === '')}
+                        className={`${btnCls(false)} disabled:opacity-40 disabled:cursor-default`}
+                        title="Resmi kaldır (çerçeve kalır)"
+                      >
+                        Kaldır
+                      </button>
+                    </div>
+                  );
+                }
                 case 'bitMap': {
                   // Splitter bit distribution (single part): Logisim bit0..bitN, 0 = no end
                   const cfg = getSplitterConfig(first);
@@ -10880,6 +11085,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </button>
               </div>
             );
+            const imageToolsRow = single && first.type === 'image' && (() => {
+              const ok = !!imageShownSize(getImageConfig(first).src);
+              const cls = `${btnCls(false)} disabled:opacity-40 disabled:cursor-default`;
+              return (
+                <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                  <span className={`text-[11px] font-semibold ${rowLabel}`}>Araçlar</span>
+                  <div className="flex flex-wrap gap-1">
+                    <button disabled={!ok} onClick={() => runImageTool(first.id, 'reset')} className={cls} title="Çerçeveyi resmin kendi boyutuna getir (Logisim-evolution &quot;Reset size&quot;)">
+                      Kendi boyutu
+                    </button>
+                    <button
+                      disabled={!ok}
+                      onClick={() => runImageTool(first.id, 'optimize')}
+                      className={cls}
+                      title="Resmi çerçevenin gerektirdiği piksel boyutunda yeniden kaydet, dosya küçülür (Logisim-evolution &quot;Optimize&quot;; sığdırda çerçeve de yeni boyutu alır)"
+                    >
+                      Optimize et
+                    </button>
+                    <button
+                      disabled={!ok}
+                      onClick={() => runImageTool(first.id, 'white')}
+                      className={cls}
+                      title="Kenara bağlı beyaz zemini saydam yap (Logisim-evolution &quot;Make white transparent&quot;)"
+                    >
+                      Beyazı saydam yap
+                    </button>
+                  </div>
+                </div>
+              );
+            })();
             const terminalRow = single && first.type === 'telnet' && (
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>Terminal</span>
@@ -10919,7 +11154,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </button>
                 {!attrPanelCollapsed && (
                   <div className="overflow-y-auto px-3 py-2 space-y-2">
-                    {single && first.type !== 'textLabel' && (
+                    {single && first.type !== 'textLabel' && first.type !== 'image' && (
                       <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                         <span className={`text-[11px] font-semibold ${rowLabel}`}>Etiket</span>
                         <input
@@ -10950,6 +11185,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       </React.Fragment>
                     ))}
                     {terminalRow}
+                    {imageToolsRow}
                     {defs.length === 0 && !single && (
                       <p className={`text-[11px] ${rowLabel}`}>Bu parçanın ortak ayarı yok.</p>
                     )}
@@ -13844,6 +14080,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       {/* Desktop Extra Modals (K-Map, Number Converter, Presets, About) */}
       {/* File input for "Devre Aç / Yükle" (Ctrl+O): rendered in both layouts, the desktop one has no web toolbar */}
       <input ref={fileInputRef} type="file" accept=".json,.circ" onChange={handleImportJSON} className="hidden" />
+      <input ref={imageFileInputRef} type="file" accept={IMAGE_FILE_ACCEPT} onChange={handleImageFileChosen} className="hidden" />
       {desktopMode && renderDesktopExtraModals()}
 
             {/* Secondary Confirmation Modal for Clear Canvas */}

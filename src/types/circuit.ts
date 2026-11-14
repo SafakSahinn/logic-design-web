@@ -73,6 +73,8 @@ export type ComponentType =
   | 'tty'
   | 'telnet'
   | 'rgbVideo'
+  // Logisim-evolution decorative image of the Base library (Aşama 5e)
+  | 'image'
   | 'multiplexer'
   | 'demultiplexer'
   | 'decoder'
@@ -371,6 +373,18 @@ export interface CircuitComponentInstance {
     videoX?: number;
     videoY?: number;
     videoData?: number;
+    /** Image: the picture as a data URL ("data:image/png;base64,...") or a file path (evolution "Image"); unset = none */
+    imageSrc?: string;
+    /** Image: frame size in canvas units (unset = 64, at least 1) */
+    imageWidth?: number;
+    imageHeight?: number;
+    /** Image: how the picture fills the frame (unset = 'fit') */
+    imageScale?: 'fit' | 'stretch' | 'cover';
+    /** Image: evolution's licence option value (unset = 'Unspecified') and attribution text */
+    imageLicense?: string;
+    imageAttribution?: string;
+    /** Image: the frame size was set by hand (evolution userSetDimensions), so a new picture keeps it */
+    imageSized?: boolean;
     asciiChar?: string;
     asciiCode?: number;
     strobe?: boolean;

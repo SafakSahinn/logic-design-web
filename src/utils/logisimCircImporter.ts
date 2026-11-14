@@ -30,6 +30,13 @@ import {
   VIDEO_SCALE_MAX,
   VIDEO_SIZE_MAX,
   VIDEO_SIZE_MIN,
+  configureImage,
+  IMAGE_DEFAULT_SIZE,
+  IMAGE_LICENSES,
+  IMAGE_SCALES,
+  imageShownSize,
+  type ImageConfig,
+  type ImageScale,
   type Io5cConfig,
   KEYBOARD_BUFFER_MAX,
   KEYBOARD_DEFAULT_BUFFER,
@@ -156,6 +163,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'telnet') return 'telnet';
   // Evolution's RGB Video of Aşama 5d (2.7.1 has none)
   if (n === 'rgb video') return 'rgbVideo';
+  // Evolution's decorative Image of the Base library, Aşama 5e (2.7.1 has none)
+  if (n === 'image') return 'image';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
 
   // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
@@ -1202,6 +1211,65 @@ export function logisimVideoSettings(attr: Record<string, string>): { cfg: Video
   return { cfg, ports: logisimVideoPorts(), notes };
 }
 
+// ---- Aşama 5e part (evolution's std/base Image) ----
+
+/** Logisim-evolution part name of the decorative image (Base library) */
+export const LOGISIM_IMAGE_NAME = 'Image';
+
+/**
+ * Settings of an Image from its evolution attributes (ImageAttributes): image = the source string (a data URL or a
+ * file path, line breaks dropped like evolution's writer), width / height = the frame (default 64; 0 or less: the
+ * picture's size when it decodes, else 1), scale fit / stretch / cover, license (one of evolution's options) and
+ * attribution. Evolution refuses a value it cannot parse; here it takes the default with a note.
+ */
+export function logisimImageSettings(attr: Record<string, string>): { cfg: ImageConfig; notes: string[] } {
+  const notes: string[] = [];
+  const src = (attr.image ?? '').replace(/[\r\n]+/g, '');
+  const shown = imageShownSize(src);
+  if (src && !src.startsWith('data:image/')) notes.push(`resim "${src}" dosya yolu olarak kayıtlı; tarayıcı bu dosyayı okuyamaz, boş çerçeve çizilir (yol korunur).`);
+  else if (src && !shown) notes.push('gömülü resim PNG, JPEG, GIF ya da BMP olarak çözülemedi; Logisim-evolution da boş çerçeve çizer.');
+  // XmlReader.initAttributeSet: the attributes in the part's list order (image, width, height, ...), a missing one set
+  // to its default the same way; so the picture first sizes the frame, then width and height (64 when missing) are
+  // set like the user would set them (0 or less: both sides from the picture when it decodes, else 1)
+  let width = shown ? shown.width : IMAGE_DEFAULT_SIZE;
+  let height = shown ? shown.height : IMAGE_DEFAULT_SIZE;
+  for (const name of ['width', 'height'] as const) {
+    const what = name === 'width' ? 'genişlik' : 'yükseklik';
+    const v = attr[name];
+    let n = IMAGE_DEFAULT_SIZE;
+    if (v !== undefined) {
+      n = /^-?\d+$/.test(v.trim()) ? parseInt(v, 10) : NaN;
+      if (!Number.isFinite(n)) {
+        notes.push(`${what} "${v}" okunamadı, varsayılan ${IMAGE_DEFAULT_SIZE} alındı.`);
+        n = IMAGE_DEFAULT_SIZE;
+      }
+    }
+    if (n <= 0 && shown) {
+      width = shown.width;
+      height = shown.height;
+      notes.push(`${what} ${n}; resmin kendi boyutu (${shown.width} × ${shown.height}) alındı.`);
+    } else if (n <= 0) {
+      if (name === 'width') width = 1;
+      else height = 1;
+      notes.push(`${what} ${n}; en az 1 olmalı, 1 alındı.`);
+    } else if (name === 'width') width = n;
+    else height = n;
+  }
+  const scaleText = attr.scale;
+  let scale: ImageScale = 'fit';
+  if (scaleText !== undefined) {
+    if (IMAGE_SCALES.includes(scaleText as ImageScale)) scale = scaleText as ImageScale;
+    else notes.push(`yerleşim "${scaleText}" tanınmadı, varsayılan "fit" alındı.`);
+  }
+  let license = 'Unspecified';
+  if (attr.license !== undefined) {
+    if (IMAGE_LICENSES.includes(attr.license)) license = attr.license;
+    else notes.push(`lisans "${attr.license}" tanınmadı, varsayılan "Unspecified" alındı.`);
+  }
+  // width and height were set while loading, so evolution's userSetDimensions is on: a new picture keeps the frame
+  return { cfg: { src, width, height, scale, license, attribution: attr.attribution ?? '', sized: true }, notes };
+}
+
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
   const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
   const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
@@ -1618,14 +1686,14 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
-      // (the RGB Video's width is its screen width in pixels, not a bit width)
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo')
+      // (the RGB Video's width is its screen width in pixels, the Image's its frame width, not a bit width)
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image') occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -2016,6 +2084,15 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         );
         continue;
       }
+      if (nativeType === 'image') {
+        // Evolution's Image (no pins, no facing, no label): its top-left corner on the (scaled) loc; the frame keeps
+        // evolution's size so the file goes back unchanged
+        const st = logisimImageSettings(attr);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        const p = scaled(loc);
+        components.push(configureImage(createComponentInstance('image', p.x, p.y), st.cfg));
+        continue;
+      }
       if (nativeType === 'rgbVideo') {
         // Evolution's RGB Video (no facing, no label): every pin on its connection point, our part unrotated, the
         // screen black (evolution keeps no image in the file)
@@ -2192,6 +2269,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       });
     for (let k = 0; k < components.length; k++) {
       let comp = components[k];
+      // an Image has no pins and may lie under other parts on purpose (a background): it stays and blocks nothing
+      if (comp.type === 'image') continue;
       for (let tries = 0; tries < 400; tries++) {
         if (!pinClash(comp) && !overlaps(box(comp))) break;
         comp = updatePinPositions({ ...comp, y: comp.y + 10 });

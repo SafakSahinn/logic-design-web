@@ -1609,6 +1609,247 @@ export function configureVideo(comp: CircuitComponentInstance, patch: Partial<Vi
   return updatePinPositions({ ...comp, inputs, outputs: [], state });
 }
 
+// ---- Logisim-evolution Base library Image of Aşama 5e -------------------------------------------------------
+// image = 'Image' (std/base/Image.java + ImageAttributes): a picture in a frame whose top-left corner is the part's
+// location; no pins, no logic, not in HDL. The picture is kept as evolution keeps it: the source string itself
+// (normally a "data:image/...;base64," URL, else a file path), so the .circ attribute goes back byte for byte.
+// Evolution decodes it with ImageIO (PNG, JPEG, GIF, BMP) and scales a picture above 2048 px down for drawing;
+// the frame size follows the picture until the user sets it (userSetDimensions).
+
+export const IMAGE_DEFAULT_SIZE = 64;
+/** evolution ImageUtil.MAX_IMAGE_DIMENSION */
+export const IMAGE_MAX_DIMENSION = 2048;
+export type ImageScale = 'fit' | 'stretch' | 'cover';
+export const IMAGE_SCALES: ImageScale[] = ['fit', 'stretch', 'cover'];
+/** evolution's licence options (their .circ value), in its order */
+export const IMAGE_LICENSES = [
+  'Unspecified',
+  'Public Domain / CC0',
+  'CC BY (Attribution)',
+  'CC BY-SA (Attribution-ShareAlike)',
+  'CC BY-NC (NonCommercial)',
+  'CC BY-ND (NoDerivatives)',
+  'Fair Use / Educational',
+  'Proprietary / Copyrighted',
+  'Other',
+];
+
+export interface ImageConfig {
+  src: string;
+  width: number;
+  height: number;
+  scale: ImageScale;
+  license: string;
+  attribution: string;
+  sized: boolean;
+}
+
+export function getImageConfig(comp: Pick<CircuitComponentInstance, 'state'>): ImageConfig {
+  const s = comp.state;
+  return {
+    src: s.imageSrc ?? '',
+    width: Math.max(1, Math.round(s.imageWidth ?? IMAGE_DEFAULT_SIZE)),
+    height: Math.max(1, Math.round(s.imageHeight ?? IMAGE_DEFAULT_SIZE)),
+    scale: s.imageScale && IMAGE_SCALES.includes(s.imageScale) ? s.imageScale : 'fit',
+    license: s.imageLicense && IMAGE_LICENSES.includes(s.imageLicense) ? s.imageLicense : 'Unspecified',
+    attribution: s.imageAttribution ?? '',
+    sized: s.imageSized === true,
+  };
+}
+
+/** The image's settings as given (defaults stay unset in the state); an image has no pins */
+export function configureImage(comp: CircuitComponentInstance, patch: Partial<ImageConfig>): CircuitComponentInstance {
+  const cfg = { ...getImageConfig(comp), ...patch };
+  const state = {
+    ...comp.state,
+    imageSrc: cfg.src || undefined,
+    imageWidth: cfg.width === IMAGE_DEFAULT_SIZE ? undefined : Math.max(1, Math.round(cfg.width)),
+    imageHeight: cfg.height === IMAGE_DEFAULT_SIZE ? undefined : Math.max(1, Math.round(cfg.height)),
+    imageScale: cfg.scale === 'fit' ? undefined : cfg.scale,
+    imageLicense: cfg.license === 'Unspecified' ? undefined : cfg.license,
+    imageAttribution: cfg.attribution || undefined,
+    imageSized: cfg.sized || undefined,
+  };
+  return { ...comp, inputs: [], outputs: [], state };
+}
+
+/** evolution ImageUtil.formatBytes: "0 B", "512 B", "12.3 KB", ... (1024 steps, one decimal) */
+export function formatImageBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const g = Math.min(Math.trunc(Math.log10(bytes) / Math.log10(1024)), units.length - 1);
+  if (g === 0) return `${bytes} B`;
+  return `${(bytes / 1024 ** g).toFixed(1)} ${units[g]}`;
+}
+
+/** evolution formatDataSize: the UTF-8 size of the source string (the data URL text, not the decoded file) */
+export function imageDataSize(src: string): string {
+  return formatImageBytes(new TextEncoder().encode(src).length);
+}
+
+/** Bytes of a data URL's base64 payload from its start (all of it when maxChars is undefined) */
+function dataUrlBytes(src: string, maxChars?: number): Uint8Array | null {
+  if (!src.startsWith('data:image/')) return null;
+  const comma = src.indexOf(',');
+  if (comma < 0) return null;
+  let b64 = src.slice(comma + 1, maxChars === undefined ? undefined : comma + 1 + maxChars).replace(/\s+/g, '');
+  b64 = b64.slice(0, b64.length - (b64.length % 4));
+  try {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Picture size from the PNG / GIF / JPEG / BMP header (the formats evolution's ImageIO reads), null otherwise */
+function headerSize(b: Uint8Array): { width: number; height: number } | null | 'more' {
+  const u16be = (i: number) => (b[i] << 8) | b[i + 1];
+  const u16le = (i: number) => b[i] | (b[i + 1] << 8);
+  const i32le = (i: number) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24);
+  const u32be = (i: number) => ((b[i] << 24) >>> 0) + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]);
+  if (b.length >= 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return { width: u32be(16), height: u32be(20) };
+  if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) {
+    // ImageIO reads the first frame, sized by its image descriptor
+    let i = 13;
+    if (b.length < 13) return 'more';
+    if (b[10] & 0x80) i += 3 * (1 << ((b[10] & 7) + 1));
+    while (i < b.length) {
+      if (b[i] === 0x2c) return i + 9 <= b.length ? { width: u16le(i + 5), height: u16le(i + 7) } : 'more';
+      if (b[i] !== 0x21) return null;
+      i += 2;
+      while (i < b.length && b[i] !== 0) i += b[i] + 1;
+      i++;
+    }
+    return 'more';
+  }
+  if (b.length >= 2 && b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2;
+    while (i + 4 <= b.length) {
+      if (b[i] !== 0xff) return null;
+      const m = b[i + 1];
+      if (m === 0xff) {
+        i++;
+        continue;
+      }
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc)
+        return i + 9 <= b.length ? { width: u16be(i + 7), height: u16be(i + 5) } : 'more';
+      if (m === 0xd9 || m === 0xda) return null;
+      i += 2 + u16be(i + 2);
+    }
+    return 'more';
+  }
+  if (b.length >= 26 && b[0] === 0x42 && b[1] === 0x4d) return { width: Math.abs(i32le(18)), height: Math.abs(i32le(22)) };
+  return null;
+}
+
+const imageSizeCache = new Map<string, { width: number; height: number } | null>();
+
+/** The picture's own size in pixels, or null when it is not a data URL evolution could decode */
+export function imageNaturalSize(src: string): { width: number; height: number } | null {
+  if (imageSizeCache.has(src)) return imageSizeCache.get(src)!;
+  let r = (() => {
+    const head = dataUrlBytes(src, 1 << 16);
+    if (!head) return null;
+    const first = headerSize(head);
+    if (first !== 'more') return first;
+    const all = dataUrlBytes(src);
+    const full = all ? headerSize(all) : null;
+    return full === 'more' ? null : full;
+  })();
+  if (r && (r.width <= 0 || r.height <= 0)) r = null;
+  if (imageSizeCache.size > 64) imageSizeCache.clear();
+  imageSizeCache.set(src, r);
+  return r;
+}
+
+/** Size evolution draws the picture at: its own size, scaled down to fit 2048 x 2048 (enforceMaxDimensions) */
+export function imageShownSize(src: string): { width: number; height: number } | null {
+  const n = imageNaturalSize(src);
+  if (!n || (n.width <= IMAGE_MAX_DIMENSION && n.height <= IMAGE_MAX_DIMENSION)) return n;
+  const scale = Math.min(IMAGE_MAX_DIMENSION / n.width, IMAGE_MAX_DIMENSION / n.height);
+  return { width: Math.max(1, Math.trunc(n.width * scale)), height: Math.max(1, Math.trunc(n.height * scale)) };
+}
+
+/** A new picture (evolution setValue(ATTR_IMAGE)): the frame takes its size unless the user has set the size */
+export function imageWithSource(comp: CircuitComponentInstance, src: string): CircuitComponentInstance {
+  const cfg = getImageConfig(comp);
+  const shown = imageShownSize(src);
+  return configureImage(comp, shown && !cfg.sized ? { src, width: shown.width, height: shown.height } : { src });
+}
+
+/** A new frame width or height (evolution setValue(ATTR_WIDTH / ATTR_HEIGHT)): 0 or less takes the picture's size
+ * on both sides when there is a picture, else 1; afterwards a new picture keeps the frame */
+export function imageWithSize(comp: CircuitComponentInstance, key: 'width' | 'height', value: number): CircuitComponentInstance {
+  const shown = imageShownSize(getImageConfig(comp).src);
+  const v = Math.round(value);
+  if (v <= 0 && shown) return configureImage(comp, { width: shown.width, height: shown.height, sized: true });
+  return configureImage(comp, { [key]: Math.max(1, v), sized: true });
+}
+
+/** Where evolution draws the picture inside the frame (paintGhost), relative to the frame's top-left corner;
+ * 'cover' may reach outside the frame (it is clipped). null: no decodable picture */
+export function imageDrawRect(cfg: ImageConfig): { x: number; y: number; width: number; height: number } | null {
+  const img = imageShownSize(cfg.src);
+  if (!img) return null;
+  const { width: w, height: h } = cfg;
+  if (cfg.scale === 'stretch') return { x: 0, y: 0, width: w, height: h };
+  const scale = cfg.scale === 'cover' ? Math.max(w / img.width, h / img.height) : Math.min(w / img.width, h / img.height);
+  const tw = Math.max(1, Math.trunc(img.width * scale));
+  const th = Math.max(1, Math.trunc(img.height * scale));
+  return { x: Math.trunc((w - tw) / 2), y: Math.trunc((h - th) / 2), width: tw, height: th };
+}
+
+/** evolution ImageUtil.getOptimizedTargetDimensions: the picture size "Optimize" scales to */
+export function imageOptimizedSize(img: { width: number; height: number }, frameW: number, frameH: number, scale: ImageScale): { width: number; height: number } {
+  if (frameW <= 0 || frameH <= 0) return { width: 0, height: 0 };
+  if (scale === 'stretch' || scale === 'cover') return { width: frameW, height: frameH };
+  const s = Math.min(frameW / img.width, frameH / img.height);
+  if (s >= 1) return { ...img };
+  return { width: Math.max(1, Math.trunc(img.width * s)), height: Math.max(1, Math.trunc(img.height * s)) };
+}
+
+/** evolution ImageUtil.makeWhiteTransparent on RGBA pixels: the near-white (r, g, b > 235, not fully transparent)
+ * area joined to the border, 4-connected, becomes fully transparent (its colour is kept); a new array */
+export function whiteToTransparent(px: Uint8ClampedArray | Uint8Array, w: number, h: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(px);
+  const visited = new Uint8Array(w * h);
+  const white = (i: number) => px[4 * i + 3] > 0 && px[4 * i] > 235 && px[4 * i + 1] > 235 && px[4 * i + 2] > 235;
+  const queue: number[] = [];
+  const seed = (x: number, y: number) => {
+    const i = y * w + x;
+    if (!visited[i] && white(i)) {
+      visited[i] = 1;
+      queue.push(i);
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    seed(x, 0);
+    seed(x, h - 1);
+  }
+  for (let y = 0; y < h; y++) {
+    seed(0, y);
+    seed(w - 1, y);
+  }
+  for (let q = 0; q < queue.length; q++) {
+    const i = queue[q];
+    out[4 * i + 3] = 0;
+    const x = i % w;
+    const y = (i - x) / w;
+    if (y + 1 < h) seed(x, y + 1);
+    if (y > 0) seed(x, y - 1);
+    if (x + 1 < w) seed(x + 1, y);
+    if (x > 0) seed(x - 1, y);
+  }
+  return out;
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -1920,6 +2161,17 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     inputs: [],
     outputs: [],
     description: 'Tuvale devre şeması için özel notlar ve başlıklar eklemek için kullanılır',
+  },
+  image: {
+    type: 'image',
+    name: 'Resim',
+    category: 'outputs',
+    width: IMAGE_DEFAULT_SIZE,
+    height: IMAGE_DEFAULT_SIZE,
+    inputs: [],
+    outputs: [],
+    description:
+      'Devreye süs ya da açıklama için resim koyar (Logisim-evolution Image): PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Bacağı ve mantığı yok; çerçeve boyutu, sığdır / uzat / kapla, lisans ve atıf ayarlanır. Ctrl+V panodaki resmi yeni bir Resim olarak yapıştırır',
   },
   sevenSegment: {
     type: 'sevenSegment',
@@ -2269,7 +2521,8 @@ export function createComponentInstance(
   const inst: CircuitComponentInstance = {
     id: compId,
     type,
-    label: customLabel || meta.name,
+    // evolution's Image has no label
+    label: customLabel || (type === 'image' ? '' : meta.name),
     x,
     y,
     inputs,
@@ -2363,6 +2616,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   if (comp.type === 'rgbVideo') {
     const g = videoGeometry(getVideoConfig(comp));
     return { width: g.width, height: g.height };
+  }
+  if (comp.type === 'image') {
+    const cfg = getImageConfig(comp);
+    return { width: cfg.width, height: cfg.height };
   }
   const ttl = ttlChipOf(comp.type);
   if (ttl) return ttlSize(ttl);
@@ -5058,6 +5315,7 @@ export function simulateCircuitStep(
       case 'probe':
       case 'buzzer':
       case 'textLabel':
+      case 'image':
       case 'tunnel': {
         // Output displays & wireless tunnels reflect network resolution
         break;
@@ -6549,6 +6807,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'keyboard' &&
       c.type !== 'telnet' &&
       c.type !== 'textLabel' &&
+      c.type !== 'image' &&
       c.type !== 'splitter' &&
       c.type !== 'tunnel'
     ) {

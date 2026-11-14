@@ -153,7 +153,7 @@ function ramSyncRead(c: CircuitComponentInstance): boolean {
 }
 const breaksPath = (c: CircuitComponentInstance) => PATH_BREAK_TYPES.includes(c.type) || ramSyncRead(c);
 // Parts that are only wiring / display and add no logic level
-const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'splitter4', 'busSplitter', 'splitter', 'bitExtender'];
+const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'image', 'splitter4', 'busSplitter', 'splitter', 'bitExtender'];
 
 export interface CMOSGateStats {
   gateType: string;
@@ -504,7 +504,7 @@ export function analyzeCircuit(
       gateCount++;
     } else if (SEQUENTIAL_TYPES.includes(c.type)) {
       sequentialCount++;
-    } else if (!['tunnel', 'textLabel'].includes(c.type)) {
+    } else if (!['tunnel', 'textLabel', 'image'].includes(c.type)) {
       combinationalCount++;
     }
   });

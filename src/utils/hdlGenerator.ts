@@ -196,7 +196,7 @@ function wrap(e: string): string {
 // and a port I/O are blocks (their pins go both ways), see their cases below
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
-const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
+const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
 // encoder always has one) or three-state unselected outputs

@@ -31,6 +31,9 @@ import {
   getIo5Config,
   getVideoConfig,
   VIDEO_COLOR_MODELS,
+  getImageConfig,
+  IMAGE_DEFAULT_SIZE,
+  imageNaturalSize,
   binToBcdBits,
   KEYPAD_DEFAULT_CUSTOM,
   pinKey,
@@ -59,6 +62,7 @@ import {
   LOGISIM_VIDEO_CURSOR,
   LOGISIM_VIDEO_NAME,
   LOGISIM_VIDEO_RESET,
+  LOGISIM_IMAGE_NAME,
   logisimVideoBounds,
   logisimVideoPorts,
   logisimArithPorts,
@@ -79,6 +83,8 @@ import { getTtlConfig } from './circuitEngine';
 const TTL_LIB = 6;
 /** Library number of evolution's #BFH-Praktika (Aşama 5b) in the exported file */
 const BFH_LIB = 7;
+/** Library number of evolution's #Base (its Image, Aşama 5e) in the exported file */
+const BASE_LIB = 8;
 
 /*
  * Logisim 2.7 (.circ) export.
@@ -168,7 +174,16 @@ export interface CircExportResult {
 const memPorts = (part: ComponentType, length: number, parallel: boolean) =>
   logisimMemPorts(part, { width: 1, length, parallel, appearance: 'classic', hasEnable: true, hasUpDown: true });
 
-const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// Tabs and line breaks as character references: a reader turns raw ones in an attribute value into spaces
+const xmlEsc = (s: string) =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\t/g, '&#9;')
+    .replace(/\n/g, '&#10;')
+    .replace(/\r/g, '&#13;');
 
 // Where the port Pins of an IC's own circuit go: inputs facing east (west edge of the box), outputs
 // facing west (east edge), each column ordered by y, so Logisim's default appearance keeps port order
@@ -188,6 +203,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesTtl = false;
   // Likewise evolution's BFH library (binary to BCD converter, BCD to 7-segment decoder)
   let usesBfh = false;
+  // and the Base library, only for an Image (2.7.1's Base has no Image)
+  let usesBase = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
 
@@ -483,6 +500,31 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'tunnel':
         case 'textLabel':
           break;
+        case 'image': {
+          // Evolution's Image (lib Base, 2.7.1 has none): no pins, its frame kept clear of the other parts; the
+          // attributes as evolution writes them (sorted by name, license always, the others when not the default)
+          const cfg = getImageConfig(c);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${xmlEsc(String(val))}"/>`;
+          // evolution's Attribute.toStandardString drops control characters and "&#...;" text (the image source
+          // only drops line breaks); a value that ends up empty is the default and is left out
+          const attribution = cfg.attribution.replace(/[\u0000-\u001f]/g, '').replace(/&#.*?;/g, '');
+          let attrs = '';
+          if (attribution !== '') attrs += a('attribution', attribution);
+          if (cfg.height !== IMAGE_DEFAULT_SIZE) attrs += a('height', cfg.height);
+          if (cfg.src !== '') attrs += a('image', cfg.src.replace(/[\r\n]+/g, ''));
+          attrs += a('license', cfg.license);
+          if (cfg.scale !== 'fit') attrs += a('scale', cfg.scale);
+          if (cfg.width !== IMAGE_DEFAULT_SIZE) attrs += a('width', cfg.width);
+          P.push({ kind: 'ram', part: c.type, attrs, ports: [], lib: BASE_LIB, name: LOGISIM_IMAGE_NAME, box: { x0: 0, y0: 0, x1: cfg.width, y1: cfg.height } });
+          usesBase = true;
+          const name = `Resim (${c.x},${c.y})`;
+          if ((c.rotation ?? 0) % 360 !== 0) warnings.push(`${name}: Logisim-evolution'daki resmin yönü yok; döndürülmeden yazıldı.`);
+          if (cfg.src && !cfg.src.startsWith('data:image/'))
+            warnings.push(`${name}: resim dosya yolu olarak yazıldı ("${cfg.src}"); Logisim-evolution o dosyayı bulamazsa boş çerçeve çizer.`);
+          else if (cfg.src && !imageNaturalSize(cfg.src))
+            warnings.push(`${name}: gömülü resim PNG, JPEG, GIF ya da BMP değil; Logisim-evolution onu çizemez, boş çerçeve görünür.`);
+          break;
+        }
         case 'sevenSegment':
         case 'hexDigit':
         case 'dotMatrix':
@@ -1333,6 +1375,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     warnings.unshift(
       "TTL çipleri Logisim-evolution'ın TTL kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
     );
+  if (usesBase)
+    warnings.unshift(
+      "Resimler Logisim-evolution'ın Image parçası olarak yazıldı; Logisim 2.7.1'de bu parça yok, dosyayı yalnız Logisim-evolution açar."
+    );
   if (usesBfh)
     warnings.unshift(
       "İkili → BCD ve BCD → 7-segment parçaları Logisim-evolution'ın BFH kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
@@ -1345,7 +1391,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}
