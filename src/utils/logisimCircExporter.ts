@@ -19,6 +19,15 @@ import {
   getSplitterConfig,
   getTrigger,
   getIoConfig,
+  getIo5cConfig,
+  KEYBOARD_DEFAULT_BUFFER,
+  TELNET_DEFAULT_BUFFER,
+  TELNET_DEFAULT_PORT,
+  TTY_DEFAULT_BG,
+  TTY_DEFAULT_COLOR,
+  TTY_DEFAULT_COLS,
+  TTY_DEFAULT_ROWS,
+  ttyScreen,
   getIo5Config,
   binToBcdBits,
   KEYPAD_DEFAULT_CUSTOM,
@@ -42,6 +51,9 @@ import {
   io5FacingOf,
   LOGISIM_BFH_NAME,
   logisimBfhPorts,
+  LOGISIM_IO5C_NAME,
+  logisimColor,
+  logisimIo5cPorts,
   logisimArithPorts,
   logisimMemPorts,
   logisimDefaultPortOffsets,
@@ -362,6 +374,55 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             }
           });
           break;
+        case 'keyboard':
+        case 'tty':
+        case 'telnet': {
+          // The Logisim I/O part on its own connection points (Keyboard and TTY are the same in Logisim 2.7.1 and
+          // evolution, Telnet is evolution's). None has a facing: written unrotated, a tunnel on each pin's point
+          // (the exporter joins nets by tunnels, so our rotation changes nothing). Logisim leaves defaults out.
+          const cfg = getIo5cConfig(c);
+          const a = (name: string, val: string | number | boolean) => `<a name="${name}" val="${xmlEsc(String(val))}"/>`;
+          let attrs = '';
+          if (c.type === 'keyboard') {
+            if (cfg.kbdBufLen !== KEYBOARD_DEFAULT_BUFFER) attrs += a('buflen', cfg.kbdBufLen);
+            if (getTrigger(c) === 'falling') attrs += a('trigger', 'falling');
+          } else if (c.type === 'tty') {
+            if (cfg.ttyRows !== TTY_DEFAULT_ROWS) attrs += a('rows', cfg.ttyRows);
+            if (cfg.ttyCols !== TTY_DEFAULT_COLS) attrs += a('cols', cfg.ttyCols);
+            if (getTrigger(c) === 'falling') attrs += a('trigger', 'falling');
+            const color = logisimColor(c.state.ttyColor);
+            const bg = logisimColor(c.state.ttyBg);
+            if (color && color !== TTY_DEFAULT_COLOR) attrs += a('color', color);
+            if (bg && bg !== TTY_DEFAULT_BG) attrs += a('bg', bg);
+          } else {
+            if (cfg.telnetMode) attrs += a('telnetMode', true);
+            if (cfg.telnetPort !== TELNET_DEFAULT_PORT) attrs += a('port', cfg.telnetPort);
+            if (cfg.telnetBufLen !== TELNET_DEFAULT_BUFFER) attrs += a('buflen', cfg.telnetBufLen);
+            // our default name stays out (evolution's Telnet has no label by default)
+            if (c.label?.trim() && c.label.trim() !== 'Telnet') attrs += a('label', c.label.trim());
+          }
+          const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
+          const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+          for (const { key, off } of logisimIo5cPorts(c.type)) {
+            const p = byKey.get(key);
+            const isIn = !!p && c.inputs.includes(p);
+            const net = !p ? OPEN : isIn ? pinNet(p.id) : isConn(p.id) ? out(c.outputs.indexOf(p)) : OPEN;
+            ports.push({ off, net, width: p?.width ?? 1, sink: isIn });
+          }
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: 5, name: LOGISIM_IO5C_NAME[c.type] });
+          if ((c.rotation ?? 0) % 360 !== 0)
+            warnings.push(`${label}: Logisim'deki parçanın yönü yok; döndürülmeden yazıldı (bağlantılar aynı).`);
+          if (c.type === 'telnet')
+            warnings.push(`${label}: Logisim-evolution parçası (Telnet); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          if (c.type === 'keyboard' && (c.state.kbdBuf ?? '') !== '')
+            warnings.push(`${label}: klavye tamponundaki karakterler dosyaya yazılmadı (Logisim saklamaz), dosya açılınca tampon boş.`);
+          if (c.type === 'tty') {
+            const scr = ttyScreen(c);
+            if (scr.cursorRow > 0 || scr.rows.some((r) => r !== ''))
+              warnings.push(`${label}: ekrandaki yazı dosyaya yazılmadı (Logisim saklamaz), dosya açılınca ekran boş.`);
+          }
+          break;
+        }
         case 'led':
         case 'probe':
         case 'buzzer':

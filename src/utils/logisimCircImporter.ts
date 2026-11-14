@@ -22,6 +22,20 @@ import {
   BIN_TO_BCD_MIN_BITS,
   binToBcdDigits,
   configureBfh,
+  configureIo5c,
+  IO5C_TYPES,
+  type Io5cConfig,
+  KEYBOARD_BUFFER_MAX,
+  KEYBOARD_DEFAULT_BUFFER,
+  TELNET_BUFFER_MAX,
+  TELNET_DEFAULT_BUFFER,
+  TELNET_DEFAULT_PORT,
+  TTY_COLS_MAX,
+  TTY_DEFAULT_BG,
+  TTY_DEFAULT_COLOR,
+  TTY_DEFAULT_COLS,
+  TTY_DEFAULT_ROWS,
+  TTY_ROWS_MAX,
   IO5_TYPES,
   PORT_IO_MAX,
   KEYPAD_DEFAULT_CUSTOM,
@@ -130,8 +144,11 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // Logisim-evolution BFH library of Aşama 5b
   if (n === 'binary_to_bcd_converter') return 'binToBcd';
   if (n === 'bcd_to_7_segment_decoder') return 'bcdToSevenSegment';
+  // Keyboard and TTY (Logisim 2.7.1 and evolution), Telnet (evolution only) of Aşama 5c
+  if (n === 'keyboard') return 'keyboard';
+  if (n === 'tty') return 'tty';
+  if (n === 'telnet') return 'telnet';
   if (n.includes('rgb') || n.includes('video') || n.includes('screen')) return 'rgbMatrix16x16';
-  if (n.includes('keyboard') || n === 'tty') return 'asciiKeyboard';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
 
   // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
@@ -1024,6 +1041,90 @@ export function logisimBfhSettings(type: ComponentType, attr: Record<string, str
   return { bits, ports: logisimBfhPorts(type, bits), notes };
 }
 
+// ---- Aşama 5c parts (std/io Keyboard and TTY, in Logisim 2.7.1 too; evolution's Telnet) ----
+
+/** Logisim part name of each Aşama 5c part (all three in the I/O library) */
+export const LOGISIM_IO5C_NAME: Partial<Record<ComponentType, string>> = {
+  keyboard: 'Keyboard',
+  tty: 'TTY',
+  telnet: 'Telnet',
+};
+
+/**
+ * Connection points of an Aşama 5c part relative to its Logisim loc, with our pin keys. None of them has a facing
+ * and the points do not depend on the settings (Logisim 2.7.1 and evolution agree for the keyboard and the TTY):
+ * - keyboard: clock at loc, RE (10, 10), CLR (20, 10), available (130, 10), 7-bit data (140, 10)
+ * - TTY: clock at loc, WE (10, 10), CLR (20, 10), 7-bit data (0, -10)
+ * - Telnet: in (-30, 10), clock (-30, 20), write (-30, 30) on the left; out (10, 10), available (10, 20), read (10, 30)
+ */
+export function logisimIo5cPorts(type: ComponentType): Array<{ key: string; off: Pt }> {
+  const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
+  if (type === 'keyboard') return [P('clk', 0, 0), P('en', 10, 10), P('clr', 20, 10), P('avl', 130, 10), P('out', 140, 10)];
+  if (type === 'tty') return [P('clk', 0, 0), P('we', 10, 10), P('clr', 20, 10), P('in', 0, -10)];
+  return [P('in', -30, 10), P('clk', -30, 20), P('wr', -30, 30), P('out', 10, 10), P('av', 10, 20), P('rd', 10, 30)];
+}
+
+/** A Logisim colour attribute as ours stores it: '#rrggbb', or '#rrggbbaa' when not opaque (undefined: unreadable) */
+export function logisimColor(v: string | undefined): string | undefined {
+  const m = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec((v ?? '').trim());
+  if (!m) return undefined;
+  const a = (m[2] ?? 'ff').toLowerCase();
+  return `#${m[1].toLowerCase()}${a === 'ff' ? '' : a}`;
+}
+
+/**
+ * Settings of an Aşama 5c part from its Logisim attributes. A missing attribute is Logisim's default (Logisim leaves
+ * defaults out of the file): keyboard buffer 32, rising edge; terminal 8 rows x 32 columns, black text on
+ * #00000040; Telnet port 8000, buffer 1024, telnet mode off. Evolution's Telnet ignores its trigger (always rising).
+ */
+export function logisimIo5cSettings(
+  type: ComponentType,
+  attr: Record<string, string>
+): { cfg: Partial<Io5cConfig>; state: Partial<CircuitComponentInstance['state']>; ports: Array<{ key: string; off: Pt }>; notes: string[] } {
+  const notes: string[] = [];
+  const cfg: Partial<Io5cConfig> = {};
+  const state: Partial<CircuitComponentInstance['state']> = {};
+  const int = (name: string, what: string, dflt: number, min: number, max: number): number => {
+    const v = attr[name];
+    if (v === undefined) return dflt;
+    const n = /^-?\d+$/.test(v.trim()) ? parseInt(v, 10) : NaN;
+    if (!Number.isFinite(n)) {
+      notes.push(`${what} "${v}" okunamadı, varsayılan ${dflt} alındı.`);
+      return dflt;
+    }
+    const c = Math.max(min, Math.min(max, n));
+    if (c !== n) notes.push(`${what} ${n}; ${min}-${max} aralığında olmalı, ${c} alındı.`);
+    return c;
+  };
+  const trigger = () => {
+    if (attr.trigger === undefined || attr.trigger === 'rising') return;
+    if (attr.trigger === 'falling') state.trigger = 'falling';
+    else notes.push(`tetikleme "${attr.trigger}" tanınmadı, yükselen kenar alındı.`);
+  };
+  const color = (name: string, what: string, dflt: string, key: 'ttyColor' | 'ttyBg') => {
+    const v = attr[name];
+    if (v === undefined) return;
+    const c = logisimColor(v);
+    if (!c) notes.push(`${what} "${v}" okunamadı, varsayılan renk alındı.`);
+    else if (c !== dflt) state[key] = c;
+  };
+  if (type === 'keyboard') {
+    cfg.kbdBufLen = int('buflen', 'tampon uzunluğu', KEYBOARD_DEFAULT_BUFFER, 1, KEYBOARD_BUFFER_MAX);
+    trigger();
+  } else if (type === 'tty') {
+    cfg.ttyRows = int('rows', 'satır sayısı', TTY_DEFAULT_ROWS, 1, TTY_ROWS_MAX);
+    cfg.ttyCols = int('cols', 'sütun sayısı', TTY_DEFAULT_COLS, 1, TTY_COLS_MAX);
+    trigger();
+    color('color', 'yazı rengi', TTY_DEFAULT_COLOR, 'ttyColor');
+    color('bg', 'arka plan rengi', TTY_DEFAULT_BG, 'ttyBg');
+  } else {
+    cfg.telnetPort = int('port', 'port', TELNET_DEFAULT_PORT, 1, 65535);
+    cfg.telnetBufLen = int('buflen', 'tampon uzunluğu', TELNET_DEFAULT_BUFFER, 1, TELNET_BUFFER_MAX);
+    cfg.telnetMode = attr.telnetMode === 'true';
+  }
+  return { cfg, state, ports: logisimIo5cPorts(type), notes };
+}
+
 export function logisimDefaultPortOffsets(pins: Array<{ loc: Pt; facing: string }>): Pt[] {
   const edgeOf: Record<string, 'west' | 'east' | 'north' | 'south'> = { east: 'west', west: 'east', north: 'south', south: 'north' };
   const edge: Record<'west' | 'east' | 'north' | 'south', number[]> = { west: [], east: [], north: [], south: [] };
@@ -1446,7 +1547,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType)) occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1467,6 +1568,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? ramSettings(nativeType, attr).ports.map((p) => p.off)
                 : BFH_TYPES.has(nativeType)
                 ? logisimBfhSettings(nativeType, attr).ports.map((p) => p.off)
+                : IO5C_TYPES.has(nativeType)
+                ? logisimIo5cPorts(nativeType).map((p) => p.off)
                 : IO5_TYPES.has(nativeType)
                 ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
@@ -1805,6 +1908,27 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           idOf(first.key)!,
           at(loc, first.off),
           label,
+          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+            const id = idOf(k);
+            return id ? [[id, at(loc, off)]] : [];
+          })
+        );
+        continue;
+      }
+      if (IO5C_TYPES.has(nativeType)) {
+        // Keyboard / TTY / Telnet (no facing): every pin on its Logisim connection point, our part unrotated, empty
+        // (Logisim keeps no buffer or screen contents in the file)
+        const st = logisimIo5cSettings(nativeType, attr);
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        let inst = createComponentInstance(nativeType, 0, 0);
+        inst = configureIo5c({ ...inst, state: { ...inst.state, ...st.state } }, st.cfg);
+        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+        const first = st.ports[0];
+        place(
+          inst,
+          idOf(first.key)!,
+          at(loc, first.off),
+          nativeType === 'telnet' ? label : undefined,
           st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
             const id = idOf(k);
             return id ? [[id, at(loc, off)]] : [];
