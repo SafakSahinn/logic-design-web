@@ -1,10 +1,10 @@
 // Chronogram (timing diagram) panel, after Logisim-evolution's gui/chrono: a signal name column with the
 // current values on the left, the waveforms of every selected signal on one shared time axis on the right.
-import { useLayoutEffect, useRef } from 'react';
-import { Activity, Download, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { bitsToString, formatBits, type SignalValue } from '../types/logic';
 import type { WaveformSample } from '../utils/vcdGenerator';
-import { CHRONO_LIMITS, waveKey, waveSymbol, type ChronoSignal } from '../utils/chronogram';
+import { CHRONO_LIMITS, moveChronoKey, waveKey, waveSymbol, type ChronoSignal, type ChronoTreeNode } from '../utils/chronogram';
 
 // Segment colours for non-binary values, as in evolution's chronogram (x / z: orange box, E: red box)
 const WAVE_UNKNOWN_FILL = '#eaaa6c';
@@ -44,6 +44,10 @@ export interface ChronogramPanelProps {
   /** a clock key, or null for step mode */
   onClockChange: (key: string | null) => void;
   onLimitChange: (limit: number) => void;
+  /** every loggable signal: the top-level circuit and its subcircuit instances */
+  tree: ChronoTreeNode;
+  /** new selection (keys in display order), or null for the automatic one */
+  onSelectionChange: (keys: string[] | null) => void;
 }
 
 type Seg = { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number };
@@ -53,11 +57,12 @@ function segmentsOf(samples: WaveformSample[], key: string, t0: number): Seg[] {
   const segs: Seg[] = [];
   samples.forEach((smp) => {
     const raw = smp.values[key];
-    const k = waveKey(raw);
     const x0 = (smp.time - t0) * TICK_WIDTH;
     const x1 = x0 + TICK_WIDTH;
+    if (raw === undefined) return;
+    const k = waveKey(raw);
     const last = segs[segs.length - 1];
-    if (last && last.key === k) last.x1 = x1;
+    if (last && last.key === k && last.x1 === x0) last.x1 = x1;
     else if (Array.isArray(raw)) segs.push({ v: 0, bits: raw, key: k, x0, x1 });
     else segs.push({ v: raw ?? 0, key: k, x0, x1 });
   });
@@ -182,6 +187,111 @@ function ValueBadge({ raw }: { raw: SignalValue | SignalValue[] | undefined }) {
   );
 }
 
+function TreeLevel({ node, selected, toggle, depth }: { node: ChronoTreeNode; selected: Set<string>; toggle: (k: string) => void; depth: number }) {
+  const [open, setOpen] = useState(depth === 0);
+  const count = node.signals.filter((s) => selected.has(s.key)).length;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-1 px-1 py-1 text-xs font-bold text-slate-300 hover:bg-slate-800 rounded cursor-pointer"
+        style={{ paddingLeft: depth * 12 + 4 }}
+        data-chrono-node={node.id}
+      >
+        {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        <span className="truncate">{depth === 0 ? node.name : node.name.split('/').pop()}</span>
+        <span className="ml-auto text-[10px] text-slate-500 font-mono">
+          {count}/{node.signals.length}
+        </span>
+      </button>
+      {open && (
+        <>
+          {node.signals.map((s) => (
+            <label
+              key={s.key}
+              className="flex items-center gap-2 py-0.5 text-xs text-slate-200 hover:bg-slate-800 rounded cursor-pointer"
+              style={{ paddingLeft: depth * 12 + 24 }}
+            >
+              <input type="checkbox" checked={selected.has(s.key)} onChange={() => toggle(s.key)} data-chrono-key={s.key} className="accent-cyan-500" />
+              <span className="font-mono truncate" title={s.name}>
+                {depth === 0 ? s.name : s.name.slice(node.name.length + 1)}
+              </span>
+            </label>
+          ))}
+          {node.children.map((c) => (
+            <TreeLevel key={c.id} node={c} selected={selected} toggle={toggle} depth={depth + 1} />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SignalPicker({
+  tree,
+  signals,
+  onChange,
+  onClose,
+}: {
+  tree: ChronoTreeNode;
+  signals: ChronoSignal[];
+  onChange: (keys: string[] | null) => void;
+  onClose: () => void;
+}) {
+  const keys = signals.map((s) => s.key);
+  const selected = new Set(keys);
+  const toggle = (k: string) => onChange(selected.has(k) ? keys.filter((x) => x !== k) : [...keys, k]);
+  const btn = 'p-1 rounded text-slate-400 hover:text-white hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-transparent cursor-pointer';
+  return (
+    <div id="chrono-picker" className="absolute right-0 top-full mt-2 z-30 w-[640px] max-w-[90vw] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-extrabold text-white">Sinyal Seçimi</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="px-2 py-1 text-[11px] rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:text-white cursor-pointer"
+            title="Ana devredeki tüm sinyaller, varsayılan sırayla (saat kaynağı, girişler, diğerleri)"
+          >
+            Varsayılana dön
+          </button>
+          <button type="button" onClick={onClose} className={btn} title="Kapat">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="max-h-72 overflow-y-auto border border-slate-800 rounded-xl p-1">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 px-1 pb-1">Devre ve alt devreler</div>
+          <TreeLevel node={tree} selected={selected} toggle={toggle} depth={0} />
+        </div>
+        <div className="max-h-72 overflow-y-auto border border-slate-800 rounded-xl p-1">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 px-1 pb-1">Seçili ({signals.length}) — gösterim sırası</div>
+          {signals.length === 0 && <div className="text-xs text-slate-500 p-2">Hiç sinyal seçili değil.</div>}
+          {signals.map((s, i) => (
+            <div key={s.key} className="flex items-center gap-1 px-1 py-0.5 text-xs hover:bg-slate-800 rounded" data-chrono-sel={s.key}>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+              <span className="font-mono text-slate-200 truncate flex-1" title={s.name}>
+                {s.name}
+              </span>
+              <button type="button" className={btn} disabled={i === 0} onClick={() => onChange(moveChronoKey(keys, i, i - 1))} title="Yukarı taşı">
+                <ArrowUp className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" className={btn} disabled={i === signals.length - 1} onClick={() => onChange(moveChronoKey(keys, i, i + 1))} title="Aşağı taşı">
+                <ArrowDown className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" className={btn} onClick={() => toggle(s.key)} title="Çıkar">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ChronogramPanel(props: ChronogramPanelProps) {
   const { signals, samples, paused, clocks, clockKey, limit } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -192,6 +302,11 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   const width = slots * TICK_WIDTH + EXTRA_SPACE;
   const height = signals.length * ROW_H;
   const lastValues = samples.length > 0 ? samples[samples.length - 1].values : {};
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // row drag: index being dragged and the row it would drop on
+  const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
+  const keys = signals.map((s) => s.key);
+  const hasCandidates = props.tree.signals.length > 0 || props.tree.children.length > 0;
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -226,7 +341,19 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex flex-wrap items-center gap-2">
+          <button
+            id="chrono-signals"
+            onClick={() => setPickerOpen(!pickerOpen)}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors ${
+              pickerOpen ? 'bg-cyan-900 text-white border-cyan-700' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+            title="İzlenecek sinyalleri seç ve sırala (alt devrelerin içindekiler dahil)"
+          >
+            <ListChecks className="w-3.5 h-3.5" />
+            <span>Sinyaller ({signals.length})</span>
+          </button>
+          {pickerOpen && <SignalPicker tree={props.tree} signals={signals} onChange={props.onSelectionChange} onClose={() => setPickerOpen(false)} />}
           <label className="flex items-center gap-1.5 text-xs text-slate-400">
             Zaman:
             <select
@@ -293,21 +420,58 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
 
       {signals.length === 0 ? (
         <div className="p-8 text-center text-slate-500 text-xs font-mono">
-          Tuval üzerinde izlenecek giriş veya çıkış elemanı (Anahtar, Saat, LED, Prob vb.) bulunamadı.
+          {hasCandidates
+            ? 'Hiç sinyal seçili değil. "Sinyaller" düğmesinden ekleyin.'
+            : 'Tuval üzerinde izlenecek giriş veya çıkış elemanı (Anahtar, Saat, LED, Prob vb.) bulunamadı.'}
         </div>
       ) : (
         <div className="flex bg-slate-950/70 rounded-2xl border border-slate-800/80 overflow-hidden" id="chrono-body">
           {/* Signal names and current values */}
-          <div className="w-48 shrink-0 border-r border-slate-800">
-            {signals.map((s) => (
-              <div key={s.key} className="flex items-center justify-between gap-2 px-3 border-b border-slate-900" style={{ height: ROW_H }}>
-                <div className="flex items-center gap-2 truncate">
+          <div className="w-56 shrink-0 border-r border-slate-800">
+            {signals.map((s, i) => (
+              <div
+                key={s.key}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', s.key);
+                  setDrag({ from: i, over: i });
+                }}
+                onDragOver={(e) => {
+                  if (!drag) return;
+                  e.preventDefault();
+                  if (drag.over !== i) setDrag({ ...drag, over: i });
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (drag) props.onSelectionChange(moveChronoKey(keys, drag.from, i));
+                  setDrag(null);
+                }}
+                onDragEnd={() => setDrag(null)}
+                className={`group flex items-center justify-between gap-1 pl-1 pr-2 border-b border-slate-900 cursor-grab ${
+                  drag && drag.over === i && drag.from !== i ? (drag.from < i ? 'border-b-2 border-b-cyan-400' : 'border-t-2 border-t-cyan-400') : ''
+                } ${drag?.from === i ? 'opacity-50' : ''}`}
+                style={{ height: ROW_H }}
+                data-chrono-row={s.key}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <GripVertical className="w-3.5 h-3.5 text-slate-600 shrink-0" />
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
                   <span className="font-mono text-xs font-bold text-slate-200 truncate" title={s.name}>
                     {s.name}
                   </span>
                 </div>
-                <ValueBadge raw={lastValues[s.key]} />
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => props.onSelectionChange(keys.filter((k) => k !== s.key))}
+                    className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-700 opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
+                    title="Diyagramdan çıkar"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                  <ValueBadge raw={lastValues[s.key]} />
+                </div>
               </div>
             ))}
           </div>

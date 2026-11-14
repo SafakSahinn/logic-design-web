@@ -215,11 +215,16 @@ import {
   emptyChronoLog,
   limitChrono,
   recordChrono,
+  editChronoSelection,
+  flattenChronoTree,
+  resolveChronoSelection,
   selectedChronoSignals,
   sortChronoGroups,
   waveSymbol,
   type ChronoLog,
+  type ChronoSelection,
   type ChronoSignal,
+  type ChronoTreeNode,
 } from '../utils/chronogram';
 import { ChronogramPanel } from './ChronogramPanel';
 import MemoryHexEditor from './MemoryHexEditor';
@@ -667,8 +672,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [chronoLog, setChronoLog] = useState<ChronoLog>(() => emptyChronoLog());
   // Time source: undefined = automatic (the first clock by location, step mode without clocks), null = step mode
   const [chronoClockChoice, setChronoClockChoice] = useState<string | null | undefined>(undefined);
-  // Selected signal keys in display order; null = automatic (every loggable signal in evolution's default order)
-  const [chronoSelection] = useState<string[] | null>(null);
+  // Selected signals (keys in display order + the top-level keys known then); null = automatic (every top-level
+  // loggable signal in evolution's default order)
+  const [chronoSelection, setChronoSelection] = useState<ChronoSelection | null>(null);
   const [chronoLimit, setChronoLimit] = useState<number>(CHRONO_DEFAULT_LIMIT);
 
   // Rename modal state
@@ -2448,7 +2454,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
     // the selected signals in their panel order
-    const vcdContent = generateVCD(chronoLog.samples, components, chronoSignals.map((s) => s.key));
+    const vcdContent = generateVCD(
+      chronoLog.samples,
+      components,
+      chronoSignals.map((s) => s.key),
+      // subcircuit signals are named by their path
+      Object.fromEntries(chronoSignals.filter((s) => s.key.includes('/')).map((s) => [s.key, s.name]))
+    );
     const blob = new Blob([vcdContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -3771,8 +3783,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     };
     const sfx = (w: number) => (w > 1 ? `[${w}]` : '');
 
-    components.forEach((c) => {
-      const name = inputNames.get(c.id) || c.label || c.type;
+    const partRows = (c: CircuitComponentInstance, name: string): Row[] => {
       const rows: Row[] = [];
       if (c.type === 'clock') {
         rows.push({ key: c.id, name: `${name} (CLK)`, kind: 'clock', width: 1, value: c.state.on ? 1 : 0 });
@@ -3852,10 +3863,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         rows.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, kind: 'input', width: 1, value: c.outputs[7]?.value ?? 0, color: '#22c55e' });
         rows.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, kind: 'input', width: 1, value: c.outputs[0]?.value ?? 0 });
       }
-      if (rows.length === 0) return;
-      // evolution counts Button, Clock, input Pin and Random as inputs
-      const input = rows[0].kind === 'clock' || rows[0].kind === 'input' || c.type === 'random';
-      groups.push({ id: c.id, x: c.x, y: c.y, input, clock: false, rows });
+      return rows;
+    };
+    // evolution counts Button, Clock, input Pin and Random as inputs
+    const isInputPart = (c: CircuitComponentInstance, rows: Row[]) =>
+      rows[0].kind === 'clock' || rows[0].kind === 'input' || c.type === 'random';
+
+    components.forEach((c) => {
+      const rows = partRows(c, inputNames.get(c.id) || c.label || c.type);
+      if (rows.length > 0) groups.push({ id: c.id, x: c.x, y: c.y, input: isInputPart(c, rows), clock: false, rows });
     });
 
     // Time source: the chosen clock, else (automatic) the first clock by location; no clock = step mode
@@ -3869,21 +3885,46 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     const colors = ['#06b6d4', '#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ec4899', '#14b8a6', '#f43f5e'];
     let cIdx = 0;
-    const candidates: ChronoSignal[] = [];
-    const values: Record<string, WaveformValue> = {};
-    sortChronoGroups(groups).forEach((g) =>
-      g.rows.forEach(({ value, color, ...s }) => {
-        candidates.push({ ...s, color: color ?? colors[cIdx++ % colors.length] });
-        values[s.key] = value;
-      })
-    );
-    return { candidates, values, clocks, clockKey };
-  }, [components, chronoClockChoice]);
+    const allValues = new Map<string, WaveformValue>();
+    const toSignals = (gs: typeof groups): ChronoSignal[] =>
+      sortChronoGroups(gs).flatMap((g) =>
+        g.rows.map(({ value, color, ...s }) => {
+          allValues.set(s.key, value);
+          return { ...s, color: color ?? colors[cIdx++ % colors.length] };
+        })
+      );
+    const topLevel = toSignals(groups);
 
-  const chronoSignals = useMemo(
-    () => selectedChronoSignals(chronoProbe.candidates, chronoSelection),
-    [chronoProbe.candidates, chronoSelection]
-  );
+    // Parts inside subcircuit instances (evolution's ComponentSelector tree): keys `${instance}/${innerKey}`,
+    // names `${instance}/${innerName}`; offered in the signal picker, never selected automatically
+    const subNodes = (list: CircuitComponentInstance[], keyPrefix: string, namePrefix: string): ChronoTreeNode[] =>
+      list.flatMap((c) => {
+        const inner = c.state.subcircuitInternal?.components;
+        if (!inner) return [];
+        const label = c.label || c.state.subcircuitName || c.type;
+        const kp = `${keyPrefix}${c.id}/`;
+        const np = `${namePrefix}${label}/`;
+        const gs: typeof groups = [];
+        inner.forEach((ic) => {
+          const rows = partRows(ic, ic.label || ic.type).map((r) => ({ ...r, key: kp + r.key, name: np + r.name }));
+          if (rows.length > 0) gs.push({ id: ic.id, x: ic.x, y: ic.y, input: isInputPart(ic, rows), clock: false, rows });
+        });
+        return [{ id: kp.slice(0, -1), name: np.slice(0, -1), signals: toSignals(gs), children: subNodes(inner, kp, np) }];
+      });
+    const sheetName = sheets.find((s) => s.id === activeSheetId)?.name || 'Ana devre';
+    const tree: ChronoTreeNode = { id: '', name: sheetName, signals: topLevel, children: subNodes(components, '', '') };
+
+    // Every top-level value is recorded (a signal added later has a history); subcircuit values only while selected
+    const selectedKeys = resolveChronoSelection(topLevel, chronoSelection);
+    const values: Record<string, WaveformValue> = {};
+    topLevel.forEach((s) => (values[s.key] = allValues.get(s.key)!));
+    selectedKeys.forEach((k) => {
+      if (allValues.has(k)) values[k] = allValues.get(k)!;
+    });
+    const signals = selectedChronoSignals(flattenChronoTree(tree), selectedKeys);
+    return { topLevel, tree, signals, values, clocks, clockKey };
+  }, [components, chronoClockChoice, chronoSelection, sheets, activeSheetId]);
+  const chronoSignals = chronoProbe.signals;
 
   // Record on every change of the circuit while the panel is open (evolution: every propagation that changed a
   // value), also while the simulation is stopped (switch clicks, single steps)
@@ -11479,6 +11520,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       {showWaveform && (
         <ChronogramPanel
           signals={chronoSignals}
+          tree={chronoProbe.tree}
+          onSelectionChange={(keys) => setChronoSelection(keys === null ? null : editChronoSelection(chronoProbe.topLevel, keys))}
           samples={chronoLog.samples}
           paused={isWaveformPaused}
           clocks={chronoProbe.clocks}

@@ -32,7 +32,9 @@ export function generateVCD(
   samples: WaveformSample[],
   components: CircuitComponentInstance[],
   /** the signals to dump, in this order; unset = every key seen in any sample, in first-seen order */
-  only?: string[]
+  only?: string[],
+  /** names for keys that are not `${componentId}[_suffix]` (subcircuit paths); '/' becomes '_' */
+  names: Record<string, string> = {}
 ): string {
   const now = new Date().toISOString();
   const compById = new Map(components.map((c) => [c.id, c]));
@@ -67,7 +69,7 @@ export function generateVCD(
         suffix = key.slice(cut + 1);
       }
     }
-    const base = ((comp?.label || (comp ? comp.type : key)) + (suffix ? `_${suffix}` : ''))
+    const base = (names[key] ?? (comp?.label || (comp ? comp.type : key)) + (suffix ? `_${suffix}` : ''))
       .replace(/[^a-zA-Z0-9_]/g, '_')
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '') || 'sig';

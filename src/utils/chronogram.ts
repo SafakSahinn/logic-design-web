@@ -88,17 +88,63 @@ export const limitChrono = (log: ChronoLog, limit: number): ChronoLog => {
 };
 
 /**
- * The selected signals in their order. selection null = automatic: every candidate in the default order.
- * Keys of parts that no longer exist are skipped.
+ * Loggable signals of one circuit level: the top-level circuit, or a subcircuit instance with its own parts.
+ * Keys inside a subcircuit are `${instanceId}/${innerKey}` (nested levels add more `/` parts).
  */
-export function selectedChronoSignals(candidates: ChronoSignal[], selection: string[] | null): ChronoSignal[] {
-  if (selection === null) return candidates;
-  const byKey = new Map(candidates.map((s) => [s.key, s]));
-  return selection.flatMap((k) => {
+export interface ChronoTreeNode {
+  id: string;
+  name: string;
+  signals: ChronoSignal[];
+  children: ChronoTreeNode[];
+}
+
+/**
+ * The user's selection: keys in display order, and the top-level keys that existed when it was last edited.
+ * A top-level signal that appears later (a new part) is added at the end, as evolution's Model adds new pins
+ * and clocks; one the user removed stays removed. null selection = automatic: every top-level signal.
+ */
+export interface ChronoSelection {
+  keys: string[];
+  known: string[];
+}
+
+/** Keys of the selected signals in display order */
+export function resolveChronoSelection(topLevel: ChronoSignal[], selection: ChronoSelection | null): string[] {
+  if (selection === null) return topLevel.map((s) => s.key);
+  const known = new Set(selection.known);
+  const keys = new Set(selection.keys);
+  return [...selection.keys, ...topLevel.filter((s) => !known.has(s.key) && !keys.has(s.key)).map((s) => s.key)];
+}
+
+/** A selection edited to these keys (in this order) */
+export const editChronoSelection = (topLevel: ChronoSignal[], keys: string[]): ChronoSelection => ({
+  keys: [...new Set(keys)],
+  known: topLevel.map((s) => s.key),
+});
+
+/** Every signal of a tree, top level first, depth first */
+export const flattenChronoTree = (node: ChronoTreeNode): ChronoSignal[] => [
+  ...node.signals,
+  ...node.children.flatMap(flattenChronoTree),
+];
+
+/** The selected signals in their order; keys of parts that no longer exist are skipped */
+export function selectedChronoSignals(pool: ChronoSignal[], keys: string[]): ChronoSignal[] {
+  const byKey = new Map(pool.map((s) => [s.key, s]));
+  return keys.flatMap((k) => {
     const s = byKey.get(k);
     return s ? [s] : [];
   });
 }
+
+/** Move the key at index `from` to index `to` (both in the current list) */
+export const moveChronoKey = (keys: string[], from: number, to: number): string[] => {
+  if (from === to || from < 0 || from >= keys.length || to < 0 || to >= keys.length) return keys;
+  const next = [...keys];
+  const [k] = next.splice(from, 1);
+  next.splice(to, 0, k);
+  return next;
+};
 
 /**
  * evolution's default order (Model constructor): the time source clock first, then the inputs, then the rest,
