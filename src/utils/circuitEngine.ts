@@ -4337,14 +4337,6 @@ const logisimDiff = (a: SignalValue[], b: SignalValue[], bin: SignalValue): { di
   return { diff: sum, borrow: sigNot(carry) };
 };
 
-// Logisim clocks memory only on a clean 0 -> 1 step, so x or E on the clock never makes an edge
-// (the first evaluation never does either: there is no previous level yet)
-const risingEdge = (comp: CircuitComponentInstance, clk: SignalValue): boolean => {
-  const prevClk = comp.state.lastClk ?? clk;
-  comp.state.lastClk = clk;
-  return prevClk === 0 && clk === 1;
-};
-
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
 // Parts with Logisim's "Output Value" attribute
