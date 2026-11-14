@@ -32,6 +32,8 @@ import {
   splitterThreads,
   pinKey,
   getIo5Config,
+  getVideoConfig,
+  VIDEO_COLOR_MODELS,
   joystickValue,
   portPokeOf,
   rtcValue,
@@ -193,7 +195,7 @@ function wrap(e: string): string {
 // Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
 // and a port I/O are blocks (their pins go both ways), see their cases below
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbMatrix16x16', 'rgbLed'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'pullResistor'];
 const TRI_TYPES = ['triState', 'controlledInverter'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -2174,6 +2176,66 @@ function buildModule(
         if ((c.state.telnetRx ?? '') !== '') warnings.push(`${label}: IC içindeki Telnet'in tamponundaki baytlar HDL'de yok; tampon boş kabul edildi.`);
         break;
       }
+      case 'rgbVideo': {
+        // Evolution has no HDL for the RGB Video (its image lives in the simulator). At the top level the screen is
+        // the outside world's, like the terminal: everything it reads goes out through output ports and an external
+        // display driver (a VGA / HDMI controller with a frame buffer) shows the picture. Inside an IC it reads nothing.
+        const label = c.label || c.type;
+        if (spec.subPorts) {
+          body.push(L.comment(`${label}: IC içindeki RGB Video'nun görüntüsü HDL'de yok, girişleri kullanılmaz`));
+          break;
+        }
+        const inIdx = (k: string) => c.inputs.findIndex((p) => pinKey(c, p) === k);
+        // RST / CLK / WE: an open or undefined level is not 1 in the simulator (no reset, no write, no edge)
+        const ctrl = (k: string) => {
+          const i = inIdx(k);
+          return i < 0 ? L.zero : inp(i, L.zero);
+        };
+        // X / Y / DATA: an unwired input reads 0, a word with any undefined bit -1 (all bits 1 at the pin width)
+        const word = (k: string): { w: number; rhs: string } => {
+          const i = inIdx(k);
+          const pin = i < 0 ? undefined : c.inputs[i];
+          const w = pin?.width ?? 1;
+          const all = (v: 0 | 1) => (w === 1 ? (v ? L.one : L.zero) : bitLiteral(new Array<0 | 1>(w).fill(v)));
+          if (!pin || !isConnected(pin.id)) return { w, rhs: all(0) };
+          const r = readBits(pin.id, w);
+          if (r.floating || r.mismatch) {
+            const atari = k === 'data' && getVideoConfig(c).color === 'atari';
+            body.push(L.comment(`${label}: ${k.toUpperCase()} tanımsız, simülatör -1 okur (tüm bitler 1${atari ? '; Atari renginde simülatör siyah boyar' : k === 'data' ? '' : ', ekran dışı: piksel yazılmaz'})`));
+            // All ones is a pixel on the screen when the size is a power of two; the Atari table has no entry 127
+            const size = k === 'x' ? getVideoConfig(c).width : k === 'y' ? getVideoConfig(c).height : 0;
+            if (size && 2 ** w - 1 < size)
+              warnings.push(`${label}: ${k.toUpperCase()} tanımsız; simülatör hiç piksel yazmaz, harici sürücü ise ${k.toUpperCase()} = ${2 ** w - 1} (ekranın son ${k === 'x' ? 'sütunu' : 'satırı'}) piksellerine yazar.`);
+            if (atari) warnings.push(`${label}: DATA tanımsız; simülatör siyah boyar, harici sürücü 127 numaralı Atari rengini gösterir.`);
+            return { w, rhs: all(1) };
+          }
+          return { w, rhs: compose(r.bits) };
+        };
+        const outPort = (k: string, w: number, rhs: string) => {
+          const i = inIdx(k);
+          const pn = names.make(`out_${label}_${k}`, 'out_video');
+          addPort({ name: pn, dir: 'out', width: w, source: { compId: c.id, type: c.type, group: k, pins: i < 0 ? [] : [c.inputs[i].id] } });
+          emit(pn, rhs);
+        };
+        outPort('rst', 1, ctrl('rst'));
+        outPort('clk', 1, ctrl('clk'));
+        outPort('we', 1, ctrl('we'));
+        for (const k of ['x', 'y', 'data']) {
+          const { w, rhs } = word(k);
+          outPort(k, w, rhs);
+        }
+        const cfg = getVideoConfig(c);
+        const model = VIDEO_COLOR_MODELS.find((m) => m.id === cfg.color)!;
+        body.push(
+          L.comment(
+            `${label}: ${cfg.width}x${cfg.height} ekran dışarıda (${model.circ}); RST/CK/WE/X/Y/DATA çıkış portu (piksel CK'nin yükselen kenarında WE = 1 iken yazılır, RST ${cfg.reset === 'sync' ? 'saatle' : 'asenkron'})`
+          )
+        );
+        warnings.push(
+          `${label}: evolution'da RGB Video'nun HDL karşılığı yok; RST / CK / WE / X / Y / DATA çıkış portu oldu, görüntüyü harici bir sürücü (çerçeve tamponlu VGA / HDMI denetleyicisi) göstermeli.`
+        );
+        break;
+      }
       default:
         if (hasTtlHdl(c.type)) {
           // TTL chip: an instance of its ttl<number> module, pins bound by their physical number
@@ -2244,14 +2306,7 @@ function buildModule(
       if (!OUTPUT_TYPES.includes(c.type)) continue;
       const label = c.label || c.type;
       const groups: { suffix: string; pins: typeof c.inputs }[] =
-        c.type === 'rgbMatrix16x16'
-            ? [
-                { suffix: 'x', pins: c.inputs.slice(0, 4) },
-                { suffix: 'y', pins: c.inputs.slice(4, 8) },
-                { suffix: 'rgb', pins: c.inputs.slice(8, 11) },
-                { suffix: 'we', pins: c.inputs.slice(11, 12) },
-              ]
-            : c.type === 'buzzer'
+        c.type === 'buzzer'
               ? [
                   { suffix: 'en', pins: c.inputs.slice(0, 1) },
                   { suffix: 'note', pins: c.inputs.slice(1, 5) },

@@ -204,7 +204,8 @@ import MemoryHexEditor from './MemoryHexEditor';
 
 /**
  * A saved part this version can draw and simulate. Parts of an unknown type (the fixed 4-bit parts removed in
- * Aşama 3h, a newer version, a hand-edited file) would crash the renderer, so loaders drop them.
+ * Aşama 3h, the 16x16 RGB matrix removed in 5d-4, a newer version, a hand-edited file) would crash the renderer, so
+ * loaders drop them.
  */
 const isKnownPart = (c: CircuitComponentInstance | null | undefined): c is CircuitComponentInstance =>
   !!c && (c.type === 'subcircuit' || !!COMPONENT_CATALOG[c.type]) && Array.isArray(c.inputs) && Array.isArray(c.outputs);
@@ -239,17 +240,6 @@ export interface CircuitSheet {
 const pinDotFill = (v: SignalValue): string =>
   v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
 
-// Number on a part body from its pins (bit 0 first); null when a bit is not 0 or 1
-const pinsNumber = (pins: (CircuitPin | undefined)[]): number | null => {
-  let n = 0;
-  for (let i = 0; i < pins.length; i++) {
-    const v = pins[i]?.value;
-    if (v !== 0 && v !== 1) return null;
-    n |= v << i;
-  }
-  return n;
-};
-const numText = (n: number | null): string => (n === null ? '?' : String(n));
 
 // Waveform segment colours for non-binary values, as in Logisim-evolution's chronogram
 // (x / z: orange box, E: red box)
@@ -265,12 +255,13 @@ const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
 const waveKey = (v: WaveformValue | undefined): string =>
   v === undefined ? '0' : Array.isArray(v) ? `b${v.join('')}` : String(v);
 
-// Waveform rows of the Keyboard / TTY / Telnet (pin key, row name, row kind): the data and strobe lines the
-// circuit exchanges with them (outputs read like a DIP switch, inputs like an LED bar). Sample key `${id}_${pin}`
+// Waveform rows of the Keyboard / TTY / Telnet / RGB Video (pin key, row name, row kind): the data and strobe lines
+// the circuit exchanges with them (outputs read like a DIP switch, inputs like an LED bar). Sample key `${id}_${pin}`
 const IO5C_WAVE_PINS: Partial<Record<string, [string, string, 'input' | 'output'][]>> = {
   keyboard: [['out', 'OUT', 'input'], ['avl', 'AV', 'input']],
   tty: [['in', 'IN', 'output'], ['we', 'WE', 'output']],
   telnet: [['out', 'OUT', 'input'], ['av', 'AV', 'input'], ['in', 'IN', 'output'], ['wr', 'WR', 'output'], ['rd', 'RD', 'output']],
+  rgbVideo: [['x', 'X', 'output'], ['y', 'Y', 'output'], ['data', 'DATA', 'output'], ['we', 'WE', 'output'], ['rst', 'RST', 'output']],
 };
 // Value of one pin for a waveform sample: the bit array of a wide pin (x when it has none yet), else its level
 const pinWaveValue = (p: CircuitPin | undefined): WaveformValue => {
@@ -382,7 +373,6 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
-  rgbMatrix16x16: { label: '16x16 RGB Matris (eski)', badge: 'GPU' },
   rgbVideo: { label: 'RGB Video', badge: 'VGA' },
   asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
   keyboard: { label: 'Klavye', badge: 'KBD' },
@@ -1119,7 +1109,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           if (!urlPreset) {
             showToast(
               droppedParts > 0
-                ? `Önceki çalışma oturumunuz geri yüklendi (${droppedParts} tanınmayan bileşen atlandı: eski sürümün sabit 4 bitlik parçaları artık yok, yerine ayarlanabilir parçaları kullanın).`
+                ? `Önceki çalışma oturumunuz geri yüklendi (${droppedParts} tanınmayan bileşen atlandı: eski sürümün sabit 4 bitlik parçaları ve 16x16 RGB matrisi artık yok, yerine ayarlanabilir parçaları ve RGB Video'yu kullanın).`
                 : 'Önceki çalışma oturumunuz otomatik olarak geri yüklendi.',
               droppedParts > 0 ? 8000 : undefined
             );
@@ -1475,36 +1465,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const sim = simulateCircuit(updated, wires);
       setWires(sim.wires);
       return sim.components;
-    });
-  };
-
-  // 16x16 RGB Matrix interactive pixel painting
-  const handleToggleRgbPixel = (e: React.MouseEvent, compId: string, x: number, y: number) => {
-    e.stopPropagation();
-    if (!selectedCompIds.includes(compId)) {
-      setSelectedCompIds([compId]);
-      setSelectedWireIds([]);
-      return;
-    }
-    setComponents((prev) => {
-      const updated = prev.map((c) => {
-        if (c.id === compId) {
-          const pixels = (c.state.rgbPixels || Array.from({ length: 16 }, () => Array(16).fill('#050505'))).map((row) => [...row]);
-          const current = pixels[y][x];
-          const colorCycle = ['#050505', '#ef4444', '#10b981', '#1d4ed8', '#facc15', '#d946ef', '#06b6d4', '#ffffff'];
-          const nextIdx = (colorCycle.indexOf(current) + 1) % colorCycle.length;
-          pixels[y][x] = colorCycle[nextIdx === -1 ? 1 : nextIdx];
-          return {
-            ...c,
-            state: {
-              ...c.state,
-              rgbPixels: pixels,
-            },
-          };
-        }
-        return c;
-      });
-      return updated;
     });
   };
 
@@ -3536,15 +3496,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         // If sheet doesn't exist yet in project tabs, load internal circuit from library!
         const subDef = comp.state.subcircuitId ? getSubcircuitDefinition(comp.state.subcircuitId) : null;
         if (subDef) {
+          // An IC saved by an older version may hold parts that no longer exist (16x16 RGB matrix): leave them out
+          const parts = subDef.components.filter(isKnownPart);
+          const dropped = subDef.components.length - parts.length;
           const newSheet: CircuitSheet = {
             id: subDef.id,
             name: subDef.name,
-            components: subDef.components.map(updatePinPositions),
-            wires: subDef.wires,
+            components: parts.map(updatePinPositions),
+            wires: dropped > 0 ? repairWires(subDef.wires, parts) : subDef.wires,
           };
           setSheets((prev) => [...prev, newSheet]);
           handleSwitchSheet(newSheet.id);
-          showToast(`"${subDef.name}" (${subDef.chipCode || 'IC'}) içine girildi.`);
+          showToast(`"${subDef.name}" (${subDef.chipCode || 'IC'}) içine girildi.${dropped > 0 ? ` ${dropped} tanınmayan bileşen gösterilmedi.` : ''}`);
           return;
         }
       }
@@ -3726,7 +3689,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
         list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
       } else if (IO5C_WAVE_PINS[c.type]) {
-        // Keyboard / TTY / Telnet: one row per data or strobe pin, the 7/8-bit data lines as bus rows
+        // Keyboard / TTY / Telnet / RGB Video: one row per data or strobe pin, the wide data lines as bus rows
         IO5C_WAVE_PINS[c.type]!.forEach(([k, port, kind]) => {
           const p = [...c.inputs, ...c.outputs].find((q) => plexerPinKey(c, q) === k);
           const w = p?.width ?? 1;
@@ -3735,8 +3698,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       } else if (c.type === 'asciiKeyboard') {
         list.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, color: '#22c55e', type: 'input' });
         list.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, color: colors[cIdx++ % colors.length], type: 'input' });
-      } else if (c.type === 'rgbMatrix16x16') {
-        list.push({ key: `${c.id}_we`, name: `${name} (WE)`, color: '#eab308', type: 'output' });
       }
     });
 
@@ -3795,8 +3756,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         } else if (c.type === 'asciiKeyboard') {
           values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
           values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
-        } else if (c.type === 'rgbMatrix16x16') {
-          values[`${c.id}_we`] = c.inputs[11]?.value ?? 0;
         }
       });
 
@@ -4978,64 +4937,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={34} y={59} textAnchor="middle" className={`text-[8px] font-mono font-bold select-none ${isOn ? 'fill-amber-400 font-extrabold' : 'fill-slate-500'}`}>
               {isOn ? noteName : 'BUZZER'}
             </text>
-          </g>
-        );
-      }
-
-
-      case 'rgbMatrix16x16': {
-        const pixels = comp.state.rgbPixels || Array.from({ length: 16 }, () => Array(16).fill('#050505'));
-        const curX = pinsNumber(comp.inputs.slice(0, 4));
-        const curY = pinsNumber(comp.inputs.slice(4, 8));
-        const isWe = comp.inputs[11]?.value === 1;
-
-        return (
-          <g filter="url(#gateShadow)">
-            {/* Dark Bezel Chassis */}
-            <rect x={0} y={0} width={170} height={180} rx={10} fill="#090d16" stroke={strokeColor} strokeWidth={strokeWidth} />
-            {/* Screen Glass */}
-            <rect x={24} y={14} width={136} height={136} rx={6} fill="#02040a" stroke="#1e293b" strokeWidth={1.5} />
-
-            {/* Header info */}
-            <text x={85} y={10} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-sky-400 select-none">
-              16x16 RGB VRAM
-            </text>
-            <text x={158} y={10} textAnchor="end" className="text-[6.5px] font-mono font-bold fill-amber-300 select-none">
-              [{numText(curX)},{numText(curY)}]{isWe ? '•WE' : ''}
-            </text>
-
-            {/* 256 RGB Pixels (16x16) */}
-            {pixels.map((row, rIdx) =>
-              row.map((colHex, cIdx) => {
-                const px = 28 + cIdx * 8.1;
-                const py = 18 + rIdx * 8.1;
-                const isSelectedPixel = cIdx === curX && rIdx === curY;
-                const isLit = colHex && colHex !== '#050505';
-                return (
-                  <rect
-                    key={`${rIdx}_${cIdx}`}
-                    x={px}
-                    y={py}
-                    width={7}
-                    height={7}
-                    rx={1.5}
-                    fill={colHex || '#050505'}
-                    stroke={isSelectedPixel ? '#38bdf8' : isLit ? colHex : '#0f172a'}
-                    strokeWidth={isSelectedPixel ? 1.2 : 0.6}
-                    className="cursor-pointer hover:opacity-80 transition-opacity"
-                    onClick={(e) => handleToggleRgbPixel(e, comp.id, cIdx, rIdx)}
-                  />
-                );
-              })
-            )}
-
-            {/* Pin Group Labels */}
-            <text x={4} y={36} className="text-[6.5px] font-mono font-bold fill-slate-400 select-none">X:0-3</text>
-            <text x={4} y={88} className="text-[6.5px] font-mono font-bold fill-slate-400 select-none">Y:0-3</text>
-            <text x={4} y={136} className="text-[6.5px] font-mono font-bold fill-slate-400 select-none">RGB</text>
-            <text x={4} y={166} className="text-[6.5px] font-mono font-bold fill-amber-400 select-none">WE</text>
-            <text x={60} y={176} textAnchor="middle" className="text-[6.5px] font-mono font-bold fill-cyan-400 select-none">CLK</text>
-            <text x={110} y={176} textAnchor="middle" className="text-[6.5px] font-mono font-bold fill-rose-400 select-none">RST</text>
           </g>
         );
       }

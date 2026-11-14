@@ -1911,31 +1911,6 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk (Logisim-evolution LedBar): her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
   dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris (Logisim DotMatrix). Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
   rgbLed: io5Meta('rgbLed', 'RGB LED', 'Kırmızı, yeşil ve mavi girişli LED (Logisim-evolution RgbLed): her renk girişi 1 iken yanar, karışımlar ara renkleri verir; ortak anotta (aktif düşük) 0 iken yanar'),
-  rgbMatrix16x16: {
-    type: 'rgbMatrix16x16',
-    name: '16x16 RGB Video Matrisi (VRAM GPU Ekranı)',
-    category: 'outputs',
-    width: 170,
-    height: 180,
-    inputs: [
-      { id: 'inX0', name: 'X0', type: 'input', relX: 0, relY: 20 },
-      { id: 'inX1', name: 'X1', type: 'input', relX: 0, relY: 30 },
-      { id: 'inX2', name: 'X2', type: 'input', relX: 0, relY: 40 },
-      { id: 'inX3', name: 'X3', type: 'input', relX: 0, relY: 50 },
-      { id: 'inY0', name: 'Y0', type: 'input', relX: 0, relY: 70 },
-      { id: 'inY1', name: 'Y1', type: 'input', relX: 0, relY: 80 },
-      { id: 'inY2', name: 'Y2', type: 'input', relX: 0, relY: 90 },
-      { id: 'inY3', name: 'Y3', type: 'input', relX: 0, relY: 100 },
-      { id: 'inR', name: 'R', type: 'input', relX: 0, relY: 120 },
-      { id: 'inG', name: 'G', type: 'input', relX: 0, relY: 130 },
-      { id: 'inB', name: 'B', type: 'input', relX: 0, relY: 140 },
-      { id: 'inWE', name: 'WE', type: 'input', relX: 0, relY: 160 },
-      { id: 'inClk', name: 'CLK', type: 'input', relX: 60, relY: 180 },
-      { id: 'inRst', name: 'RST', type: 'input', relX: 110, relY: 180 },
-    ],
-    outputs: [],
-    description: '16x16 (256 Piksel) Renkli Video Ekranı. X(3:0) ve Y(3:0) adreslerindeki piksele R, G, B renk verisini yazar',
-  },
   textLabel: {
     type: 'textLabel',
     name: 'Metin / Açıklama Notu (Text Note)',
@@ -2307,7 +2282,6 @@ export function createComponentInstance(
       // No previous clock yet: the first evaluation never counts as an edge (like Logisim, whose signals
       // power up unknown), so a flip-flop clocked by a high signal does not toggle when the circuit starts
       lastClk: undefined,
-      rgbPixels: type === 'rgbMatrix16x16' ? Array(16).fill(null).map(() => Array(16).fill('#050505')) : undefined,
       asciiChar: type === 'asciiKeyboard' ? 'A' : undefined,
       asciiCode: type === 'asciiKeyboard' ? 65 : undefined,
       strobe: type === 'asciiKeyboard' ? false : undefined,
@@ -4194,10 +4168,7 @@ export function simulateCircuitStep(
     ...c,
     inputs: c.inputs.map((p) => ({ ...p })),
     outputs: c.outputs.map((p) => ({ ...p })),
-    state: {
-      ...c.state,
-      rgbPixels: c.state.rgbPixels ? c.state.rgbPixels.map((row) => [...row]) : undefined,
-    },
+    state: { ...c.state },
   }));
 
   const newWires: CircuitWire[] = wires.map((w) => ({ ...w }));
@@ -5014,48 +4985,6 @@ export function simulateCircuitStep(
           comp.state.on = en;
           comp.state.buzzerNote = note;
           hasChanged = true;
-        }
-        break;
-      }
-      case 'rgbMatrix16x16': {
-        const xVal = (inVals[0] === 1 ? 1 : 0) | ((inVals[1] === 1 ? 2 : 0)) | ((inVals[2] === 1 ? 4 : 0)) | ((inVals[3] === 1 ? 8 : 0));
-        const yVal = (inVals[4] === 1 ? 1 : 0) | ((inVals[5] === 1 ? 2 : 0)) | ((inVals[6] === 1 ? 4 : 0)) | ((inVals[7] === 1 ? 8 : 0));
-        const rVal = inVals[8] === 1;
-        const gVal = inVals[9] === 1;
-        const bVal = inVals[10] === 1;
-        const weVal = inVals[11] === 1;
-        const rstVal = inVals[13] === 1;
-        const isRising = risingEdge(comp, raw[12]);
-
-        if (!comp.state.rgbPixels || comp.state.rgbPixels.length !== 16) {
-          comp.state.rgbPixels = Array.from({ length: 16 }, () => Array(16).fill('#050505'));
-        }
-
-        const clkPin = comp.inputs[12];
-        const isClkConnected = clkPin
-          ? (netWires.get(findRoot(clkPin.id))?.length ?? 0) > 0 ||
-            (netPins.get(findRoot(clkPin.id))?.length ?? 0) > 1
-          : false;
-
-        if (rstVal) {
-          comp.state.rgbPixels = Array.from({ length: 16 }, () => Array(16).fill('#050505'));
-          hasChanged = true;
-        } else if (weVal && (isRising || !isClkConnected)) {
-          let hexCol = '#050505';
-          if (rVal && gVal && bVal) hexCol = '#ffffff'; // Beyaz (R+G+B)
-          else if (rVal && gVal && !bVal) hexCol = '#facc15'; // Sarı (R+G)
-          else if (rVal && !gVal && bVal) hexCol = '#d946ef'; // Macenta / Fuşya (R+B)
-          else if (rVal && !gVal && !bVal) hexCol = '#ef4444'; // Kırmızı (R)
-          else if (!rVal && gVal && bVal) hexCol = '#06b6d4'; // Camgöbeği / Turkuaz (G+B)
-          else if (!rVal && gVal && !bVal) hexCol = '#10b981'; // Canlı Zümrüt Yeşili (G)
-          else if (!rVal && !gVal && bVal) hexCol = '#1d4ed8'; // Derin Saf Mavi (B)
-
-          if (xVal >= 0 && xVal < 16 && yVal >= 0 && yVal < 16) {
-            if (comp.state.rgbPixels[yVal][xVal] !== hexCol) {
-              comp.state.rgbPixels[yVal][xVal] = hexCol;
-              hasChanged = true;
-            }
-          }
         }
         break;
       }
@@ -6619,7 +6548,6 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'realTimeClock' &&
       c.type !== 'keyboard' &&
       c.type !== 'telnet' &&
-      c.type !== 'rgbMatrix16x16' &&
       c.type !== 'textLabel' &&
       c.type !== 'splitter' &&
       c.type !== 'tunnel'

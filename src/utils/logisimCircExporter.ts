@@ -472,7 +472,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'led':
         case 'probe':
         case 'buzzer':
-        case 'rgbMatrix16x16':
           if (inScope) break; // an IC's outputs reach the outside through its ports
           c.inputs.forEach((p, i) => {
             const l = c.inputs.length === 1 ? label : `${label}_${p.name}`;

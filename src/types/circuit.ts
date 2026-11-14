@@ -57,7 +57,6 @@ export type ComponentType =
   | 'hexDigit'
   | 'ledBar'
   | 'dotMatrix'
-  | 'rgbMatrix16x16'
   // Logisim-evolution RGB LED (Aşama 5a)
   | 'rgbLed'
   // Combinational Blocks
@@ -372,7 +371,6 @@ export interface CircuitComponentInstance {
     videoX?: number;
     videoY?: number;
     videoData?: number;
-    rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;
     strobe?: boolean;

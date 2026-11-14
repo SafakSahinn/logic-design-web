@@ -178,6 +178,12 @@ export function generateFpgaConstraints(
             ? `Metin terminali "${label || 'Terminal'}" portları kartta yok: IN / WE / CK / CLR'yi bir UART verici ya da VGA metin denetleyicisine bağlayın (ya da Pmod / GPIO pinlerine elle atayın).`
             : `Telnet "${label || 'Telnet'}" portları kartta yok: ağ bağlantısını bir UART köprüsü ya da Ethernet çekirdeği vermeli; OUT / AV / IN / WR / RD / CK'yi ona bağlayın.`;
       if (!notes.includes(what)) notes.push(what);
+    } else if (type === 'rgbVideo') {
+      // The board's VGA / HDMI connector needs a timing generator and a frame buffer in between: one note per part
+      for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
+      const label = components.find((x) => x.id === p.source?.compId)?.label;
+      const what = `RGB Video "${label || 'RGB Video'}" portları kartta yok: RST / CK / WE / X / Y / DATA'yı bir çerçeve tamponuna yazan VGA / HDMI denetleyicisine bağlayın (kartın VGA pinleri doğrudan sürülemez; ya da Pmod / GPIO pinlerine elle atayın).`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'sevenSegment' && !sevenSegUsed) {
       sevenSegUsed = true;
       assign('7-segment ekran (a..g, dp)', [...board.sevenSegPins.segments], p);

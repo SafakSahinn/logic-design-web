@@ -131,8 +131,8 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 // Board / outside I/O parts (a keypad's columns and a port's pins come from outside like a switch; the keyboard and
 // Telnet are the outside world's in the HDL too, so no transistors are counted for their buffers)
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet'];
-// Displays carry no logic (no transistors counted)
-const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbMatrix16x16', 'rgbLed', 'tty'];
+// Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [
@@ -203,7 +203,6 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   splitter4: 0,
   splitter: 0,
   busSplitter: 0,
-  rgbMatrix16x16: 512,
   asciiKeyboard: 140,
   srLatch: 8,
   register4bit: 92,
