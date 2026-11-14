@@ -260,6 +260,20 @@ const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
 const waveKey = (v: WaveformValue | undefined): string =>
   v === undefined ? '0' : Array.isArray(v) ? `b${v.join('')}` : String(v);
 
+// Waveform rows of the Keyboard / TTY / Telnet (pin key, row name, row kind): the data and strobe lines the
+// circuit exchanges with them (outputs read like a DIP switch, inputs like an LED bar). Sample key `${id}_${pin}`
+const IO5C_WAVE_PINS: Partial<Record<string, [string, string, 'input' | 'output'][]>> = {
+  keyboard: [['out', 'OUT', 'input'], ['avl', 'AV', 'input']],
+  tty: [['in', 'IN', 'output'], ['we', 'WE', 'output']],
+  telnet: [['out', 'OUT', 'input'], ['av', 'AV', 'input'], ['in', 'IN', 'output'], ['wr', 'WR', 'output'], ['rd', 'RD', 'output']],
+};
+// Value of one pin for a waveform sample: the bit array of a wide pin (x when it has none yet), else its level
+const pinWaveValue = (p: CircuitPin | undefined): WaveformValue => {
+  const w = p?.width ?? 1;
+  if (w > 1) return p?.bits ? [...p.bits] : Array<SignalValue>(w).fill('X');
+  return p?.value ?? 'Z';
+};
+
 // Header cells over the truth-table columns: one spanning the bits of each wide part (A[7..0]), an
 // empty one over each run of 1-bit columns
 const truthColumnGroups = (cols: TruthTableData['inputs']): { label: string; span: number }[] => {
@@ -3672,6 +3686,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         list.push({ key: `${c.id}_io`, name: `${name} PIO${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: getIo5Config(c).portDir === 'output' ? 'output' : 'input', width: w });
       } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
         list.push({ key: c.id, name: `${name} (KAPI)`, color: colors[cIdx++ % colors.length], type: 'gate' });
+      } else if (IO5C_WAVE_PINS[c.type]) {
+        // Keyboard / TTY / Telnet: one row per data or strobe pin, the 7/8-bit data lines as bus rows
+        IO5C_WAVE_PINS[c.type]!.forEach(([k, port, kind]) => {
+          const p = [...c.inputs, ...c.outputs].find((q) => plexerPinKey(c, q) === k);
+          const w = p?.width ?? 1;
+          list.push({ key: `${c.id}_${k}`, name: `${name} ${port}${w > 1 ? `[${w}]` : ''}`, color: colors[cIdx++ % colors.length], type: kind, width: w });
+        });
       } else if (c.type === 'asciiKeyboard') {
         list.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, color: '#22c55e', type: 'input' });
         list.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, color: colors[cIdx++ % colors.length], type: 'input' });
@@ -3727,6 +3748,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         } else if (c.type === 'portIo') {
           const bits = portIoPins(c);
           values[`${c.id}_io`] = bits.length > 1 ? bits : bits[0] ?? 'Z';
+        } else if (IO5C_WAVE_PINS[c.type]) {
+          // Telnet OUT is 8 x while RD is not 1: shown as the x box, not as 0
+          IO5C_WAVE_PINS[c.type]!.forEach(([k]) => {
+            values[`${c.id}_${k}`] = pinWaveValue([...c.inputs, ...c.outputs].find((q) => plexerPinKey(c, q) === k));
+          });
         } else if (c.type === 'asciiKeyboard') {
           values[`${c.id}_st`] = c.outputs[7]?.value ?? 0;
           values[`${c.id}_d0`] = c.outputs[0]?.value ?? 0;
