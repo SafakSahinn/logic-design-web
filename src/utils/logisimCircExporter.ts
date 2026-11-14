@@ -32,6 +32,12 @@ import {
   getVideoConfig,
   VIDEO_COLOR_MODELS,
   getImageConfig,
+  getTextConfig,
+  textFontString,
+  decodeTextFont,
+  textLayout,
+  textStandardString,
+  TEXT_DEFAULT_COLOR,
   IMAGE_DEFAULT_SIZE,
   imageNaturalSize,
   binToBcdBits,
@@ -63,6 +69,7 @@ import {
   LOGISIM_VIDEO_NAME,
   LOGISIM_VIDEO_RESET,
   LOGISIM_IMAGE_NAME,
+  LOGISIM_TEXT_NAME,
   logisimVideoBounds,
   logisimVideoPorts,
   logisimArithPorts,
@@ -83,7 +90,7 @@ import { getTtlConfig } from './circuitEngine';
 const TTL_LIB = 6;
 /** Library number of evolution's #BFH-Praktika (Aşama 5b) in the exported file */
 const BFH_LIB = 7;
-/** Library number of evolution's #Base (its Image, Aşama 5e) in the exported file */
+/** Library number of Logisim's #Base (its Text; evolution's Image, Aşama 5e) in the exported file */
 const BASE_LIB = 8;
 
 /*
@@ -203,8 +210,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesTtl = false;
   // Likewise evolution's BFH library (binary to BCD converter, BCD to 7-segment decoder)
   let usesBfh = false;
-  // and the Base library, only for an Image (2.7.1's Base has no Image)
+  // and the Base library, only for a Text or an Image (2.7.1's Base has Text, but no Image)
   let usesBase = false;
+  let usesImage = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
 
@@ -498,8 +506,37 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           });
           break;
         case 'tunnel':
-        case 'textLabel':
           break;
+        case 'textLabel': {
+          // Logisim's Text (lib Base, 2.7.1 and evolution): no pins, its text block kept clear of the other parts.
+          // The attributes as evolution writes them (sorted by name, text through toStandardString, a multi-line text
+          // as the element's content), except the font: always written, since 2.7.1 and evolution differ on its
+          // default (plain 12 / bold 16) and both should show the same text. 2.7.1 ignores the colour
+          const cfg = getTextConfig(c);
+          const text = textStandardString(cfg.text);
+          const name = `Metin "${cfg.text.replace(/\s+/g, ' ').slice(0, 30)}" (${c.x},${c.y})`;
+          if (text === '') {
+            // evolution deletes a Text with no text when it loads the file
+            if (cfg.text !== '') warnings.push(`${name}: yazdırılabilir karakteri yok; Logisim onu silerdi, dosyaya yazılmadı.`);
+            break;
+          }
+          const a = (n: string, val: string) => `<a name="${n}" val="${xmlEsc(val)}"/>`;
+          let attrs = '';
+          if (cfg.color !== TEXT_DEFAULT_COLOR) attrs += a('color', cfg.color);
+          attrs += a('font', textFontString(decodeTextFont(cfg.font)));
+          if (cfg.halign !== 'center') attrs += a('halign', cfg.halign);
+          attrs += text.includes('\n') ? `<a name="text">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</a>` : a('text', text);
+          if (cfg.valign !== 'base') attrs += a('valign', cfg.valign);
+          // (the box out to the grid, so the anchor lands on a grid point: 2.7.1 snaps a Text's location)
+          const l = textLayout(cfg);
+          const g = (v: number, up: boolean) => (up ? Math.ceil(v / 10) : Math.floor(v / 10)) * 10;
+          const box = { x0: g(-l.ax, false), y0: g(-l.ay, false), x1: g(l.width - l.ax, true), y1: g(l.height - l.ay, true) };
+          P.push({ kind: 'ram', part: c.type, attrs, ports: [], lib: BASE_LIB, name: LOGISIM_TEXT_NAME, box });
+          usesBase = true;
+          if ((c.rotation ?? 0) % 360 !== 0) warnings.push(`${name}: Logisim'deki metnin yönü yok; döndürülmeden yazıldı.`);
+          if (text !== cfg.text) warnings.push(`${name}: sekme ve denetim karakterleri ile "&#...;" parçaları Logisim'in yazdığı gibi atıldı.`);
+          break;
+        }
         case 'image': {
           // Evolution's Image (lib Base, 2.7.1 has none): no pins, its frame kept clear of the other parts; the
           // attributes as evolution writes them (sorted by name, license always, the others when not the default)
@@ -517,6 +554,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           if (cfg.width !== IMAGE_DEFAULT_SIZE) attrs += a('width', cfg.width);
           P.push({ kind: 'ram', part: c.type, attrs, ports: [], lib: BASE_LIB, name: LOGISIM_IMAGE_NAME, box: { x0: 0, y0: 0, x1: cfg.width, y1: cfg.height } });
           usesBase = true;
+          usesImage = true;
           const name = `Resim (${c.x},${c.y})`;
           if ((c.rotation ?? 0) % 360 !== 0) warnings.push(`${name}: Logisim-evolution'daki resmin yönü yok; döndürülmeden yazıldı.`);
           if (cfg.src && !cfg.src.startsWith('data:image/'))
@@ -1375,7 +1413,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     warnings.unshift(
       "TTL çipleri Logisim-evolution'ın TTL kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
     );
-  if (usesBase)
+  if (usesImage)
     warnings.unshift(
       "Resimler Logisim-evolution'ın Image parçası olarak yazıldı; Logisim 2.7.1'de bu parça yok, dosyayı yalnız Logisim-evolution açar."
     );

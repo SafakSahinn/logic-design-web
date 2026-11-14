@@ -1850,6 +1850,229 @@ export function whiteToTransparent(px: Uint8ClampedArray | Uint8Array, w: number
   return out;
 }
 
+// ---- Logisim Base library Text (2.7.1 and evolution) -------------------------------------------------------------
+// textLabel = 'Text' (std/base/Text.java + TextAttributes): a text with no pins and no logic. Evolution's
+// attributes text (the part's label, may hold line breaks), font, color, halign, valign; 2.7.1 has the same ones
+// without color. The text is placed on an anchor point (evolution's location): halign / valign say which point of the
+// text block it is. Here the part's x / y is the top-left corner of the block's box (StringUtil.estimateBounds,
+// grown by 4 like paintGhost's bounds), so the anchor stays where it is when the text or font changes.
+
+/** evolution StdAttr.DEFAULT_LABEL_FONT (the Text tool's default) */
+export const TEXT_DEFAULT_FONT = 'SansSerif bold 16';
+/** Logisim 2.7.1's default Text font (a 2.7.1 file leaves it out) */
+export const TEXT_DEFAULT_FONT_271 = 'SansSerif plain 12';
+export const TEXT_DEFAULT_COLOR = '#000000';
+export type TextHAlign = 'left' | 'right' | 'center';
+export type TextVAlign = 'top' | 'base' | 'bottom' | 'center';
+export const TEXT_HALIGNS: TextHAlign[] = ['left', 'right', 'center'];
+export const TEXT_VALIGNS: TextVAlign[] = ['top', 'base', 'bottom', 'center'];
+export type TextFontStyle = 'plain' | 'bold' | 'italic' | 'bolditalic';
+export const TEXT_FONT_STYLES: TextFontStyle[] = ['plain', 'bold', 'italic', 'bolditalic'];
+/** What an empty text shows on the canvas (evolution draws nothing; here it would be impossible to find) */
+export const TEXT_PLACEHOLDER = 'Metin';
+const TEXT_PAD = 4;
+
+export interface TextFont {
+  family: string;
+  style: TextFontStyle;
+  size: number;
+}
+
+/** Java's logical font names; Font.getFamily() gives them in this spelling whatever the case written */
+const LOGICAL_FONTS = ['Dialog', 'DialogInput', 'Serif', 'SansSerif', 'Monospaced'];
+
+/** Java Integer.valueOf(s, radix): optional sign, then digits of the radix, within 32 bits; else null */
+function javaInt(s: string, radix = 10): number | null {
+  const m = /^([+-]?)(.+)$/.exec(s);
+  if (!m) return null;
+  const digits = radix === 16 ? /^[0-9a-fA-F]+$/ : radix === 8 ? /^[0-7]+$/ : /^[0-9]+$/;
+  if (!digits.test(m[2])) return null;
+  const v = parseInt(m[2], radix) * (m[1] === '-' ? -1 : 1);
+  return v < -2147483648 || v > 2147483647 ? null : v;
+}
+
+/** java.awt.Font.decode ("Name style size", "Name-STYLE-size", parts may be left out); the family as getFamily() */
+export function decodeTextFont(str: string): TextFont {
+  let size = 12;
+  let style: TextFontStyle = 'plain';
+  const len = str.length;
+  const sep = str.lastIndexOf('-') > str.lastIndexOf(' ') ? '-' : ' ';
+  let sizeIndex = str.lastIndexOf(sep);
+  let styleIndex = sizeIndex - 1 < 0 ? -1 : str.lastIndexOf(sep, sizeIndex - 1);
+  if (sizeIndex > 0 && sizeIndex + 1 < len) {
+    const n = javaInt(str.substring(sizeIndex + 1));
+    if (n !== null) size = n <= 0 ? 12 : n;
+    else {
+      styleIndex = sizeIndex;
+      sizeIndex = len;
+      if (str.charAt(sizeIndex - 1) === sep) sizeIndex--;
+    }
+  }
+  let family: string;
+  if (styleIndex >= 0 && styleIndex + 1 < len) {
+    const name = str.substring(styleIndex + 1, sizeIndex).toLowerCase();
+    if ((TEXT_FONT_STYLES as string[]).includes(name)) style = name as TextFontStyle;
+    else {
+      styleIndex = sizeIndex;
+      if (str.charAt(styleIndex - 1) === sep) styleIndex--;
+    }
+    family = str.substring(0, styleIndex);
+  } else {
+    let end = len;
+    if (styleIndex > 0) end = styleIndex;
+    else if (sizeIndex > 0) end = sizeIndex;
+    if (end > 0 && str.charAt(end - 1) === sep) end--;
+    family = str.substring(0, end);
+  }
+  const logical = LOGICAL_FONTS.find((f) => f.toLowerCase() === family.toLowerCase());
+  return { family: logical ?? (family === '' ? 'Dialog' : family), style, size };
+}
+
+/** evolution FontAttribute.toStandardString: "Family style size" */
+export const textFontString = (f: TextFont) => `${f.family} ${f.style} ${f.size}`;
+
+const hex2 = (n: number) => n.toString(16).padStart(2, '0');
+
+/**
+ * evolution ColorAttribute.parse: "#rrggbbaa" (9 characters) or java.awt.Color.decode (Integer.decode: #, 0x, 0X
+ * hexadecimal, a leading 0 octal, else decimal; the low 24 bits, opaque), given back as its standard string
+ * ("#rrggbb", "#rrggbbaa" when not opaque); null when evolution refuses the value
+ */
+export function parseTextColor(value: string): string | null {
+  if (value.length === 9) {
+    const parts = [1, 3, 5, 7].map((i) => javaInt(value.substring(i, i + 2), 16));
+    if (parts.some((p) => p === null || p < 0 || p > 255)) return null;
+    const [r, g, b, a] = parts as number[];
+    return `#${hex2(r)}${hex2(g)}${hex2(b)}${a === 255 ? '' : hex2(a)}`;
+  }
+  let i = 0;
+  let neg = false;
+  if (value.startsWith('-')) {
+    neg = true;
+    i = 1;
+  } else if (value.startsWith('+')) i = 1;
+  let radix = 10;
+  if (value.startsWith('0x', i) || value.startsWith('0X', i)) {
+    radix = 16;
+    i += 2;
+  } else if (value.startsWith('#', i)) {
+    radix = 16;
+    i += 1;
+  } else if (value.startsWith('0', i) && value.length > i + 1) {
+    radix = 8;
+    i += 1;
+  }
+  const rest = value.substring(i);
+  if (rest.startsWith('-') || rest.startsWith('+')) return null;
+  const v = javaInt((neg ? '-' : '') + rest, radix);
+  if (v === null) return null;
+  return `#${hex2((v >> 16) & 255)}${hex2((v >> 8) & 255)}${hex2(v & 255)}`;
+}
+
+/** evolution MultilineStringAttribute.toStandardString: CR / CRLF become LF, other control characters and "&#...;" go */
+export function textStandardString(text: string): string {
+  const n = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  let out = '';
+  for (const ch of n) if (ch === '\n' || ch >= ' ') out += ch;
+  return out.replace(/&#.*?;/g, '');
+}
+
+export interface TextConfig {
+  text: string;
+  /** standard font string ("SansSerif bold 16") */
+  font: string;
+  /** standard colour string ("#000000") */
+  color: string;
+  halign: TextHAlign;
+  valign: TextVAlign;
+}
+
+export function getTextConfig(comp: Pick<CircuitComponentInstance, 'state' | 'label'>): TextConfig {
+  const s = comp.state;
+  return {
+    text: comp.label ?? '',
+    font: s.textFont ?? TEXT_DEFAULT_FONT,
+    color: s.textColor ?? TEXT_DEFAULT_COLOR,
+    halign: s.textHAlign && TEXT_HALIGNS.includes(s.textHAlign) ? s.textHAlign : 'center',
+    valign: s.textVAlign && TEXT_VALIGNS.includes(s.textVAlign) ? s.textVAlign : 'base',
+  };
+}
+
+export interface TextLayout {
+  /** box of the text block */
+  width: number;
+  height: number;
+  /** the anchor (evolution's location) inside the box */
+  ax: number;
+  ay: number;
+  /** the lines drawn (the placeholder for an empty text) and the font */
+  lines: string[];
+  font: TextFont;
+  placeholder: boolean;
+}
+
+/** The text block's box from evolution's StringUtil.estimateBounds (tab = 4 characters, w = size * chars * 2 / 3) */
+export function textLayout(cfg: TextConfig): TextLayout {
+  const font = decodeTextFont(cfg.font);
+  const placeholder = cfg.text === '';
+  const text = placeholder ? TEXT_PLACEHOLDER : cfg.text;
+  let n = 0;
+  let c = 0;
+  let lines = 0;
+  for (const ch of text) {
+    if (ch === '\n') {
+      n = Math.max(c, n);
+      c = 0;
+      lines++;
+    } else if (ch === '\t') c += 4;
+    else c++;
+  }
+  if (!text.endsWith('\n')) {
+    n = Math.max(c, n);
+    lines++;
+  }
+  const w = Math.trunc((font.size * n * 2) / 3);
+  const h = font.size * lines;
+  const x0 = cfg.halign === 'left' ? 0 : cfg.halign === 'right' ? -w : -Math.trunc(w / 2);
+  const y0 = cfg.valign === 'top' ? 0 : cfg.valign === 'center' ? -Math.trunc(h / 2) : -h;
+  return {
+    width: Math.max(1, w) + 2 * TEXT_PAD,
+    height: Math.max(1, h) + 2 * TEXT_PAD,
+    ax: -x0 + TEXT_PAD,
+    ay: -y0 + TEXT_PAD,
+    lines: text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n'),
+    font,
+    placeholder,
+  };
+}
+
+/** The anchor point (evolution's location) of a text part on the canvas */
+export function textAnchor(comp: CircuitComponentInstance): { x: number; y: number } {
+  const l = textLayout(getTextConfig(comp));
+  return { x: comp.x + l.ax, y: comp.y + l.ay };
+}
+
+/** The text part with new settings; its anchor stays where it is (defaults stay unset in the state) */
+export function configureText(comp: CircuitComponentInstance, patch: Partial<TextConfig>): CircuitComponentInstance {
+  const old = textLayout(getTextConfig(comp));
+  const cfg = { ...getTextConfig(comp), ...patch };
+  const next = textLayout(cfg);
+  const state = {
+    ...comp.state,
+    textFont: cfg.font === TEXT_DEFAULT_FONT ? undefined : cfg.font,
+    textColor: cfg.color === TEXT_DEFAULT_COLOR ? undefined : cfg.color,
+    textHAlign: cfg.halign === 'center' ? undefined : cfg.halign,
+    textVAlign: cfg.valign === 'base' ? undefined : cfg.valign,
+  };
+  return { ...comp, label: cfg.text, x: comp.x + old.ax - next.ax, y: comp.y + old.ay - next.ay, inputs: [], outputs: [], state };
+}
+
+/** A new text part whose anchor lies on (x, y) */
+export function textAt(comp: CircuitComponentInstance, x: number, y: number): CircuitComponentInstance {
+  const l = textLayout(getTextConfig(comp));
+  return { ...comp, x: x - l.ax, y: y - l.ay };
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -2154,13 +2377,14 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   rgbLed: io5Meta('rgbLed', 'RGB LED', 'Kırmızı, yeşil ve mavi girişli LED (Logisim-evolution RgbLed): her renk girişi 1 iken yanar, karışımlar ara renkleri verir; ortak anotta (aktif düşük) 0 iken yanar'),
   textLabel: {
     type: 'textLabel',
-    name: 'Metin / Açıklama Notu (Text Note)',
+    name: 'Metin',
     category: 'outputs',
-    width: 140,
-    height: 44,
+    width: 60,
+    height: 30,
     inputs: [],
     outputs: [],
-    description: 'Tuvale devre şeması için özel notlar ve başlıklar eklemek için kullanılır',
+    description:
+      'Devreye başlık ya da açıklama yazısı koyar (Logisim Text): bacağı ve mantığı yok. Yazı birden çok satır olabilir; yazı tipi, renk ve yatay / dikey hizalama ayarlanır. Hizalama, yazının hangi noktasının yerinde durduğunu söyler',
   },
   image: {
     type: 'image',
@@ -2522,7 +2746,7 @@ export function createComponentInstance(
     id: compId,
     type,
     // evolution's Image has no label
-    label: customLabel || (type === 'image' ? '' : meta.name),
+    label: customLabel || (type === 'image' ? '' : type === 'textLabel' ? TEXT_PLACEHOLDER : meta.name),
     x,
     y,
     inputs,
@@ -2620,6 +2844,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   if (comp.type === 'image') {
     const cfg = getImageConfig(comp);
     return { width: cfg.width, height: cfg.height };
+  }
+  if (comp.type === 'textLabel') {
+    const l = textLayout(getTextConfig(comp));
+    return { width: l.width, height: l.height };
   }
   const ttl = ttlChipOf(comp.type);
   if (ttl) return ttlSize(ttl);

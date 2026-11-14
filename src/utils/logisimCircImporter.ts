@@ -31,6 +31,19 @@ import {
   VIDEO_SIZE_MAX,
   VIDEO_SIZE_MIN,
   configureImage,
+  configureText,
+  decodeTextFont,
+  parseTextColor,
+  textAt,
+  textFontString,
+  TEXT_DEFAULT_COLOR,
+  TEXT_DEFAULT_FONT,
+  TEXT_DEFAULT_FONT_271,
+  TEXT_HALIGNS,
+  TEXT_VALIGNS,
+  type TextConfig,
+  type TextHAlign,
+  type TextVAlign,
   IMAGE_DEFAULT_SIZE,
   IMAGE_LICENSES,
   IMAGE_SCALES,
@@ -165,6 +178,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'rgb video') return 'rgbVideo';
   // Evolution's decorative Image of the Base library, Aşama 5e (2.7.1 has none)
   if (n === 'image') return 'image';
+  // The Base library's Text (2.7.1 and evolution)
+  if (n === 'text') return 'textLabel';
   if (n.includes('dip switch') || n === 'dipswitch') return 'dipSwitch';
 
   // Arithmetic (Logisim std/arith; Absolute, MinMax, SquareRoot, Exponentiator only in evolution)
@@ -1211,6 +1226,39 @@ export function logisimVideoSettings(attr: Record<string, string>): { cfg: Video
   return { cfg, ports: logisimVideoPorts(), notes };
 }
 
+// ---- Base library Text (Logisim 2.7.1 and evolution) ----
+
+/** Logisim part name of the text (Base library) */
+export const LOGISIM_TEXT_NAME = 'Text';
+
+/**
+ * Settings of a Text from its attributes (TextAttributes): text (kept as written; evolution's writer later drops control
+ * characters except line breaks), font (java Font.decode; a file that leaves it out means the writer's default:
+ * evolution SansSerif bold 16, 2.7.1 SansSerif plain 12), color (evolution only), halign, valign. A value Logisim
+ * refuses takes the default with a note.
+ */
+export function logisimTextSettings(attr: Record<string, string>, evolutionFile: boolean): { cfg: TextConfig; notes: string[] } {
+  const notes: string[] = [];
+  const font = attr.font !== undefined ? textFontString(decodeTextFont(attr.font)) : evolutionFile ? TEXT_DEFAULT_FONT : TEXT_DEFAULT_FONT_271;
+  let color = TEXT_DEFAULT_COLOR;
+  if (attr.color !== undefined) {
+    const c = parseTextColor(attr.color);
+    if (c) color = c;
+    else notes.push(`renk "${attr.color}" okunamadı, siyah alındı.`);
+  }
+  let halign: TextHAlign = 'center';
+  if (attr.halign !== undefined) {
+    if (TEXT_HALIGNS.includes(attr.halign as TextHAlign)) halign = attr.halign as TextHAlign;
+    else notes.push(`yatay hizalama "${attr.halign}" tanınmadı, "center" alındı.`);
+  }
+  let valign: TextVAlign = 'base';
+  if (attr.valign !== undefined) {
+    if (TEXT_VALIGNS.includes(attr.valign as TextVAlign)) valign = attr.valign as TextVAlign;
+    else notes.push(`dikey hizalama "${attr.valign}" tanınmadı, "base" alındı.`);
+  }
+  return { cfg: { text: attr.text ?? '', font, color, halign, valign }, notes };
+}
+
 // ---- Aşama 5e part (evolution's std/base Image) ----
 
 /** Logisim-evolution part name of the decorative image (Base library) */
@@ -1400,7 +1448,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       .map((l) => l.getAttribute('name') ?? '')
   );
   // Logisim parts that carry no logic
-  const DECORATIVE = new Set(['text', 'probe text']);
+  const DECORATIVE = new Set(['probe text']);
 
   const imported = new Map<string, { sheet: ImportedCircuitSheet; pins: CircPin[]; signature: string }>();
   const inProgress = new Set<string>();
@@ -1687,13 +1735,13 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
       // (the RGB Video's width is its screen width in pixels, the Image's its frame width, not a bit width)
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image')
+      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image' && nativeType !== 'textLabel')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot = FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image') occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel') occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -2084,6 +2132,17 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         );
         continue;
       }
+      if (nativeType === 'textLabel') {
+        // Logisim's Text (no pins, no facing): its anchor on the (scaled) loc, the font size as written. Evolution
+        // drops a Text with no text while loading (2.7.1 keeps it, invisible): it is left out
+        const st = logisimTextSettings(attr, evolutionFile);
+        if (st.cfg.text === '') continue;
+        for (const n of st.notes) warnings.push(`${where}: ${n}`);
+        const p = scaled(loc);
+        const t = configureText(createComponentInstance('textLabel', 0, 0), st.cfg);
+        components.push(textAt(t, p.x, p.y));
+        continue;
+      }
       if (nativeType === 'image') {
         // Evolution's Image (no pins, no facing, no label): its top-left corner on the (scaled) loc; the frame keeps
         // evolution's size so the file goes back unchanged
@@ -2270,7 +2329,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     for (let k = 0; k < components.length; k++) {
       let comp = components[k];
       // an Image has no pins and may lie under other parts on purpose (a background): it stays and blocks nothing
-      if (comp.type === 'image') continue;
+      if (comp.type === 'image' || comp.type === 'textLabel') continue;
       for (let tries = 0; tries < 400; tries++) {
         if (!pinClash(comp) && !overlaps(box(comp))) break;
         comp = updatePinPositions({ ...comp, y: comp.y + 10 });

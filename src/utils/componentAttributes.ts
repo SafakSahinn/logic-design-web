@@ -38,6 +38,15 @@ import {
   VIDEO_SCALE_MAX,
   configureImage,
   getImageConfig,
+  configureText,
+  decodeTextFont,
+  getTextConfig,
+  textFontString,
+  TEXT_DEFAULT_COLOR,
+  TEXT_FONT_STYLES,
+  type TextFontStyle,
+  type TextHAlign,
+  type TextVAlign,
   imageDataSize,
   imageWithSize,
   imageWithSource,
@@ -126,6 +135,7 @@ export type AttrKind =
   | 'int' // decimal integer text field (32-bit signed)
   | 'eng' // resistance / capacitance text field with presets (evolution EngineeringAttribute), see AttrDef.unit
   | 'text' // free text field, see AttrDef.maxLength
+  | 'multiline' // free text box, line breaks kept (Enter = new line, Ctrl+Enter / leaving the box = apply)
   | 'info' // read-only value (a number is shown as a bit width)
   | 'image' // picture chooser (data URL value)
   | 'bitMap' // splitter: one drop-down per incoming bit
@@ -933,6 +943,10 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'rgbVideo':
       list.push(videoResolutionAttr, videoWidthAttr, videoHeightAttr, videoColorAttr, videoResetAttr, videoCursorAttr, videoScaleAttr);
       break;
+    case 'textLabel':
+      // evolution's order (text, font, color, halign, valign); the font is split into family / style / size
+      list.push(textTextAttr, textFamilyAttr, textStyleAttr, textSizeAttr, textColorAttr, textHAlignAttr, textVAlignAttr);
+      break;
     case 'image':
       // evolution's order; the image has no label
       list.push(imageSrcAttr, imageWidthAttr, imageHeightAttr, imageScaleAttr, imageDataSizeAttr, imageLicenseAttr, imageAttributionAttr);
@@ -1578,6 +1592,114 @@ const imageAttributionAttr: AttrDef = {
   title: 'Resmin sahibi ya da kaynağı (Logisim-evolution "Attribution"); yalnız bilgi',
   get: (c) => getImageConfig(c).attribution,
   set: (c, v) => imageEdit(c, configureImage(c, { attribution: String(v) })),
+};
+
+// ---- Text (Logisim Base "Text"): every edit keeps the text's anchor point where it is
+const textEdit = (c: CircuitComponentInstance, next: CircuitComponentInstance): AttrEdit | null =>
+  next.label === c.label && next.x === c.x && next.y === c.y && JSON.stringify(next.state) === JSON.stringify(c.state) ? null : { comp: next };
+const textFontPatch = (c: CircuitComponentInstance, patch: Partial<ReturnType<typeof decodeTextFont>>) =>
+  textEdit(c, configureText(c, { font: textFontString({ ...decodeTextFont(getTextConfig(c).font), ...patch }) }));
+
+const textTextAttr: AttrDef = {
+  key: 'textText',
+  label: 'Metin',
+  kind: 'multiline',
+  title: 'Gösterilen yazı (Logisim "Text"); birden çok satır olabilir',
+  singleOnly: true,
+  get: (c) => getTextConfig(c).text,
+  set: (c, v) => textEdit(c, configureText(c, { text: String(v) })),
+};
+
+/** Java's logical fonts first (every Logisim has them), then common ones; a family from a file is kept and listed */
+const TEXT_FAMILIES = ['SansSerif', 'Serif', 'Monospaced', 'Dialog', 'DialogInput', 'Arial', 'Times New Roman', 'Courier New', 'Verdana'];
+
+const textFamilyAttr: AttrDef = {
+  key: 'textFamily',
+  label: 'Yazı tipi',
+  kind: 'select',
+  title:
+    'Yazı tipi ailesi (Logisim "Font"). SansSerif, Serif, Monospaced, Dialog ve DialogInput her Logisim kurulumunda var; başka bir aile o bilgisayarda yüklü değilse Logisim onu Dialog ile çizer',
+  options: (c) => {
+    const cur = decodeTextFont(getTextConfig(c).font).family;
+    return [...TEXT_FAMILIES, ...(TEXT_FAMILIES.includes(cur) ? [] : [cur])].map((f) => ({ value: f, label: f }));
+  },
+  get: (c) => decodeTextFont(getTextConfig(c).font).family,
+  set: (c, v) => textFontPatch(c, { family: String(v) }),
+};
+
+const textStyleAttr: AttrDef = {
+  key: 'textStyle',
+  label: 'Stil',
+  kind: 'buttons',
+  title: 'Düz, kalın, eğik ya da kalın eğik (Logisim "Font" stili)',
+  options: [
+    { value: 'plain', label: 'Düz' },
+    { value: 'bold', label: 'Kalın' },
+    { value: 'italic', label: 'Eğik' },
+    { value: 'bolditalic', label: 'K+E' },
+  ],
+  get: (c) => decodeTextFont(getTextConfig(c).font).style,
+  set: (c, v) => (TEXT_FONT_STYLES.includes(v as TextFontStyle) ? textFontPatch(c, { style: v as TextFontStyle }) : null),
+};
+
+export const TEXT_SIZE_MAX = 400;
+const textSizeAttr: AttrDef = {
+  key: 'textSize',
+  label: 'Boyut',
+  kind: 'int',
+  title: `Yazı boyutu, punto (1-${TEXT_SIZE_MAX}, Logisim "Font" boyutu)`,
+  get: (c) => decodeTextFont(getTextConfig(c).font).size,
+  set: (c, v) => textFontPatch(c, { size: Math.max(1, Math.min(TEXT_SIZE_MAX, Math.round(Number(v)) || 1)) }),
+};
+
+const textColorAttr: AttrDef = {
+  key: 'textColor',
+  label: 'Renk',
+  kind: 'buttons',
+  title: 'Yazının rengi (Logisim-evolution "Color"; Logisim 2.7.1 rengi bilmez, siyah çizer)',
+  options: (c) =>
+    colorChoices(
+      [
+        { value: TEXT_DEFAULT_COLOR, label: 'Siyah', swatch: TEXT_DEFAULT_COLOR },
+        { value: '#ff0000', label: 'Kırmızı', swatch: '#ff0000' },
+        { value: '#0000ff', label: 'Mavi', swatch: '#0000ff' },
+        { value: '#008000', label: 'Yeşil', swatch: '#008000' },
+        { value: '#808080', label: 'Gri', swatch: '#808080' },
+        { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+      ],
+      c.state.textColor
+    ),
+  get: (c) => getTextConfig(c).color,
+  set: (c, v) => textEdit(c, configureText(c, { color: String(v) })),
+};
+
+const textHAlignAttr: AttrDef = {
+  key: 'textHAlign',
+  label: 'Yatay hizalama',
+  kind: 'buttons',
+  title: 'Yazının yerinde duran noktası: sol kenarı, ortası ya da sağ kenarı (Logisim "Horizontal Alignment")',
+  options: [
+    { value: 'left', label: 'Sol' },
+    { value: 'center', label: 'Orta' },
+    { value: 'right', label: 'Sağ' },
+  ],
+  get: (c) => getTextConfig(c).halign,
+  set: (c, v) => textEdit(c, configureText(c, { halign: v as TextHAlign })),
+};
+
+const textVAlignAttr: AttrDef = {
+  key: 'textVAlign',
+  label: 'Dikey hizalama',
+  kind: 'buttons',
+  title: 'Yazının yerinde duran noktası: üstü, ortası, taban çizgisi ya da altı (Logisim "Vertical Alignment")',
+  options: [
+    { value: 'top', label: 'Üst' },
+    { value: 'center', label: 'Orta' },
+    { value: 'base', label: 'Taban' },
+    { value: 'bottom', label: 'Alt' },
+  ],
+  get: (c) => getTextConfig(c).valign,
+  set: (c, v) => textEdit(c, configureText(c, { valign: v as TextVAlign })),
 };
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires

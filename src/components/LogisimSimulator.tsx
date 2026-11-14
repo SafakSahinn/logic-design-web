@@ -106,6 +106,9 @@ import {
   switchStateFor,
   configureImage,
   getImageConfig,
+  getTextConfig,
+  textLayout,
+  TEXT_DEFAULT_COLOR,
   imageDrawRect,
   imageShownSize,
 } from '../utils/circuitEngine';
@@ -385,7 +388,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   keyboard: { label: 'Klavye', badge: 'KBD' },
   tty: { label: 'Metin Terminali', badge: 'TTY' },
   telnet: { label: 'Telnet', badge: 'NET' },
-  textLabel: { label: 'Metin Etiketi' },
+  textLabel: { label: 'Metin' },
   image: { label: 'Resim', badge: 'IMG' },
   halfAdder: { label: 'Yarım Toplayıcı', badge: 'HA' },
   fullAdder: { label: 'Tam Toplayıcı', badge: 'FA' },
@@ -3616,6 +3619,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         openImagePicker([comp.id]);
         return;
       }
+      // Text: double-click opens the attribute panel on its text box
+      if (comp.type === 'textLabel') {
+        setAttrPanelCollapsed(false);
+        setTimeout(() => {
+          const box = document.getElementById('attr-textText') as HTMLTextAreaElement | null;
+          box?.focus();
+          box?.select();
+        }, 50);
+        return;
+      }
       // Telnet: double-click opens its terminal window (the label stays editable in the attribute panel)
       if (comp.type === 'telnet') {
         openTerminalWindow(comp.id);
@@ -5072,33 +5085,49 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'textLabel': {
+        // Logisim Text: plain text, no frame; each line placed in the box like evolution's GraphicsUtil.drawText
+        // (the box is the estimated text block, the anchor is where halign / valign put it). Selection draws the
+        // box; an empty text shows a grey placeholder so it can still be found
+        const cfg = getTextConfig(comp);
+        const l = textLayout(cfg);
+        const { family, style, size } = l.font;
+        const css =
+          { SansSerif: 'Arial, Helvetica, sans-serif', Serif: '"Times New Roman", Times, serif', Monospaced: '"Courier New", Courier, monospace', Dialog: 'Arial, Helvetica, sans-serif', DialogInput: '"Courier New", Courier, monospace' }[family] ??
+          `"${family}", Arial, sans-serif`;
+        // black text would vanish on the dark canvas: the default colour is drawn light there
+        const fill = l.placeholder ? '#94a3b8' : cfg.color === TEXT_DEFAULT_COLOR && cadTheme === 'dark' ? '#e2e8f0' : cfg.color;
+        const tx = cfg.halign === 'left' ? 4 : cfg.halign === 'right' ? l.width - 4 : l.width / 2;
         return (
-          <g filter="url(#gateShadow)">
+          <g>
+            <title>{l.placeholder ? 'Boş metin: çift tıklayın ya da Özellikler panelinden yazın' : `Metin (${family} ${style} ${size})`}</title>
             <rect
               x={0}
               y={0}
-              width={140}
-              height={44}
-              rx={8}
-              fill="#f8fafc"
-              stroke={isSelected ? '#2563eb' : '#cbd5e1'}
-              strokeWidth={isSelected ? 2 : 1.5}
+              width={l.width}
+              height={l.height}
+              fill="transparent"
+              stroke={isSelected ? '#2563eb' : l.placeholder ? '#cbd5e1' : 'none'}
+              strokeWidth={isSelected ? 1.5 : 1}
               strokeDasharray={isSelected ? undefined : '4,3'}
             />
             <text
-              x={12}
-              y={24}
-              className="text-xs font-sans font-bold fill-slate-800 select-none"
+              x={tx}
+              textAnchor={cfg.halign === 'left' ? 'start' : cfg.halign === 'right' ? 'end' : 'middle'}
+              fill={fill}
+              fontFamily={css}
+              fontSize={size}
+              fontWeight={style === 'bold' || style === 'bolditalic' ? 'bold' : 'normal'}
+              fontStyle={style === 'italic' || style === 'bolditalic' || l.placeholder ? 'italic' : 'normal'}
+              className="select-none"
+              style={{ whiteSpace: 'pre' }}
             >
-              {comp.label || 'Açıklama Notu'}
+              {l.lines.map((line, i) => (
+                <tspan key={i} x={tx} y={4 + size * i + size * 0.8}>
+                  {line}
+                </tspan>
+              ))}
             </text>
-            <text
-              x={12}
-              y={36}
-              className="text-[9px] font-sans font-medium fill-slate-400 select-none"
-            >
-              (Çift tıkla veya Etiket ile düzenle)
-            </text>
+            {isSelected && <circle cx={l.ax} cy={l.ay} r={2} fill="#2563eb" />}
           </g>
         );
       }
@@ -10462,7 +10491,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   </g>
 
                   {/* Component Label Text with Alignment (Top, Bottom, Center, Hidden) */}
-                  {comp.label && comp.state.labelPos !== 'hidden' && (
+                  {/* (a Text's label is the text it draws itself) */}
+                  {comp.label && comp.state.labelPos !== 'hidden' && comp.type !== 'textLabel' && (
                     <text
                       x={compW / 2}
                       y={
@@ -10898,6 +10928,32 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       }}
                       className={fieldCls}
                       title={def.title}
+                    />
+                  );
+                }
+                case 'multiline': {
+                  // Text box: Enter is a new line; Ctrl+Enter or leaving the box applies, Escape undoes the typing
+                  const shown = common === undefined ? '' : String(common);
+                  return (
+                    <textarea
+                      id={`attr-${def.key}`}
+                      key={`${ids.join('|')}:${shown}`}
+                      defaultValue={shown}
+                      rows={Math.min(6, Math.max(2, shown.split('\n').length))}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) (e.target as HTMLTextAreaElement).blur();
+                        if (e.key === 'Escape') {
+                          (e.target as HTMLTextAreaElement).value = shown;
+                          (e.target as HTMLTextAreaElement).blur();
+                        }
+                      }}
+                      onBlur={(e) => {
+                        if (e.target.value === shown) return;
+                        handleApplyAttribute(def, e.target.value, ids);
+                      }}
+                      className={`${fieldCls} font-sans resize-y`}
+                      title={`${def.title ?? ''} (Ctrl+Enter: uygula)`}
                     />
                   );
                 }

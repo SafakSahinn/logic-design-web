@@ -385,6 +385,12 @@ export interface CircuitComponentInstance {
     imageAttribution?: string;
     /** Image: the frame size was set by hand (evolution userSetDimensions), so a new picture keeps it */
     imageSized?: boolean;
+    /** Text (Logisim Base "Text"; its text is the label): font as evolution's standard string ("SansSerif bold 16",
+     * unset = that), colour "#rrggbb" / "#rrggbbaa" (unset = black), alignment of the anchor (unset = center / base) */
+    textFont?: string;
+    textColor?: string;
+    textHAlign?: 'left' | 'right' | 'center';
+    textVAlign?: 'top' | 'base' | 'bottom' | 'center';
     asciiChar?: string;
     asciiCode?: number;
     strobe?: boolean;
