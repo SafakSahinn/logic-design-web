@@ -80,6 +80,8 @@ import {
   keyboardText,
   keyboardType,
   keyboardView,
+  telnetReceive,
+  telnetSent,
   ttyScreen,
   TTY_DEFAULT_BG,
   TTY_DEFAULT_COLOR,
@@ -172,6 +174,8 @@ import {
   type AttrValue,
 } from '../utils/componentAttributes';
 import { generateVerilog, generateVHDL } from '../utils/hdlGenerator';
+import { getLdsNet, type LdsNetStatus } from '../utils/telnetNet';
+import { TelnetTerminalWindow } from './TelnetTerminalWindow';
 import {
   TTL_CHIPS, TTL_GROUP_TITLES, formatEng, formatMonoWidth, monoWidthNanos, parseEng, setTtlRunning, ttlChipOf, ttlHeight,
   ttlNextDeadline, ttlNow, ttlPinPoint, ttlPorts, ttlRcOf, type TtlGroup,
@@ -404,6 +408,12 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return false;
     }
   });
+  // Telnet parts (Aşama 5c-2b): open terminal windows (last = on top), TCP server status per port (desktop),
+  // the app-wide network setting and where each window's screen was last cleared (telnetTxCount)
+  const [terminalWins, setTerminalWins] = useState<{ id: string; x: number; y: number }[]>([]);
+  const [netStatus, setNetStatus] = useState<Record<number, LdsNetStatus>>({});
+  const [netLan, setNetLan] = useState<boolean>(false);
+  const [terminalClearedAt, setTerminalClearedAt] = useState<Record<string, number>>({});
   const [showPresetsModal, setShowPresetsModal] = useState<boolean>(false);
   const [presetModalSearch, setPresetModalSearch] = useState<string>('');
   const [presetFilterCat, setPresetFilterCat] = useState<string>('all');
@@ -2035,6 +2045,95 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     },
     pokeKeyboard: pokeComponent,
   };
+
+  // ---- Telnet parts (Aşama 5c-2b). Desktop: each part asks the main process for the TCP server on its port
+  // (shared per port, see electron/telnetServer.cjs); client bytes go into every part on that port (evolution
+  // shares one buffer per port, here each part keeps its own) and bytes the circuit sends go to the newest
+  // client. Web: no sockets, the part's terminal window is its client. Only the parts of the open sheet's top
+  // level are served (parts inside an IC are not).
+  const ldsNet = useMemo(() => getLdsNet(), []);
+  const telnetRef = useRef({ components, poke: pokeComponent });
+  telnetRef.current = { components, poke: pokeComponent };
+  // per part: the port|mode its server was opened with, and how many sent bytes were passed on already
+  const telnetOpenRef = useRef(new Map<string, string>());
+  const telnetSentRef = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    if (!ldsNet) return;
+    ldsNet
+      .getLan()
+      .then(setNetLan)
+      .catch(() => {});
+    const offRx = ldsNet.onRx((port, bytes) => {
+      const { components: comps, poke } = telnetRef.current;
+      for (const c of comps) {
+        if (c.type === 'telnet' && getIo5cConfig(c).telnetPort === port) poke(c.id, (x) => telnetReceive(x, bytes));
+      }
+    });
+    const offStatus = ldsNet.onStatus((s) =>
+      setNetStatus((prev) => {
+        const next = { ...prev };
+        if (s.closed) delete next[s.port];
+        else next[s.port] = s;
+        return next;
+      })
+    );
+    const opened = telnetOpenRef.current;
+    return () => {
+      offRx();
+      offStatus();
+      for (const id of opened.keys()) ldsNet.close(id);
+      opened.clear();
+    };
+  }, [ldsNet]);
+
+  useEffect(() => {
+    const opened = telnetOpenRef.current;
+    const sent = telnetSentRef.current;
+    const telnets = components.filter((c) => c.type === 'telnet');
+    const live = new Set(telnets.map((c) => c.id));
+    for (const id of [...sent.keys()]) if (!live.has(id)) sent.delete(id);
+    if (ldsNet) {
+      for (const id of [...opened.keys()]) {
+        if (!live.has(id)) {
+          ldsNet.close(id);
+          opened.delete(id);
+        }
+      }
+    }
+    for (const c of telnets) {
+      const cfg = getIo5cConfig(c);
+      if (ldsNet) {
+        const key = `${cfg.telnetPort}|${cfg.telnetMode}`;
+        if (opened.get(c.id) !== key) {
+          ldsNet.open(c.id, cfg.telnetPort, cfg.telnetMode);
+          opened.set(c.id, key);
+        }
+      }
+      // first sight (new part, loaded file) or a reset count: bytes sent before are history, not sent again
+      const count = c.state.telnetTxCount ?? 0;
+      const from = sent.get(c.id);
+      if (from === undefined || count < from) {
+        sent.set(c.id, count);
+      } else if (count > from) {
+        sent.set(c.id, count);
+        const { bytes } = telnetSent(c, from);
+        if (ldsNet && bytes.length) ldsNet.send(c.id, bytes);
+      }
+    }
+    setTerminalWins((prev) => (prev.every((w) => live.has(w.id)) ? prev : prev.filter((w) => live.has(w.id))));
+  }, [components, ldsNet]);
+
+  // Terminal window of a Telnet part: opened (or brought to the front) by double-click or the attribute panel
+  const openTerminalWindow = useCallback((id: string) => {
+    setTerminalWins((prev) => {
+      const old = prev.find((w) => w.id === id);
+      if (old) return [...prev.filter((w) => w.id !== id), old];
+      const n = prev.length % 6;
+      return [...prev, { id, x: 140 + n * 28, y: 140 + n * 28 }];
+    });
+  }, []);
+
   // Space: a short press starts / pauses the simulation, holding it while dragging pans the canvas
   const spaceUsedForPanRef = useRef(false);
 
@@ -3396,6 +3495,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           return;
         }
       }
+      // Telnet: double-click opens its terminal window (the label stays editable in the attribute panel)
+      if (comp.type === 'telnet') {
+        openTerminalWindow(comp.id);
+        return;
+      }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
       if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo'].includes(comp.type)) {
         return;
@@ -3404,7 +3508,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setRenameInputVal(comp.label || '');
       setRenameLabelPos(comp.state.labelPos || 'bottom');
     },
-    [sheets, handleSwitchSheet, showToast]
+    [sheets, handleSwitchSheet, showToast, openTerminalWindow]
   );
 
   // Save Renamed Label & Position
@@ -10770,6 +10874,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 </button>
               </div>
             );
+            const terminalRow = single && first.type === 'telnet' && (
+              <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                <span className={`text-[11px] font-semibold ${rowLabel}`}>Terminal</span>
+                <button onClick={() => openTerminalWindow(first.id)} className={btnCls(false)} title="Parçanın gönderdiklerini gösteren, yazılanı ona gönderen pencere (çift tıklama da açar)">
+                  Aç…
+                </button>
+              </div>
+            );
 
             return (
               <div
@@ -10831,6 +10943,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                         </div>
                       </React.Fragment>
                     ))}
+                    {terminalRow}
                     {defs.length === 0 && !single && (
                       <p className={`text-[11px] ${rowLabel}`}>Bu parçanın ortak ayarı yok.</p>
                     )}
@@ -13768,6 +13881,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           </div>
         </div>
       )}
+
+      {/* Telnet terminal windows (Aşama 5c-2b) */}
+      {terminalWins.map((w) => {
+        const comp = components.find((c) => c.id === w.id && c.type === 'telnet');
+        if (!comp) return null;
+        return (
+          <TelnetTerminalWindow
+            key={w.id}
+            comp={comp}
+            x={w.x}
+            y={w.y}
+            dark={cadTheme === 'dark'}
+            desktop={ldsNet !== null}
+            status={netStatus[getIo5cConfig(comp).telnetPort]}
+            lan={netLan}
+            clearedAt={terminalClearedAt[w.id] ?? 0}
+            onMove={(x, y) => setTerminalWins((prev) => prev.map((p) => (p.id === w.id ? { ...p, x, y } : p)))}
+            onFocus={() => setTerminalWins((prev) => (prev[prev.length - 1]?.id === w.id ? prev : [...prev.filter((p) => p.id !== w.id), w]))}
+            onClose={() => setTerminalWins((prev) => prev.filter((p) => p.id !== w.id))}
+            onClear={() => setTerminalClearedAt((prev) => ({ ...prev, [w.id]: comp.state.telnetTxCount ?? 0 }))}
+            onType={(bytes) => telnetRef.current.poke(w.id, (c) => telnetReceive(c, bytes))}
+            onSetLan={(on) => {
+              ldsNet
+                ?.setLan(on)
+                .then(setNetLan)
+                .catch(() => {});
+            }}
+          />
+        );
+      })}
 
       {/* Floating Action Toast Notification */}
       {toastMessage && (
