@@ -6313,6 +6313,8 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'matrixKeypad' &&
       c.type !== 'portIo' &&
       c.type !== 'realTimeClock' &&
+      c.type !== 'keyboard' &&
+      c.type !== 'telnet' &&
       c.type !== 'rgbMatrix16x16' &&
       c.type !== 'textLabel' &&
       c.type !== 'splitter' &&

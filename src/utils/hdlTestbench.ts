@@ -131,6 +131,11 @@ function plan(
   if (components.some((c) => c.type === 'asciiKeyboard')) {
     notes.push("ASCII klavye HDL'de giriş portudur (veri ve strobe tuvaldeki değerinde tutulur); klavyenin CLR ile strobe'u temizlemesi modellenmez.");
   }
+  if (components.some((c) => c.type === 'keyboard' || c.type === 'telnet')) {
+    notes.push(
+      "Klavye / Telnet HDL'de giriş portudur (OUT ve AV tuvaldeki değerinde tutulur); tamponun okundukça ilerlemesi modellenmez, uygulama içi koşturucudan farklı olabilir."
+    );
+  }
   if (components.some((c) => c.type === 'random' && !(c.state.randomSeed ?? 0))) {
     notes.push('Tohumu 0 olan rastgele sayı üreteci simülatörde her açılışta farklı başlar; beklenen değerleri tutmayabilir.');
   }

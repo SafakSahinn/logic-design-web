@@ -145,6 +145,8 @@ function unsupportedInput(type: string, dir: string): string | undefined {
   if (type === 'joystick') return 'joystick test vektörüyle sürülemiyor (çubuğun konumu elle verilir)';
   if (type === 'matrixKeypad') return 'tuş takımının sütunları test vektörüyle sürülemiyor (simülatörde satırlardan ve basılı tuşlardan gelir)';
   if (type === 'realTimeClock') return 'gerçek zaman saati test vektörüyle sürülemiyor';
+  if (type === 'keyboard') return 'klavyenin OUT / AV çıkışları test vektörüyle sürülemiyor (simülatörde tampondan gelir)';
+  if (type === 'telnet') return "Telnet'in OUT / AV çıkışları test vektörüyle sürülemiyor (simülatörde ağdan gelen tampondan gelir)";
   return undefined;
 }
 

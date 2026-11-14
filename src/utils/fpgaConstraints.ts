@@ -167,6 +167,17 @@ export function generateFpgaConstraints(
               ? `Joystick "${components.find((x) => x.id === p.source?.compId)?.label || 'Joystick'}" X / Y portları kartta yok: harici bir joystick / ADC'nin sayısal çıkışına ya da anahtarlara elle atayın.`
               : `Gerçek zaman saati portu ${p.name}: FPGA'da duvar saati yok; değeri harici bir RTC'den ya da kart saatiyle sayan bir sayaçtan verin.`;
       if (!notes.includes(what)) notes.push(what);
+    } else if (type === 'keyboard' || type === 'tty' || type === 'telnet') {
+      // No board resource behind them: one note per part
+      for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
+      const label = components.find((x) => x.id === p.source?.compId)?.label;
+      const what =
+        type === 'keyboard'
+          ? `Klavye "${label || 'Klavye'}" portları kartta yok: OUT / AV'yi bir UART ya da PS/2 alıcısının çıkışına, RE / CK / CLR'yi ona bağlayın (ya da Pmod / GPIO pinlerine elle atayın).`
+          : type === 'tty'
+            ? `Metin terminali "${label || 'Terminal'}" portları kartta yok: IN / WE / CK / CLR'yi bir UART verici ya da VGA metin denetleyicisine bağlayın (ya da Pmod / GPIO pinlerine elle atayın).`
+            : `Telnet "${label || 'Telnet'}" portları kartta yok: ağ bağlantısını bir UART köprüsü ya da Ethernet çekirdeği vermeli; OUT / AV / IN / WR / RD / CK'yi ona bağlayın.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'sevenSegment' && !sevenSegUsed) {
       sevenSegUsed = true;
       assign('7-segment ekran (a..g, dp)', [...board.sevenSegPins.segments], p);

@@ -2069,6 +2069,111 @@ function buildModule(
         poke.forEach((v, i) => emit(at(o.sig, i), L.mux(lang === 'vhdl' ? wrap(en[i]) : en[i], d[i], v)));
         break;
       }
+      case 'keyboard':
+      case 'tty':
+      case 'telnet': {
+        // Evolution has no HDL for the keyboard, the terminal or Telnet (their contents live in the simulator). At the
+        // top level they are the outside world's: what the part outputs comes in through input ports, what it reads
+        // goes out through output ports (a UART / PS/2 receiver, a display controller or a network interface is
+        // attached there). Inside an IC (no pins of its own) they are constants, as the simulator sees them there.
+        const label = c.label || c.type;
+        const inIdx = (k: string) => c.inputs.findIndex((p) => pinKey(c, p) === k);
+        const outIdx = (k: string) => c.outputs.findIndex((p) => pinKey(c, p) === k);
+        const lit = (v: number, w: number) => bitLiteral(numberToBits(v, w).map((b) => (b === 1 ? 1 : 0)) as (0 | 1)[]);
+        // An open control input reads what the simulator does with it: RE / WE open = enabled (only 0 stops them),
+        // CLR, WR, RD open = not active, an open clock never makes an edge
+        const ctrl = (k: string, open: string) => {
+          const i = inIdx(k);
+          return i < 0 ? open : inp(i, open);
+        };
+        // Data input: the terminal writes '?' for a word with any undefined bit; Telnet sends 0 for an input wired to
+        // nothing and 255 for an undefined one (both exact, no note)
+        const dataIn = (w: number): string => {
+          const i = inIdx('in');
+          const pin = i < 0 ? undefined : c.inputs[i];
+          const r = pin ? readBits(pin.id, w) : undefined;
+          if (!pin || !r || r.floating || r.mismatch) {
+            const v = c.type === 'tty' ? 63 : !pin || !isConnected(pin.id) ? 0 : 255;
+            body.push(
+              L.comment(c.type === 'tty' ? `${label}: IN tanımsız, simülatör '?' (63) yazar` : `${label}: IN ${v ? 'tanımsız, simülatör 255 gönderir' : 'boşta, simülatör 0 gönderir'}`)
+            );
+            return lit(v, w);
+          }
+          return compose(r.bits);
+        };
+        const edge = c.type !== 'telnet' && c.state.trigger === 'falling' ? 'düşen' : 'yükselen';
+        if (!spec.subPorts) {
+          const inPort = (k: string, w: number) => {
+            const i = outIdx(k);
+            if (i < 0) return;
+            const pn = names.make(`in_${label}_${k}`, `in_${c.type}`);
+            addPort({ name: pn, dir: 'in', width: w, source: { compId: c.id, type: c.type, group: k, pins: [c.outputs[i].id] } });
+            emit(out[i], pn);
+          };
+          const outPort = (k: string, name: string, w: number, rhs: string) => {
+            const i = inIdx(k);
+            const pn = names.make(`out_${label}_${name}`, `out_${c.type}`);
+            addPort({ name: pn, dir: 'out', width: w, source: { compId: c.id, type: c.type, group: name, pins: i < 0 ? [] : [c.inputs[i].id] } });
+            emit(pn, rhs);
+          };
+          if (c.type === 'keyboard') {
+            inPort('out', 7);
+            inPort('avl', 1);
+            outPort('en', 're', 1, ctrl('en', L.one));
+            outPort('clk', 'clk', 1, ctrl('clk', L.zero));
+            outPort('clr', 'clr', 1, ctrl('clr', L.zero));
+            body.push(L.comment(`${label}: klavye dışarıda; OUT/AV giriş, RE/CK/CLR çıkış portu (karakter CK'nin ${edge} kenarında RE = 1 iken alınır)`));
+            warnings.push(
+              `${label}: evolution'da klavyenin HDL karşılığı yok; OUT ve AV giriş portu, RE / CK / CLR çıkış portu oldu. Karakteri bir UART / PS/2 alıcısı gibi harici bir devre vermeli; simülatördeki tampon HDL'de yok.`
+            );
+          } else if (c.type === 'tty') {
+            outPort('in', 'in', 7, dataIn(7));
+            outPort('we', 'we', 1, ctrl('we', L.one));
+            outPort('clk', 'clk', 1, ctrl('clk', L.zero));
+            outPort('clr', 'clr', 1, ctrl('clr', L.zero));
+            body.push(L.comment(`${label}: terminal dışarıda; IN/WE/CK/CLR çıkış portu (karakter CK'nin ${edge} kenarında WE = 1 iken yazılır)`));
+            warnings.push(
+              `${label}: evolution'da metin terminalinin HDL karşılığı yok; IN / WE / CK / CLR çıkış portu oldu, ekranı harici bir sürücü (UART verici, VGA metin denetleyicisi) göstermeli.`
+            );
+          } else {
+            inPort('out', 8);
+            inPort('av', 1);
+            outPort('in', 'in', 8, dataIn(8));
+            outPort('wr', 'wr', 1, ctrl('wr', L.zero));
+            outPort('rd', 'rd', 1, ctrl('rd', L.zero));
+            outPort('clk', 'clk', 1, ctrl('clk', L.zero));
+            body.push(L.comment(`${label}: Telnet dışarıda; OUT/AV giriş, IN/WR/RD/CK çıkış portu (bayt CK'nin yükselen kenarında)`));
+            warnings.push(
+              `${label}: evolution'da Telnet'in HDL karşılığı yok; OUT ve AV giriş portu, IN / WR / RD / CK çıkış portu oldu. Ağ bağlantısını harici bir arayüz (UART köprüsü, Ethernet çekirdeği) sağlamalı.`
+            );
+          }
+          break;
+        }
+        // Inside an IC
+        if (c.type === 'tty') {
+          body.push(L.comment(`${label}: IC içindeki terminalin ekranı HDL'de yok, girişleri kullanılmaz`));
+          break;
+        }
+        const avI = outIdx(c.type === 'keyboard' ? 'avl' : 'av');
+        const oI = outIdx('out');
+        if (c.type === 'keyboard') {
+          // Nobody types into a keyboard inside an IC: what its buffer holds now is not in the HDL
+          if (avI >= 0) emit(out[avI], L.zero);
+          if (oI >= 0) emit(out[oI], lit(0, 7));
+          body.push(L.comment(`${label}: IC içinde klavye tamponu boş kabul edildi (AV 0, OUT 0)`));
+          if ((c.state.kbdBuf ?? '') !== '') warnings.push(`${label}: IC içindeki klavyenin tamponundaki ${(c.state.kbdBuf ?? '').length} karakter HDL'de yok; AV 0, OUT 0 verildi.`);
+          break;
+        }
+        // Telnet inside an IC has no network: its buffer stays empty, so AV = 0 and OUT = 255 while RD = 1 (x otherwise)
+        if (avI >= 0) emit(out[avI], L.zero);
+        if (oI >= 0) {
+          const rd = ctrl('rd', L.zero);
+          emit(out[oI], L.mux(lang === 'vhdl' ? wrap(rd) : rd, lit(255, 8), lit(0, 8)));
+        }
+        body.push(L.comment(`${label}: IC içinde Telnet ağa bağlı değil; tampon boş: AV 0, RD = 1 iken OUT 255 (RD 0 iken simülatörde x, burada 0)`));
+        if ((c.state.telnetRx ?? '') !== '') warnings.push(`${label}: IC içindeki Telnet'in tamponundaki baytlar HDL'de yok; tampon boş kabul edildi.`);
+        break;
+      }
       default:
         if (hasTtlHdl(c.type)) {
           // TTL chip: an instance of its ttl<number> module, pins bound by their physical number
