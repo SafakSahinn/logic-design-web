@@ -25,6 +25,15 @@ import {
   configureIo,
   configureIo5,
   configureBfh,
+  configureIo5c,
+  getIo5cConfig,
+  type Io5cConfig,
+  KEYBOARD_BUFFER_MAX,
+  TTY_ROWS_MAX,
+  TTY_COLS_MAX,
+  TELNET_BUFFER_MAX,
+  TTY_DEFAULT_COLOR,
+  TTY_DEFAULT_BG,
   binToBcdBits,
   BIN_TO_BCD_MIN_BITS,
   BIN_TO_BCD_MAX_BITS,
@@ -893,6 +902,16 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
     case 'binToBcd':
       list.push(binBitsAttr);
       break;
+    case 'keyboard':
+      list.push(kbdBufLenAttr, triggerAttr);
+      break;
+    case 'tty':
+      list.push(ttyRowsAttr, ttyColsAttr, triggerAttr, ttyColorAttr, ttyBgAttr);
+      break;
+    case 'telnet':
+      // evolution's Telnet has a trigger attribute but always acts on the rising edge, so it is not offered
+      list.push(telnetPortAttr, telnetBufLenAttr, telnetModeAttr);
+      break;
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);
@@ -1210,6 +1229,126 @@ const binBitsAttr: AttrDef = {
     }
     return { comp: next, remap };
   },
+};
+
+// ---- Keyboard, TTY and Telnet of Aşama 5c: only the terminal's size moves pins (the top-left corner stays, the
+// pins along its bottom edge keep their wires); the other settings change the contents the way evolution does
+function reconfigureIo5c(c: CircuitComponentInstance, patch: Partial<Io5cConfig>): AttrEdit | null {
+  const cur = getIo5cConfig(c);
+  if ((Object.keys(patch) as (keyof Io5cConfig)[]).every((k) => cur[k] === patch[k])) return null;
+  const next = configureIo5c(c, patch);
+  if (c.type !== 'tty') return { comp: next, stateOnly: true };
+  const remap = new Map<string, string | null>();
+  for (const p of [...c.outputs, ...c.inputs]) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, p.id);
+  }
+  return { comp: next, remap };
+}
+
+const kbdBufLenAttr: AttrDef = {
+  key: 'kbdBufLen',
+  label: 'Tampon',
+  kind: 'select',
+  title: `Tamponda bekleyebilecek en çok karakter (1-${KEYBOARD_BUFFER_MAX}, Logisim-evolution "Buffer Length"); dolunca yazılanlar atılır. Kısaltınca sondaki karakterler silinir`,
+  options: numberOptions(1, KEYBOARD_BUFFER_MAX),
+  get: (c) => getIo5cConfig(c).kbdBufLen,
+  set: (c, v) => reconfigureIo5c(c, { kbdBufLen: Number(v) }),
+};
+
+const ttyRowsAttr: AttrDef = {
+  key: 'ttyRows',
+  label: 'Satır',
+  kind: 'select',
+  title: `Ekrandaki satır sayısı (1-${TTY_ROWS_MAX}, Logisim-evolution "Rows"); küçültünce son satırlar kalır`,
+  options: numberOptions(1, TTY_ROWS_MAX),
+  get: (c) => getIo5cConfig(c).ttyRows,
+  set: (c, v) => reconfigureIo5c(c, { ttyRows: Number(v) }),
+};
+
+const ttyColsAttr: AttrDef = {
+  key: 'ttyCols',
+  label: 'Sütun',
+  kind: 'select',
+  title: `Bir satırdaki karakter sayısı (1-${TTY_COLS_MAX}, Logisim-evolution "Columns"); daraltınca uzun satırların sonu kesilir`,
+  options: numberOptions(1, TTY_COLS_MAX),
+  get: (c) => getIo5cConfig(c).ttyCols,
+  set: (c, v) => reconfigureIo5c(c, { ttyCols: Number(v) }),
+};
+
+/** Colour choices of a terminal; a colour from a .circ file is kept and listed */
+const colorChoices = (list: AttrOption[], cur: string | undefined): AttrOption[] =>
+  cur && !list.some((o) => o.value === cur) ? [...list, { value: cur, label: cur, swatch: cur }] : list;
+
+const ttyColorAttr: AttrDef = {
+  key: 'ttyColor',
+  label: 'Yazı rengi',
+  kind: 'buttons',
+  title: 'Karakterlerin rengi (Logisim-evolution "Color")',
+  options: (c) =>
+    colorChoices(
+      [
+        { value: TTY_DEFAULT_COLOR, label: 'Siyah', swatch: TTY_DEFAULT_COLOR },
+        { value: '#00ff00', label: 'Yeşil', swatch: '#00ff00' },
+        { value: '#ffb000', label: 'Kehribar', swatch: '#ffb000' },
+        { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+        { value: '#1d4ed8', label: 'Mavi', swatch: '#1d4ed8' },
+      ],
+      c.state.ttyColor
+    ),
+  get: (c) => c.state.ttyColor ?? TTY_DEFAULT_COLOR,
+  set: (c, v) => ((c.state.ttyColor ?? TTY_DEFAULT_COLOR) === v ? null : withState(c, { ttyColor: v === TTY_DEFAULT_COLOR ? undefined : String(v) })),
+};
+
+const ttyBgAttr: AttrDef = {
+  key: 'ttyBg',
+  label: 'Arka plan',
+  kind: 'buttons',
+  title: 'Ekranın arka plan rengi (Logisim-evolution "Background"); varsayılan yarı saydam gri',
+  options: (c) =>
+    colorChoices(
+      [
+        { value: TTY_DEFAULT_BG, label: 'Yarı saydam gri', swatch: TTY_DEFAULT_BG },
+        { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+        { value: '#000000', label: 'Siyah', swatch: '#000000' },
+        { value: '#002b36', label: 'Koyu mavi', swatch: '#002b36' },
+        { value: '#fef3c7', label: 'Krem', swatch: '#fef3c7' },
+      ],
+      c.state.ttyBg
+    ),
+  get: (c) => c.state.ttyBg ?? TTY_DEFAULT_BG,
+  set: (c, v) => ((c.state.ttyBg ?? TTY_DEFAULT_BG) === v ? null : withState(c, { ttyBg: v === TTY_DEFAULT_BG ? undefined : String(v) })),
+};
+
+const telnetPortAttr: AttrDef = {
+  key: 'telnetPort',
+  label: 'TCP port',
+  kind: 'int',
+  title: 'Telnet istemcisinin bağlanacağı TCP portu (1-65535, Logisim-evolution "Port"); değişince tampon boşalır. Gerçek ağ yalnız masaüstü uygulamasında, ayarlardan açılınca',
+  get: (c) => getIo5cConfig(c).telnetPort,
+  set: (c, v) => reconfigureIo5c(c, { telnetPort: Number(v) }),
+};
+
+const telnetBufLenAttr: AttrDef = {
+  key: 'telnetBufLen',
+  label: 'Tampon',
+  kind: 'int',
+  title: `İstemciden gelip bekleyebilecek en çok bayt (1-${TELNET_BUFFER_MAX}, Logisim-evolution "Buffer Length"); dolunca gelenler atılır, değişince tampon boşalır`,
+  get: (c) => getIo5cConfig(c).telnetBufLen,
+  set: (c, v) => reconfigureIo5c(c, { telnetBufLen: Number(v) }),
+};
+
+const telnetModeAttr: AttrDef = {
+  key: 'telnetMode',
+  label: 'Telnet anlaşması',
+  kind: 'buttons',
+  title: "Açıkken bağlanan istemciye telnet seçenekleri (karakter karakter gönderim, yankı) bildirilir ve istemcinin telnet komutları (IAC) tampona alınmaz; kapalıyken baytlar olduğu gibi geçer (Logisim-evolution \"Telnet mode\")",
+  options: [
+    { value: 'off', label: 'Kapalı (ham)' },
+    { value: 'on', label: 'Açık' },
+  ],
+  get: (c) => (getIo5cConfig(c).telnetMode ? 'on' : 'off'),
+  set: (c, v) => reconfigureIo5c(c, { telnetMode: v === 'on' }),
 };
 
 // ---- TTL chips (Logisim-evolution std/ttl, Aşama 4): VCC / GND pins come and go, the other pins keep their wires

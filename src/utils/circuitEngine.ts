@@ -1056,6 +1056,9 @@ export const TELNET_DEFAULT_BUFFER = 1024;
 export const TELNET_BUFFER_MAX = 16 * 1024 * 1024;
 /** Sent Telnet bytes kept in the state for the terminal / network side to pick up (older ones are dropped) */
 export const TELNET_TX_KEEP = 4096;
+/** Evolution TTY default colours: Color.BLACK text on new Color(0, 0, 0, 64) */
+export const TTY_DEFAULT_COLOR = '#000000';
+export const TTY_DEFAULT_BG = '#00000040';
 /** Evolution TTY column width (Tty.COL_WIDTH, the width of 'W' in its 11 pt monospaced font) and row height */
 const TTY_COL_WIDTH = 7;
 const TTY_ROW_HEIGHT = 15;
@@ -1108,11 +1111,12 @@ export function io5cGeometry(type: ComponentType, cfg: Io5cConfig): { width: num
   }
   if (type === 'tty') {
     // evolution: bounds (0, 10 - h, w, h) with w = 12 + 7 * cols, h = 12 + 15 * rows (both at least 30); clock (0, 0),
-    // CLR (20, 10), WE (10, 10), data (0, -10). Ours is rounded up to the grid so the pins along the bottom stay on it.
+    // CLR (20, 10), WE (10, 10), data (0, -10). Ours is rounded up to twice the grid: the pins along the bottom stay
+    // on the grid, and so do the body corners of a rotated terminal (half the width - height difference is whole grid)
     const w = Math.max(30, 2 * TTY_BORDER + cfg.ttyCols * TTY_COL_WIDTH);
     const h = Math.max(30, 2 * TTY_BORDER + cfg.ttyRows * TTY_ROW_HEIGHT);
-    const width = Math.ceil((2 * w) / 10) * 10;
-    const height = Math.ceil((2 * h) / 10) * 10;
+    const width = Math.ceil((2 * w) / 20) * 20;
+    const height = Math.ceil((2 * h) / 20) * 20;
     return { width, height, pins: { clr: { x: 40, y: height }, clk: { x: 0, y: height - 20 }, we: { x: 20, y: height }, in: { x: 0, y: height - 40 } } };
   }
   if (type === 'telnet') {
@@ -1249,6 +1253,25 @@ export function keyboardText(comp: CircuitComponentInstance): { text: string; cu
     text += control ? ' ' : buf[i];
   }
   return { text, cursor: Math.min(comp.state.kbdCursor ?? 0, buf.length), specials };
+}
+
+/**
+ * Part of the keyboard buffer shown in a box `max` characters wide, after evolution's KeyboardData.updateDisplay: the
+ * whole buffer when it fits, otherwise a window that keeps the cursor in view; a cut-off front keeps the first
+ * character followed by an ellipsis (it is the next one the circuit reads), a cut-off end ends with one.
+ */
+export function keyboardView(text: string, cursor: number, max: number): { start: number; end: number } {
+  const len = text.length;
+  const room = Math.max(max, 4);
+  if (len <= room) return { start: 0, end: len };
+  const pos = Math.min(Math.max(cursor, 0), len);
+  // front cut: first character + ellipsis, then the end of the buffer
+  if (pos > len - (room - 2)) return { start: len - (room - 2), end: len };
+  // end cut: the start of the buffer, then an ellipsis
+  if (pos < room - 1) return { start: 0, end: room - 1 };
+  // both cut: the cursor with one character after it
+  const end = Math.min(len - 1, pos + 1);
+  return { start: end - (room - 3), end };
 }
 
 // ---- terminal: TtyState, the rows above the cursor's row plus the row being written
@@ -5574,28 +5597,29 @@ function dotMatrixPreset(): CircuitPreset {
 }
 
 function asciiKeyboardPreset(): CircuitPreset {
-  const kbd = busPart('asciiKeyboard', 60, 80, 'ASCII Giriş Terminali', 'kbd_unit', {
-    state: { asciiChar: 'A', asciiCode: 65, strobe: true },
-  });
-  const ack = busPart('pushbutton', 60, 230, 'ST Temizle (ACK/CLR)', 'btn_ack');
-  const hex = hexDigitPart(380, 60, 'ASCII Alt Hane (D0-D3)', 'hex_ascii');
-  const st = busPart('led', 380, 220, 'Veri Hazır (ST / IRQ)', 'led_strobe');
-  const bar = busPart('ledBar', 520, 70, 'ASCII D0-D3 Veri Yolu', 'bar_ascii', {
-    configure: (c) => configureIo(c, { size: 4, ledBarMode: 'oneWire' }),
-  });
+  // Logisim-evolution Keyboard -> TTY: on each clock edge with a character waiting (AV = 1) the keyboard gives up its
+  // first character (RE) and the terminal writes the one on OUT (WE); the button clears both
+  const kbd = busPart('keyboard', 60, 60, 'Klavye', 'kbd_unit', { state: { kbdBuf: 'Merhaba!\n', kbdCursor: 9 } });
+  const clk = busPart('clock', 60, 180, 'Saat (CLK)', 'kbd_clk');
+  const clr = busPart('pushbutton', 60, 270, 'Temizle (CLR)', 'kbd_clr');
+  const av = busPart('led', 200, 180, 'Karakter Var (AV)', 'kbd_av');
+  const tty = busPart('tty', 440, 40, 'Metin Terminali', 'kbd_tty');
   const { wires, link } = busWires();
-  const low = joinBits(link, 'ascii_low', 'Alt 4 Bit', 280, 90, [0, 1, 2, 3].map((i) => [kbd, pk(kbd, `outD${i}`)] as [CircuitComponentInstance, CircuitPin]));
-  link(ack, ack.outputs[0], kbd, pk(kbd, 'inClr'));
-  link(kbd, pk(kbd, 'outStrobe'), st, st.inputs[0]);
-  link(low, low.inputs[0], hex, pk(hex, 'in'));
-  link(low, low.inputs[0], bar, pk(bar, 'in'));
+  link(clk, clk.outputs[0], kbd, pk(kbd, 'clk'));
+  link(clk, clk.outputs[0], tty, pk(tty, 'clk'));
+  link(kbd, pk(kbd, 'avl'), kbd, pk(kbd, 'en'));
+  link(kbd, pk(kbd, 'avl'), tty, pk(tty, 'we'));
+  link(kbd, pk(kbd, 'avl'), av, av.inputs[0]);
+  link(kbd, pk(kbd, 'out'), tty, pk(tty, 'in'));
+  link(clr, clr.outputs[0], kbd, pk(kbd, 'clr'));
+  link(clr, clr.outputs[0], tty, pk(tty, 'clr'));
   return {
     id: 'ascii_keyboard_terminal',
-    name: 'ASCII Klavye ve Veri Hazır (ST) Sinyali',
+    name: 'Klavye ve Metin Terminali',
     category: 'music_graphics',
     description:
-      "Klavye basılan tuşun 7-bit ASCII kodunu (D0-D6) ve veri hazır (ST) sinyalini üretir. Bu şablonda alt 4 bit (D0-D3) bir splitter ile 4 bitlik tek tele birleştirilir: hex ekran ve tek telli LED çubuğu kodun son hex hanesini gösterir (ör. 'A' = 41h → 1). ST LED'i tuşa basılınca yanar, düğmeyle temizlenir.",
-    components: [kbd, ack, low, hex, st, bar],
+      "Klavyeye yazılan karakterler tamponda bekler; AV = 1 iken her saat kenarında klavye ilk karakteri tampondan çıkarır (RE) ve terminal OUT'taki 7 bitlik ASCII kodunu ekrana yazar (WE). Simülasyonu başlatınca tampondaki 'Merhaba!' ekrana akar; sonra klavyeyi seçip yazın (Enter yeni satır, Backspace siler, Ctrl+L ekranı temizler). Düğme ikisini de temizler.",
+    components: [kbd, clk, clr, av, tty],
     wires,
   };
 }

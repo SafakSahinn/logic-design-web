@@ -339,6 +339,9 @@ export interface CircuitComponentInstance {
     ttyLines?: string[];
     ttyRow?: number;
     ttyLast?: string;
+    /** Terminal text colour '#rrggbb' and background '#rrggbbaa' (evolution 'color', 'bg'); unset = black on translucent black */
+    ttyColor?: string;
+    ttyBg?: string;
     /** Telnet: TCP port (1-65535, unset = 8000), receive buffer length (unset = 1024), telnet negotiation ('telnetMode') */
     telnetPort?: number;
     telnetBufLen?: number;

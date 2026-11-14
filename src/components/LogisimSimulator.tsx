@@ -73,6 +73,16 @@ import {
   toggleDipSwitch,
   getIo5Config,
   binToBcdBits,
+  getIo5cConfig,
+  io5cGeometry,
+  keyboardAccepts,
+  keyboardKey,
+  keyboardText,
+  keyboardType,
+  keyboardView,
+  ttyScreen,
+  TTY_DEFAULT_BG,
+  TTY_DEFAULT_COLOR,
   setJoystick,
   setKeypadKey,
   keypadLabels,
@@ -317,7 +327,10 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
   rgbMatrix16x16: { label: '16x16 RGB Matris', badge: 'GPU' },
-  asciiKeyboard: { label: 'ASCII Klavye', badge: 'KBD' },
+  asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
+  keyboard: { label: 'Klavye', badge: 'KBD' },
+  tty: { label: 'Metin Terminali', badge: 'TTY' },
+  telnet: { label: 'Telnet', badge: 'NET' },
   textLabel: { label: 'Metin Etiketi' },
   halfAdder: { label: 'Yarım Toplayıcı', badge: 'HA' },
   fullAdder: { label: 'Tam Toplayıcı', badge: 'FA' },
@@ -2005,8 +2018,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // Latest versions of plain handlers the keyboard shortcuts call; the key listener effect
   // is not re-created on every render, so it reads them from here instead of a stale closure
-  const shortcutActionsRef = useRef({ step: () => {}, resetView: () => {} });
-  shortcutActionsRef.current = { step: handleSingleStep, resetView: handleResetView };
+  const shortcutActionsRef = useRef({
+    step: () => {},
+    resetView: () => {},
+    selectedKeyboard: (): string | null => null,
+    pokeKeyboard: (_id: string, _fn: (c: CircuitComponentInstance) => CircuitComponentInstance) => {},
+  });
+  shortcutActionsRef.current = {
+    step: handleSingleStep,
+    resetView: handleResetView,
+    // the one selected part when it is a keyboard: typing goes into it
+    selectedKeyboard: () => {
+      if (selectedCompIds.length !== 1) return null;
+      const c = components.find((x) => x.id === selectedCompIds[0]);
+      return c && c.type === 'keyboard' ? c.id : null;
+    },
+    pokeKeyboard: pokeComponent,
+  };
   // Space: a short press starts / pauses the simulation, holding it while dragging pans the canvas
   const spaceUsedForPanRef = useRef(false);
 
@@ -3369,7 +3397,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         }
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -3627,6 +3655,40 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
 
+      // Keyboard part (evolution Keyboard.Poker): while one is selected, typed characters go into its buffer and the
+      // canvas shortcuts on those keys (Delete, Backspace, R, + - 0 /, space, arrows) wait; Esc releases it as usual
+      const kbdId = shortcutActionsRef.current.selectedKeyboard();
+      if (kbdId && !e.altKey) {
+        const poke = shortcutActionsRef.current.pokeKeyboard;
+        const ctrl = e.ctrlKey || e.metaKey;
+        const editKeys: Record<string, 'delete' | 'left' | 'right' | 'home' | 'end'> = { Delete: 'delete', ArrowLeft: 'left', ArrowRight: 'right', Home: 'home', End: 'end' };
+        const edit = editKeys[e.key];
+        if (edit && !ctrl) {
+          e.preventDefault();
+          poke(kbdId, (c) => keyboardKey(c, edit));
+          return;
+        }
+        // the control characters evolution takes: backspace, newline, form feed (also as Ctrl+H, Ctrl+J, Ctrl+L)
+        const ctrlCodes: Record<string, number> = { h: 8, j: 10, l: 12 };
+        let code: number | undefined;
+        if (!ctrl && e.key === 'Enter') code = 10;
+        else if (!ctrl && e.key === 'Backspace') code = 8;
+        else if (ctrl && !e.shiftKey && ctrlCodes[e.key.toLowerCase()] !== undefined) code = ctrlCodes[e.key.toLowerCase()];
+        else if (!ctrl && e.key.length === 1) code = e.key.charCodeAt(0);
+        if (code !== undefined) {
+          e.preventDefault();
+          const ch = code;
+          if (keyboardAccepts(ch)) poke(kbdId, (c) => keyboardType(c, String.fromCharCode(ch)));
+          return;
+        }
+        if (!ctrl && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+          e.preventDefault();
+          return;
+        }
+        // Ctrl+V pastes text into the buffer (the paste event below), not copied parts
+        if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'v') return;
+      }
+
       // ASCII Keyboard direct typing when selected
       if (!e.ctrlKey && !e.metaKey && selectedCompIds.length === 1) {
         const selComp = components.find((c) => c.id === selectedCompIds[0]);
@@ -3793,11 +3855,28 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
     };
 
+    // Pasted text goes into a selected keyboard, newlines as 10, characters it does not take dropped
+    const handlePaste = (e: ClipboardEvent) => {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) return;
+      const kbdId = shortcutActionsRef.current.selectedKeyboard();
+      if (!kbdId) return;
+      e.preventDefault();
+      const text = (e.clipboardData?.getData('text') ?? '').replace(/\r\n?/g, '\n');
+      const chars = text
+        .split('')
+        .filter((ch) => keyboardAccepts(ch.charCodeAt(0)))
+        .join('');
+      if (chars) shortcutActionsRef.current.pokeKeyboard(kbdId, (c) => keyboardType(c, chars));
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('paste', handlePaste);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('paste', handlePaste);
     };
   }, [
     selectedCompIds,
@@ -5095,6 +5174,141 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <text x={48} y={60} textAnchor="middle" className="text-[7.5px] font-mono font-bold fill-amber-300 select-none">
               HEX={(num % 16).toString(16).toUpperCase()}
             </text>
+          </g>
+        );
+      }
+
+      case 'keyboard': {
+        // Logisim-evolution Keyboard.paintInstance (x2): box, clock triangle, the buffer in a monospaced font with
+        // glyphs for backspace / newline / form feed (drawSpecials) and dots where it is cut off; the cursor only while
+        // the part is selected (evolution draws it while its poker is active), "Klavye (n)" when empty
+        const { text, cursor, specials } = keyboardText(comp);
+        const FS = 22;
+        const CW = FS * 0.6;
+        // evolution starts the text 8 units in, right at the clock triangle's tip; ours leaves a small gap after it
+        const X0 = 22;
+        const max = Math.floor((290 - X0 - 8) / CW);
+        const { start, end } = keyboardView(text, cursor, max);
+        // characters shown and their column: the first one stays when the front is cut, then an ellipsis column
+        const cells: { i: number; col: number }[] = [];
+        if (start > 0) cells.push({ i: 0, col: 0 });
+        const off = start > 0 ? 2 : 0;
+        for (let i = start; i < end; i++) cells.push({ i, col: off + i - start });
+        const colOf = (i: number) => (i === 0 && start > 0 ? 0 : off + i - start);
+        const base = 33;
+        const glyph = (code: number, col: number, key: number) => {
+          const w0 = X0 + col * CW + 1;
+          const w1 = X0 + (col + 1) * CW - 1;
+          const asc = 16;
+          if (code === 8) {
+            const y1 = base - asc / 2;
+            return <path key={key} d={`M${w0} ${y1}H${w1}M${w0 + 5} ${y1 - 5}L${w0} ${y1}L${w0 + 5} ${y1 + 5}`} fill="none" stroke={io5Stroke} strokeWidth={1.5} />;
+          }
+          if (code === 10) {
+            const y1 = base - 5;
+            return <path key={key} d={`M${w1} ${base - asc}V${y1}H${w0}M${w0 + 5} ${y1 - 5}L${w0} ${y1}L${w0 + 5} ${y1 + 5}`} fill="none" stroke={io5Stroke} strokeWidth={1.5} />;
+          }
+          if (code === 12) return <rect key={key} x={w0} y={base - asc} width={w1 - w0} height={asc} fill="none" stroke={io5Stroke} strokeWidth={1.5} />;
+          return null;
+        };
+        const dots = (col: number, key: string) => (
+          <g key={key} fill={io5Stroke}>
+            {[0, 1, 2].map((k) => (
+              <circle key={k} cx={X0 + col * CW + 2 + k * 4} cy={base - 2} r={1.5} />
+            ))}
+          </g>
+        );
+        const cursorCol = cursor === 0 || text.length === 0 ? 0 : colOf(cursor - 1) + 1;
+        return (
+          <g>
+            <rect x={0} y={0} width={290} height={50} fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <path d="M0 22L16 30L0 38" fill="none" stroke={io5Stroke} strokeWidth={2} />
+            {text.length === 0 ? (
+              !isSelected && (
+                <text x={145} y={32} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 15, fontFamily: 'sans-serif' }} className="select-none">
+                  {`Klavye (${getIo5cConfig(comp).kbdBufLen})`}
+                </text>
+              )
+            ) : (
+              <g>
+                {cells.map(({ i, col }) => (
+                  <text key={i} x={X0 + col * CW} y={base} fill={cadTheme === 'dark' ? '#e2e8f0' : '#0f172a'} style={{ fontSize: FS, fontFamily: 'monospace' }} className="select-none">
+                    {text[i] === ' ' ? '\u00a0' : text[i]}
+                  </text>
+                ))}
+                {specials.filter((sp) => sp.at === 0 || (sp.at >= start && sp.at < end)).map((sp) => glyph(sp.code, colOf(sp.at), sp.at))}
+                {start > 0 && dots(1, 'front')}
+                {end < text.length && dots(off + end - start, 'end')}
+              </g>
+            )}
+            {isSelected && <line x1={X0 + cursorCol * CW} y1={base - 17} x2={X0 + cursorCol * CW} y2={base + 3} stroke="#3b82f6" strokeWidth={2} className="animate-pulse" />}
+            <title>{`Tampon ${comp.state.kbdBuf?.length ?? 0}/${getIo5cConfig(comp).kbdBufLen} karakter. Seçiliyken yazın; ← → Home End Delete düzenler, Enter = 10, Backspace = 8, Ctrl+L = 12, Ctrl+V yapıştırır, Esc bırakır`}</title>
+          </g>
+        );
+      }
+
+      case 'tty': {
+        // Logisim-evolution Tty.paintInstance (x2): background colour in a rounded box, clock triangle, the rows in a
+        // monospaced font of the text colour and the cursor line. The canvas under evolution's translucent default
+        // background is white, so a white layer goes first and the colours look the same on the dark canvas.
+        const cfg = getIo5cConfig(comp);
+        const scr = ttyScreen(comp);
+        const { width: W, height: H } = io5cGeometry('tty', cfg);
+        const color = comp.state.ttyColor ?? TTY_DEFAULT_COLOR;
+        const bg = comp.state.ttyBg ?? TTY_DEFAULT_BG;
+        const B = 12;
+        const RH = 30;
+        const CW = 14;
+        return (
+          <g>
+            <rect x={0} y={0} width={W} height={H} rx={12} fill="#ffffff" />
+            <rect x={0} y={0} width={W} height={H} rx={12} fill={bg} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <path d={`M0 ${H - 28}L16 ${H - 20}L0 ${H - 12}`} fill="none" stroke={io5Stroke} strokeWidth={2} />
+            {scr.rows.map((row, i) => (
+              <text
+                key={i}
+                x={B}
+                y={B + i * RH + 22}
+                fill={color}
+                textLength={row.length > 0 ? row.length * CW : undefined}
+                lengthAdjust="spacingAndGlyphs"
+                style={{ fontSize: 22, fontFamily: 'monospace', whiteSpace: 'pre' }}
+                className="select-none"
+              >
+                {row.replace(/ /g, '\u00a0')}
+              </text>
+            ))}
+            <line x1={B + scr.cursorCol * CW} y1={B + scr.cursorRow * RH + 5} x2={B + scr.cursorCol * CW} y2={B + scr.cursorRow * RH + 25} stroke={color} strokeWidth={2} />
+            <title>{`${cfg.ttyRows} satır x ${cfg.ttyCols} sütun; imleç satır ${scr.cursorRow + 1}, sütun ${scr.cursorCol + 1}`}</title>
+          </g>
+        );
+      }
+
+      case 'telnet': {
+        // Logisim-evolution Telnet.paintInstance (x2): box, "Telnet" and the port number, pin names inside
+        const cfg = getIo5cConfig(comp);
+        const waiting = comp.state.telnetRx?.length ?? 0;
+        const pinText = (x: number, y: number, t: string, anchor: 'start' | 'end') => (
+          <text x={x} y={y + 5} textAnchor={anchor} fill={io5Stroke} style={{ fontSize: 13, fontFamily: 'sans-serif' }} className="select-none">
+            {t}
+          </text>
+        );
+        return (
+          <g>
+            <rect x={0} y={0} width={80} height={120} fill={cadTheme === 'dark' ? '#0f172a' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 3 : 2.5} />
+            <text x={40} y={24} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 16, fontWeight: 700, fontFamily: 'sans-serif' }} className="select-none">
+              Telnet
+            </text>
+            <text x={40} y={42} textAnchor="middle" fill={io5Stroke} style={{ fontSize: 13, fontFamily: 'monospace' }} className="select-none">
+              {cfg.telnetPort}
+            </text>
+            {pinText(6, 60, 'in', 'start')}
+            <path d="M0 72L16 80L0 88" fill="none" stroke={io5Stroke} strokeWidth={2} />
+            {pinText(6, 100, 'wr', 'start')}
+            {pinText(74, 60, 'out', 'end')}
+            {pinText(74, 80, 'av', 'end')}
+            {pinText(74, 100, 'rd', 'end')}
+            <title>{`TCP port ${cfg.telnetPort}; tamponda ${waiting} bayt bekliyor${cfg.telnetMode ? '; telnet anlaşması açık' : ''}`}</title>
           </g>
         );
       }
@@ -6413,7 +6627,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -6446,7 +6660,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'rgbMatrix16x16', 'asciiKeyboard', 'textLabel'] as ComponentType[],
+      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbMatrix16x16', 'textLabel'] as ComponentType[],
     },
     {
       id: 'audio',
