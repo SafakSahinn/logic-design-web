@@ -73,6 +73,7 @@ export type ComponentType =
   | 'keyboard'
   | 'tty'
   | 'telnet'
+  | 'rgbVideo'
   | 'multiplexer'
   | 'demultiplexer'
   | 'decoder'
@@ -354,6 +355,20 @@ export interface CircuitComponentInstance {
     /** Telnet, set by the simulator: the inputs it last acted on, and whether it must act again (a byte arrived, a setting changed) */
     telnetSig?: string;
     telnetDirty?: boolean;
+    /** RGB video (evolution 'RGB Video'): colour model ('color'), reset kind ('reset'), cursor off ('cursor' = No Cursor) */
+    videoColor?: 'rgb888' | 'rgb555' | 'rgb565' | 'rgb444' | 'rgb111' | 'atari' | 'xterm16' | 'xterm256' | 'gray4' | 'vga256';
+    videoReset?: 'async' | 'sync';
+    videoNoCursor?: boolean;
+    /** RGB video: screen width / height in pixels (2-4096, unset = 128) and drawing scale (1-8, unset = 2) */
+    videoWidth?: number;
+    videoHeight?: number;
+    videoScale?: number;
+    /** RGB video: the image, 0xRRGGBB per pixel (index y * width + x) in pages of 1024; unset page / pixel = black */
+    videoPages?: Record<string, number[]>;
+    /** RGB video, set by the simulator: the X, Y and data values last read (-1 = undefined), for the cursor */
+    videoX?: number;
+    videoY?: number;
+    videoData?: number;
     rgbPixels?: string[][];
     asciiChar?: string;
     asciiCode?: number;

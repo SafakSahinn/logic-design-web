@@ -1356,6 +1356,259 @@ export function telnetSent(comp: CircuitComponentInstance, from: number): { byte
   return { bytes: Array.from(tx.slice(start), (c) => c.charCodeAt(0)), count };
 }
 
+// ---- Logisim-evolution std/io RGB Video of Aşama 5d ----------------------------------------------------------
+// rgbVideo = 'RGB Video' (Video.java, a ManagedComponent). Pins along the bottom edge: RST, CLK, WE, X, Y, DATA; X / Y
+// are as wide as the width / height need (32 - numberOfLeadingZeros(n - 1)), DATA as the colour model's pixel size.
+// The image is kept in the component state as 0xRRGGBB pixels; evolution does not save it in the .circ either.
+
+export const VIDEO_PAGE_SIZE = 1024;
+export const VIDEO_SIZE_MIN = 2;
+export const VIDEO_SIZE_MAX = 4096;
+export const VIDEO_SCALE_MAX = 8;
+export type VideoColorModel = NonNullable<CircuitComponentInstance['state']['videoColor']>;
+/** Colour models in evolution's COLOR_OPTIONS order, with its option text (the .circ value) and pixel size */
+export const VIDEO_COLOR_MODELS: { id: VideoColorModel; circ: string; bits: number }[] = [
+  { id: 'rgb888', circ: '888 RGB (24 bit)', bits: 24 },
+  { id: 'rgb555', circ: '555 RGB (15 bit)', bits: 15 },
+  { id: 'rgb565', circ: '565 RGB (16 bit)', bits: 16 },
+  { id: 'rgb444', circ: '444 RGB (12 bit)', bits: 12 },
+  { id: 'rgb111', circ: '8-Color RGB (3 bit)', bits: 3 },
+  { id: 'atari', circ: 'Atari 2600 (7 bit)', bits: 7 },
+  { id: 'xterm16', circ: 'XTerm16 (4 bit)', bits: 4 },
+  { id: 'xterm256', circ: 'XTerm256 (8 bit)', bits: 8 },
+  { id: 'gray4', circ: 'Grayscale (4 bit)', bits: 4 },
+  { id: 'vga256', circ: 'VGA256 (8 bit)', bits: 8 },
+];
+/** Evolution's resolution choices (RESOLUTION_OPTIONS, without Custom) */
+export const VIDEO_RESOLUTIONS: [number, number][] = [
+  [128, 128], [256, 256], [320, 240], [640, 480], [960, 540], [1024, 768], [1280, 720], [1920, 1080],
+];
+
+// Indexed palettes of Video.java (atari 128 entries, the others 2^bits), measured from evolution's IndexColorModels
+const VIDEO_PALETTE_HEX: Partial<Record<VideoColorModel, string>> = {
+  atari:
+    '0000000a0a0a3737375f5f5f7a7a7aa1a1a1c5c5c5ededed0000003521005a4500816c009c8700c3af01e8d326fffa4d' +
+    '3100005907007d2b00a45200bf6d04e7952bffb950ffe0774700006e0000931302ba3b2ad55545fc7d6cffa190ffc9b8' +
+    '4b000272002996034ebe2a75d94590ff6cb7ff91dcffb8ff3c0049640070880094af24bcca3fd7f266feff8affffb2ff' +
+    '1e007d4500a56902c99129f1ac44ffd36bfff790ffffb7ff0000961d00bd4111e16939ff8453ffab7bffcf9ffff7c7ff' +
+    '00008d0004b41728d93f50ff5a6bff8192ffa5b6ffcddeff000065001e8c0042b01b6ad83685f35dacff82d0ffa9f8ff' +
+    '000f2500364c005a700482981f9db347c4da6be8fe92ffff002000004701006b2500934d1aae6842d58f66f9b48dffdb' +
+    '002700004e000072000d9a0628b5204fdc4874ff6c9bff94002200004a00036e002b950045b0006dd81291fc36b9ff5d' +
+    '000a00073a002b5f005286006da10095c800b9ed1ce0ff430000003521005a4500816c009c8700c3af01e8d326fffa4d',
+  xterm16:
+    '000000800000008000808000000080800080008080c0c0c0808080ff000000ff00ffff000000ffff00ff00ffffffffff',
+  xterm256:
+    '000000800000008000808000000080800080008080c0c0c0808080ff000000ff00ffff000000ffff00ff00ffffffffff' +
+    '00000000005f0000870000af0000d70000ff005f00005f5f005f87005faf005fd7005fff00870000875f0087870087af' +
+    '0087d70087ff00af0000af5f00af8700afaf00afd700afff00d70000d75f00d78700d7af00d7d700d7ff00ff0000ff5f' +
+    '00ff8700ffaf00ffd700ffff5f00005f005f5f00875f00af5f00d75f00ff5f5f005f5f5f5f5f875f5faf5f5fd75f5fff' +
+    '5f87005f875f5f87875f87af5f87d75f87ff5faf005faf5f5faf875fafaf5fafd75fafff5fd7005fd75f5fd7875fd7af' +
+    '5fd7d75fd7ff5fff005fff5f5fff875fffaf5fffd75fffff87000087005f8700878700af8700d78700ff875f00875f5f' +
+    '875f87875faf875fd7875fff87870087875f8787878787af8787d78787ff87af0087af5f87af8787afaf87afd787afff' +
+    '87d70087d75f87d78787d7af87d7d787d7ff87ff0087ff5f87ff8787ffaf87ffd787ffffaf0000af005faf0087af00af' +
+    'af00d7af00ffaf5f00af5f5faf5f87af5fafaf5fd7af5fffaf8700af875faf8787af87afaf87d7af87ffafaf00afaf5f' +
+    'afaf87afafafafafd7afafffafd700afd75fafd787afd7afafd7d7afd7ffafff00afff5fafff87afffafafffd7afffff' +
+    'd70000d7005fd70087d700afd700d7d700ffd75f00d75f5fd75f87d75fafd75fd7d75fffd78700d7875fd78787d787af' +
+    'd787d7d787ffdfaf00dfaf5fdfaf87dfafafdfafdfdfafffdfdf00dfdf5fdfdf87dfdfafdfdfdfdfdfffdfff00dfff5f' +
+    'dfff87dfffafdfffdfdfffffff0000ff005fff0087ff00afff00dfff00ffff5f00ff5f5fff5f87ff5fafff5fdfff5fff' +
+    'ff8700ff875fff8787ff87afff87dfff87ffffaf00ffaf5fffaf87ffafafffafdfffafffffdf00ffdf5fffdf87ffdfaf' +
+    'ffdfdfffdfffffff00ffff5fffff87ffffafffffdfffffff0808081212121c1c1c2626263030303a3a3a4444444e4e4e' +
+    '5858586262626c6c6c7676768080808a8a8a9494949e9e9ea8a8a8b2b2b2bcbcbcc6c6c6d0d0d0dadadae4e4e4eeeeee',
+  vga256:
+    '0000000000aa00aa0000aaaaaa0000aa00aaaa5500aaaaaa5555555555ff55ff5555ffffff5555ff55ffffff55ffffff' +
+    '0000001414142020202c2c2c383838454545515151616161717171828282929292a2a2a2b6b6b6cbcbcbe3e3e3ffffff' +
+    '0000ff4100ff7d00ffbe00ffff00ffff00beff007dff0041ff0000ff4100ff7d00ffbe00ffff00beff007dff0041ff00' +
+    '00ff0000ff4100ff7d00ffbe00ffff00beff007dff0041ff7d7dff9e7dffbe7dffdf7dffff7dffff7ddfff7dbeff7d9e' +
+    'ff7d7dff9e7dffbe7dffdf7dffff7ddfff7dbeff7d9eff7d7dff7d7dff9e7dffbe7dffdf7dffff7ddfff7dbeff7d9eff' +
+    'b6b6ffc7b6ffdbb6ffebb6ffffb6ffffb6ebffb6dbffb6c7ffb6b6ffc7b6ffdbb6ffebb6ffffb6ebffb6dbffb6c7ffb6' +
+    'b6ffb6b6ffc7b6ffdbb6ffebb6ffffb6ebffb6dbffb6c7ff0000711c007138007155007171007171005571003871001c' +
+    '710000711c007138007155007171005571003871001c710000710000711c007138007155007171005571003871001c71' +
+    '383871453871553871613871713871713861713855713845713838714538715538716138717138617138557138457138' +
+    '387138387145387155387161387171386171385571384571515171595171615171695171715171715169715161715159' +
+    '715151715951716151716951717151697151617151597151517151517159517161517169517171516971516171515971' +
+    '000041100041200041300041410041410030410020410010410000411000412000413000414100304100204100104100' +
+    '004100004110004120004130004141003041002041001041202041282041302041382041412041412038412030412028' +
+    '412020412820413020413820414120384120304120284120204120204128204130204138204141203841203041202841' +
+    '2c2c41302c41342c413c2c41412c41412c3c412c34412c30412c2c41302c41342c413c2c41412c3c412c34412c30412c' +
+    '2c412c2c41302c41342c413c2c41412c3c412c34412c3041000000000000000000000000000000000000000000000000',
+};
+const videoPalettes: Partial<Record<VideoColorModel, number[]>> = {};
+function videoPalette(id: VideoColorModel): number[] {
+  if (!videoPalettes[id]) {
+    const hex = VIDEO_PALETTE_HEX[id] ?? '';
+    const t: number[] = [];
+    for (let i = 0; i + 6 <= hex.length; i += 6) t.push(parseInt(hex.slice(i, i + 6), 16));
+    videoPalettes[id] = t;
+  }
+  return videoPalettes[id]!;
+}
+
+/** Red / green / blue field widths of the direct colour models (DirectColorModel masks), red highest */
+const VIDEO_DIRECT: Partial<Record<VideoColorModel, [number, number, number]>> = {
+  rgb888: [8, 8, 8],
+  rgb555: [5, 5, 5],
+  rgb565: [5, 6, 5],
+  rgb444: [4, 4, 4],
+  rgb111: [1, 1, 1],
+};
+
+/**
+ * 0xRRGGBB evolution paints for a data value (new Color(cm.getRGB(value))). Direct models scale each field to 8 bits
+ * with rounding; indexed ones look the value up. An undefined data input reads -1 (Value.toLongValue): every field
+ * full = white for the direct models; the indexed models mask it to their table index (IndexColorModel pixel_mask:
+ * 4 bits -> 15, 7 and 8 bits -> 255), past the 128 Atari entries that is 0 = black.
+ */
+export function videoRgb(model: VideoColorModel, value: number): number {
+  const direct = VIDEO_DIRECT[model];
+  if (direct) {
+    if (value < 0) return 0xffffff;
+    const [rb, gb, bb] = direct;
+    const field = (shift: number, bits: number) => {
+      const max = (1 << bits) - 1;
+      return Math.floor((((value >>> shift) & max) * 255) / max + 0.5);
+    };
+    return (field(gb + bb, rb) << 16) | (field(bb, gb) << 8) | field(0, bb);
+  }
+  if (model === 'gray4') return 0x111111 * (value < 0 ? 15 : value & 15);
+  const t = videoPalette(model);
+  const bits = model === 'xterm16' ? 4 : 8;
+  return t[value < 0 ? (1 << bits) - 1 : value] ?? 0;
+}
+
+export interface VideoConfig {
+  color: VideoColorModel;
+  reset: 'async' | 'sync';
+  cursor: boolean;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+export function getVideoConfig(comp: CircuitComponentInstance): VideoConfig {
+  const st = comp.state;
+  return {
+    color: VIDEO_COLOR_MODELS.some((m) => m.id === st.videoColor) ? st.videoColor! : 'rgb888',
+    reset: st.videoReset === 'sync' ? 'sync' : 'async',
+    cursor: st.videoNoCursor !== true,
+    width: clampRange(st.videoWidth ?? 128, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX),
+    height: clampRange(st.videoHeight ?? 128, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX),
+    scale: clampRange(st.videoScale ?? 2, 1, VIDEO_SCALE_MAX),
+  };
+}
+
+/** Bits of an X / Y input for a screen n pixels wide / high (Video.configureComponent) */
+export function videoCoordBits(n: number): number {
+  return Math.max(1, 32 - Math.clz32(n - 1));
+}
+
+function videoPinWidth(key: string, cfg: VideoConfig): number {
+  if (key === 'x') return videoCoordBits(cfg.width);
+  if (key === 'y') return videoCoordBits(cfg.height);
+  if (key === 'data') return VIDEO_COLOR_MODELS.find((m) => m.id === cfg.color)!.bits;
+  return 1;
+}
+
+const VIDEO_PIN_KEYS = ['rst', 'clk', 'we', 'x', 'y', 'data'];
+const VIDEO_PIN_LABELS: Record<string, string> = { rst: 'RST', clk: 'CLK', we: 'WE', x: 'X', y: 'Y', data: 'DATA' };
+
+/**
+ * Body size and pin points (unrotated, from the top-left corner). Evolution: bounds (-30, -bh, bw, bh) with
+ * bw = max(scale * width + 14, 100), bh = max(scale * height + 14, 20), pins on the bottom edge at x = 0, 10, 20,
+ * 40, 50, 60. Ours is twice that, rounded up to twice the grid like the terminal (corners stay on the grid when
+ * rotated); the screen sits 14 from the top-left corner.
+ */
+export function videoGeometry(cfg: VideoConfig): { width: number; height: number; pins: Record<string, { x: number; y: number }> } {
+  const bw = Math.max(cfg.scale * cfg.width + 14, 100);
+  const bh = Math.max(cfg.scale * cfg.height + 14, 20);
+  const width = Math.ceil((2 * bw) / 20) * 20;
+  const height = Math.ceil((2 * bh) / 20) * 20;
+  const at = (x: number) => ({ x: 60 + 2 * x, y: height });
+  return { width, height, pins: { rst: at(0), clk: at(10), we: at(20), x: at(40), y: at(50), data: at(60) } };
+}
+
+function videoMeta(): ComponentMetadata {
+  const cfg = getVideoConfig({ state: {} } as CircuitComponentInstance);
+  const g = videoGeometry(cfg);
+  return {
+    type: 'rgbVideo',
+    name: 'RGB Video',
+    category: 'outputs',
+    width: g.width,
+    height: g.height,
+    inputs: VIDEO_PIN_KEYS.map((k) => {
+      const width = videoPinWidth(k, cfg);
+      return { id: k, name: VIDEO_PIN_LABELS[k], type: 'input' as const, relX: g.pins[k].x, relY: g.pins[k].y, ...(width > 1 ? { width } : {}) };
+    }),
+    outputs: [],
+    description:
+      'Piksel ekranı (Logisim-evolution RGB Video): saatin yükselen kenarında WE 1 ise (X, Y) pikseline DATA rengini yazar. Çözünürlük 2-4096, 10 renk modeli (24 bit RGB, 555, 565, 444, 8 renk, Atari, XTerm16/256, gri, VGA256), ölçek 1-8. RST 1 iken ekran siyaha döner (asenkron ya da saatle)',
+  };
+}
+
+/** Pixel at (x, y) as 0xRRGGBB (black where nothing was drawn) */
+export function videoPixel(comp: CircuitComponentInstance, x: number, y: number): number {
+  const w = getVideoConfig(comp).width;
+  const i = y * w + x;
+  return comp.state.videoPages?.[Math.floor(i / VIDEO_PAGE_SIZE)]?.[i % VIDEO_PAGE_SIZE] ?? 0;
+}
+
+/** Store a pixel; copy on write (pages are shared with earlier steps' states and with undo history) */
+function videoWrite(comp: CircuitComponentInstance, i: number, rgb: number): void {
+  const k = String(Math.floor(i / VIDEO_PAGE_SIZE));
+  const pages = comp.state.videoPages ?? {};
+  if ((pages[k]?.[i % VIDEO_PAGE_SIZE] ?? 0) === rgb) return;
+  const page = pages[k] ? [...pages[k]] : new Array<number>(VIDEO_PAGE_SIZE).fill(0);
+  page[i % VIDEO_PAGE_SIZE] = rgb;
+  comp.state.videoPages = { ...pages, [k]: page };
+}
+
+/**
+ * New RGB video settings; pins keep their ids, X / Y / DATA take the new widths. A new size starts a new image the
+ * way evolution's getState does (black, the old image drawn at the top-left corner, so pixels inside both sizes
+ * stay) and forgets the previous clock level (the new State's lastClock is null: its next run counts as an edge).
+ * Colour, reset, cursor and scale leave the image alone (pixels are stored as colours).
+ */
+export function configureVideo(comp: CircuitComponentInstance, patch: Partial<VideoConfig>): CircuitComponentInstance {
+  const old = getVideoConfig(comp);
+  const cfg: VideoConfig = { ...old, ...patch };
+  cfg.width = clampRange(cfg.width, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX);
+  cfg.height = clampRange(cfg.height, VIDEO_SIZE_MIN, VIDEO_SIZE_MAX);
+  cfg.scale = clampRange(cfg.scale, 1, VIDEO_SCALE_MAX);
+  let state: CircuitComponentInstance['state'] = {
+    ...comp.state,
+    videoColor: cfg.color,
+    videoReset: cfg.reset === 'sync' ? 'sync' : undefined,
+    videoNoCursor: cfg.cursor ? undefined : true,
+    videoWidth: cfg.width,
+    videoHeight: cfg.height,
+    videoScale: cfg.scale,
+  };
+  if (cfg.width !== old.width || cfg.height !== old.height) {
+    const pages: Record<string, number[]> = {};
+    for (const [k, page] of Object.entries(comp.state.videoPages ?? {})) {
+      page.forEach((rgb, j) => {
+        if (!rgb) return;
+        const i = Number(k) * VIDEO_PAGE_SIZE + j;
+        const x = i % old.width;
+        const y = Math.floor(i / old.width);
+        if (x >= cfg.width || y >= cfg.height) return;
+        const ni = y * cfg.width + x;
+        const nk = String(Math.floor(ni / VIDEO_PAGE_SIZE));
+        (pages[nk] ??= new Array<number>(VIDEO_PAGE_SIZE).fill(0))[ni % VIDEO_PAGE_SIZE] = rgb;
+      });
+    }
+    state = { ...state, videoPages: Object.keys(pages).length ? pages : undefined, lastClk: undefined, videoX: undefined, videoY: undefined, videoData: undefined };
+  }
+  const oldPins = new Map<string, CircuitPin>();
+  for (const p of comp.inputs) oldPins.set(pinKey(comp, p), p);
+  const inputs = VIDEO_PIN_KEYS.map((key) => {
+    const prev = oldPins.get(key);
+    const base = prev ?? newPin(comp, key, VIDEO_PIN_LABELS[key], 'input');
+    return { ...pinWithWidth(base, videoPinWidth(key, cfg)), name: VIDEO_PIN_LABELS[key] };
+  });
+  return updatePinPositions({ ...comp, inputs, outputs: [], state });
+}
+
 // ---- 7400-series TTL chips (Logisim-evolution std/ttl, Aşama 4): the chip table lives in ttlChips.ts ----------
 
 function ttlMeta(chip: TtlChip): ComponentMetadata {
@@ -1468,6 +1721,7 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu (Logisim-evolution PortIO): yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
   binToBcd: bfhMeta('binToBcd', 'İkili → BCD Dönüştürücü', 'İkili sayıyı (4-13 bit) ondalık basamaklarına ayırır (Logisim-evolution BinToBcd): her basamak 4 bitlik BCD çıkışı (1, 10, 100, 1000); giriş tanımsızsa birler basamağı 1111, diğerleri 0'),
   bcdToSevenSegment: bfhMeta('bcdToSevenSegment', 'BCD → 7-Segment Kod Çözücü', '4 bitlik BCD girişi (0-9) 7-segment göstergenin a-g segment sinyallerine (aktif-yüksek) çevirir (Logisim-evolution BcdToSevenSegmentDisplay); 10-15 ya da tanımsız girişte bütün segmentler x'),
+  rgbVideo: videoMeta(),
   keyboard: io5cMeta('keyboard', 'Klavye', 'Yazılan karakterleri 1-256 karakterlik bir tamponda biriktirir (Logisim-evolution Keyboard): OUT tamponun ilk karakterinin 7 bitlik ASCII kodu, AV tampon boş değilken 1; RE açıkken saat kenarı ilk karakteri tampondan alır, CLR tamponu boşaltır. Parçayı seçip yazın (← → Home End Delete ile düzenlenir)'),
   tty: io5cMeta('tty', 'Metin Terminali', 'Satır x sütun metin ekranı (Logisim-evolution TTY): WE açıkken her saat kenarında IN girişindeki 7 bitlik ASCII karakteri yazar; satır sonu (10/13) yeni satıra geçer, geri silme (8) son karakteri siler, form besleme (12) ve CLR ekranı temizler, en altta satırlar yukarı kayar'),
   telnet: io5cMeta('telnet', 'Telnet', 'Devre ile bir Telnet istemcisi arasında bayt alıp verir (Logisim-evolution Telnet): istemciden gelen baytlar tamponda bekler, AV doluyken 1; RD = 1 iken OUT ilk baytı gösterir ve yükselen saat kenarı onu tampondan alır, WR = 1 iken saat kenarı IN baytını istemciye gönderir'),
@@ -2073,6 +2327,7 @@ export function createComponentInstance(
   if (IO5_TYPES.has(type)) return configureIo5(inst, {});
   if (BFH_TYPES.has(type)) return configureBfh(inst, {});
   if (IO5C_TYPES.has(type)) return configureIo5c(inst, {});
+  if (type === 'rgbVideo') return configureVideo(inst, {});
   if (isTtlType(type)) return configureTtl(inst, {});
   return inst;
 }
@@ -2129,6 +2384,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   if (IO5C_TYPES.has(comp.type)) {
     const g = io5cGeometry(comp.type, getIo5cConfig(comp));
+    return { width: g.width, height: g.height };
+  }
+  if (comp.type === 'rgbVideo') {
+    const g = videoGeometry(getVideoConfig(comp));
     return { width: g.width, height: g.height };
   }
   const ttl = ttlChipOf(comp.type);
@@ -3709,7 +3968,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
-  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type) || BFH_TYPES.has(comp.type) || IO5C_TYPES.has(comp.type)) {
+  if (MEM_TYPES.has(comp.type) || RAM_TYPES.has(comp.type) || IO_TYPES.has(comp.type) || IO5_TYPES.has(comp.type) || BFH_TYPES.has(comp.type) || IO5C_TYPES.has(comp.type) || comp.type === 'rgbVideo') {
     const g = MEM_TYPES.has(comp.type)
       ? memLayout(comp)
       : RAM_TYPES.has(comp.type)
@@ -3720,7 +3979,9 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
             ? bfhGeometry(comp.type, binToBcdBits(comp))
             : IO5C_TYPES.has(comp.type)
               ? io5cGeometry(comp.type, getIo5cConfig(comp))
-              : ioGeometry(comp.type, getIoConfig(comp));
+              : comp.type === 'rgbVideo'
+                ? videoGeometry(getVideoConfig(comp))
+                : ioGeometry(comp.type, getIoConfig(comp));
     const place = (pin: CircuitPin) => {
       const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
       const p = rotatePoint(at.x, at.y);
@@ -4495,6 +4756,41 @@ export function simulateCircuitStep(
           }
           if (rd === 1 && rx !== '') comp.state.telnetRx = rx.slice(1);
         }
+        break;
+      }
+      case 'rgbVideo': {
+        // Video.propagate: X, Y and DATA are read every run (an undefined value is -1, an unwired end reads NIL = 0)
+        // and kept for the cursor. State.tick counts a run as a rising edge when there is no previous clock level
+        // (a new State: first run, new size) or the clock went 0 -> 1; on it, WE = 1 paints the pixel (outside the
+        // screen nothing happens), and with synchronous reset RST = 1 then blackens the screen. Asynchronous reset:
+        // RST = 1 blackens it on every run.
+        const pinOf = (k: string) => comp.inputs.find((p) => pinKey(comp, p) === k);
+        const cfg = getVideoConfig(comp);
+        const value = (k: string) => {
+          const p = pinOf(k);
+          if (!p || !isPinConnected(p.id)) return 0;
+          return bitsToNumber(readBits(p, p.width ?? 1)) ?? -1;
+        };
+        const level = (k: string) => {
+          const p = pinOf(k);
+          return p && isPinConnected(p.id) ? readBits(p, 1)[0] : undefined;
+        };
+        const x = value('x');
+        const y = value('y');
+        const data = value('data');
+        if (comp.state.videoX !== x) comp.state.videoX = x;
+        if (comp.state.videoY !== y) comp.state.videoY = y;
+        if (comp.state.videoData !== data) comp.state.videoData = data;
+        const clk = readBits(pinOf('clk'), 1)[0];
+        const prev = comp.state.lastClk;
+        comp.state.lastClk = clk;
+        const tick = prev === undefined || (prev === 0 && clk === 1);
+        const rst = level('rst') === 1;
+        if (tick && level('we') === 1) {
+          if (x >= 0 && x < cfg.width && y >= 0 && y < cfg.height) videoWrite(comp, y * cfg.width + x, videoRgb(cfg.color, data));
+          if (cfg.reset === 'sync' && rst) comp.state.videoPages = undefined;
+        }
+        if (cfg.reset === 'async' && rst && comp.state.videoPages) comp.state.videoPages = undefined;
         break;
       }
       case 'binToBcd': {
