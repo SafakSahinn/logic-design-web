@@ -2,7 +2,7 @@
 // current values on the left, the waveforms of every selected signal on one shared time axis on the right.
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Maximize2, Pause, Play, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { bitsToString, formatBits, type SignalValue } from '../types/logic';
+import { bitsToString, formatBits, type Radix, type SignalValue } from '../types/logic';
 import type { WaveformSample } from '../utils/vcdGenerator';
 import {
   CHRONO_LIMITS,
@@ -26,7 +26,18 @@ const WAVE_UNKNOWN_FILL = '#eaaa6c';
 const WAVE_ERROR_FILL = '#f97676';
 // A wide sample as one value: its hex text (x / E digits as Logisim shows them) and the colour class of the bus
 // segment: E if any bit is E, x if any bit is undefined / floating, else a normal value
-const waveBusText = (bits: SignalValue[]): string => formatBits(bits, '16').toUpperCase().replace(/X/g, 'x');
+const waveBusText = (bits: SignalValue[], radix: Radix = '16'): string =>
+  radix === '16' ? formatBits(bits, '16').toUpperCase().replace(/X/g, 'x') : formatBits(bits, radix);
+
+// Display bases of wide signals (evolution RadixOption), as named in the signal's right-click menu
+const RADIX_OPTIONS: [Radix, string][] = [
+  ['2', 'İkilik (2)'],
+  ['8', 'Sekizlik (8)'],
+  ['10s', 'Onluk, işaretli'],
+  ['10u', 'Onluk, işaretsiz'],
+  ['16', 'Onaltılık (16)'],
+];
+const RADIX_PREFIX: Record<Radix, string> = { '2': '0b', '8': '0o', '10s': '', '10u': '', '16': '0x' };
 const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
   bits.includes('E') ? 'E' : bits.some((b) => b !== 0 && b !== 1) ? 'X' : 'ok';
 
@@ -61,6 +72,9 @@ export interface ChronogramPanelProps {
   tree: ChronoTreeNode;
   /** new selection (keys in display order), or null for the automatic one */
   onSelectionChange: (keys: string[] | null) => void;
+  /** display base of wide signals by key; unset = hexadecimal */
+  radix: Record<string, Radix>;
+  onRadixChange: (key: string, radix: Radix) => void;
 }
 
 type Seg = { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number };
@@ -82,7 +96,19 @@ function segmentsOf(samples: WaveformSample[], key: string, t0: number, tick: nu
   return segs;
 }
 
-function SignalTrace({ signal, samples, t0, tick }: { signal: ChronoSignal; samples: WaveformSample[]; t0: number; tick: number }) {
+function SignalTrace({
+  signal,
+  samples,
+  t0,
+  tick,
+  radix,
+}: {
+  signal: ChronoSignal;
+  samples: WaveformSample[];
+  t0: number;
+  tick: number;
+  radix: Radix;
+}) {
   const isBus = signal.width > 1;
   const segs = segmentsOf(samples, signal.key, t0, tick);
   let pathD = '';
@@ -114,7 +140,7 @@ function SignalTrace({ signal, samples, t0, tick }: { signal: ChronoSignal; samp
           const kind = waveBusKind(bits);
           const col = kind === 'E' ? WAVE_ERROR_FILL : kind === 'X' ? WAVE_UNKNOWN_FILL : signal.color;
           const slope = Math.min(4, (sg.x1 - sg.x0) / 2);
-          const text = waveBusText(bits);
+          const text = waveBusText(bits, radix);
           return (
             <g key={`b${k}`}>
               <polygon
@@ -134,7 +160,7 @@ function SignalTrace({ signal, samples, t0, tick }: { signal: ChronoSignal; samp
                   {text}
                 </text>
               )}
-              <title>{`${signal.name}: ${bitsToString(bits)} = 0x${text}`}</title>
+              <title>{`${signal.name}: ${bitsToString(bits)}${radix === '2' ? '' : ` = ${RADIX_PREFIX[radix]}${text}`}`}</title>
             </g>
           );
         })}
@@ -171,7 +197,7 @@ function SignalTrace({ signal, samples, t0, tick }: { signal: ChronoSignal; samp
 }
 
 // Current value badge: a bus shows its hex value and takes the colour of a 1 / E / x value
-function ValueBadge({ raw }: { raw: SignalValue | SignalValue[] | undefined }) {
+function ValueBadge({ raw, radix = '16' }: { raw: SignalValue | SignalValue[] | undefined; radix?: Radix }) {
   const bits = Array.isArray(raw) ? raw : undefined;
   const busKind = bits ? waveBusKind(bits) : undefined;
   const v: SignalValue = bits
@@ -195,7 +221,7 @@ function ValueBadge({ raw }: { raw: SignalValue | SignalValue[] | undefined }) {
               : 'bg-slate-900 text-slate-500 border border-slate-800'
       }`}
     >
-      {bits ? waveBusText(bits) : waveSymbol(v)}
+      {bits ? waveBusText(bits, radix) : waveSymbol(v)}
     </span>
   );
 }
@@ -324,6 +350,9 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   slotsRef.current = slots;
   const lastValues = samples.length > 0 ? samples[samples.length - 1].values : {};
   const [pickerOpen, setPickerOpen] = useState(false);
+  // right-click menu of a wide signal: its display base
+  const [radixMenu, setRadixMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const radixOf = (key: string): Radix => props.radix[key] ?? '16';
   // row drag: index being dragged and the row it would drop on
   const [drag, setDrag] = useState<{ from: number; over: number } | null>(null);
   const keys = signals.map((s) => s.key);
@@ -594,6 +623,12 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
                   setDrag(null);
                 }}
                 onDragEnd={() => setDrag(null)}
+                onContextMenu={(e) => {
+                  if (s.width <= 1) return;
+                  e.preventDefault();
+                  setRadixMenu({ key: s.key, x: e.clientX, y: e.clientY });
+                }}
+                title={s.width > 1 ? 'Sağ tık: sayı tabanı' : undefined}
                 className={`group flex items-center justify-between gap-1 pl-1 pr-2 border-b border-slate-900 cursor-grab ${
                   drag && drag.over === i && drag.from !== i ? (drag.from < i ? 'border-b-2 border-b-cyan-400' : 'border-t-2 border-t-cyan-400') : ''
                 } ${drag?.from === i ? 'opacity-50' : ''}`}
@@ -616,7 +651,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
                   >
                     <X className="w-3 h-3" />
                   </button>
-                  <ValueBadge raw={shownValues[s.key]} />
+                  <ValueBadge raw={shownValues[s.key]} radix={radixOf(s.key)} />
                 </div>
               </div>
             ))}
@@ -653,7 +688,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
               {signals.map((s, r) => (
                 <g key={s.key} transform={`translate(0 ${RULER_H + r * ROW_H})`}>
                   {s.width === 1 && <line x1={0} y1={Y_LOW} x2={width} y2={Y_LOW} stroke="#334155" strokeWidth={1} />}
-                  <SignalTrace signal={s} samples={samples} t0={t0} tick={tick} />
+                  <SignalTrace signal={s} samples={samples} t0={t0} tick={tick} radix={radixOf(s.key)} />
                 </g>
               ))}
               {/* cursor: the slot band, a line through its middle and its time on the ruler */}
@@ -670,6 +705,41 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
             </svg>
           </div>
         </div>
+      )}
+
+      {radixMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setRadixMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setRadixMenu(null);
+            }}
+          />
+          <div
+            id="chrono-radix-menu"
+            className="fixed z-50 w-48 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1 text-xs"
+            style={{ left: Math.min(radixMenu.x, window.innerWidth - 200), top: Math.min(radixMenu.y, window.innerHeight - 210) }}
+          >
+            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-slate-500">Sayı tabanı</div>
+            {RADIX_OPTIONS.map(([r, label]) => (
+              <button
+                key={r}
+                type="button"
+                data-radix={r}
+                onClick={() => {
+                  props.onRadixChange(radixMenu.key, r);
+                  setRadixMenu(null);
+                }}
+                className={`w-full text-left px-3 py-1.5 cursor-pointer hover:bg-slate-800 ${radixOf(radixMenu.key) === r ? 'text-cyan-300 font-bold' : 'text-slate-200'}`}
+              >
+                {radixOf(radixMenu.key) === r ? '● ' : ''}
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

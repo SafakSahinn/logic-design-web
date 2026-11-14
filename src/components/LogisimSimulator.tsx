@@ -222,7 +222,7 @@ import {
   sortChronoGroups,
   waveSymbol,
   type ChronoLog,
-  type ChronoSelection,
+  type ChronoSettings,
   type ChronoSignal,
   type ChronoTreeNode,
 } from '../utils/chronogram';
@@ -261,6 +261,8 @@ export interface CircuitSheet {
   components: CircuitComponentInstance[];
   wires: CircuitWire[];
   annotations?: CircuitAnnotation[];
+  /** chronogram signal selection, time source and display bases */
+  chrono?: ChronoSettings;
 }
 
 // Pin dot colour per signal value (Logisim: blue = floating/unknown, red = error)
@@ -670,12 +672,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [showWaveform, setShowWaveform] = useState<boolean>(false);
   const [isWaveformPaused, setIsWaveformPaused] = useState<boolean>(false);
   const [chronoLog, setChronoLog] = useState<ChronoLog>(() => emptyChronoLog());
-  // Time source: undefined = automatic (the first clock by location, step mode without clocks), null = step mode
-  const [chronoClockChoice, setChronoClockChoice] = useState<string | null | undefined>(undefined);
-  // Selected signals (keys in display order + the top-level keys known then); null = automatic (every top-level
-  // loggable signal in evolution's default order)
-  const [chronoSelection, setChronoSelection] = useState<ChronoSelection | null>(null);
   const [chronoLimit, setChronoLimit] = useState<number>(CHRONO_DEFAULT_LIMIT);
+  // The active sheet's chronogram settings live on the sheet, so the autosave and the project file keep them:
+  // - time source: undefined = automatic (the first clock by location, step mode without clocks), null = step mode
+  // - selection: keys in display order + the top-level keys known then; null = automatic (every top-level loggable
+  //   signal in evolution's default order)
+  // - display base of wide signals by key (unset = hexadecimal)
+  const activeChrono = sheets.find((s) => s.id === activeSheetId)?.chrono;
+  const chronoClockChoice = activeChrono?.clock;
+  const chronoSelection = activeChrono?.selection ?? null;
+  const chronoRadix = activeChrono?.radix;
+  const updateChrono = (patch: Partial<ChronoSettings>) =>
+    setSheets((prev) => prev.map((s) => (s.id === activeSheetId ? { ...s, chrono: { ...s.chrono, ...patch } } : s)));
+  // Another sheet is another circuit: its log starts over (evolution keeps one log model per circuit state)
+  useEffect(() => {
+    setChronoLog(emptyChronoLog());
+  }, [activeSheetId]);
 
   // Rename modal state
   const [renameModalCompId, setRenameModalCompId] = useState<string | null>(null);
@@ -11521,7 +11533,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         <ChronogramPanel
           signals={chronoSignals}
           tree={chronoProbe.tree}
-          onSelectionChange={(keys) => setChronoSelection(keys === null ? null : editChronoSelection(chronoProbe.topLevel, keys))}
+          onSelectionChange={(keys) => updateChrono({ selection: keys === null ? null : editChronoSelection(chronoProbe.topLevel, keys) })}
+          radix={chronoRadix ?? {}}
+          onRadixChange={(key, r) => updateChrono({ radix: { ...chronoRadix, [key]: r } })}
           samples={chronoLog.samples}
           paused={isWaveformPaused}
           clocks={chronoProbe.clocks}
@@ -11531,7 +11545,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           onClear={() => setChronoLog(recordChrono(emptyChronoLog(chronoProbe.clockKey), chronoProbe.values, chronoProbe.clockKey, chronoLimit))}
           onExportVCD={handleExportVCD}
           onClose={() => setShowWaveform(false)}
-          onClockChange={setChronoClockChoice}
+          onClockChange={(key) => updateChrono({ clock: key })}
           onLimitChange={(n) => {
             setChronoLimit(n);
             setChronoLog((prev) => limitChrono(prev, n));

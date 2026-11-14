@@ -6,7 +6,7 @@
 //   changes between two edges replace the values of the current slot (back-dated to the last edge);
 // - step mode (no clock): every change of any logged value starts a new slot.
 // A sample holds the values of every candidate signal, so a signal added to the selection later has a history.
-import type { SignalValue } from '../types/logic';
+import type { Radix, SignalValue } from '../types/logic';
 import type { WaveformSample, WaveformValue } from './vcdGenerator';
 
 /** A loggable signal. key: `${componentId}` or `${componentId}_${port}` (also the VCD sample key). */
@@ -106,6 +106,18 @@ export interface ChronoTreeNode {
 export interface ChronoSelection {
   keys: string[];
   known: string[];
+}
+
+/**
+ * Chronogram settings of one sheet, saved with it (autosave and project file; not in .circ files: evolution keeps
+ * its log selection out of the file too). Every field unset = the default.
+ */
+export interface ChronoSettings {
+  selection?: ChronoSelection | null;
+  /** time source: a clock key, null = step mode, unset = automatic */
+  clock?: string | null;
+  /** display base of wide signals by key (evolution SignalInfo radix); unset = hexadecimal */
+  radix?: Record<string, Radix>;
 }
 
 /** Keys of the selected signals in display order */
