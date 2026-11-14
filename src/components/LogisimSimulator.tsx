@@ -111,7 +111,9 @@ import {
   TEXT_DEFAULT_COLOR,
   imageDrawRect,
   imageShownSize,
+  subcircuitLayoutOf,
 } from '../utils/circuitEngine';
+import { AppearanceShapesSvg } from './AppearanceShapes';
 import { IMAGE_FILE_ACCEPT, clipboardImageSource, fileToImageSource, optimizeImageSource, whiteTransparentSource } from '../utils/imageOps';
 import {
   Play,
@@ -5310,6 +5312,17 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
 
       case 'subcircuit': {
+        // A drawn appearance (Logisim classic / evolution / custom): its shapes, a dashed frame when selected
+        const layout = subcircuitLayoutOf(comp);
+        if (layout) {
+          return (
+            <g>
+              <title>{`${comp.state.subcircuitCode || 'IC'} · ${comp.state.subcircuitName || comp.label || ''}`}</title>
+              <rect x={0} y={0} width={layout.width} height={layout.height} fill="transparent" stroke={isSelected ? '#3b82f6' : 'none'} strokeWidth={1.5} strokeDasharray="4,3" />
+              <AppearanceShapesSvg shapes={layout.shapes} dark={cadTheme === 'dark'} />
+            </g>
+          );
+        }
         const chipWidth = 120;
         const inCount = comp.inputs.length;
         const outCount = comp.outputs.length;

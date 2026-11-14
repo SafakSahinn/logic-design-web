@@ -422,7 +422,67 @@ export interface CustomSubcircuit {
   components: CircuitComponentInstance[];
   wires: CircuitWire[];
   createdAt: number;
+  /** How the IC body is drawn (Logisim-evolution's circuit appearance); unset = our own chip look */
+  appearance?: SubcircuitAppearance;
 }
+
+/**
+ * Logisim-evolution circuit appearance attribute: 'classic' (Logisim 2.7.1's box), 'evolution' (the Holy Cross
+ * box; evolution's option value "evolution"), 'logisim_evolution' (evolution's own look), 'custom' (drawn in the
+ * appearance editor) plus our own 'chip'
+ */
+export type SubcircuitAppearanceStyle = 'chip' | 'classic' | 'evolution' | 'logisim_evolution' | 'custom';
+
+export interface SubcircuitAppearance {
+  style: SubcircuitAppearanceStyle;
+  /** The drawing of a custom appearance, in evolution's appearance coordinates (bottom first) */
+  shapes?: AppearanceShape[];
+  /** Evolution's "fixed size" for the named box (logisim_evolution style); unset = false like a new evolution circuit */
+  fixedSize?: boolean;
+}
+
+/** Evolution's DrawAttr paint type: stroke only (default), fill only, or both */
+export type AppearancePaintType = 'stroke' | 'fill' | 'both';
+
+/** Stroke and fill of a fillable draw shape (defaults: stroke, width 1, black stroke, white fill) */
+export interface AppearancePaint {
+  paint?: AppearancePaintType;
+  strokeWidth?: number;
+  /** #rrggbb or #rrggbbaa */
+  stroke?: string;
+  fill?: string;
+}
+
+/**
+ * One object of an appearance drawing (evolution com.cburch.draw.shapes + the port and anchor elements):
+ * rect (round rect when rx is set), oval (bounding box), line, poly (polygon when closed), quadratic curve,
+ * text (x, y = alignment point), image, port (a connection point of the IC, by port id) and the anchor
+ * (the instance location and the default facing)
+ */
+export type AppearanceShape =
+  | ({ kind: 'rect'; x: number; y: number; width: number; height: number; rx?: number } & AppearancePaint)
+  | ({ kind: 'oval'; x: number; y: number; width: number; height: number } & AppearancePaint)
+  | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; strokeWidth?: number; stroke?: string }
+  | ({ kind: 'poly'; closed: boolean; points: Array<{ x: number; y: number }> } & AppearancePaint)
+  | ({ kind: 'curve'; x0: number; y0: number; cx: number; cy: number; x1: number; y1: number } & AppearancePaint)
+  | {
+      kind: 'text';
+      x: number;
+      y: number;
+      text: string;
+      /** Font family as written (Java logical names like SansSerif or a real family) */
+      fontFamily: string;
+      fontSize: number;
+      bold?: boolean;
+      italic?: boolean;
+      /** Text colour; unset = black */
+      fill?: string;
+      halign: 'left' | 'center' | 'right';
+      valign: 'top' | 'middle' | 'baseline' | 'bottom';
+    }
+  | { kind: 'image'; x: number; y: number; width: number; height: number; src: string; scale?: string; license?: string; attribution?: string }
+  | { kind: 'port'; x: number; y: number; portId: string }
+  | { kind: 'anchor'; x: number; y: number; facing: 'east' | 'west' | 'north' | 'south' };
 
 export interface CircuitAnnotation {
   id: string;

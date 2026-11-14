@@ -220,6 +220,22 @@ export function getSubcircuitDefinition(id: string): CustomSubcircuit | undefine
 }
 
 /**
+ * Lookup without reloading storage for an unknown id (geometry asks on every pin update); the registry is
+ * loaded once when empty
+ */
+export function peekSubcircuitDefinition(id: string | undefined): CustomSubcircuit | undefined {
+  if (!id) return undefined;
+  if (runtimeSubcircuits.size === 0) initSubcircuits();
+  return runtimeSubcircuits.get(id);
+}
+
+/** Make a definition known for this run without saving it (the .circ importer, before the app keeps them) */
+export function registerSubcircuit(subDef: CustomSubcircuit): void {
+  if (runtimeSubcircuits.size === 0) initSubcircuits();
+  runtimeSubcircuits.set(subDef.id, subDef);
+}
+
+/**
  * Save / persist a new or updated custom subcircuit
  */
 export function saveCustomSubcircuit(subDef: CustomSubcircuit): void {
@@ -301,7 +317,7 @@ export function createSubcircuitInstance(
     );
   });
 
-  return {
+  const inst: CircuitComponentInstance = {
     id: compId,
     type: 'subcircuit',
     label: customLabel || subDef.name,
@@ -315,6 +331,10 @@ export function createSubcircuitInstance(
       subcircuitCode: subDef.chipCode || 'IC-CUSTOM',
     },
   };
+  // A drawn appearance (not the chip look) puts the pins where its ports are; geometry finds the definition
+  // in the registry
+  if (runtimeSubcircuits.get(subDef.id) !== subDef && !runtimeSubcircuits.has(subDef.id)) registerSubcircuit(subDef);
+  return subDef.appearance && subDef.appearance.style !== 'chip' ? updatePinPositions(inst) : inst;
 }
 
 /**

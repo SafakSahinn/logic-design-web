@@ -9,7 +9,8 @@ import type {
   TruthTableEntry,
 } from '../types/circuit';
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
-import { evaluateSubcircuitStateful, getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
+import { evaluateSubcircuitStateful, getSubcircuitDefinition, peekSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
+import { subcircuitLayout, type SubcircuitLayout } from './subcircuitAppearance';
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlRcOf, ttlNow, ttlSeqCopy, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
@@ -2798,6 +2799,8 @@ export function getBitWidth(comp: CircuitComponentInstance): number {
 // a constant is as wide as its hex digits
 export function getComponentSize(comp: CircuitComponentInstance): { width: number; height: number } {
   if (comp.type === 'subcircuit') {
+    const layout = subcircuitLayoutOf(comp);
+    if (layout) return { width: layout.width, height: layout.height };
     const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
     return { width: 120, height: Math.max(60, (maxPins + 1) * 20) };
   }
@@ -4324,11 +4327,22 @@ export function multiInputGateHeight(count: number): number {
   return (count % 2 === 1 ? count + 1 : count + 2) * 10;
 }
 
+/**
+ * The drawn appearance of a subcircuit instance (classic / evolution / logisim_evolution / custom), or null for
+ * our chip look (also when its definition is not known)
+ */
+export function subcircuitLayoutOf(comp: CircuitComponentInstance): SubcircuitLayout | null {
+  if (comp.type !== 'subcircuit') return null;
+  const def = peekSubcircuitDefinition(comp.state.subcircuitId);
+  return def ? subcircuitLayout(def) : null;
+}
+
 export function updatePinPositions(comp: CircuitComponentInstance): CircuitComponentInstance {
   if (comp.type === 'subcircuit') {
-    const width = 120;
+    const layout = subcircuitLayoutOf(comp);
+    const width = layout ? layout.width : 120;
     const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
-    const height = Math.max(60, (maxPins + 1) * 20);
+    const height = layout ? layout.height : Math.max(60, (maxPins + 1) * 20);
     const rot = comp.rotation || 0;
     const cx = width / 2;
     const cy = height / 2;
@@ -4344,14 +4358,16 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
       return { x: Math.round(rx / 10) * 10, y: Math.round(ry / 10) * 10 };
     };
 
+    // A drawn appearance places each pin at its port (pins follow the definition's input / output port
+    // order); the chip look puts inputs on the left and outputs on the right, 20px apart
     const newInputs = comp.inputs.map((pin, idx) => {
-      const relY = 20 * (idx + 1);
-      const pt = rotatePoint(0, relY);
+      const at = layout?.inputs[idx] ?? { x: 0, y: 20 * (idx + 1) };
+      const pt = rotatePoint(at.x, at.y);
       return { ...pin, x: comp.x + pt.x, y: comp.y + pt.y };
     });
     const newOutputs = comp.outputs.map((pin, idx) => {
-      const relY = 20 * (idx + 1);
-      const pt = rotatePoint(width, relY);
+      const at = layout?.outputs[idx] ?? { x: width, y: 20 * (idx + 1) };
+      const pt = rotatePoint(at.x, at.y);
       return { ...pin, x: comp.x + pt.x, y: comp.y + pt.y };
     });
     return { ...comp, inputs: newInputs, outputs: newOutputs };
