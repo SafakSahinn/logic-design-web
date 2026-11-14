@@ -1,10 +1,25 @@
 // Chronogram (timing diagram) panel, after Logisim-evolution's gui/chrono: a signal name column with the
 // current values on the left, the waveforms of every selected signal on one shared time axis on the right.
-import { useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Maximize2, Pause, Play, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { bitsToString, formatBits, type SignalValue } from '../types/logic';
 import type { WaveformSample } from '../utils/vcdGenerator';
-import { CHRONO_LIMITS, moveChronoKey, waveKey, waveSymbol, type ChronoSignal, type ChronoTreeNode } from '../utils/chronogram';
+import {
+  CHRONO_LIMITS,
+  CHRONO_ZOOM_DEFAULT,
+  CHRONO_ZOOM_MAX,
+  CHRONO_ZOOM_MIN,
+  chronoRulerStep,
+  chronoTickWidth,
+  chronoWidth,
+  fitChronoZoom,
+  moveChronoKey,
+  stepChronoZoom,
+  waveKey,
+  waveSymbol,
+  type ChronoSignal,
+  type ChronoTreeNode,
+} from '../utils/chronogram';
 
 // Segment colours for non-binary values, as in evolution's chronogram (x / z: orange box, E: red box)
 const WAVE_UNKNOWN_FILL = '#eaaa6c';
@@ -15,11 +30,9 @@ const waveBusText = (bits: SignalValue[]): string => formatBits(bits, '16').toUp
 const waveBusKind = (bits: SignalValue[]): 'E' | 'X' | 'ok' =>
   bits.includes('E') ? 'E' : bits.some((b) => b !== 0 && b !== 1) ? 'X' : 'ok';
 
-/** pixels per time slot (evolution RightPanel: tickWidth 20 at the default zoom) */
-const TICK_WIDTH = 20;
-/** room after the last slot (evolution RightPanel.EXTRA_SPACE) */
-const EXTRA_SPACE = 40;
 const ROW_H = 40;
+/** height of the time ruler above the waveforms (evolution's timeline header) */
+const RULER_H = 22;
 const Y_HIGH = 8;
 const Y_LOW = 32;
 
@@ -53,12 +66,12 @@ export interface ChronogramPanelProps {
 type Seg = { v: SignalValue; bits?: SignalValue[]; key: string; x0: number; x1: number };
 
 // Runs of equal values of one signal; 0/1 runs form the step line, x / z / E runs and bus values are boxes
-function segmentsOf(samples: WaveformSample[], key: string, t0: number): Seg[] {
+function segmentsOf(samples: WaveformSample[], key: string, t0: number, tick: number): Seg[] {
   const segs: Seg[] = [];
   samples.forEach((smp) => {
     const raw = smp.values[key];
-    const x0 = (smp.time - t0) * TICK_WIDTH;
-    const x1 = x0 + TICK_WIDTH;
+    const x0 = (smp.time - t0) * tick;
+    const x1 = x0 + tick;
     if (raw === undefined) return;
     const k = waveKey(raw);
     const last = segs[segs.length - 1];
@@ -69,9 +82,9 @@ function segmentsOf(samples: WaveformSample[], key: string, t0: number): Seg[] {
   return segs;
 }
 
-function SignalTrace({ signal, samples, t0 }: { signal: ChronoSignal; samples: WaveformSample[]; t0: number }) {
+function SignalTrace({ signal, samples, t0, tick }: { signal: ChronoSignal; samples: WaveformSample[]; t0: number; tick: number }) {
   const isBus = signal.width > 1;
-  const segs = segmentsOf(samples, signal.key, t0);
+  const segs = segmentsOf(samples, signal.key, t0, tick);
   let pathD = '';
   let prevBinary = false;
   segs.forEach((sg) => {
@@ -299,8 +312,16 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   const atEndRef = useRef(true);
   const t0 = samples.length > 0 ? samples[0].time : 0;
   const slots = samples.length;
-  const width = slots * TICK_WIDTH + EXTRA_SPACE;
-  const height = signals.length * ROW_H;
+  const [zoom, setZoom] = useState(CHRONO_ZOOM_DEFAULT);
+  const tick = chronoTickWidth(zoom);
+  const width = chronoWidth(slots, zoom);
+  const height = RULER_H + signals.length * ROW_H;
+  // time and view x to keep in place across a zoom (evolution RightPanel.zoom keeps the time under the mouse)
+  const anchorRef = useRef<{ t: number; vx: number } | null>(null);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
   const lastValues = samples.length > 0 ? samples[samples.length - 1].values : {};
   const [pickerOpen, setPickerOpen] = useState(false);
   // row drag: index being dragged and the row it would drop on
@@ -310,13 +331,61 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && atEndRef.current) el.scrollLeft = el.scrollWidth;
-  }, [slots, t0, signals.length]);
+    if (!el) return;
+    const a = anchorRef.current;
+    if (a) {
+      anchorRef.current = null;
+      el.scrollLeft = Math.max(0, a.t * chronoTickWidth(zoom) - a.vx);
+      atEndRef.current = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+    } else if (atEndRef.current) el.scrollLeft = el.scrollWidth;
+  }, [slots, t0, signals.length, zoom]);
 
   const onScroll = () => {
     const el = scrollRef.current;
     if (el) atEndRef.current = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
   };
+
+  // One zoom step, keeping the time at view x `vx` (default: the middle of the view) where it is
+  const zoomBy = (sens: number, vx?: number) => {
+    const z = zoomRef.current;
+    const nz = stepChronoZoom(z, sens, slotsRef.current);
+    if (nz === z) return;
+    const el = scrollRef.current;
+    // several steps before the next render (fast wheel) keep the first step's anchor time
+    if (el && !anchorRef.current) {
+      const x = vx ?? el.clientWidth / 2;
+      anchorRef.current = { t: (el.scrollLeft + x) / chronoTickWidth(z), vx: x };
+    }
+    zoomRef.current = nz;
+    setZoom(nz);
+  };
+  const zoomByRef = useRef(zoomBy);
+  zoomByRef.current = zoomBy;
+  const fit = () => {
+    const el = scrollRef.current;
+    atEndRef.current = true;
+    setZoom(fitChronoZoom(slots, el ? el.clientWidth : 800));
+  };
+
+  // Ctrl + wheel zooms at the mouse (evolution ChronoPanel); a plain wheel scrolls as usual. Not a React handler:
+  // those are passive, and the page must not zoom or scroll
+  const hasBody = signals.length > 0;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      zoomByRef.current(e.deltaY > 0 ? -1 : 1, e.clientX - el.getBoundingClientRect().left);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [hasBody]);
+
+  // Time ruler: a label every `step` slots (slot numbers count from the last reset), grid lines through the rows
+  const step = chronoRulerStep(tick);
+  const marks: number[] = [];
+  for (let m = Math.ceil(t0 / step) * step; m <= t0 + slots; m += step) marks.push(m);
 
   const selectCls = 'bg-slate-800 border border-slate-700 text-slate-200 rounded-lg text-xs px-2 py-1 cursor-pointer';
 
@@ -387,6 +456,37 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
               ))}
             </select>
           </label>
+          <div className="flex items-center rounded-xl border border-slate-700 bg-slate-800 overflow-hidden" id="chrono-zoom">
+            <button
+              type="button"
+              onClick={() => zoomBy(-1)}
+              disabled={zoom <= CHRONO_ZOOM_MIN}
+              className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 cursor-pointer"
+              title="Uzaklaştır (Ctrl + tekerlek)"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <span className="px-1.5 text-[11px] font-mono text-slate-300 min-w-[3.5rem] text-center" title="Bir zaman diliminin genişliği" id="chrono-zoom-level">
+              {tick >= 10 ? Math.round(tick) : tick.toFixed(1)} px
+            </span>
+            <button
+              type="button"
+              onClick={() => zoomBy(1)}
+              disabled={zoom >= CHRONO_ZOOM_MAX}
+              className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-30 cursor-pointer"
+              title="Yakınlaştır (Ctrl + tekerlek)"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={fit}
+              className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-700 border-l border-slate-700 cursor-pointer"
+              title="Tüm kaydı sığdır"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
           <button
             onClick={props.onTogglePause}
             className={`px-3 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 cursor-pointer transition-colors ${
@@ -428,6 +528,10 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
         <div className="flex bg-slate-950/70 rounded-2xl border border-slate-800/80 overflow-hidden" id="chrono-body">
           {/* Signal names and current values */}
           <div className="w-56 shrink-0 border-r border-slate-800">
+            <div className="flex items-center justify-between px-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800" style={{ height: RULER_H }}>
+              <span>Sinyal</span>
+              <span>Değer</span>
+            </div>
             {signals.map((s, i) => (
               <div
                 key={s.key}
@@ -478,14 +582,29 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
 
           {/* Waveforms on one shared time axis */}
           <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-x-auto" id="chrono-scroll">
-            <svg width={width} height={height} className="block">
-              {Array.from({ length: slots + 1 }).map((_, i) => (
-                <line key={i} x1={i * TICK_WIDTH} y1={0} x2={i * TICK_WIDTH} y2={height} stroke="#1e293b" strokeWidth={1} strokeDasharray="2,3" />
-              ))}
+            <svg width={width} height={height} className="block" id="chrono-svg">
+              {/* time ruler */}
+              <rect x={0} y={0} width={width} height={RULER_H} fill="#0f172a" />
+              <line x1={0} y1={RULER_H - 0.5} x2={width} y2={RULER_H - 0.5} stroke="#1e293b" />
+              {tick >= 6 &&
+                Array.from({ length: slots + 1 }).map((_, i) => (
+                  <line key={`m${i}`} x1={i * tick} y1={RULER_H - 4} x2={i * tick} y2={RULER_H} stroke="#334155" />
+                ))}
+              {marks.map((m) => {
+                const x = (m - t0) * tick;
+                return (
+                  <g key={`r${m}`}>
+                    <line x1={x} y1={RULER_H - 9} x2={x} y2={height} stroke="#1e293b" strokeWidth={1} />
+                    <text x={x + 3} y={11} className="text-[10px] font-mono fill-slate-400 select-none" data-chrono-mark={m}>
+                      {m}
+                    </text>
+                  </g>
+                );
+              })}
               {signals.map((s, r) => (
-                <g key={s.key} transform={`translate(0 ${r * ROW_H})`}>
+                <g key={s.key} transform={`translate(0 ${RULER_H + r * ROW_H})`}>
                   {s.width === 1 && <line x1={0} y1={Y_LOW} x2={width} y2={Y_LOW} stroke="#334155" strokeWidth={1} />}
-                  <SignalTrace signal={s} samples={samples} t0={t0} />
+                  <SignalTrace signal={s} samples={samples} t0={t0} tick={tick} />
                 </g>
               ))}
             </svg>

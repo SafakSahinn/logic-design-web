@@ -162,3 +162,35 @@ export function sortChronoGroups<T extends { x: number; y: number; input: boolea
 /** Value of a signal in a sample, as a bit array (LSB first); a missing value counts as x */
 export const sampleBits = (v: WaveformValue | undefined, width: number): SignalValue[] =>
   Array.isArray(v) ? v : v === undefined ? Array<SignalValue>(width).fill('X') : [v];
+
+// Zoom, as evolution's RightPanel: a level 1..40 (default 20); one slot is 20 * 1.15^(level - 20) pixels wide
+export const CHRONO_ZOOM_MIN = 1;
+export const CHRONO_ZOOM_MAX = 40;
+export const CHRONO_ZOOM_DEFAULT = 20;
+/** room after the last slot (RightPanel.EXTRA_SPACE) */
+export const CHRONO_EXTRA_SPACE = 40;
+/** widest drawing evolution allows (its offscreen image limit); a zoom in past it is refused */
+export const CHRONO_MAX_WIDTH = 32000;
+
+export const chronoTickWidth = (zoom: number): number => 20 * Math.pow(1.15, zoom - 20);
+
+export const chronoWidth = (slots: number, zoom: number): number => slots * chronoTickWidth(zoom) + CHRONO_EXTRA_SPACE;
+
+/** The zoom level after one step (sens +1 = in, -1 = out), or the same level when evolution would refuse it */
+export function stepChronoZoom(zoom: number, sens: number, slots: number): number {
+  const z = zoom + sens;
+  if (z < CHRONO_ZOOM_MIN || z > CHRONO_ZOOM_MAX) return zoom;
+  if (sens > 0 && chronoWidth(slots, z) > CHRONO_MAX_WIDTH) return zoom;
+  return z;
+}
+
+/** The largest zoom level that shows every slot in viewWidth pixels (the smallest level when none does) */
+export function fitChronoZoom(slots: number, viewWidth: number): number {
+  for (let z = CHRONO_ZOOM_MAX; z > CHRONO_ZOOM_MIN; z--) if (chronoWidth(slots, z) <= viewWidth) return z;
+  return CHRONO_ZOOM_MIN;
+}
+
+/** Slots between two time ruler labels: the smallest 1, 2, 5 x 10^k step at least minPx pixels wide */
+export function chronoRulerStep(tickWidth: number, minPx = 50): number {
+  for (let p = 1; ; p *= 10) for (const m of [1, 2, 5]) if (m * p * tickWidth >= minPx) return m * p;
+}
