@@ -1,6 +1,6 @@
 // Chronogram (timing diagram) panel, after Logisim-evolution's gui/chrono: a signal name column with the
 // current values on the left, the waveforms of every selected signal on one shared time axis on the right.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, GripVertical, ListChecks, Maximize2, Pause, Play, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { bitsToString, formatBits, type SignalValue } from '../types/logic';
 import type { WaveformSample } from '../utils/vcdGenerator';
@@ -387,6 +387,36 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
   const marks: number[] = [];
   for (let m = Math.ceil(t0 / step) * step; m <= t0 + slots; m += step) marks.push(m);
 
+  // Cursor (evolution RightPanel: click or drag on the waveforms; unset = pinned at the newest slot). Kept as a slot
+  // time, so zooming keeps it on the same slot; a slot dropped from the history clears it.
+  const [cursorT, setCursorT] = useState<number | null>(null);
+  const cur = cursorT !== null && cursorT >= t0 && cursorT < t0 + slots ? cursorT : null;
+  const shownValues = cur !== null ? samples[cur - t0].values : lastValues;
+  const timeAt = (e: ReactPointerEvent<SVGSVGElement>): number => {
+    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+    return t0 + Math.max(0, Math.min(slots - 1, Math.floor(x / tick)));
+  };
+  const onCursorDown = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0 || slots === 0) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setCursorT(timeAt(e));
+  };
+  const onCursorMove = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if ((e.buttons & 1) === 0 || slots === 0) return;
+    const tm = timeAt(e);
+    if (tm !== cursorT) setCursorT(tm);
+  };
+  // Esc puts the cursor back on the newest slot (live values)
+  useEffect(() => {
+    if (cursorT === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement;
+      if (e.key === 'Escape' && !(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'))) setCursorT(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cursorT]);
+
   const selectCls = 'bg-slate-800 border border-slate-700 text-slate-200 rounded-lg text-xs px-2 py-1 cursor-pointer';
 
   return (
@@ -530,7 +560,19 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
           <div className="w-56 shrink-0 border-r border-slate-800">
             <div className="flex items-center justify-between px-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800" style={{ height: RULER_H }}>
               <span>Sinyal</span>
-              <span>Değer</span>
+              {cur === null ? (
+                <span title="Dalgaya tıklayınca o dilimdeki değerler gösterilir">Değer (canlı)</span>
+              ) : (
+                <button
+                  type="button"
+                  id="chrono-cursor-clear"
+                  onClick={() => setCursorT(null)}
+                  className="normal-case tracking-normal text-cyan-300 hover:text-white cursor-pointer"
+                  title="İmleci kaldır, canlı değerlere dön (Esc)"
+                >
+                  t = {cur} · canlı ✕
+                </button>
+              )}
             </div>
             {signals.map((s, i) => (
               <div
@@ -574,7 +616,7 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
                   >
                     <X className="w-3 h-3" />
                   </button>
-                  <ValueBadge raw={lastValues[s.key]} />
+                  <ValueBadge raw={shownValues[s.key]} />
                 </div>
               </div>
             ))}
@@ -582,7 +624,14 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
 
           {/* Waveforms on one shared time axis */}
           <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-x-auto" id="chrono-scroll">
-            <svg width={width} height={height} className="block" id="chrono-svg">
+            <svg
+              width={width}
+              height={height}
+              className="block cursor-crosshair touch-none"
+              id="chrono-svg"
+              onPointerDown={onCursorDown}
+              onPointerMove={onCursorMove}
+            >
               {/* time ruler */}
               <rect x={0} y={0} width={width} height={RULER_H} fill="#0f172a" />
               <line x1={0} y1={RULER_H - 0.5} x2={width} y2={RULER_H - 0.5} stroke="#1e293b" />
@@ -607,6 +656,17 @@ export function ChronogramPanel(props: ChronogramPanelProps) {
                   <SignalTrace signal={s} samples={samples} t0={t0} tick={tick} />
                 </g>
               ))}
+              {/* cursor: the slot band, a line through its middle and its time on the ruler */}
+              {cur !== null && (
+                <g pointerEvents="none" id="chrono-cursor" data-t={cur}>
+                  <rect x={(cur - t0) * tick} y={RULER_H} width={tick} height={height - RULER_H} fill="#22d3ee" opacity={0.1} />
+                  <line x1={(cur - t0 + 0.5) * tick} y1={0} x2={(cur - t0 + 0.5) * tick} y2={height} stroke="#22d3ee" strokeWidth={1.5} />
+                  <rect x={(cur - t0 + 0.5) * tick - 18} y={2} width={36} height={RULER_H - 6} rx={4} fill="#0e7490" />
+                  <text x={(cur - t0 + 0.5) * tick} y={RULER_H - 8} textAnchor="middle" className="text-[10px] font-mono font-bold fill-white select-none">
+                    {cur}
+                  </text>
+                </g>
+              )}
             </svg>
           </div>
         </div>
