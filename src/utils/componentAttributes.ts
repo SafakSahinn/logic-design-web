@@ -7,6 +7,9 @@ import type { CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType }
 import { MAX_BIT_WIDTH, type Radix } from '../types/logic';
 import {
   ARITH_TYPES,
+  CLOCK_DURATION_MAX,
+  clockLevelAt,
+  getClockConfig,
   BIT_ADDER_MAX_INPUTS,
   LEVEL_TRIGGER_TYPES,
   MEM_TYPES,
@@ -795,6 +798,37 @@ const clockRateAttr: AttrDef = {
   },
 };
 
+// Clock durations in ticks (Logisim "High Duration" / "Low Duration", evolution "Phase Offset"). The level
+// follows at once from the tick count the clock has reached (Logisim waits for the next tick).
+const clockTicksAttr = (key: 'clockHigh' | 'clockLow' | 'clockPhase', field: 'high' | 'low' | 'phase', label: string, title: string): AttrDef => ({
+  key,
+  label,
+  kind: 'int',
+  title,
+  get: (c) => getClockConfig(c)[field],
+  set: (c, v) => {
+    const min = field === 'phase' ? 0 : 1;
+    const n = Math.min(CLOCK_DURATION_MAX, Math.max(min, Math.round(Number(v)) || min));
+    if (n === getClockConfig(c)[field]) return null;
+    const next = { ...c, state: { ...c.state, [key]: n } };
+    next.state.on = clockLevelAt(c.state.clockTick ?? 0, getClockConfig(next));
+    return { comp: next, stateOnly: true };
+  },
+});
+const clockHighAttr = clockTicksAttr(
+  'clockHigh',
+  'high',
+  'Yüksek süre (tik)',
+  "Saatin her çevrimde 1'de kaldığı tik sayısı (Logisim \"High Duration\"). Bir tik, saatin hızındaki yarım periyottur: 1 / 1 ayarında saat her tikte değişir"
+);
+const clockLowAttr = clockTicksAttr('clockLow', 'low', 'Düşük süre (tik)', "Saatin her çevrimde 0'da kaldığı tik sayısı (Logisim \"Low Duration\"); çevrim düşük kısımla başlar");
+const clockPhaseAttr = clockTicksAttr(
+  'clockPhase',
+  'phase',
+  'Faz kayması (tik)',
+  'Saatin dalgası bu kadar tik öne alınır (Logisim-evolution "Phase Offset"); aynı hızdaki saatler ortak tik sayar, böylece aralarında faz farkı kurulabilir'
+);
+
 const labelPosAttr: AttrDef = {
   key: 'labelPos',
   label: 'Etiket yeri',
@@ -873,7 +907,7 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       list.push(pullAttr);
       break;
     case 'clock':
-      list.push(clockRateAttr);
+      list.push(clockRateAttr, clockHighAttr, clockLowAttr, clockPhaseAttr);
       break;
     case 'register':
       list.push(memWidthAttr, triggerAttr);
