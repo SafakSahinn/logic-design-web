@@ -118,7 +118,8 @@ const BASE_LIB = 8;
  * <circuit> (ports = Pins in port order, Logisim's default appearance) used as a subcircuit.
  */
 
-type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR';
+// ODD / EVEN: Logisim's Odd Parity / Even Parity gates (AND geometry, no output bubble)
+type GateKind = 'AND' | 'OR' | 'NAND' | 'NOR' | 'XOR' | 'XNOR' | 'ODD' | 'EVEN';
 type OutMode = '01' | '0Z' | 'Z1';
 type Prim =
   // width: data bits (1 unless a canvas gate is wider); negated: input slots from 0; xor: multi-input XOR rule
@@ -223,7 +224,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  * 7-segment / hex digit displays, LED matrix, RAM and ROM either: it skips the attribute and reads the rest alike.
  */
 const LABELLED_PARTS = new Set<ComponentType>([
-  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buffer', 'triState', 'controlledInverter',
+  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -833,14 +834,16 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'nand':
         case 'nor':
         case 'xor':
-        case 'xnor': {
+        case 'xnor':
+        case 'oddParity':
+        case 'evenParity': {
           // Open inputs stay unconnected: Logisim ignores them like the simulator (none connected
           // gives E, a single one passes through); a Logisim gate has at least 2 inputs
           const gIns = c.inputs.map((_, i) => pin(i));
           while (gIns.length < 2) gIns.push(OPEN);
           P.push({
             kind: 'gate',
-            type: c.type.toUpperCase() as GateKind,
+            type: c.type === 'oddParity' ? 'ODD' : c.type === 'evenParity' ? 'EVEN' : (c.type.toUpperCase() as GateKind),
             ins: gIns,
             out: out(0),
             mode: c.state.outputMode,
@@ -1334,7 +1337,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // A negated input (Logisim 'negateN') sits 10 further out, behind its bubble
           const negAttrs = negated.map((i) => `<a name="negate${i}" val="true"/>`).join('');
           xml.push(
-            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate">${widthAttr(w)}<a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? `<a name="xor" val="${p.xor === 'one' ? '1' : 'odd'}"/>` : ''}${outAttr(p.mode)}${negAttrs}${lab(p)}</comp>`
+            `    <comp lib="1" loc="(${x},${y})" name="${p.type === 'ODD' ? 'Odd Parity' : p.type === 'EVEN' ? 'Even Parity' : `${p.type} Gate`}">${widthAttr(w)}<a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? `<a name="xor" val="${p.xor === 'one' ? '1' : 'odd'}"/>` : ''}${outAttr(p.mode)}${negAttrs}${lab(p)}</comp>`
           );
           gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx - (negated.includes(i) ? 10 : 0), y + dy, p.ins[i], true, w));
           tunnel(x, y, p.out, false, w);

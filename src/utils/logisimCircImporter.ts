@@ -152,6 +152,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'nor gate') return 'nor';
   if (n === 'xor gate') return 'xor';
   if (n === 'xnor gate') return 'xnor';
+  if (n === 'odd parity') return 'oddParity';
+  if (n === 'even parity') return 'evenParity';
   if (n === 'controlled buffer') return 'triState';
   if (n === 'controlled inverter') return 'controlledInverter';
   if (n === 'buffer') return 'buffer';
@@ -223,7 +225,7 @@ const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment', ...IO5_TY
 // Parts whose width is taken over from the file; any other Logisim part wider than 1 bit becomes 1 bit
 const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
-  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buffer', 'triState', 'controlledInverter',
+  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
   'multiplexer', 'demultiplexer',
 ]);
 // Logisim's most inputs per gate; ours takes as many
@@ -247,7 +249,7 @@ interface Pt {
   y: number;
 }
 
-const GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+const GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity'];
 
 // Logisim draws every part facing east by default; other facings turn the part around its anchor (loc)
 const FACING_ROTATION: Record<string, 0 | 90 | 180 | 270> = { east: 0, south: 90, west: 180, north: 270 };
@@ -1989,7 +1991,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           // Our gates take at most 5 inputs: wider Logisim gates become groups of the base operation
           // feeding the original gate (inversion stays on the last one), joined by private connection points
           if (isGate && inputPoints.length > MAX_IMPORT_GATE_INPUTS) {
-            const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType;
+            const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType === 'evenParity' ? 'oddParity' : nativeType;
             const feeds: Pt[] = [];
             for (let gi = 0; gi * 5 < inputPoints.length; gi++) {
               const group = inputPoints.slice(gi * 5, gi * 5 + 5);
