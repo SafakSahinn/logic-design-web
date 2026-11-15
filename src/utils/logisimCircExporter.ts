@@ -79,8 +79,10 @@ import {
   logisimMemPorts,
   logisimDefaultPortOffsets,
   logisimPlexerPortKeys,
+  logisimGateLoc271,
   logisimPlexerPorts,
   logisimRamPorts,
+  logisimTransistorPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
   type LogisimRamLook,
@@ -868,6 +870,31 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'controlledInverter':
           P.push({ kind: 'tri', in: pin(0), en: pin(1), out: out(0), inv: true, width: getGateWidth(c) });
           break;
+        case 'transistor':
+        case 'transmissionGate': {
+          // Logisim's part (lib Wiring) on its own connection points, facing as our rotation. The gate side is
+          // written under both names: evolution reads 'selloc', Logisim 2.7.1 'gate', each skips the other's.
+          // Every attribute is written out. Neither Logisim gives the part a label
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const selloc = c.state.selectLoc ?? 'tr';
+          const w = getGateWidth(c);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const attrs =
+            (c.type === 'transistor' ? a('type', c.state.transistorType === 'n' ? 'n' : 'p') : '') +
+            a('facing', facing) + a('selloc', selloc) + a('gate', logisimGateLoc271(facing, selloc)) + a('width', w);
+          const t = logisimTransistorPorts(facing, selloc);
+          const ports = [
+            { off: { x: 0, y: 0 }, net: out(0), width: w, sink: false },
+            { off: t.source, net: pin(0), width: w, sink: true },
+            { off: t.gate, net: pin(1), width: 1, sink: true },
+            ...(c.type === 'transmissionGate' ? [{ off: t.gate2, net: pin(2), width: 1, sink: true }] : []),
+          ];
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: 0, name: c.type === 'transistor' ? 'Transistor' : 'Transmission Gate' });
+          // (once per file)
+          if (c.type === 'transistor' && !warnings.some((x) => x.startsWith('Transistör:')))
+            warnings.push(`Transistör: tek transistör Logisim 2.7.1'de her seviyeyi geçirir (Logisim-evolution'da ve burada P tipi yalnız 1'i, N tipi yalnız 0'ı); devre 2.7.1'de farklı çalışabilir.`);
+          break;
+        }
         case 'splitter4':
           // An open bit leaves its output undriven: x in Logisim, as in the simulator
           for (let i = 0; i < 4; i++) if (c.outputs[i] && isConn(c.inputs[i]?.id)) union(pin(i), out(i));

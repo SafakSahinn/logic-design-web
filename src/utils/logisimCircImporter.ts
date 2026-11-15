@@ -164,6 +164,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'clock') return 'clock';
   if (n === 'tunnel') return 'tunnel';
   if (n === 'pull resistor') return 'pullResistor';
+  if (n === 'transistor') return 'transistor';
+  if (n === 'transmission gate') return 'transmissionGate';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -226,7 +228,7 @@ const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment', ...IO5_TY
 const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
-  'multiplexer', 'demultiplexer',
+  'multiplexer', 'demultiplexer', 'transistor', 'transmissionGate',
 ]);
 // Logisim's most inputs per gate; ours takes as many
 const MAX_IMPORT_GATE_INPUTS = 32;
@@ -297,6 +299,30 @@ export function logisimSplitterEnds(facing: string, appear: string, fanout: numb
 export type LogisimPlexer = 'multiplexer' | 'demultiplexer' | 'decoder' | 'priorityEncoder';
 
 const dirStep: Record<string, Pt> = { east: { x: 1, y: 0 }, west: { x: -1, y: 0 }, north: { x: 0, y: -1 }, south: { x: 0, y: 1 } };
+
+/**
+ * Logisim Transistor / Transmission Gate ports (std/wiring updatePorts) relative to the part's loc, the drain:
+ * the source 40 behind it, the gate (the P gate of a transmission gate) 20 behind and 20 to the side `selloc`
+ * names in Logisim-evolution's terms ('tr' = top when facing east / west, right when facing north / south),
+ * a transmission gate's N gate (gate2) on the opposite side.
+ */
+export function logisimTransistorPorts(facing: string, selloc: string): { source: Pt; gate: Pt; gate2: Pt } {
+  const dx = facing === 'west' ? 1 : facing === 'north' || facing === 'south' ? 0 : -1;
+  const dy = facing === 'north' ? 1 : facing === 'south' ? -1 : 0;
+  const flip = (facing === 'north' || facing === 'west') === (selloc === 'tr');
+  const a = { x: 20 * (dx + dy), y: 20 * (-dx + dy) };
+  const b = { x: 20 * (dx - dy), y: 20 * (dx + dy) };
+  return { source: { x: 40 * dx, y: 40 * dy }, gate: flip ? a : b, gate2: flip ? b : a };
+}
+/**
+ * Logisim 2.7.1 names the same side differently ('gate': tl = top / left, br = bottom / right): facing east or
+ * west its top is evolution's 'tr', facing north or south its left is evolution's 'bl'. Both ways (the mapping
+ * is its own inverse once the names are swapped).
+ */
+export const logisimGateLoc271 = (facing: string, selloc: string): 'tl' | 'br' =>
+  (facing === 'north' || facing === 'south') === (selloc === 'tr') ? 'br' : 'tl';
+export const logisimSellocOf271 = (facing: string, gate: string): 'tr' | 'bl' =>
+  (facing === 'north' || facing === 'south') === (gate === 'br') ? 'tr' : 'bl';
 
 /**
  * Logisim 2.7.1 plexer ports (std/plexers updatePorts) relative to the part's loc, in Logisim's port order:
@@ -1460,6 +1486,10 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     for (let k = 0; k < Math.max(v.length, ref.length); k++) if ((v[k] ?? 0) !== (ref[k] ?? 0)) return (v[k] ?? 0) > (ref[k] ?? 0);
     return false;
   })();
+  // Gate side of a transistor / transmission gate in evolution's terms: evolution reads 'selloc' (default tr),
+  // Logisim 2.7.1 'gate' (default tl), each skipping the other's attribute
+  const transistorSelloc = (attr: Record<string, string>, facing: string): 'tr' | 'bl' =>
+    evolutionFile ? (attr.selloc === 'bl' ? 'bl' : 'tr') : logisimSellocOf271(facing, attr.gate === 'br' ? 'br' : 'tl');
   if (circuits.length === 0) {
     throw new Error('Geçerli bir .circ devre dosyası bulunamadı (circuit etiketi yok).');
   }
@@ -1907,6 +1937,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             ? extenderPoints(attr)
             : nativeType === 'bitSelector'
               ? BIT_SELECTOR_POINTS[facing] ?? BIT_SELECTOR_POINTS.east
+              : nativeType === 'transistor' || nativeType === 'transmissionGate'
+              ? ((t) => (nativeType === 'transistor' ? [t.source, t.gate] : [t.source, t.gate, t.gate2]))(logisimTransistorPorts(facing, transistorSelloc(attr, facing)))
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2079,6 +2111,25 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             [inst.outputs[0].id, loc],
             [inst.inputs[0].id, at(loc, pts[0])],
             ...(inst.inputs[1] ? ([[inst.inputs[1].id, at(loc, pts[1])]] as Array<[string, Pt]>) : []),
+          ]);
+          continue;
+        }
+        if (nativeType === 'transistor' || nativeType === 'transmissionGate') {
+          // Logisim's own connection points: the drain on loc, the source and the gate(s) by facing and gate side
+          const selloc = transistorSelloc(attr, part.facing);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = {
+            ...inst,
+            rotation: rot as 0 | 90 | 180 | 270,
+            state: { ...inst.state, selectLoc: selloc, ...(nativeType === 'transistor' ? { transistorType: attr.type === 'n' ? ('n' as const) : ('p' as const) } : {}) },
+          };
+          if (width > 1) inst = setGateWidth(inst, width);
+          const t = logisimTransistorPorts(part.facing, selloc);
+          place(inst, inst.outputs[0].id, loc, label, [
+            [inst.outputs[0].id, loc],
+            [inst.inputs[0].id, at(loc, t.source)],
+            [inst.inputs[1].id, at(loc, t.gate)],
+            ...(inst.inputs[2] ? ([[inst.inputs[2].id, at(loc, t.gate2)]] as Array<[string, Pt]>) : []),
           ]);
           continue;
         }
