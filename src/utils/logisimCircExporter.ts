@@ -45,6 +45,7 @@ import {
   pinKey,
   ramPinWidth,
   splitterThreads,
+  COMPONENT_CATALOG,
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
@@ -215,6 +216,21 @@ const svgXml = (e: AppearanceSvgElement) => {
   return e.text === undefined ? `<${e.tag}${attrs}/>` : `<${e.tag}${attrs}>${xmlEsc(e.text)}</${e.tag}>`;
 };
 
+/**
+ * Parts written as one Logisim part whose Logisim-evolution factory has a label attribute (asked from evolution's
+ * own factories). Evolution's arithmetic parts, plexers, constant, splitter, bit extender / selector, pull resistor,
+ * joystick, keyboard, TTY, real-time clock, RGB Video and BFH converters have none. Logisim 2.7.1 has none on its
+ * 7-segment / hex digit displays, LED matrix, RAM and ROM either: it skips the attribute and reads the rest alike.
+ */
+const LABELLED_PARTS = new Set<ComponentType>([
+  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'not', 'buffer', 'triState', 'controlledInverter',
+  'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
+  // (inside an IC; on the canvas they are the circuit's output Pins)
+  'led', 'probe',
+  'subcircuit',
+]);
+const hasLogisimLabel = (type: ComponentType) => LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type);
+
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
   const warnings: string[] = [];
   // Evolution's TTL library is declared only when a chip uses it (Logisim 2.7.1 cannot load it)
@@ -255,7 +271,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     const style = def.appearance?.style ?? 'chip';
     // the circuit's parts first: a dynamic element of the drawing names its part by where it was written
     const placed = new Map<string, DynamicPathStep>();
-    const body = buildCircuit(def.components, def.wires, def, depth + 1, placed);
+    const body = buildCircuit(name, def.components, def.wires, def, depth + 1, placed);
     placedIn.set(def.id, placed);
     let info: SubcircuitInfo;
     let head = '';
@@ -353,6 +369,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   // Builds the parts of one circuit (the canvas, or an IC definition with its ports as Pins)
   // placed: where each part a dynamic appearance element can name was written (its factory name and location)
   const buildCircuit = (
+    circuitName: string,
     comps: CircuitComponentInstance[],
     levelWires: CircuitWire[],
     def: CustomSubcircuit | null,
@@ -360,6 +377,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     placed?: Map<string, DynamicPathStep>
   ): string => {
     const partOf = new Map<Prim, string>();
+    // The label a written part carries (the part's own, see hasLogisimLabel)
+    const labelOf = new Map<Prim, string>();
     const blocks: { prims: Prim[] }[] = [];
     const fixed: Array<{ x: number; y: number; prim: Prim }> = [];
 
@@ -546,8 +565,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             if (cfg.telnetMode) attrs += a('telnetMode', true);
             if (cfg.telnetPort !== TELNET_DEFAULT_PORT) attrs += a('port', cfg.telnetPort);
             if (cfg.telnetBufLen !== TELNET_DEFAULT_BUFFER) attrs += a('buflen', cfg.telnetBufLen);
-            // our default name stays out (evolution's Telnet has no label by default)
-            if (c.label?.trim() && c.label.trim() !== 'Telnet') attrs += a('label', c.label.trim());
           }
           const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
           const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
@@ -609,9 +626,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             // other LED / probe stays a Logisim LED (1 bit, lib I/O) / Probe (lib Wiring), so the IC can show it on
             // its drawing (a dynamic element)
             if (def!.ports.some((q) => q.targetCompId === c.id) || c.type === 'buzzer' || (c.type === 'led' && w0(c.inputs[0]) !== 1)) break;
-            const attrs = c.label?.trim() ? `<a name="label" val="${xmlEsc(c.label.trim())}"/>` : '';
             const net = pin(0);
-            P.push({ kind: 'ram', part: c.type, attrs, ports: [{ off: { x: 0, y: 0 }, net, width: c.type === 'led' ? 1 : undefined, sink: true }], lib: c.type === 'led' ? 5 : 0, name: c.type === 'led' ? 'LED' : 'Probe' });
+            P.push({ kind: 'ram', part: c.type, attrs: '', ports: [{ off: { x: 0, y: 0 }, net, width: c.type === 'led' ? 1 : undefined, sink: true }], lib: c.type === 'led' ? 5 : 0, name: c.type === 'led' ? 'LED' : 'Probe' });
             break;
           }
           c.inputs.forEach((p, i) => {
@@ -1096,7 +1112,6 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             usesTtl = true;
             const a = (name: string, val: string | boolean) => `<a name="${name}" val="${val}"/>`;
             let attrs = a('VccGndPorts', vccGnd) + a('ShowInternalStructure', c.state.ttlInternal === true);
-            if (c.label?.trim()) attrs += a('label', xmlEsc(c.label.trim()));
             if (chip.expire) {
               // 74123: evolution's 1Rext / 1Cext / 2Rext / 2Cext, plain numbers in kΩ / pF
               const rc = ttlRcOf(c.state);
@@ -1246,6 +1261,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       }
       if (openInputs)
         warnings.push(`${label}: boştaki giriş(ler)i Logisim'e x (sürücüsüz OPEN tüneli) olarak aktarıldı; kapılarla kurulan karşılığı bazı çıkışlarda simülatörden farklı sonuç verebilir.`);
+      // The part's own label, on the Logisim part that stands for it (the last one written: a real-time clock's
+      // splitter comes first). Logisim's parts have no label by default, so our default name stays out.
+      const own = c.label?.trim();
+      const main = P[P.length - 1];
+      if (own && own !== COMPONENT_CATALOG[c.type]?.name && main && main.kind !== 'inpin' && main.kind !== 'outpin' && main.kind !== 'clock' && hasLogisimLabel(c.type))
+        labelOf.set(main, own);
       // The part a dynamic appearance element can name (by the written factory name and location)
       const shown = c.type === 'subcircuit' || DYNAMIC_ELEMENT_OF[c.type] ? P.find((q) => q.kind === 'ram' || q.kind === 'mem' || q.kind === 'sub') : undefined;
       if (shown) partOf.set(shown, c.id);
@@ -1301,6 +1322,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       const id = partOf.get(p);
       if (id && placed) placed.set(id, { name, x, y });
     };
+    const lab = (p: Prim) => (labelOf.has(p) ? `<a name="label" val="${xmlEsc(labelOf.get(p)!)}"/>` : '');
     const emit = (p: Prim, x: number, y: number) => {
       switch (p.kind) {
         case 'gate': {
@@ -1312,27 +1334,27 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // A negated input (Logisim 'negateN') sits 10 further out, behind its bubble
           const negAttrs = negated.map((i) => `<a name="negate${i}" val="true"/>`).join('');
           xml.push(
-            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate">${widthAttr(w)}<a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? `<a name="xor" val="${p.xor === 'one' ? '1' : 'odd'}"/>` : ''}${outAttr(p.mode)}${negAttrs}</comp>`
+            `    <comp lib="1" loc="(${x},${y})" name="${p.type} Gate">${widthAttr(w)}<a name="inputs" val="${p.ins.length}"/><a name="size" val="50"/>${xorBonus ? `<a name="xor" val="${p.xor === 'one' ? '1' : 'odd'}"/>` : ''}${outAttr(p.mode)}${negAttrs}${lab(p)}</comp>`
           );
           gateOffsets(p.ins.length).forEach((dy, i) => tunnel(x - dx - (negated.includes(i) ? 10 : 0), y + dy, p.ins[i], true, w));
           tunnel(x, y, p.out, false, w);
           break;
         }
         case 'not':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${widthAttr(p.width)}${outAttr(p.mode)}</comp>`);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="NOT Gate">${widthAttr(p.width)}${outAttr(p.mode)}${lab(p)}</comp>`);
           tunnel(x - 30, y, p.in, true, p.width ?? 1);
           tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'buf':
-          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${widthAttr(p.width)}${outAttr(p.mode)}</comp>`);
+          xml.push(`    <comp lib="1" loc="(${x},${y})" name="Buffer">${widthAttr(p.width)}${outAttr(p.mode)}${lab(p)}</comp>`);
           tunnel(x - 20, y, p.in, true, p.width ?? 1);
           tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'tri':
           // Logisim's (wide) controlled inverter is 10 longer than the buffer; the control stays 1 bit
           xml.push(
-            p.width && p.width > 1
-              ? `    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}">${widthAttr(p.width)}</comp>`
+            (p.width && p.width > 1) || labelOf.has(p)
+              ? `    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}">${widthAttr(p.width)}${lab(p)}</comp>`
               : `    <comp lib="1" loc="(${x},${y})" name="${p.inv ? 'Controlled Inverter' : 'Controlled Buffer'}"/>`
           );
           tunnel(x - (p.inv ? 30 : 20), y, p.in, true, p.width ?? 1);
@@ -1428,17 +1450,17 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         case 'mem':
           written(p, LOGISIM_MEM_NAME[p.part] ?? '', x, y);
-          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_MEM_NAME[p.part]}">${p.attrs}</comp>`);
+          xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_MEM_NAME[p.part]}">${p.attrs}${lab(p)}</comp>`);
           memPorts(p.part, p.length, p.parallel).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
         case 'ram':
           written(p, p.name ?? LOGISIM_RAM_NAME[p.part] ?? '', x, y);
-          xml.push(`    <comp lib="${p.lib ?? 4}" loc="(${x},${y})" name="${xmlEsc(p.name ?? LOGISIM_RAM_NAME[p.part] ?? '')}">${p.attrs}</comp>`);
+          xml.push(`    <comp lib="${p.lib ?? 4}" loc="(${x},${y})" name="${xmlEsc(p.name ?? LOGISIM_RAM_NAME[p.part] ?? '')}">${p.attrs}${lab(p)}</comp>`);
           for (const q of p.ports) tunnel(x + q.off.x, y + q.off.y, q.net, q.sink, q.width);
           break;
         case 'sub':
           written(p, p.circuit, x, y);
-          xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"${p.facing === 'east' ? '/>' : `><a name="facing" val="${p.facing}"/></comp>`}`);
+          xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"${p.facing === 'east' && !labelOf.has(p) ? '/>' : `>${p.facing === 'east' ? '' : `<a name="facing" val="${p.facing}"/>`}${lab(p)}</comp>`}`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
           p.outOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.outs[i], false, p.outW[i]));
           break;
@@ -1532,10 +1554,28 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       xml[p.at] =
         `    <comp lib="0" loc="(${p.x},${p.y})" name="Pin"><a name="facing" val="west"/><a name="output" val="true"/>${widthAttr(w)}<a name="label" val="${xmlEsc(p.label)}"/></comp>`;
     }
+    // Logisim-evolution keeps a label on one part per circuit (ignoring case) and none that is the name of the
+    // circuit or of a kind of part used in it: it clears the others when it loads the file (2.7.1 keeps them all)
+    if (labelOf.size) {
+      const names = new Set([xmlEsc(circuitName).toUpperCase()]);
+      const count = new Map<string, number>();
+      for (const l of xml) {
+        const m = /<comp (?:lib="\d+" )?loc="[^"]*" name="([^"]*)"/.exec(l);
+        if (!m) continue;
+        names.add(m[1].toUpperCase());
+        const lb = m[1] === 'Tunnel' ? null : /<a name="label" val="([^"]*)"\/>/.exec(l);
+        if (lb) count.set(lb[1].toUpperCase(), (count.get(lb[1].toUpperCase()) ?? 0) + 1);
+      }
+      const lost = [...new Set(labelOf.values())].filter((l) => names.has(xmlEsc(l).toUpperCase()) || (count.get(xmlEsc(l).toUpperCase()) ?? 0) > 1);
+      if (lost.length)
+        warnings.push(
+          `"${circuitName}" devresi: Logisim-evolution bir devrede aynı etiketi (büyük / küçük harf ayırmadan) yalnız bir parçada tutar, devrenin ya da kullanılan bir parça türünün adıyla aynı etiketi de siler; şu etiket(ler) orada bir parçadan silinir: ${lost.join(', ')}. Logisim 2.7.1 hepsini tutar.`
+        );
+    }
     return xml.join('\n');
   };
 
-  const top = buildCircuit(components, wires, null, 0);
+  const top = buildCircuit(topName, components, wires, null, 0);
   const circuit = xmlEsc(topName);
   if (usesTtl)
     warnings.unshift(
