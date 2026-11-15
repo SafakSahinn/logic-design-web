@@ -374,6 +374,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   nor: { label: 'NOR', badge: 'VEYA DEĞİL' },
   xor: { label: 'XOR', badge: 'Özel VEYA' },
   xnor: { label: 'XNOR', badge: 'Özel VEYA DEĞİL' },
+  oddParity: { label: 'Tek Eşlik', badge: 'Odd Parity' },
+  evenParity: { label: 'Çift Eşlik', badge: 'Even Parity' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
@@ -3928,7 +3930,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           width: w,
           value: bits.length > 1 ? bits : bits[0] ?? 'Z',
         });
-      } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor'].includes(c.type)) {
+      } else if (['and', 'or', 'not', 'buffer', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity'].includes(c.type)) {
         rows.push({ key: c.id, name: `${name} (KAPI)`, kind: 'gate', width: 1, value: c.outputs[0]?.value ?? 0 });
       } else if (IO5C_WAVE_PINS[c.type]) {
         // Keyboard / TTY / Telnet / RGB Video: one row per data or strobe pin, the wide data lines as bus rows
@@ -4866,7 +4868,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       case 'nand':
       case 'nor':
       case 'xor':
-      case 'xnor': {
+      case 'xnor':
+      case 'oddParity':
+      case 'evenParity': {
         // One drawing for every logic gate: the body grows with the input count (more than 5 inputs),
         // a wide gate has thick leads and a negated input a bubble where its lead meets the body
         const t = comp.type;
@@ -4877,6 +4881,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const isOrShape = t === 'or' || t === 'nor';
         const isXorShape = t === 'xor' || t === 'xnor';
         const bubbleOut = t === 'nand' || t === 'nor' || t === 'xnor';
+        // The parity gates are a plain box with Logisim's label: 2k+1 (odd count of 1s) or 2k (even), no bubble
+        const isParity = t === 'oddParity' || t === 'evenParity';
         // Where an input lead meets the back of the body: the OR/XOR back is a quadratic curve
         // (x = start + 2·bulge·t(1-t) over t = 0..1 from top to bottom), the AND back is straight
         const leadEndAt = (y: number) => {
@@ -4892,8 +4898,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           ? `M 14,${top} Q 28,${mid} 14,${bot} Q 50,${bot} 72,${mid} Q 50,${top} 14,${top} Z`
           : isOrShape
             ? `M 12,${top} Q 24,${mid} 12,${bot} Q 48,${bot} 68,${mid} Q 48,${top} 12,${top} Z`
-            : `M 12,${top} L 45,${top} A 20,${(bot - top) / 2} 0 0,1 45,${bot} L 12,${bot} Z`;
-        const name = t.toUpperCase();
+            : isParity
+              ? `M 12,${top} L 65,${top} L 65,${bot} L 12,${bot} Z`
+              : `M 12,${top} L 45,${top} A 20,${(bot - top) / 2} 0 0,1 45,${bot} L 12,${bot} Z`;
+        const name = t === 'oddParity' ? '2k+1' : t === 'evenParity' ? '2k' : t.toUpperCase();
         return (
           <g filter="url(#gateShadow)">
             {comp.inputs.map((pin, idx) => {
@@ -4920,13 +4928,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {bubbleOut && <circle cx={bubbleCx} cy={mid} r={bubbleR} fill="#ffffff" stroke={strokeColor} strokeWidth={strokeWidth} />}
             <line x1={bubbleOut ? bubbleCx + bubbleR : bodyEnd} y1={mid} x2={80} y2={mid} stroke="#64748b" strokeWidth={leadW} />
             <text
-              x={isXorShape ? 38 : isOrShape ? 36 : 35}
+              x={isXorShape ? 38 : isOrShape ? 36 : isParity ? 38.5 : 35}
               y={mid + 4}
               textAnchor="middle"
               className={`${name.length > 3 ? (name.length > 4 ? 'text-[10px]' : 'text-[11px]') : 'text-xs'} font-bold fill-slate-800 select-none`}
             >
               {name}
-              {comp.inputs.length > 2 ? ` (${comp.inputs.length})` : ''}
+              {comp.inputs.length > 2 && !isParity ? ` (${comp.inputs.length})` : ''}
+              {isParity && <title>{t === 'oddParity' ? '1 olan giriş sayısı tekse 1' : '1 olan giriş sayısı çiftse 1'}</title>}
             </text>
             {isXorShape && comp.state.xorMode === 'one' && (
               <text x={38} y={mid + 14} textAnchor="middle" className="text-[8px] font-mono font-bold fill-slate-600 select-none">
@@ -7101,7 +7110,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'gates',
       title: 'Temel Mantık Kapıları',
       icon: '🚪',
-      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'] as ComponentType[],
+      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'] as ComponentType[],
     },
     {
       id: 'plexers',
