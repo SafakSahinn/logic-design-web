@@ -888,7 +888,9 @@ function buildModule(
       case 'nand':
       case 'nor':
       case 'xor':
-      case 'xnor': {
+      case 'xnor':
+      case 'oddParity':
+      case 'evenParity': {
         // Open inputs are left out like in the simulator; a negated input is inverted first
         const negated = c.state.negated ?? [];
         const ins =
@@ -908,11 +910,11 @@ function buildModule(
         let base: string;
         if (c.type === 'and' || c.type === 'nand') base = L.and(ins);
         else if (c.type === 'or' || c.type === 'nor') base = L.or(ins);
-        else if (c.state.xorMode === 'one' && ins.length > 2) {
+        else if ((c.type === 'xor' || c.type === 'xnor') && c.state.xorMode === 'one' && ins.length > 2) {
           // Exactly one 1: some input is 1 while every other one is 0
           base = L.or(ins.map((_, i) => L.and(ins.map((y, j) => (i === j ? y : L.not(y))))));
-        } else base = L.xor(ins);
-        emitGate(c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' ? L.not(base) : base);
+        } else base = L.xor(ins); // odd parity: XOR / XNOR in parity mode and the Odd / Even Parity gates
+        emitGate(c.type === 'nand' || c.type === 'nor' || c.type === 'xnor' || c.type === 'evenParity' ? L.not(base) : base);
         break;
       }
       case 'triState':

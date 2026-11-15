@@ -133,7 +133,7 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet'];
 // Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo'];
-const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
+const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [
   'srLatch',
@@ -184,6 +184,8 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   or: 6,
   xor: 8,
   xnor: 8,
+  oddParity: 8,
+  evenParity: 8,
   triState: 6,
   controlledInverter: 4,
   halfAdder: 12,
@@ -321,7 +323,9 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       return 2 * n + 2; // NAND/NOR + inverter
     case 'xor':
     case 'xnor':
-      return 8 * Math.max(1, n - 1); // chain of 2-input stages
+    case 'oddParity':
+    case 'evenParity':
+      return 8 * Math.max(1, n - 1); // chain of 2-input stages (a parity gate is an XOR / XNOR chain)
     case 'multiplexer':
     case 'demultiplexer':
     case 'decoder':
