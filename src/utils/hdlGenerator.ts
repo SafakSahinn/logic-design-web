@@ -198,7 +198,7 @@ function wrap(e: string): string {
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor'];
-const TRI_TYPES = ['triState', 'controlledInverter'];
+const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
 // encoder always has one) or three-state unselected outputs
 const plexerFloats = (c: CircuitComponentInstance) =>
@@ -923,6 +923,29 @@ function buildModule(
       case 'controlledInverter':
         emit(out[0], L.mux(inp(1), L.not(gateIn(0)), hiZW));
         break;
+      case 'transistor': {
+        // A three-state driver of one level: P drives 1 while its gate is 0 and the source is 1, N drives 0
+        // while its gate is 1 and the source is 0; otherwise the drain floats (bit by bit on a vector)
+        const isN = c.state.transistorType === 'n';
+        const gate = inp(1);
+        body.push(L.comment(`${isN ? 'N' : 'P'} transistör: kapı tanımsızken simülatörde çıkış E, burada karşılığı yok`));
+        const bit = (src: string) => {
+          const sel = isN ? L.and([gate, L.not(src)]) : L.and([L.not(gate), src]);
+          return L.mux(lang === 'vhdl' ? wrap(sel) : sel, isN ? L.zero : L.one, L.hiZ);
+        };
+        if (gateW > 1) {
+          const v = asName(gateIn(0), gateW, `${nm}_s`);
+          for (let b = 0; b < gateW; b++) emit(vecIndex(out[0], b), bit(vecIndex(v, b)));
+        } else emit(out[0], bit(inp(0)));
+        break;
+      }
+      case 'transmissionGate': {
+        // Passes the source while the P gate is 0 and the N gate is 1, floats otherwise
+        body.push(L.comment('iletim kapısı: iki kapı aynı seviyedeyken (ya da tanımsızken) simülatörde çıkış E, burada yüksek empedans'));
+        const sel = L.and([L.not(inp(1)), inp(2)]);
+        emit(out[0], L.mux(lang === 'vhdl' ? wrap(sel) : sel, gateIn(0), hiZW));
+        break;
+      }
       case 'splitter4':
         for (let i = 0; i < 4; i++) if (out[i]) emit(out[i], inp(i));
         break;

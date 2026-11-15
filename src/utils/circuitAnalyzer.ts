@@ -133,7 +133,9 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet'];
 // Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo'];
-const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'];
+const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
+// (gates whose input count is not part of their name in the transistor table)
+const FIXED_INPUT_GATES = ['not', 'buffer', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
 // State-holding parts: timing paths start at their outputs and end at their inputs
 const SEQUENTIAL_TYPES: string[] = [
   'srLatch',
@@ -188,6 +190,9 @@ const CMOS_TRANSISTOR_TABLE: Record<string, number> = {
   evenParity: 8,
   triState: 6,
   controlledInverter: 4,
+  // the part itself: one transistor, the P + N pair
+  transistor: 1,
+  transmissionGate: 2,
   halfAdder: 12,
   fullAdder: 28,
   halfSubtractor: 14,
@@ -527,7 +532,7 @@ export function analyzeCircuit(
     const name =
       c.type === 'subcircuit'
         ? `IC: ${c.state.subcircuitName || c.label || 'Alt devre'}`
-        : GATE_TYPES.includes(c.type) && c.type !== 'not' && c.type !== 'buffer' && c.type !== 'triState' && c.type !== 'controlledInverter'
+        : GATE_TYPES.includes(c.type) && !FIXED_INPUT_GATES.includes(c.type)
           ? `${c.type.toUpperCase()} (${c.inputs.length} giriş)`
           : ARITH_TYPES.has(c.type)
             ? `${c.type.toUpperCase()} (${arithGroupDetail(c)})`
