@@ -67,6 +67,7 @@ import {
   memRead,
   pinKey as plexerPinKey,
   plexerLayout,
+  transistorGateOnTop,
   getIoConfig,
   matrixDots,
   segmentsLit,
@@ -378,6 +379,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   evenParity: { label: 'Çift Eşlik', badge: 'Even Parity' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
+  transistor: { label: 'Transistör', badge: 'P / N' },
+  transmissionGate: { label: 'İletim Kapısı', badge: 'Transmission Gate' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
@@ -4794,6 +4797,46 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      // Logisim-evolution's own drawings (Transistor / TransmissionGate.drawInstance) in the unrotated body: source
+      // on the left, drain on the right, the gate (the P gate, with the bubble) on side s. The channel takes the
+      // colour of the value the part puts out, like Logisim's
+      case 'transistor': {
+        const s = transistorGateOnTop(comp) ? -1 : 1;
+        const isP = comp.state.transistorType !== 'n';
+        const lead = getGateWidth(comp) > 1 ? 4 : 2;
+        const channel = isSelected ? '#2563eb' : pinDotFill(comp.outputs[0]?.value ?? 'X');
+        return (
+          <g fill="none" strokeLinecap="round">
+            <rect x={0} y={0} width={40} height={40} fill="transparent" stroke="none" />
+            <path d={`M0,20 H13 V${20 + 6 * s} M40,20 H27 V${20 + 6 * s}`} stroke="#64748b" strokeWidth={lead} />
+            <line x1={20} y1={20 + 20 * s} x2={20} y2={20 + (isP ? 18 : 13) * s} stroke="#64748b" strokeWidth={2} />
+            <line x1={12} y1={20 + 12 * s} x2={28} y2={20 + 12 * s} stroke={strokeColor} strokeWidth={2} />
+            {isP && <circle cx={20} cy={20 + 15.5 * s} r={2.6} fill="#ffffff" stroke={strokeColor} strokeWidth={1.5} />}
+            <line x1={9} y1={20 + 7 * s} x2={31} y2={20 + 7 * s} stroke={channel} strokeWidth={2} />
+            <path d={`M19,${20 + 4 * s} L21,${20 + 2 * s} L19,20`} stroke={channel} strokeWidth={1} />
+          </g>
+        );
+      }
+
+      case 'transmissionGate': {
+        const s = transistorGateOnTop(comp) ? -1 : 1;
+        const lead = getGateWidth(comp) > 1 ? 4 : 2;
+        const channel = isSelected ? '#2563eb' : pinDotFill(comp.outputs[0]?.value ?? 'X');
+        return (
+          <g fill="none" strokeLinecap="round">
+            <rect x={0} y={0} width={40} height={40} fill="transparent" stroke="none" />
+            <path d="M0,20 H13 M13,14 V26 M40,20 H27 M27,14 V26" stroke="#64748b" strokeWidth={lead} />
+            <line x1={20} y1={20 + 20 * s} x2={20} y2={20 + 18 * s} stroke="#64748b" strokeWidth={2} />
+            <line x1={11} y1={20 + 11 * s} x2={29} y2={20 + 11 * s} stroke={strokeColor} strokeWidth={2} />
+            <circle cx={20} cy={20 + 14.8 * s} r={2.6} fill="#ffffff" stroke={strokeColor} strokeWidth={1.5} />
+            <line x1={20} y1={20 - 20 * s} x2={20} y2={20 - 13 * s} stroke="#64748b" strokeWidth={2} />
+            <line x1={11} y1={20 - 11 * s} x2={29} y2={20 - 11 * s} stroke={strokeColor} strokeWidth={2} />
+            <path d="M9,13 H31 M9,27 H31" stroke={channel} strokeWidth={2} />
+            <path d="M19,18 L21,20 L19,22" stroke={channel} strokeWidth={1} />
+          </g>
+        );
+      }
+
       case 'tunnel': {
         const lbl = comp.label || 'Tünel';
         const isHigh = comp.inputs[0]?.value === 1 || comp.outputs[0]?.value === 1;
@@ -7104,7 +7147,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate'] as ComponentType[],
     },
     {
       id: 'gates',

@@ -657,6 +657,43 @@ const plexerSelectLocAttr: AttrDef = {
   set: (c, v) => ((c.state.selectLoc ?? 'bl') === v ? null : reconfigurePlexer(c, {}, { selectLoc: v as 'bl' | 'tr' })),
 };
 
+// ---- Transistor / transmission gate (Logisim std/wiring) ----------------------------------------------------
+const transistorTypeAttr: AttrDef = {
+  key: 'transistorType',
+  label: 'Tip',
+  kind: 'buttons',
+  title: 'P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir; N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir (Logisim-evolution "Type")',
+  options: [
+    { value: 'p', label: 'P tipi' },
+    { value: 'n', label: 'N tipi' },
+  ],
+  get: (c) => c.state.transistorType ?? 'p',
+  set: (c, v) => ((c.state.transistorType ?? 'p') === v ? null : withState(c, { transistorType: v as 'p' | 'n' })),
+};
+
+// The source and the drain stay where they are; wires on the gate pins follow them to the other side
+const transistorGateLocAttr: AttrDef = {
+  key: 'gateLoc',
+  label: 'Kapı bacağı',
+  kind: 'buttons',
+  title: 'Kapı girişinin bulunduğu kenar (Logisim "Gate Location"); iletim kapısında P kapısının kenarı, N kapısı karşı kenarda',
+  options: [
+    { value: 'bl', label: 'Alt / Sol' },
+    { value: 'tr', label: 'Üst / Sağ' },
+  ],
+  get: (c) => c.state.selectLoc ?? 'tr',
+  set: (c, v) => {
+    if ((c.state.selectLoc ?? 'tr') === v) return null;
+    const next = updatePinPositions({ ...c, state: { ...c.state, selectLoc: v as 'bl' | 'tr' } });
+    const remap = new Map<string, string | null>();
+    for (const p of [...c.inputs, ...c.outputs]) {
+      const sp = snapPt10(p);
+      remap.set(`${sp.x},${sp.y}`, p.id);
+    }
+    return { comp: next, remap };
+  },
+};
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -905,6 +942,12 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'pullResistor':
       list.push(pullAttr);
+      break;
+    case 'transistor':
+      list.push(transistorTypeAttr, transistorGateLocAttr);
+      break;
+    case 'transmissionGate':
+      list.push(transistorGateLocAttr);
       break;
     case 'clock':
       list.push(clockRateAttr, clockHighAttr, clockLowAttr, clockPhaseAttr);
