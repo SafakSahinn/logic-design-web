@@ -2310,6 +2310,32 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: 'Girişler birbirine eşit olduğunda 1 verir (Eşitlik kapısı)',
   },
+  oddParity: {
+    type: 'oddParity',
+    name: 'Tek Eşlik Kapısı (Odd Parity)',
+    category: 'gates',
+    width: 80,
+    height: 60,
+    inputs: [
+      { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
+      { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
+    ],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
+    description: '1 olan girişlerin sayısı tek olduğunda 1 verir',
+  },
+  evenParity: {
+    type: 'evenParity',
+    name: 'Çift Eşlik Kapısı (Even Parity)',
+    category: 'gates',
+    width: 80,
+    height: 60,
+    inputs: [
+      { id: 'in0', name: 'A', type: 'input', relX: 0, relY: 20 },
+      { id: 'in1', name: 'B', type: 'input', relX: 0, relY: 40 },
+    ],
+    outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
+    description: '1 olan girişlerin sayısı çift olduğunda 1 verir',
+  },
   triState: {
     type: 'triState',
     name: '3 Durumlu Tampon (Tri-State)',
@@ -2785,7 +2811,7 @@ export function createComponentInstance(
 }
 
 // Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
-export const MULTI_INPUT_GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+export const MULTI_INPUT_GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity'];
 
 // Parts whose single pin can be wider than 1 bit (Logisim Pin and Constant); the pin's width is the part's width
 const WIDE_PIN_TYPES = new Set<ComponentType>(['switch', 'led', 'constant']);
@@ -4519,7 +4545,7 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     return { ...comp, inputs: comp.inputs.map(place), outputs: comp.outputs.map(place) };
   }
 
-  const isMultiInputGate = ['and', 'or', 'nand', 'nor', 'xor', 'xnor'].includes(comp.type);
+  const isMultiInputGate = MULTI_INPUT_GATE_TYPES.includes(comp.type);
 
   const newInputs = comp.inputs.map((pin, idx) => {
     let relX = 0;
@@ -4638,12 +4664,12 @@ const logisimDiff = (a: SignalValue[], b: SignalValue[], bin: SignalValue): { di
 // Gates power up unknown like in Logisim, so feedback loops such as a NAND latch only settle
 // once something drives them; combinational logic overwrites the X on the first step
 // Parts with Logisim's "Output Value" attribute
-export const OUTPUT_MODE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor'];
+export const OUTPUT_MODE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity'];
 // 0/floating leaves the net on a 1, floating/1 on a 0; x and E pass unchanged (Logisim pullOutput)
 const gateOutput = (comp: CircuitComponentInstance, v: SignalValue): SignalValue =>
   (comp.state.outputMode === '0Z' && v === 1) || (comp.state.outputMode === 'Z1' && v === 0) ? 'Z' : v;
 
-const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter']);
+const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter']);
 
 
 // Gate outputs Logisim computes bit by bit with the 1-bit rules (Value.and/or/xor/not on each bit)
@@ -4656,7 +4682,8 @@ const logicGateBits = (comp: CircuitComponentInstance, connected: CircuitPin[], 
     return negated?.includes(comp.inputs.indexOf(p)) ? bits.map(sigNot) : bits;
   });
   const t = comp.type;
-  const invert = t === 'nand' || t === 'nor' || t === 'xnor';
+  // The parity gates are Logisim's Odd Parity / Even Parity: always the odd-parity rule, whatever the input count
+  const invert = t === 'nand' || t === 'nor' || t === 'xnor' || t === 'evenParity';
   const one = (t === 'xor' || t === 'xnor') && comp.state.xorMode === 'one';
   const out: SignalValue[] = [];
   for (let b = 0; b < w; b++) {
@@ -4677,7 +4704,7 @@ const logicGateBits = (comp: CircuitComponentInstance, connected: CircuitPin[], 
 };
 
 // ---- Gate width (Logisim 'Data Bits' of the gates library) -----------------------------------------------
-export const GATE_WIDTH_TYPES: ComponentType[] = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'triState', 'controlledInverter'];
+export const GATE_WIDTH_TYPES: ComponentType[] = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'];
 // Controlled buffer / inverter: the data pin and the output take the width, the control pin stays 1 bit
 const isGateDataPin = (comp: CircuitComponentInstance, inputIdx: number) =>
   (comp.type !== 'triState' && comp.type !== 'controlledInverter') || inputIdx === 0;
@@ -5337,6 +5364,8 @@ export function simulateCircuitStep(
       case 'nor':
       case 'xor':
       case 'xnor':
+      case 'oddParity':
+      case 'evenParity':
         setBitsOut(0, logicGateBits(comp, connectedInputs, getGateWidth(comp)));
         break;
       case 'triState':
@@ -6829,7 +6858,7 @@ const OPAQUE_EXPR = '\u0000';
 // its output out); a gate reading it skips that input like an open one
 const NO_EXPR = '\u0001';
 // Gates that ignore inputs without a driver, like Logisim's analyzer
-const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor']);
+const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity']);
 const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
 const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector']);
@@ -6989,9 +7018,11 @@ function booleanExprOf(
       result = `(${inputExprs.join(' + ')})'`;
       break;
     case 'xor':
+    case 'oddParity':
       result = inputExprs.map((e) => (e.includes('+') ? `(${e})` : e)).join(' ⊕ ');
       break;
     case 'xnor':
+    case 'evenParity':
       result = `(${inputExprs.map((e) => (e.includes('+') ? `(${e})` : e)).join(' ⊕ ')})'`;
       break;
     case 'halfAdder':

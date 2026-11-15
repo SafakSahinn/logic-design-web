@@ -45,6 +45,8 @@ export type ComponentType =
   | 'nor'
   | 'xor'
   | 'xnor'
+  | 'oddParity'
+  | 'evenParity'
   | 'triState'
   | 'controlledInverter'
   // Outputs
