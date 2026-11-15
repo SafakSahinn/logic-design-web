@@ -2180,6 +2180,35 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'Bağlı olduğu hat hiçbir parça tarafından sürülmüyorsa (Hi-Z / x) hattı 0 (pull-down) ya da 1 (pull-up) seviyesine çeker',
   },
+  // Logisim-evolution Transistor / Transmission Gate at Logisim's own size: source on the left, drain on the
+  // right, the gate(s) above / below the middle (transistorGateOnTop)
+  transistor: {
+    type: 'transistor',
+    name: 'Transistör (Transistor)',
+    category: 'inputs',
+    width: 40,
+    height: 40,
+    inputs: [
+      { id: 'inS', name: 'S', type: 'input', relX: 0, relY: 20 },
+      { id: 'inG', name: 'G', type: 'input', relX: 20, relY: 0 },
+    ],
+    outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
+    description: 'Tek transistör (Logisim-evolution Transistor): P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir (0 gelirse çıkış boşta kalır), N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir; iletmezken çıkış boşta, kapı tanımsızsa hata (E)',
+  },
+  transmissionGate: {
+    type: 'transmissionGate',
+    name: 'İletim Kapısı (Transmission Gate)',
+    category: 'inputs',
+    width: 40,
+    height: 40,
+    inputs: [
+      { id: 'inS', name: 'S', type: 'input', relX: 0, relY: 20 },
+      { id: 'inP', name: 'P', type: 'input', relX: 20, relY: 0 },
+      { id: 'inN', name: 'N', type: 'input', relX: 20, relY: 40 },
+    ],
+    outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
+    description: 'İletim kapısı (Logisim Transmission Gate): P kapısı 0 ve N kapısı 1 iken girişi olduğu gibi çıkışa geçirir, P = 1 ve N = 0 iken çıkış boşta; iki kapı aynı seviyedeyse ya da biri tanımsızsa hata (E)',
+  },
   dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
   joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu (Logisim Joystick): X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
   matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı (Logisim-evolution MatrixKeypad): basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
@@ -2792,6 +2821,9 @@ export function createComponentInstance(
       constValue: type === 'constant' ? 1 : undefined,
     },
   };
+  // A new transistor is evolution's default: P type, gate on the top / right side
+  if (TRANSISTOR_TYPES.has(type)) inst.state.selectLoc = 'tr';
+  if (type === 'transistor') inst.state.transistorType = 'p';
   // A new bit extender is type zero (Logisim default), which has no extension input
   if (type === 'bitExtender') return configureBitExtender(inst, {});
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
@@ -3170,6 +3202,19 @@ export function configureBitSelector(
 // ---- Parametric plexers (Logisim std/plexers: Multiplexer, Demultiplexer, Decoder, PriorityEncoder) -------
 
 export const PLEXER_TYPES = new Set<ComponentType>(['multiplexer', 'demultiplexer', 'decoder', 'priorityEncoder']);
+
+// Logisim Transistor / Transmission Gate (std/wiring). Input 0 is the source, input 1 the gate (the P gate of a
+// transmission gate, whose input 2 is the N gate on the opposite side); the output is the drain
+export const TRANSISTOR_TYPES = new Set<ComponentType>(['transistor', 'transmissionGate']);
+/**
+ * Is the gate (P gate) on the top side of the unrotated body? Like Logisim's 'selloc' the gate location names a
+ * side of the screen: 'tr' = top when the part faces east / west, right when it faces north / south. The layout
+ * turns with the part, so facing west / north the local side is the other one.
+ */
+export const transistorGateOnTop = (comp: CircuitComponentInstance): boolean => {
+  const rot = comp.rotation || 0;
+  return ((comp.state.selectLoc ?? 'tr') === 'tr') !== (rot === 180 || rot === 270);
+};
 
 export const PLEXER_MAX_SELECT = 5;
 
@@ -4559,6 +4604,8 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
       const pinDef = meta.inputs[idx] || { relX: 0, relY: 0, id: `in${idx}` };
       relX = sizedPin?.relX ?? pinDef.relX;
       relY = sizedPin?.relY ?? pinDef.relY;
+      // Transistor gate (P gate) on its chosen side, a transmission gate's N gate opposite it
+      if (idx >= 1 && TRANSISTOR_TYPES.has(comp.type)) relY = transistorGateOnTop(comp) === (idx === 1) ? 0 : meta.height;
       pinSuffix = pinDef.id || `in${idx}`;
     }
     const p = rotatePoint(relX, relY);
@@ -4669,7 +4716,7 @@ export const OUTPUT_MODE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', '
 const gateOutput = (comp: CircuitComponentInstance, v: SignalValue): SignalValue =>
   (comp.state.outputMode === '0Z' && v === 1) || (comp.state.outputMode === 'Z1' && v === 0) ? 'Z' : v;
 
-const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter']);
+const POWER_UP_X_TYPES = new Set<string>(['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate']);
 
 
 // Gate outputs Logisim computes bit by bit with the 1-bit rules (Value.and/or/xor/not on each bit)
@@ -4704,10 +4751,11 @@ const logicGateBits = (comp: CircuitComponentInstance, connected: CircuitPin[], 
 };
 
 // ---- Gate width (Logisim 'Data Bits' of the gates library) -----------------------------------------------
-export const GATE_WIDTH_TYPES: ComponentType[] = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'];
-// Controlled buffer / inverter: the data pin and the output take the width, the control pin stays 1 bit
+export const GATE_WIDTH_TYPES: ComponentType[] = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
+// Controlled buffer / inverter, transistor, transmission gate: the data pin and the output take the width, the
+// control pin (the gates) stays 1 bit
 const isGateDataPin = (comp: CircuitComponentInstance, inputIdx: number) =>
-  (comp.type !== 'triState' && comp.type !== 'controlledInverter') || inputIdx === 0;
+  (comp.type !== 'triState' && comp.type !== 'controlledInverter' && !TRANSISTOR_TYPES.has(comp.type)) || inputIdx === 0;
 
 export function getGateWidth(comp: CircuitComponentInstance): number {
   return comp.outputs[0]?.width ?? 1;
@@ -5386,6 +5434,36 @@ export function simulateCircuitStep(
                 ? data.map(sigNot)
                 : data
               : new Array<SignalValue>(w).fill('E')
+        );
+        break;
+      }
+      case 'transistor':
+      case 'transmissionGate': {
+        // Logisim-evolution Transistor / TransmissionGate.computeOutput. Conducting (P: gate 0, N: gate 1; the
+        // pair: P gate 0 and N gate 1) the source passes bit by bit, but a single transistor leaves the level it
+        // passes badly floating: P a 0, N a 1 (Logisim 2.7.1 passes every level). Blocking (the pair: P gate 1
+        // and N gate 0) the drain floats. A gate that is no level (the pair: also both gates alike) makes every
+        // driven source bit E and leaves the undriven ones floating
+        const w = getGateWidth(comp);
+        const src = readBits(comp.inputs[0], w);
+        const g0 = readBits(comp.inputs[1], 1)[0];
+        let state: 'on' | 'off' | 'bad';
+        let weak: SignalValue | null = null;
+        if (comp.type === 'transistor') {
+          const onLevel = comp.state.transistorType === 'n' ? 1 : 0;
+          state = !isLevel(g0) ? 'bad' : g0 === onLevel ? 'on' : 'off';
+          weak = onLevel;
+        } else {
+          const g1 = readBits(comp.inputs[2], 1)[0];
+          state = !isLevel(g0) || !isLevel(g1) || g0 === g1 ? 'bad' : g0 === 0 ? 'on' : 'off';
+        }
+        setBitsOut(
+          0,
+          state === 'off'
+            ? new Array<SignalValue>(w).fill('Z')
+            : state === 'on'
+              ? src.map((v) => (v === weak ? 'Z' : v))
+              : src.map((v) => (v === 'X' ? 'X' : 'E'))
         );
         break;
       }
@@ -6861,7 +6939,8 @@ const NO_EXPR = '\u0001';
 const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity']);
 const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
-const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector']);
+// (a transistor / transmission gate has no formula in Logisim's analyzer either: its output can float)
+const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate']);
 
 interface BooleanExprContext {
   driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;

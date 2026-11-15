@@ -28,6 +28,9 @@ export type ComponentType =
   | 'constant'
   | 'tunnel'
   | 'pullResistor'
+  // Logisim Wiring: a single P / N transistor and the P + N pair (Aşama 5g-c)
+  | 'transistor'
+  | 'transmissionGate'
   // Parametric DIP switch (Logisim-evolution DipSwitch, Aşama 3g)
   | 'dipSwitch'
   | 'asciiKeyboard'
@@ -192,6 +195,9 @@ export interface CircuitComponentInstance {
     splitAppear?: 'left' | 'right' | 'center';
     /** Bit extender: how the extra high bits are filled (Logisim 'type'); unset = zero */
     extendType?: 'zero' | 'one' | 'sign' | 'input';
+    /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0
+     *  (Logisim-evolution 'type'); unset = p */
+    transistorType?: 'p' | 'n';
     /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
     pullValue?: 0 | 1 | 'X';
     /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */
@@ -206,7 +212,8 @@ export interface CircuitComponentInstance {
     plexTristate?: boolean;
     /** Switch: three-state input pin (Logisim Pin 'tristate'): starts floating and a click cycles 0 → 1 → Z; unset = false */
     pinTristate?: boolean;
-    /** Plexers: select (and enable) pins on the bottom/left side or the top/right side (Logisim 'selloc'); unset = bl */
+    /** Plexers: select (and enable) pins on the bottom/left side or the top/right side (Logisim 'selloc'); unset = bl.
+     *  Transistor / transmission gate: the side of the gate (the P gate of a transmission gate); unset = tr */
     selectLoc?: 'bl' | 'tr';
     /** Arithmetic parts: how operands are read (Logisim 'mode'): two's complement, signed A x unsigned B (multiplier), unsigned; unset = signed for the comparator, unsigned otherwise */
     arithMode?: 'signed' | 'signedUnsigned' | 'unsigned';
