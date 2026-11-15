@@ -98,6 +98,46 @@ export function resolveDynamicLive(ic: CircuitComponentInstance, path: string[])
   return found;
 }
 
+/**
+ * A node of the "show state" tree (evolution's ShowStateDialog.enumerate): a part that can be shown (`children`
+ * null) or an IC with such parts somewhere inside it; ICs with nothing to show are left out. Unlike evolution
+ * (whose Pin is not a DynamicElementProvider) an output port can be shown too: here it is an LED (`port`), and the
+ * drawing already accepts an element for it. Such an element cannot go to a .circ file (the export says so).
+ */
+export interface DynamicTreeNode {
+  comp: CircuitComponentInstance;
+  /** Part ids from the top circuit down to this part */
+  path: string[];
+  children: DynamicTreeNode[] | null;
+  /** The part is a port of its circuit */
+  port?: boolean;
+}
+
+export function dynamicTree(def: CustomSubcircuit): DynamicTreeNode[] {
+  const walk = (d: CustomSubcircuit, prefix: string[], depth: number): DynamicTreeNode[] => {
+    if (depth > 32) return [];
+    const ports = new Set(d.ports.map((p) => p.targetCompId));
+    const out: DynamicTreeNode[] = [];
+    for (const c of d.components) {
+      if (DYNAMIC_ELEMENT_OF[c.type]) out.push({ comp: c, path: [...prefix, c.id], children: null, ...(ports.has(c.id) ? { port: true } : {}) });
+      else if (c.type === 'subcircuit') {
+        const inner = peekSubcircuitDefinition(c.state.subcircuitId);
+        if (!inner) continue;
+        const kids = walk(inner, [...prefix, c.id], depth + 1);
+        if (kids.length) out.push({ comp: c, path: [...prefix, c.id], children: kids });
+      }
+    }
+    return out;
+  };
+  return walk(def, [], 0);
+}
+
+/** The element with its size recomputed for its part after a radius / scale / value font change (evolution keeps the corner) */
+export function resizeDynamicShape(def: CustomSubcircuit, s: AppearanceDynamicShape): AppearanceDynamicShape {
+  const size = dynamicElementSize(s.element, resolveDynamicTemplate(def, s.path), s);
+  return size.width === s.width && size.height === s.height ? s : { ...s, ...size };
+}
+
 /** Java's (int) for the size arithmetic below */
 const jint = (v: number) => Math.trunc(v);
 

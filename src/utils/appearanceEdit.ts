@@ -1,4 +1,5 @@
 import type {
+  AppearanceDynamicShape,
   AppearanceShape,
   CircuitComponentInstance,
   CircuitWire,
@@ -19,6 +20,7 @@ import {
 } from './subcircuitAppearance';
 import { snapPt10, rerouteWiresToRemappedPins } from './wiringEngine';
 import { updatePinPositions } from './circuitEngine';
+import { createDynamicShape, dynamicShapeValid, resolveDynamicTemplate } from './dynamicElements';
 
 /**
  * Editing a subcircuit appearance (evolution's appearance editor, com.cburch.logisim.gui.appear + draw tools):
@@ -285,6 +287,247 @@ export function shapeBox(s: AppearanceShape): { minX: number; minY: number; maxX
     maxX: Math.max(...pts.map((q) => q.x)),
     maxY: Math.max(...pts.map((q) => q.y)),
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Evolution's own geometry (CanvasObject.getBounds / contains(loc, false) / overlaps), used to place new
+// dynamic elements where nothing is drawn (ShowStateDialog.pickPlacement)
+// ---------------------------------------------------------------------------------------------------------
+
+/** Evolution's Bounds: integer corner and size, a point inside when x <= px < x + w */
+type EvoBounds = { x: number; y: number; w: number; h: number };
+
+const expandB = (b: EvoBounds, d: number): EvoBounds => (d === 0 ? b : { x: b.x - d, y: b.y - d, w: b.w + 2 * d, h: b.h + 2 * d });
+
+/** Bounds.add(x, y) */
+function addPt(b: EvoBounds, x: number, y: number): EvoBounds {
+  let { x: nx, y: ny, w, h } = b;
+  if (x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) return b;
+  if (x < b.x) {
+    nx = x;
+    w = b.x + b.w - x;
+  } else if (x >= b.x + b.w) w = x - b.x + 1;
+  if (y < b.y) {
+    ny = y;
+    h = b.y + b.h - y;
+  } else if (y >= b.y + b.h) h = y - b.y + 1;
+  return { x: nx, y: ny, w, h };
+}
+
+const paintType = (s: AppearanceShape): 'stroke' | 'fill' | 'both' => (s as { paint?: 'stroke' | 'fill' | 'both' }).paint ?? 'stroke';
+const strokeOf = (s: AppearanceShape): number => (s as { strokeWidth?: number }).strokeWidth ?? 1;
+
+function curvePoints(s: Extract<AppearanceShape, { kind: 'curve' }>, n = 32): Pt[] {
+  const pts: Pt[] = [];
+  for (let k = 0; k <= n; k++) {
+    const t = k / n;
+    const u = 1 - t;
+    pts.push({ x: u * u * s.x0 + 2 * u * t * s.cx + t * t * s.x1, y: u * u * s.y0 + 2 * u * t * s.cy + t * t * s.y1 });
+  }
+  return pts;
+}
+
+function insidePolygon(pts: Pt[], p: Pt): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    if (pts[i].y > p.y !== pts[j].y > p.y && p.x < ((pts[j].x - pts[i].x) * (p.y - pts[i].y)) / (pts[j].y - pts[i].y) + pts[i].x) inside = !inside;
+  }
+  return inside;
+}
+
+function distToPath(p: Pt, pts: Pt[], closed: boolean): number {
+  let d = Infinity;
+  for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, distToSegment(p, pts[i], pts[i + 1]));
+  if (closed && pts.length > 2) d = Math.min(d, distToSegment(p, pts[pts.length - 1], pts[0]));
+  if (pts.length === 1) d = Math.hypot(p.x - pts[0].x, p.y - pts[0].y);
+  return d;
+}
+
+/** CanvasObject.getBounds of a shape (the stroke counts from width 2 on, as evolution's shapes) */
+export function evoBounds(s: AppearanceShape, out?: ReadonlySet<string>): EvoBounds {
+  const half = (b: EvoBounds) => (strokeOf(s) < 2 || paintType(s) === 'fill' ? b : expandB(b, Math.trunc(strokeOf(s) / 2)));
+  switch (s.kind) {
+    case 'rect':
+    case 'oval':
+      return half({ x: s.x, y: s.y, w: s.width, h: s.height });
+    case 'image':
+      return { x: s.x, y: s.y, w: s.width, h: s.height };
+    case 'line':
+      return addPt({ x: s.x1, y: s.y1, w: 0, h: 0 }, s.x2, s.y2);
+    case 'poly': {
+      const xs = s.points.map((q) => q.x);
+      const ys = s.points.map((q) => q.y);
+      const b = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs) + 1, h: Math.max(...ys) - Math.min(...ys) + 1 };
+      return strokeOf(s) < 2 ? b : expandB(b, Math.trunc(strokeOf(s) / 2));
+    }
+    case 'curve': {
+      const pts = curvePoints(s);
+      const x0 = Math.floor(Math.min(...pts.map((q) => q.x)));
+      const y0 = Math.floor(Math.min(...pts.map((q) => q.y)));
+      return { x: x0, y: y0, w: Math.ceil(Math.max(...pts.map((q) => q.x))) - x0, h: Math.ceil(Math.max(...pts.map((q) => q.y))) - y0 };
+    }
+    case 'text': {
+      const b = textBox(s);
+      return { x: Math.floor(b.x), y: Math.floor(b.y), w: Math.ceil(b.width), h: Math.ceil(b.height) };
+    }
+    case 'port': {
+      const r = out?.has(s.portId) ? 5 : 4;
+      return { x: s.x - r, y: s.y - r, w: 2 * r, h: 2 * r };
+    }
+    case 'anchor': {
+      const d = { east: [1, 0], west: [-1, 0], north: [0, -1], south: [0, 1] }[s.facing];
+      return addPt({ x: s.x - 3, y: s.y - 3, w: 6, h: 6 }, s.x + d[0] * 11, s.y + d[1] * 11);
+    }
+    case 'dynamic': {
+      const b = { x: s.x, y: s.y, w: s.width, h: s.height };
+      const sw = s.strokeWidth ?? 0;
+      return sw < 2 ? b : expandB(b, Math.trunc(sw / 2));
+    }
+  }
+}
+
+/** CanvasObject.contains(loc, false): a stroke-only shape only on its outline */
+export function evoContains(s: AppearanceShape, p: Pt, out?: ReadonlySet<string>): boolean {
+  const inRect = (x: number, y: number, w: number, h: number) => p.x >= x && p.x < x + w && p.y >= y && p.y < y + h;
+  switch (s.kind) {
+    case 'rect':
+    case 'oval': {
+      const inner = (x: number, y: number, w: number, h: number): boolean => {
+        if (!inRect(x, y, w, h)) return false;
+        if (s.kind === 'oval') {
+          const dx = p.x - (x + 0.5 * w);
+          const dy = p.y - (y + 0.5 * h);
+          return (dx * dx) / (w * w) + (dy * dy) / (h * h) <= 0.25;
+        }
+        if (!s.rx) return true;
+        const rx = Math.min(s.rx, w / 2);
+        const ry = Math.min(s.rx, h / 2);
+        const cx = p.x < x + rx ? x + rx : p.x >= x + w - rx ? x + w - rx : p.x;
+        const cy = p.y < y + ry ? y + ry : p.y >= y + h - ry ? y + h - ry : p.y;
+        return ((p.x - cx) / (rx || 1)) ** 2 + ((p.y - cy) / (ry || 1)) ** 2 <= 1;
+      };
+      const sw = strokeOf(s);
+      const type = paintType(s);
+      if (type === 'fill') return inner(s.x, s.y, s.width, s.height);
+      if (type === 'stroke') {
+        const tol2 = Math.max(4, sw);
+        const tol = Math.trunc(tol2 / 2);
+        return inner(s.x - tol, s.y - tol, s.width + tol2, s.height + tol2) && !inner(s.x + tol, s.y + tol, s.width - tol2, s.height - tol2);
+      }
+      const tol = Math.trunc(sw / 2);
+      return inner(s.x - tol, s.y - tol, s.width + sw, s.height + sw);
+    }
+    case 'image':
+      return inRect(s.x, s.y, s.width, s.height);
+    case 'line': {
+      const t = Math.max(2, Math.trunc(strokeOf(s) / 2));
+      return distToSegment(p, { x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }) < t;
+    }
+    case 'poly':
+    case 'curve': {
+      const pts = s.kind === 'poly' ? s.points : curvePoints(s);
+      const closed = s.kind === 'poly' ? s.closed : false;
+      const type = paintType(s);
+      const sw = strokeOf(s);
+      if (type === 'stroke') return distToPath(p, pts, closed) < Math.max(2, Math.trunc(sw / 2));
+      if (pts.length > 2 && insidePolygon(pts, p)) return true;
+      return type === 'both' && distToPath(p, pts, closed) < sw / 2;
+    }
+    case 'text': {
+      const b = textBox(s);
+      return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+    }
+    case 'port':
+      return out?.has(s.portId) ? (p.x - s.x) ** 2 + (p.y - s.y) ** 2 < 25 : inRect(s.x - 4, s.y - 4, 8, 8);
+    case 'anchor':
+      return (p.x - s.x) ** 2 + (p.y - s.y) ** 2 < 9;
+    case 'dynamic':
+      return inRect(s.x, s.y, s.width, s.height);
+  }
+}
+
+/**
+ * AbstractCanvasObject.overlaps: the bounds meet in an area and some point of it lies in both shapes. Evolution
+ * tries 50 random points; this looks at the points of the common area (thinned out on large areas).
+ */
+export function evoOverlaps(a: AppearanceShape, b: AppearanceShape, out?: ReadonlySet<string>): boolean {
+  const A = evoBounds(a, out);
+  const B = evoBounds(b, out);
+  const x0 = Math.max(A.x, B.x);
+  const y0 = Math.max(A.y, B.y);
+  const x1 = Math.min(A.x + A.w, B.x + B.w);
+  const y1 = Math.min(A.y + A.h, B.y + B.h);
+  if (x1 <= x0 || y1 <= y0) return false;
+  const step = Math.max(1, Math.ceil(Math.sqrt(((x1 - x0) * (y1 - y0)) / 4000)));
+  for (let y = y0; y < y1; y += step) for (let x = x0; x < x1; x += step) if (evoContains(a, { x, y }, out) && evoContains(b, { x, y }, out)) return true;
+  return false;
+}
+
+/** ShowStateDialog.pickPlacement: down 10 at a time; past the bottom of the drawing, one column right and back to its top */
+function pickPlacement(avoid: AppearanceShape[], shape: AppearanceDynamicShape, box: EvoBounds, out: ReadonlySet<string>): AppearanceDynamicShape {
+  let s = shape;
+  for (let guard = 0; guard < 20000 && avoid.some((o) => evoOverlaps(s, o, out)); guard++) {
+    s = { ...s, y: s.y + 10 };
+    if (s.x < box.x + box.w && s.y + evoBounds(s).h >= box.y + box.h) s = { ...s, x: s.x + 10, y: Math.trunc((box.y + 9) / 10) * 10 };
+  }
+  return s;
+}
+
+/** A path as one string, for comparing paths */
+export const dynamicPathKey = (path: string[]) => path.join('\u0000');
+
+/**
+ * ShowStateDialog.apply: the drawing with exactly the dynamic elements of `checked` (paths to parts that can be
+ * shown). Elements no longer checked (or whose part is gone) are removed; new ones are made in the order of their
+ * parts' locations, starting at the top-left of the whole drawing and each moved down / right until it overlaps
+ * nothing but the anchor; they go on top of the drawing, under the ports. `keepOrder`: make them in the order of
+ * `checked` (tests).
+ */
+export function applyShowState(def: CustomSubcircuit, shapes: AppearanceShape[], checked: string[][], keepOrder = false): AppearanceShape[] {
+  const want = new Set(checked.map(dynamicPathKey));
+  const out = new Set(def.ports.filter((p) => p.type === 'output').map((p) => p.id));
+  let box: EvoBounds | null = null;
+  for (const s of shapes) {
+    const b = evoBounds(s, out);
+    box = !box ? b : { x: Math.min(box.x, b.x), y: Math.min(box.y, b.y), w: Math.max(box.x + box.w, b.x + b.w) - Math.min(box.x, b.x), h: Math.max(box.y + box.h, b.y + b.h) - Math.min(box.y, b.y) };
+  }
+  const bbox = box ?? { x: 0, y: 0, w: 0, h: 0 };
+  const present = new Set<string>();
+  const kept = shapes.filter((s) => {
+    if (s.kind !== 'dynamic') return true;
+    const k = dynamicPathKey(s.path);
+    if (!want.has(k) || !dynamicShapeValid(def, s) || present.has(k)) return false;
+    present.add(k);
+    return true;
+  });
+  const toAdd = checked
+    .filter((p) => !present.has(dynamicPathKey(p)))
+    .map((path) => ({ path, chain: path.map((_, i) => resolveDynamicTemplate(def, path.slice(0, i + 1))) }))
+    .filter((t) => t.chain.every(Boolean));
+  // CompareByLocations: part by part along the paths, x then y (our parts' own corner: they have no Logisim location)
+  if (!keepOrder) toAdd.sort((a, b) => {
+    for (let i = 0; i < a.chain.length && i < b.chain.length; i++) {
+      const pa = a.chain[i]!;
+      const pb = b.chain[i]!;
+      if (pa.x !== pb.x) return pa.x - pb.x;
+      if (pa.y !== pb.y) return pa.y - pb.y;
+    }
+    return 0;
+  });
+  const avoid = kept.filter((s) => s.kind !== 'anchor');
+  const added: AppearanceShape[] = [];
+  let loc = { x: Math.trunc(bbox.x / 5) * 5, y: Math.trunc(bbox.y / 5) * 5 };
+  for (const t of toAdd) {
+    const target = t.chain[t.chain.length - 1]!;
+    const fresh = createDynamicShape(target, t.path, loc.x, loc.y);
+    if (!fresh) continue;
+    // a new terminal element is 240 x 130 (TtyShape) until it is first painted with a state
+    const placed = pickPlacement(avoid, fresh.element === 'tty' ? { ...fresh, width: 240, height: 130 } : fresh, bbox, out);
+    loc = { x: placed.x, y: placed.y };
+    avoid.push(placed);
+    added.push({ ...fresh, x: placed.x, y: placed.y });
+  }
+  return portsOnTop([...kept, ...added]);
 }
 
 /** Keeps ports then the anchor on top of the drawing (evolution's CircuitAppearance does so after every change) */

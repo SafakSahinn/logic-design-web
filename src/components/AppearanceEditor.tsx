@@ -6,6 +6,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   Circle,
+  Eye,
   Image as ImageIcon,
   Magnet,
   Minus,
@@ -24,11 +25,14 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import type { AppearanceDynamicShape, AppearanceShape, CustomSubcircuit, SubcircuitAppearance } from '../types/circuit';
+import type { AppearanceDynamicElement, AppearanceDynamicShape, AppearanceFont, AppearanceShape, CircuitComponentInstance, CustomSubcircuit, SubcircuitAppearance } from '../types/circuit';
 import { AppearanceShapeSvg } from './AppearanceShapes';
 import { shapesBounds } from '../utils/subcircuitAppearance';
-import { resolveDynamicTemplate } from '../utils/dynamicElements';
+import { DYNAMIC_DEFAULTS, DYNAMIC_ELEMENT_OF, dynamicTree, resizeDynamicShape, resolveDynamicTemplate, type DynamicTreeNode } from '../utils/dynamicElements';
+import { peekSubcircuitDefinition } from '../utils/subcircuitManager';
 import {
+  applyShowState,
+  dynamicPathKey,
   editorStartShapes,
   hitShape,
   moveHandle,
@@ -66,6 +70,40 @@ const TOOLS: Array<{ id: Tool; label: string; icon: React.ReactNode }> = [
 ];
 
 const FONT_FAMILIES = ['SansSerif', 'Serif', 'Monospaced', 'Dialog', 'DialogInput', 'Courier 10 Pitch'];
+
+/** Names of the dynamic elements' parts (evolution shows the factory's display name) */
+const ELEMENT_NAMES: Record<AppearanceDynamicElement, string> = {
+  led: 'LED',
+  rgbled: 'RGB LED',
+  sevensegment: '7 Segment Gösterge',
+  hexdigit: 'Onaltılık Gösterge',
+  register: 'Yazmaç',
+  counter: 'Sayaç',
+  probe: 'Prob',
+  tty: 'TTY Terminal',
+  dotmatrix: 'Nokta Matris',
+  ledbar: 'LED Çubuğu',
+};
+const LABEL_POSITIONS: Array<[NonNullable<AppearanceDynamicShape['label']> | '', string]> = [
+  ['', 'Yok'],
+  ['top', 'Üst'],
+  ['bottom', 'Alt'],
+  ['left', 'Sol'],
+  ['right', 'Sağ'],
+  ['center', 'Orta'],
+];
+/** Which attributes each element has (evolution's getAttributes of each shape) */
+const HAS_STROKE = new Set<AppearanceDynamicElement>(['led', 'rgbled', 'dotmatrix', 'ledbar']);
+const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'rgbled']);
+const HAS_SEG_SCALE = new Set<AppearanceDynamicElement>(['sevensegment', 'hexdigit']);
+const HAS_MATRIX_SCALE = new Set<AppearanceDynamicElement>(['dotmatrix', 'ledbar']);
+const HAS_VALUE_FONT = new Set<AppearanceDynamicElement>(['register', 'counter', 'probe']);
+
+/** A part as the "show state" tree names it (evolution's Ref.toString: "label" Name @ (x, y)) */
+function partTitle(c: CircuitComponentInstance): string {
+  const name = c.type === 'subcircuit' ? peekSubcircuitDefinition(c.state.subcircuitId)?.name ?? 'Entegre' : (DYNAMIC_ELEMENT_OF[c.type] && ELEMENT_NAMES[DYNAMIC_ELEMENT_OF[c.type]!]) || c.type;
+  return `${c.label ? `"${c.label}" ` : ''}${name} @ (${Math.round(c.x)}, ${Math.round(c.y)})`;
+}
 const isElement = (s: AppearanceShape) => s.kind === 'port' || s.kind === 'anchor';
 
 type Drag =
@@ -120,6 +158,68 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
       return x === v.x && y === v.y && r === v.x + v.w && bt === v.y + v.h ? v : { x, y, w: r - x, h: bt - y };
     });
   }, []);
+
+  // "Show state" dialog (evolution ShowStateDialog): the parts that can be shown, ticked = has an element
+  const tree = useMemo(() => dynamicTree(def), [def]);
+  const [stateChecks, setStateChecks] = useState<Set<string> | null>(null);
+  const openShowState = () => {
+    const have = new Set(shapesRef.current.filter((s): s is AppearanceDynamicShape => s.kind === 'dynamic').map((s) => dynamicPathKey(s.path)));
+    const checks = new Set<string>();
+    // setCheckingPaths + adjustParentsInTree: a node with children is ticked when one of them is
+    const mark = (nodes: DynamicTreeNode[]): boolean => {
+      let any = false;
+      for (const n of nodes) {
+        const k = dynamicPathKey(n.path);
+        const on = n.children ? mark(n.children) : have.has(k);
+        if (on) {
+          checks.add(k);
+          any = true;
+        }
+      }
+      return any;
+    };
+    if (mark(tree)) checks.add('');
+    cancelPending();
+    setStateChecks(checks);
+  };
+  /** CheckBoxTree.nodeModified: the node and everything under it take its value, each parent is ticked when a child is */
+  const toggleState = (node: DynamicTreeNode | null, on: boolean) => {
+    if (!stateChecks) return;
+    const next = new Set(stateChecks);
+    const all = (nodes: DynamicTreeNode[]) => nodes.forEach((n) => (on ? next.add(dynamicPathKey(n.path)) : next.delete(dynamicPathKey(n.path)), n.children && all(n.children)));
+    if (!node) {
+      all(tree);
+      if (on) next.add('');
+      else next.delete('');
+    } else {
+      all([node]);
+      const fix = (nodes: DynamicTreeNode[]): boolean => {
+        let any = false;
+        for (const n of nodes) {
+          const k = dynamicPathKey(n.path);
+          if (n.children) {
+            if (fix(n.children)) next.add(k);
+            else next.delete(k);
+          }
+          if (next.has(k)) any = true;
+        }
+        return any;
+      };
+      if (fix(tree)) next.add('');
+      else next.delete('');
+    }
+    setStateChecks(next);
+  };
+  const applyStateChecks = () => {
+    if (!stateChecks) return;
+    const leaves: string[][] = [];
+    const walk = (nodes: DynamicTreeNode[]) => nodes.forEach((n) => (n.children ? walk(n.children) : stateChecks.has(dynamicPathKey(n.path)) && leaves.push(n.path)));
+    walk(tree);
+    const next = applyShowState(def, shapesRef.current, leaves);
+    setStateChecks(null);
+    const same = next.length === shapesRef.current.length && next.every((s, i) => s === shapesRef.current[i]);
+    if (!same) commit(next, new Set());
+  };
 
   const portName = useMemo(() => new Map(def.ports.map((p) => [p.id, p])), [def]);
   // Dynamic elements are drawn as without a simulation (evolution's editor paints them with no state)
@@ -411,6 +511,13 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
         return;
       }
       e.stopPropagation();
+      if (stateChecks) {
+        // the "show state" dialog is open: only Escape (cancel) and Enter (OK)
+        if (e.key === 'Escape') setStateChecks(null);
+        else if (e.key === 'Enter') applyStateChecks();
+        e.preventDefault();
+        return;
+      }
       const ctrl = e.ctrlKey || e.metaKey;
       if (ctrl && e.key.toLowerCase() === 'z') {
         e.preventDefault();
@@ -444,7 +551,7 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [doUndo, doRedo, deleteSelected, pendingPoly, finishPoly, cancelPending, tool, snapOn, nudge]);
+  }, [doUndo, doRedo, deleteSelected, pendingPoly, finishPoly, cancelPending, tool, snapOn, nudge, stateChecks]);
 
   const chooseTool = (t: Tool) => {
     cancelPending();
@@ -507,6 +614,11 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
   const images = drawSel.filter((s) => s.kind === 'image');
   const anchorSel = selShapes.find((s): s is Extract<AppearanceShape, { kind: 'anchor' }> => s.kind === 'anchor');
   const portSel = selShapes.filter((s): s is Extract<AppearanceShape, { kind: 'port' }> => s.kind === 'port');
+  const dyns = drawSel.filter((s): s is AppearanceDynamicShape => s.kind === 'dynamic');
+  const dynWith = (set: Set<AppearanceDynamicElement>) => dyns.filter((s) => set.has(s.element));
+  /** Change the selected dynamic elements that have the attribute (`list`); size follows radius / scale / value font */
+  const patchDyn = (list: AppearanceDynamicShape[], patch: (s: AppearanceDynamicShape) => AppearanceDynamicShape) =>
+    patchSelected((s) => (s.kind === 'dynamic' && list.includes(s) ? resizeDynamicShape(def, patch(s)) : null));
 
   const colorValue = (c: string | undefined, fallback: string) => (c ?? fallback).slice(0, 7);
   const withAlpha = (old: string | undefined, rgb: string) => (old && old.length === 9 ? rgb + old.slice(7) : rgb);
@@ -589,6 +701,15 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
               {icon}
             </button>
           ))}
+          <span className={`w-px h-5 mx-1 ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+          <button
+            onClick={openShowState}
+            className={btn()}
+            id="appear-show-state"
+            title="Durumu göster: devrenin (ve içindeki entegrelerin) LED, gösterge, yazmaç, prob gibi parçalarını entegre gövdesinde canlı göster"
+          >
+            <Eye className="w-4 h-4" />
+          </button>
           <span className={`w-px h-5 mx-1 ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
           <button onClick={() => setSnapOn((v) => !v)} className={btn(snapOn)} title="Izgaraya yasla (10 px); Alt basılıyken serbest">
             <Magnet className="w-4 h-4" />
@@ -920,6 +1041,136 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
               </>
             )}
 
+            {dyns.length > 0 &&
+              (() => {
+                const normFont = (f: AppearanceFont, d: { family: string; size: number }): AppearanceFont | undefined =>
+                  f.family.toLowerCase() === d.family.toLowerCase() && f.size === d.size && !f.bold && !f.italic ? undefined : f;
+                const fontRows = (key: string, title: string, list: AppearanceDynamicShape[], field_: 'labelFont' | 'valueFont', d: { family: string; size: number }) => {
+                  const fontOf = (s: AppearanceDynamicShape): AppearanceFont => s[field_] ?? { family: d.family, size: d.size };
+                  const setFont = (fn: (f: AppearanceFont) => AppearanceFont) => patchDyn(list, (s) => ({ ...s, [field_]: normFont(fn(fontOf(s)), d) }));
+                  const fam = common((s) => (s.kind === 'dynamic' ? fontOf(s).family : undefined), list);
+                  const size = common((s) => (s.kind === 'dynamic' ? fontOf(s).size : undefined), list);
+                  const bold = common((s) => (s.kind === 'dynamic' ? !!fontOf(s).bold : undefined), list) === true;
+                  const italic = common((s) => (s.kind === 'dynamic' ? !!fontOf(s).italic : undefined), list) === true;
+                  return (
+                    <>
+                      <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+                        <span className={label}>{title}</span>
+                        <select className={field} value={fam ?? ''} data-attr={`${key}-family`} onChange={(e) => setFont((f) => ({ ...f, family: e.target.value }))}>
+                          {fam === undefined && <option value="" disabled>—</option>}
+                          {[...new Set([...FONT_FAMILIES, ...list.map((s) => fontOf(s).family)])].map((f) => (
+                            <option key={f} value={f}>
+                              {f}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+                        <span className={label}>Boyut</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1}
+                            max={200}
+                            className={`${field} w-14`}
+                            data-attr={`${key}-size`}
+                            key={`${key}${[...sel].join(',')}:${size}`}
+                            defaultValue={size}
+                            onBlur={(e) => {
+                              const v = Math.round(Number(e.target.value));
+                              if (Number.isFinite(v) && v >= 1 && v <= 200 && v !== size) setFont((f) => ({ ...f, size: v }));
+                            }}
+                            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                          />
+                          <button className={btn(bold)} onClick={() => setFont((f) => ({ ...f, bold: bold ? undefined : true }))} title="Kalın">
+                            <b className="text-[11px] px-0.5">K</b>
+                          </button>
+                          <button className={btn(italic)} onClick={() => setFont((f) => ({ ...f, italic: italic ? undefined : true }))} title="İtalik">
+                            <i className="text-[11px] px-0.5">İ</i>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  );
+                };
+                const intRow = (key: string, title: string, list: AppearanceDynamicShape[], get: (s: AppearanceDynamicShape) => number, min: number, max: number, set: (s: AppearanceDynamicShape, v: number) => AppearanceDynamicShape) => {
+                  const v = common((s) => (s.kind === 'dynamic' ? get(s) : undefined), list);
+                  return (
+                    <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+                      <span className={label}>{title}</span>
+                      <select className={field} value={v ?? ''} data-attr={key} onChange={(e) => patchDyn(list, (s) => set(s, Number(e.target.value)))}>
+                        {v === undefined && <option value="" disabled>—</option>}
+                        {v !== undefined && (v < min || v > max) && <option value={v}>{v}</option>}
+                        {Array.from({ length: max - min + 1 }, (_, k) => min + k).map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                };
+                const one = dyns.length === 1 ? dyns[0] : null;
+                const target = one ? resolveDynamicTemplate(def, one.path) : null;
+                const strokeList = dynWith(HAS_STROKE);
+                const radiusList = dynWith(HAS_RADIUS);
+                const segList = dynWith(HAS_SEG_SCALE);
+                const matrixList = dynWith(HAS_MATRIX_SCALE);
+                const valueList = dynWith(HAS_VALUE_FONT);
+                const labelPos = common((s) => (s.kind === 'dynamic' ? s.label ?? '' : undefined), dyns);
+                return (
+                  <div className="space-y-2" id="appear-dyn-attrs">
+                    <div className="font-semibold text-[11px]">
+                      {one ? `${ELEMENT_NAMES[one.element]}${target?.label ? ` "${target.label}"` : ''}` : `${dyns.length} dinamik öğe`}
+                      {one && one.path.length > 1 && (
+                        <span className={`block font-normal font-mono ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+                          {one.path
+                            .slice(0, -1)
+                            .map((_, i) => {
+                              const c = resolveDynamicTemplate(def, one.path.slice(0, i + 1));
+                              return c ? partTitle(c) : '?';
+                            })
+                            .join(' › ')}
+                        </span>
+                      )}
+                    </div>
+                    {strokeList.length > 0 && intRow('dyn-stroke', 'Kalınlık', strokeList, (s) => s.strokeWidth ?? 0, 1, 8, (s, v) => ({ ...s, strokeWidth: v }))}
+                    {radiusList.length > 0 && intRow('dyn-radius', 'LED yarıçapı', radiusList, (s) => s.radius ?? DYNAMIC_DEFAULTS.radius, 1, 20, (s, v) => ({ ...s, radius: v === DYNAMIC_DEFAULTS.radius ? undefined : v }))}
+                    {segList.length > 0 && intRow('dyn-seg-scale', 'Ölçek', segList, (s) => s.scale ?? DYNAMIC_DEFAULTS.segmentScale, 1, 6, (s, v) => ({ ...s, scale: v === DYNAMIC_DEFAULTS.segmentScale ? undefined : v }))}
+                    {matrixList.length > 0 && intRow('dyn-matrix-scale', 'Matris ölçeği', matrixList, (s) => s.scale ?? DYNAMIC_DEFAULTS.matrixScale, 1, 10, (s, v) => ({ ...s, scale: v === DYNAMIC_DEFAULTS.matrixScale ? undefined : v }))}
+                    {valueList.length > 0 && fontRows('dyn-value-font', 'Değer yazı tipi', valueList, 'valueFont', DYNAMIC_DEFAULTS.valueFont)}
+                    <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+                      <span className={label}>Etiket</span>
+                      <select
+                        className={field}
+                        value={labelPos ?? '-'}
+                        data-attr="dyn-label"
+                        title="Gösterilen parçanın etiketinin öğeye göre yeri"
+                        onChange={(e) => patchDyn(dyns, (s) => ({ ...s, label: (e.target.value || undefined) as AppearanceDynamicShape['label'] }))}
+                      >
+                        {labelPos === undefined && <option value="-" disabled>—</option>}
+                        {LABEL_POSITIONS.map(([v, t]) => (
+                          <option key={v || 'none'} value={v}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {fontRows('dyn-label-font', 'Etiket yazı tipi', dyns, 'labelFont', DYNAMIC_DEFAULTS.labelFont)}
+                    <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+                      <span className={label}>Etiket rengi</span>
+                      <input
+                        type="color"
+                        className="w-full h-6 rounded cursor-pointer"
+                        data-attr="dyn-label-color"
+                        value={colorValue(common((s) => (s.kind === 'dynamic' ? s.labelColor ?? DYNAMIC_DEFAULTS.labelColor : undefined), dyns), DYNAMIC_DEFAULTS.labelColor)}
+                        onChange={(e) => patchDyn(dyns, (s) => ({ ...s, labelColor: e.target.value.toLowerCase() === DYNAMIC_DEFAULTS.labelColor ? undefined : e.target.value.toLowerCase() }))}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
             {images.length === 1 && (
               <button className={textBtn} onClick={() => fileRef.current?.click()}>
                 Resmi değiştir…
@@ -970,6 +1221,50 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
           </button>
         </div>
       </div>
+      {stateChecks && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/30 p-3" onPointerDown={(e) => e.target === e.currentTarget && setStateChecks(null)}>
+          <div className={`w-full max-w-lg max-h-[70vh] rounded-xl border shadow-2xl flex flex-col overflow-hidden ${panel}`} role="dialog" aria-label="Durumu göster" id="appear-show-state-dialog">
+            <div className={`px-4 py-2.5 border-b font-bold text-sm ${dark ? 'border-slate-700' : 'border-slate-200'}`}>Durumu göster: {def.name}</div>
+            <div className="flex-1 overflow-auto px-3 py-2 text-xs">
+              {tree.length === 0 ? (
+                <p className={`py-3 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  Boş devre: {def.name}. İçinde (veya içindeki entegrelerde) gövdede gösterilebilecek parça yok — LED, RGB LED, 7 segment / onaltılık gösterge, yazmaç, sayaç, prob, TTY, nokta matris ya da LED çubuğu ekleyin.
+                </p>
+              ) : (
+                (() => {
+                  const row = (node: DynamicTreeNode | null, depth: number, text: string) => {
+                    const k = node ? dynamicPathKey(node.path) : '';
+                    return (
+                      <label key={k || 'root'} className={`flex items-center gap-1.5 py-0.5 cursor-pointer select-none rounded ${dark ? 'hover:bg-slate-800' : 'hover:bg-slate-50'}`} style={{ paddingLeft: depth * 18 }} data-state-node={k}>
+                        <input type="checkbox" checked={stateChecks.has(k)} onChange={(e) => toggleState(node, e.target.checked)} />
+                        <span className={node && !node.children ? 'font-mono text-[11px]' : 'font-semibold'}>{text}</span>
+                      </label>
+                    );
+                  };
+                  const rows: React.ReactNode[] = [row(null, 0, `Durum: ${def.name}`)];
+                  const walk = (nodes: DynamicTreeNode[], depth: number) =>
+                    nodes.forEach((n) => {
+                      rows.push(row(n, depth, partTitle(n.comp) + (n.port ? ' · çıkış portu' : '')));
+                      if (n.children) walk(n.children, depth + 1);
+                    });
+                  walk(tree, 1);
+                  return rows;
+                })()
+              )}
+            </div>
+            <div className={`flex items-center gap-2 px-4 py-2.5 border-t ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
+              <span className={`text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>İşaretlenen parçalar gövdeye eklenir, işareti kaldırılanlar silinir.</span>
+              <div className="flex-1" />
+              <button onClick={() => setStateChecks(null)} className={textBtn} id="appear-show-state-cancel">
+                İptal
+              </button>
+              <button onClick={applyStateChecks} className="px-3 py-1.5 rounded-md text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white cursor-pointer" id="appear-show-state-ok">
+                Tamam
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <input
         ref={fileRef}
         type="file"
