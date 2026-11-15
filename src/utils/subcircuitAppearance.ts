@@ -584,6 +584,7 @@ export function appearanceShapeToSvg(
       return { tag: 'circ-port', attrs: [['dir', info.isInput ? 'in' : 'out'], ['pin', pin], ['x', n(s.x)], ['y', n(s.y)]] };
     }
     case 'dynamic':
+      // written by the exporter (dynamicShapeToSvg): its path names the parts by where the file has them
       return null;
     case 'anchor':
       if (format === 'logisim')

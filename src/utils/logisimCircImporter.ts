@@ -1,4 +1,5 @@
 import type {
+  AppearanceDynamicShape,
   AppearanceShape,
   CircuitComponentInstance,
   CircuitWire,
@@ -98,6 +99,7 @@ import {
 import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from './subcircuitManager';
 import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, type Facing } from './subcircuitAppearance';
+import { DYNAMIC_ELEMENT_OF, DYNAMIC_ELEMENT_TYPE, DYNAMIC_FACTORY, dynamicElementOfTag, dynamicShapeFromSvg, parseDynamicPath, type DynamicPathStep } from './dynamicElements';
 import { repairWires } from './wiringEngine';
 import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
 
@@ -1469,10 +1471,54 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
   // Logisim parts that carry no logic
   const DECORATIVE = new Set(['probe text']);
 
-  const imported = new Map<string, { sheet: ImportedCircuitSheet; pins: CircPin[]; signature: string }>();
+  // partAt: our part id of each "Factory(x,y)" a dynamic appearance element can name
+  const imported = new Map<string, { sheet: ImportedCircuitSheet; pins: CircPin[]; signature: string; partAt: Map<string, string> }>();
   const inProgress = new Set<string>();
   const subInfo = new Map<string, SubcircuitInfo | null>();
   const subcircuits: CustomSubcircuit[] = [];
+
+  /**
+   * A visible-* element of circuit `circuit`'s appearance (AppearanceSvgReader.createShape): its path resolved to our
+   * parts (DynamicElement.Path.fromSvgString: each step the part with that factory name and location, the later
+   * steps inside the IC before), or why it was left out (evolution drops it too, with an error)
+   */
+  const dynamicFromSvg = (circuit: string, e: Element): { shape: AppearanceDynamicShape; path: string } | string => {
+    const element = dynamicElementOfTag(e.tagName);
+    if (!element) return 'öğesinin karşılığı yok';
+    const pathStr = e.getAttribute('path') ?? '';
+    if (!pathStr) return 'öğesinin yolu (path) yok';
+    let steps: DynamicPathStep[];
+    try {
+      steps = parseDynamicPath(pathStr);
+    } catch {
+      return `öğesinin yolu okunamadı ("${pathStr}")`;
+    }
+    const ids: string[] = [];
+    let parts: CircuitComponentInstance[] | undefined;
+    let target: CircuitComponentInstance | undefined;
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i];
+      // the circuit this step is in: this one, then the circuit the IC before it is made of
+      const entry = imported.get(i === 0 ? circuit : steps[i - 1].name);
+      const id = entry?.partAt.get(`${st.name}(${st.x},${st.y})`);
+      const at = id ? entry!.sheet.components.findIndex((c) => c.id === id) : -1;
+      // An inner IC's parts as its definition holds them (one the library already had keeps its own ids; the
+      // same content lists its parts in the same order)
+      if (i > 0) parts = target?.type === 'subcircuit' ? peekSubcircuitDefinition(target.state.subcircuitId)?.components : undefined;
+      else parts = entry?.sheet.components;
+      target = at >= 0 ? parts?.[at] : undefined;
+      if (!target || (i > 0 && target.type !== entry!.sheet.components[at].type))
+        return `öğesinin gösterdiği parça devrede bulunamadı ("${pathStr}")`;
+      ids.push(target.id);
+    }
+    // (evolution offers an element only for its own part: an output Pin, though it reads as our LED, is no LED)
+    if (!target || target.type !== DYNAMIC_ELEMENT_TYPE[element] || steps[steps.length - 1].name !== DYNAMIC_FACTORY[element]) return `öğesinin yolu başka türde bir parçaya varıyor ("${pathStr}")`;
+    try {
+      return { shape: dynamicShapeFromSvg(element, (n) => (e.hasAttribute(n) ? e.getAttribute(n) : null), ids, target), path: pathStr };
+    } catch {
+      return 'öğesi okunamadı';
+    }
+  };
 
   // IC definition of a circuit used as a subcircuit (null: recursive use)
   const subcircuitOf = (name: string): SubcircuitInfo | null => {
@@ -1497,11 +1543,17 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     }
     const used = r.pins.map(() => false);
     const drawn: AppearanceShape[] = [];
-    let dynamic = 0;
+    // A dynamic element's path as the file wrote it (our part ids differ on every import, so the IC id hashes this)
+    const filePath = new Map<AppearanceShape, string>();
     for (const ap of kids(elem, 'appear'))
       for (const e of elems(ap)) {
         if (e.tagName.startsWith('visible-')) {
-          dynamic++;
+          const d = dynamicFromSvg(name, e);
+          if (typeof d === 'string') notes.push(`IC görünümü: <${e.tagName}> ${d}, atlandı.`);
+          else {
+            drawn.push(d.shape);
+            filePath.set(d.shape, d.path);
+          }
           continue;
         }
         let s: ReturnType<typeof appearanceShapeFromSvg>;
@@ -1529,7 +1581,6 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         used[i] = true;
         drawn.push({ kind: 'port', portId: `pin_${i}`, x: port.x, y: port.y });
       }
-    if (dynamic) notes.push(`IC görünümü: ${dynamic} dinamik öğe (visible-…) henüz desteklenmiyor, çizilmedi.`);
     const STYLES: SubcircuitAppearanceStyle[] = ['classic', 'evolution', 'logisim_evolution', 'custom'];
     let style: SubcircuitAppearanceStyle;
     if (cattr.circuitnamedbox !== undefined) style = drawn.length ? 'custom' : 'logisim_evolution';
@@ -1595,7 +1646,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const ports = [...ins.map(port), ...outs.map(port)];
     if (appearance.shapes) appearance.shapes = appearance.shapes.map((s) => (s.kind === 'port' ? { ...s, portId: idOf.get(s.portId)! } : s));
     // A drawing or a non-classic box is part of what the IC is (the same circuit drawn otherwise is another IC)
-    const look = style === 'classic' && !appearance.fixedSize ? '' : `|appear:${JSON.stringify(appearance)}`;
+    const stable = appearance.shapes ? { ...appearance, shapes: appearance.shapes.map((s) => (s.kind === 'dynamic' ? { ...s, path: [filePath.get(s) ?? ''] } : s)) } : appearance;
+    const look = style === 'classic' && !appearance.fixedSize ? '' : `|appear:${JSON.stringify(stable)}`;
     const def: CustomSubcircuit = {
       id: `sub_circ_${hash32(name + '|' + r.signature + look)}`,
       name,
@@ -1897,484 +1949,493 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const at = (loc: Pt, off: Pt): Pt => ({ x: loc.x + off.x, y: loc.y + off.y });
 
     // Pass 2: our parts, pinned to the exact Logisim connection points
+    const partAt = new Map<string, string>();
     for (const part of parts) {
-      const { loc, nativeType, attr, label, rot, size, width, inputsAttr, xorMode, negated, leftHanded, pull, outMode, where } = part;
-      const anchor = scaled(loc);
-      const isGate = GATE_TYPES.includes(nativeType);
+      const before = components.length;
+      try {
+        const { loc, nativeType, attr, label, rot, size, width, inputsAttr, xorMode, negated, leftHanded, pull, outMode, where } = part;
+        const anchor = scaled(loc);
+        const isGate = GATE_TYPES.includes(nativeType);
 
-      const isControlled = nativeType === 'triState' || nativeType === 'controlledInverter';
-      if (isGate || nativeType === 'not' || nativeType === 'buffer' || isControlled) {
-        let inputPoints: Pt[];
-        // Negated inputs among the kept (wired) input points
-        let gateNegated: number[] = [];
-        if (isGate) {
-          const isXor = nativeType === 'xor' || nativeType === 'xnor';
-          const bubble = nativeType === 'nand' || nativeType === 'nor' || nativeType === 'xnor' ? 10 : 0;
-          const gsize = size || 50;
-          // No 'inputs' attribute: Logisim 2.7 defaults to 5; every smaller count uses a subset of those points
-          const n = inputsAttr || 5;
-          const axis = gsize + (isXor ? 10 : 0) + bubble;
-          // A negated input (Logisim 'negateN', N from 0) sits 10 further out, behind its bubble
-          const neg = new Set(negated.map((k) => k - 1));
-          const slots = gateInputOffsets(n, gsize)
-            .map((dy, k) => ({ k, pt: local(loc, { x: -(axis + (neg.has(k) ? 10 : 0)), y: dy }, rot) }))
-            .filter((sl) => used(sl.pt));
-          inputPoints = slots.map((sl) => sl.pt);
-          gateNegated = slots.flatMap((sl, j) => (neg.has(sl.k) ? [j] : []));
-        } else if (isControlled) {
-          inputPoints = controlledOffsets(nativeType, size, leftHanded).map((off) => local(loc, off, rot));
-        } else if (nativeType === 'buffer') {
-          inputPoints = [local(loc, { x: -20, y: 0 }, rot)]; // Logisim buffer is 20 long, no size attribute
-        } else {
-          inputPoints = [local(loc, { x: -(size || 30), y: 0 }, rot)];
-        }
+        const isControlled = nativeType === 'triState' || nativeType === 'controlledInverter';
+        if (isGate || nativeType === 'not' || nativeType === 'buffer' || isControlled) {
+          let inputPoints: Pt[];
+          // Negated inputs among the kept (wired) input points
+          let gateNegated: number[] = [];
+          if (isGate) {
+            const isXor = nativeType === 'xor' || nativeType === 'xnor';
+            const bubble = nativeType === 'nand' || nativeType === 'nor' || nativeType === 'xnor' ? 10 : 0;
+            const gsize = size || 50;
+            // No 'inputs' attribute: Logisim 2.7 defaults to 5; every smaller count uses a subset of those points
+            const n = inputsAttr || 5;
+            const axis = gsize + (isXor ? 10 : 0) + bubble;
+            // A negated input (Logisim 'negateN', N from 0) sits 10 further out, behind its bubble
+            const neg = new Set(negated.map((k) => k - 1));
+            const slots = gateInputOffsets(n, gsize)
+              .map((dy, k) => ({ k, pt: local(loc, { x: -(axis + (neg.has(k) ? 10 : 0)), y: dy }, rot) }))
+              .filter((sl) => used(sl.pt));
+            inputPoints = slots.map((sl) => sl.pt);
+            gateNegated = slots.flatMap((sl, j) => (neg.has(sl.k) ? [j] : []));
+          } else if (isControlled) {
+            inputPoints = controlledOffsets(nativeType, size, leftHanded).map((off) => local(loc, off, rot));
+          } else if (nativeType === 'buffer') {
+            inputPoints = [local(loc, { x: -20, y: 0 }, rot)]; // Logisim buffer is 20 long, no size attribute
+          } else {
+            inputPoints = [local(loc, { x: -(size || 30), y: 0 }, rot)];
+          }
 
-        // Our gates take at most 5 inputs: wider Logisim gates become groups of the base operation
-        // feeding the original gate (inversion stays on the last one), joined by private connection points
-        if (isGate && inputPoints.length > MAX_IMPORT_GATE_INPUTS) {
-          const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType;
-          const feeds: Pt[] = [];
-          for (let gi = 0; gi * 5 < inputPoints.length; gi++) {
-            const group = inputPoints.slice(gi * 5, gi * 5 + 5);
-            if (group.length === 1) {
-              feeds.push(group[0]);
-              continue;
+          // Our gates take at most 5 inputs: wider Logisim gates become groups of the base operation
+          // feeding the original gate (inversion stays on the last one), joined by private connection points
+          if (isGate && inputPoints.length > MAX_IMPORT_GATE_INPUTS) {
+            const base: ComponentType = nativeType === 'nand' ? 'and' : nativeType === 'nor' ? 'or' : nativeType === 'xnor' ? 'xor' : nativeType;
+            const feeds: Pt[] = [];
+            for (let gi = 0; gi * 5 < inputPoints.length; gi++) {
+              const group = inputPoints.slice(gi * 5, gi * 5 + 5);
+              if (group.length === 1) {
+                feeds.push(group[0]);
+                continue;
+              }
+              let sub = createComponentInstance(base, 0, 0);
+              sub.inputs = group.map((_, k) => ({ id: `${sub.id}_in${k}`, name: String.fromCharCode(65 + k), type: 'input' as const, value: 0 as const, x: 0, y: 0 }));
+              sub.state = { ...sub.state, gateInputsCount: group.length };
+              sub = updatePinPositions(sub);
+              sub = updatePinPositions({ ...sub, x: anchor.x - 200 - sub.outputs[0].x, y: anchor.y + gi * 120 - sub.outputs[0].y });
+              components.push(sub);
+              group.forEach((pt, k) => attach.push({ at: pt, compId: sub.id, pinId: sub.inputs[k].id, isOutput: false }));
+              const link = { x: -1e6 - privatePoints++, y: -1e6 };
+              attach.push({ at: link, compId: sub.id, pinId: sub.outputs[0].id, isOutput: true });
+              feeds.push(link);
             }
-            let sub = createComponentInstance(base, 0, 0);
-            sub.inputs = group.map((_, k) => ({ id: `${sub.id}_in${k}`, name: String.fromCharCode(65 + k), type: 'input' as const, value: 0 as const, x: 0, y: 0 }));
-            sub.state = { ...sub.state, gateInputsCount: group.length };
-            sub = updatePinPositions(sub);
-            sub = updatePinPositions({ ...sub, x: anchor.x - 200 - sub.outputs[0].x, y: anchor.y + gi * 120 - sub.outputs[0].y });
-            components.push(sub);
-            group.forEach((pt, k) => attach.push({ at: pt, compId: sub.id, pinId: sub.inputs[k].id, isOutput: false }));
-            const link = { x: -1e6 - privatePoints++, y: -1e6 };
-            attach.push({ at: link, compId: sub.id, pinId: sub.outputs[0].id, isOutput: true });
-            feeds.push(link);
+            inputPoints = feeds;
           }
-          inputPoints = feeds;
+
+          let inst = createComponentInstance(nativeType, 0, 0);
+          if (isGate && inputPoints.length > 2) {
+            const n = Math.min(MAX_IMPORT_GATE_INPUTS, inputPoints.length);
+            inst.inputs = Array.from({ length: n }).map((_, k) => ({
+              id: `${inst.id}_in${k}`,
+              name: String.fromCharCode(65 + k),
+              type: 'input' as const,
+              value: 0 as const,
+              x: 0,
+              y: 0,
+            }));
+            inst.state = { ...inst.state, gateInputsCount: n };
+          }
+          inst.rotation = rot as 0 | 90 | 180 | 270;
+          // Output Value applies to the gate that drives the net (the last one of a split wide gate)
+          if (outMode) inst.state = { ...inst.state, outputMode: outMode };
+          if (gateNegated.length) inst.state = { ...inst.state, negated: gateNegated };
+          // A Logisim XOR without the attribute is "exactly one 1" (its default); ours defaults to parity
+          if ((nativeType === 'xor' || nativeType === 'xnor') && xorMode !== 'odd') inst.state = { ...inst.state, xorMode: 'one' };
+          if (width > 1) inst = setGateWidth(inst, width);
+          inst = updatePinPositions(inst);
+          // Put our output pin exactly on the (scaled) Logisim anchor
+          const out = inst.outputs[0];
+          inst = updatePinPositions({ ...inst, x: anchor.x - out.x, y: anchor.y - out.y });
+          if (label) inst.label = label;
+          components.push(inst);
+
+          attach.push({ at: loc, compId: inst.id, pinId: inst.outputs[0].id, isOutput: true });
+          inputPoints.slice(0, inst.inputs.length).forEach((pt, k) => {
+            attach.push({ at: pt, compId: inst.id, pinId: inst.inputs[k].id, isOutput: false });
+          });
+          continue;
         }
 
-        let inst = createComponentInstance(nativeType, 0, 0);
-        if (isGate && inputPoints.length > 2) {
-          const n = Math.min(MAX_IMPORT_GATE_INPUTS, inputPoints.length);
-          inst.inputs = Array.from({ length: n }).map((_, k) => ({
-            id: `${inst.id}_in${k}`,
-            name: String.fromCharCode(65 + k),
-            type: 'input' as const,
-            value: 0 as const,
-            x: 0,
-            y: 0,
-          }));
-          inst.state = { ...inst.state, gateInputsCount: n };
+        if (nativeType === 'splitter') {
+          // Logisim splitter: combined end at loc; bitN = end index from 0, 'none' = not mapped (ours: end from 1, 0 = none)
+          const fanout = num(attr.fanout, 2);
+          const incoming = num(attr.incoming, 2);
+          const dflt = splitterDistribution(fanout, incoming);
+          const bitEnd = Array.from({ length: incoming }, (_, b) => {
+            const v = attr[`bit${b}`];
+            if (v === undefined) return dflt[b];
+            if (v === 'none') return 0;
+            const e = parseInt(v, 10);
+            return Number.isFinite(e) && e >= 0 && e < fanout ? e + 1 : 0;
+          });
+          // Evolution splitters go up to 64 bits (a real-time clock's output): ours keep the low 32 with their ends
+          if (incoming > 32) {
+            warnings.push(`${where}: ${incoming} bitlik; burada en çok 32 bit olduğundan yalnız alt 32 bit (uçlarıyla birlikte) alındı.`);
+            bitEnd.length = 32;
+          }
+          const appear = attr.appear === 'right' ? 'right' : attr.appear === 'center' || attr.appear === 'legacy' ? 'center' : 'left';
+          let inst = configureSplitter(createComponentInstance('splitter', 0, 0), { incoming: bitEnd.length, fanout, appear, bitEnd });
+          inst.rotation = rot as 0 | 90 | 180 | 270;
+          const ends = splitterEnds(attr);
+          place(inst, inst.inputs[0].id, loc, label, [[inst.inputs[0].id, loc], ...inst.outputs.map((p, i): [string, Pt] => [p.id, at(loc, ends[i])])]);
+          continue;
         }
-        inst.rotation = rot as 0 | 90 | 180 | 270;
-        // Output Value applies to the gate that drives the net (the last one of a split wide gate)
-        if (outMode) inst.state = { ...inst.state, outputMode: outMode };
-        if (gateNegated.length) inst.state = { ...inst.state, negated: gateNegated };
-        // A Logisim XOR without the attribute is "exactly one 1" (its default); ours defaults to parity
-        if ((nativeType === 'xor' || nativeType === 'xnor') && xorMode !== 'odd') inst.state = { ...inst.state, xorMode: 'one' };
-        if (width > 1) inst = setGateWidth(inst, width);
-        inst = updatePinPositions(inst);
-        // Put our output pin exactly on the (scaled) Logisim anchor
-        const out = inst.outputs[0];
-        inst = updatePinPositions({ ...inst, x: anchor.x - out.x, y: anchor.y - out.y });
-        if (label) inst.label = label;
-        components.push(inst);
-
-        attach.push({ at: loc, compId: inst.id, pinId: inst.outputs[0].id, isOutput: true });
-        inputPoints.slice(0, inst.inputs.length).forEach((pt, k) => {
-          attach.push({ at: pt, compId: inst.id, pinId: inst.inputs[k].id, isOutput: false });
-        });
-        continue;
-      }
-
-      if (nativeType === 'splitter') {
-        // Logisim splitter: combined end at loc; bitN = end index from 0, 'none' = not mapped (ours: end from 1, 0 = none)
-        const fanout = num(attr.fanout, 2);
-        const incoming = num(attr.incoming, 2);
-        const dflt = splitterDistribution(fanout, incoming);
-        const bitEnd = Array.from({ length: incoming }, (_, b) => {
-          const v = attr[`bit${b}`];
-          if (v === undefined) return dflt[b];
-          if (v === 'none') return 0;
-          const e = parseInt(v, 10);
-          return Number.isFinite(e) && e >= 0 && e < fanout ? e + 1 : 0;
-        });
-        // Evolution splitters go up to 64 bits (a real-time clock's output): ours keep the low 32 with their ends
-        if (incoming > 32) {
-          warnings.push(`${where}: ${incoming} bitlik; burada en çok 32 bit olduğundan yalnız alt 32 bit (uçlarıyla birlikte) alındı.`);
-          bitEnd.length = 32;
+        if (nativeType === 'bitExtender') {
+          const type = (['zero', 'one', 'sign', 'input'] as const).find((t) => t === attr.type) ?? 'zero';
+          const inst = configureBitExtender(createComponentInstance('bitExtender', 0, 0), { inWidth: num(attr.in_width, 8), outWidth: num(attr.out_width, 16), type });
+          const pts = extenderPoints(attr);
+          place(inst, inst.outputs[0].id, loc, label, [
+            [inst.outputs[0].id, loc],
+            [inst.inputs[0].id, at(loc, pts[0])],
+            ...(inst.inputs[1] ? ([[inst.inputs[1].id, at(loc, pts[1])]] as Array<[string, Pt]>) : []),
+          ]);
+          continue;
         }
-        const appear = attr.appear === 'right' ? 'right' : attr.appear === 'center' || attr.appear === 'legacy' ? 'center' : 'left';
-        let inst = configureSplitter(createComponentInstance('splitter', 0, 0), { incoming: bitEnd.length, fanout, appear, bitEnd });
-        inst.rotation = rot as 0 | 90 | 180 | 270;
-        const ends = splitterEnds(attr);
-        place(inst, inst.inputs[0].id, loc, label, [[inst.inputs[0].id, loc], ...inst.outputs.map((p, i): [string, Pt] => [p.id, at(loc, ends[i])])]);
-        continue;
-      }
-      if (nativeType === 'bitExtender') {
-        const type = (['zero', 'one', 'sign', 'input'] as const).find((t) => t === attr.type) ?? 'zero';
-        const inst = configureBitExtender(createComponentInstance('bitExtender', 0, 0), { inWidth: num(attr.in_width, 8), outWidth: num(attr.out_width, 16), type });
-        const pts = extenderPoints(attr);
-        place(inst, inst.outputs[0].id, loc, label, [
-          [inst.outputs[0].id, loc],
-          [inst.inputs[0].id, at(loc, pts[0])],
-          ...(inst.inputs[1] ? ([[inst.inputs[1].id, at(loc, pts[1])]] as Array<[string, Pt]>) : []),
-        ]);
-        continue;
-      }
-      if (nativeType === 'bitSelector') {
-        let inst = configureBitSelector(createComponentInstance('bitSelector', 0, 0), { dataWidth: num(attr.width, 8), groupWidth: num(attr.group, 1) });
-        inst.rotation = rot as 0 | 90 | 180 | 270;
-        const [d, s] = BIT_SELECTOR_POINTS[part.facing] ?? BIT_SELECTOR_POINTS.east;
-        inst = updatePinPositions(inst);
-        place(inst, inst.outputs[0].id, loc, label, [
-          [inst.outputs[0].id, loc],
-          [inst.inputs[0].id, at(loc, d)],
-          [inst.inputs[1].id, at(loc, s)],
-        ]);
-        continue;
-      }
-      if (PLEXER_TYPES.has(nativeType)) {
-        const kind = nativeType as LogisimPlexer;
-        const st = plexerSettings(kind, attr);
-        let inst = createComponentInstance(kind, 0, 0);
-        inst = {
-          ...inst,
-          rotation: rot as 0 | 90 | 180 | 270,
-          state: { ...inst.state, plexDisabled: st.disabled, plexTristate: st.tristate, selectLoc: st.selloc },
-        };
-        inst = configurePlexer(inst, { select: st.select, width, enable: st.enable });
-        const keys = logisimPlexerPortKeys(kind, st.select, st.enable);
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const anchorKey = kind === 'demultiplexer' ? 'in' : kind === 'decoder' ? 'sel' : 'out';
-        place(
-          inst,
-          idOf(anchorKey)!,
-          loc,
-          label,
-          keys.map((k, j): [string, Pt | null] => [idOf(k) ?? '', at(loc, st.ports[j])])
-        );
-        continue;
-      }
-      if (ARITH_TYPES.has(nativeType)) {
-        // Exact Logisim geometry: the frame's anchor is the Logisim loc, every pin on its connection point
-        const st = logisimArithSettings(nativeType, attr, fileSource);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        let inst = createComponentInstance(nativeType, 0, 0);
-        inst = {
-          ...inst,
-          state: {
-            ...inst.state,
-            ...(st.mode ? { arithMode: st.mode } : {}),
-            ...(st.shiftType ? { shiftType: st.shiftType as 'll' } : {}),
-            ...(st.findType ? { findType: st.findType as 'low1' } : {}),
-          },
-        };
-        inst = configureArith(inst, { width: st.width, inputs: st.inputs });
-        const g = arithGeometry(nativeType, st.inputs);
-        inst = updatePinPositions({ ...inst, x: anchor.x - g.anchor.x, y: anchor.y - g.anchor.y });
-        if (label) inst.label = label;
-        components.push(inst);
-        for (const { key: k, off } of logisimArithPorts(nativeType, st.inputs)) {
-          const pin = [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k);
-          if (pin) attach.push({ at: at(loc, off), compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        if (nativeType === 'bitSelector') {
+          let inst = configureBitSelector(createComponentInstance('bitSelector', 0, 0), { dataWidth: num(attr.width, 8), groupWidth: num(attr.group, 1) });
+          inst.rotation = rot as 0 | 90 | 180 | 270;
+          const [d, s] = BIT_SELECTOR_POINTS[part.facing] ?? BIT_SELECTOR_POINTS.east;
+          inst = updatePinPositions(inst);
+          place(inst, inst.outputs[0].id, loc, label, [
+            [inst.outputs[0].id, loc],
+            [inst.inputs[0].id, at(loc, d)],
+            [inst.inputs[1].id, at(loc, s)],
+          ]);
+          continue;
         }
-        continue;
-      }
-      if (MEM_TYPES.has(nativeType)) {
-        // Every pin on its Logisim connection point (classic or evolution look); ours is drawn classic
-        const st = memSettings(nativeType, attr, loc);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        let inst = createComponentInstance(nativeType, 0, 0);
-        inst = configureMem(inst, { width: st.width, length: st.length, parallel: st.parallel });
-        const state = { ...inst.state, trigger: st.trigger };
-        if (nativeType === 'counter') {
-          if (st.max === undefined) delete state.counterMax;
-          else state.counterMax = st.max;
-          state.counterGoal = st.goal;
-        }
-        inst = { ...inst, state };
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const offOf = new Map(st.ports.map((p) => [p.key, p.off]));
-        const anchorKey = nativeType === 'shiftRegister' ? 'in' : 'q';
-        place(
-          inst,
-          idOf(anchorKey)!,
-          at(loc, offOf.get(anchorKey) ?? { x: 0, y: 0 }),
-          label,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        const wired = (k: string) => {
-          const off = offOf.get(k);
-          return !!off && netAt(at(loc, off)) !== null;
-        };
-        // Logisim 2.7.1 counts down while LD = 1 and CT is not 0; ours loads first, like evolution
-        if (nativeType === 'counter' && !evolutionFile && wired('ld'))
-          warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
-        if (nativeType === 'counter' && !evolutionFile && wired('ud'))
-          warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
-        continue;
-      }
-      if (isTtlType(nativeType)) {
-        // Evolution TTL chip: turned like its facing, every pin joined at its evolution connection point
-        const chip = ttlChipOf(nativeType)!;
-        const vccGnd = attr.VccGndPorts === 'true';
-        let inst = configureTtl(createComponentInstance(nativeType, 0, 0), { vccGnd });
-        inst = { ...inst, rotation: rot ? (rot as 90 | 180 | 270) : undefined };
-        if (attr.ShowInternalStructure === 'true') inst = { ...inst, state: { ...inst.state, ttlInternal: true } };
-        if (chip.expire) {
-          // 74123 R / C: kΩ / pF numbers (evolution also reads 10k, 4.7uF); an unreadable value keeps the default
-          const rc = ttlRcOf({});
-          const read = (name: string, unit: 'kohm' | 'pf', pair: [number, number], h: number) => {
-            const raw = attr[name];
-            if (raw === undefined) return;
-            const n = parseEng(raw, unit);
-            if (n === undefined) warnings.push(`${where}: ${name} = "${raw}" okunamadı (aralık dışı ya da geçersiz), varsayılan kullanıldı.`);
-            else pair[h] = n;
+        if (PLEXER_TYPES.has(nativeType)) {
+          const kind = nativeType as LogisimPlexer;
+          const st = plexerSettings(kind, attr);
+          let inst = createComponentInstance(kind, 0, 0);
+          inst = {
+            ...inst,
+            rotation: rot as 0 | 90 | 180 | 270,
+            state: { ...inst.state, plexDisabled: st.disabled, plexTristate: st.tristate, selectLoc: st.selloc },
           };
-          for (const h of [0, 1]) {
-            read(`${h + 1}Rext`, 'kohm', rc.rext, h);
-            read(`${h + 1}Cext`, 'pf', rc.cext, h);
-          }
-          inst = { ...inst, state: { ...inst.state, ttlRext: rc.rext, ttlCext: rc.cext } };
-        }
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const ports = ttlImportPorts(nativeType, vccGnd).map(({ key: k, off }) => ({ k, pt: at(loc, rotateOffset(off, rot)) }));
-        place(
-          inst,
-          idOf(ports[0].k)!,
-          ports[0].pt,
-          label,
-          ports.flatMap(({ k, pt }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, pt]] : [];
-          })
-        );
-        if (ttlEvoRemapped(chip))
-          warnings.push(
-            `${where}: Logisim-evolution'ın ${chip.id}'sı VCC/GND'yi ${ttlEvoPin(chip, chip.vcc)}/${ttlEvoPin(chip, chip.gnd)} bacaklarında tutuyor; burada gerçek dizilim (VCC ${chip.vcc}, GND ${chip.gnd}) kullanılır, bağlantılar aynı isimli bacaklara taşındı.`
+          inst = configurePlexer(inst, { select: st.select, width, enable: st.enable });
+          const keys = logisimPlexerPortKeys(kind, st.select, st.enable);
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const anchorKey = kind === 'demultiplexer' ? 'in' : kind === 'decoder' ? 'sel' : 'out';
+          place(
+            inst,
+            idOf(anchorKey)!,
+            loc,
+            label,
+            keys.map((k, j): [string, Pt | null] => [idOf(k) ?? '', at(loc, st.ports[j])])
           );
-        continue;
-      }
-      if (RAM_TYPES.has(nativeType)) {
-        // Every pin on its Logisim connection point (2.7.1 or evolution layout); ours keeps its own drawing
-        const st = ramSettings(nativeType, attr);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        let inst = configureRam(createComponentInstance(nativeType, 0, 0), st.cfg);
-        const state = { ...inst.state };
-        if (nativeType === 'random') {
-          state.trigger = st.cfg.trigger;
-          if (st.seed) state.randomSeed = st.seed;
+          continue;
         }
-        if ((nativeType === 'ram' || nativeType === 'dualRam') && st.cfg.flavor === 'evolution') {
-          state.ramAsyncRead = st.asyncRead;
-          state.ramReadBehavior = st.readBehavior;
-        }
-        if (st.pages && Object.keys(st.pages).length) state.memPages = st.pages;
-        inst = { ...inst, state };
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const anchorKey = nativeType === 'random' ? 'out' : 'd';
-        const anchorOff = st.ports.find((p) => p.key === anchorKey)!.off;
-        place(
-          inst,
-          idOf(anchorKey)!,
-          at(loc, anchorOff),
-          label,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        continue;
-      }
-      if (BFH_TYPES.has(nativeType)) {
-        // Evolution BFH part (no facing): every pin on its evolution connection point, our part unrotated
-        const st = logisimBfhSettings(nativeType, attr);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        const inst = configureBfh(createComponentInstance(nativeType, 0, 0), { binBits: st.bits });
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const first = st.ports[0];
-        place(
-          inst,
-          idOf(first.key)!,
-          at(loc, first.off),
-          label,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        continue;
-      }
-      if (IO5C_TYPES.has(nativeType)) {
-        // Keyboard / TTY / Telnet (no facing): every pin on its Logisim connection point, our part unrotated, empty
-        // (Logisim keeps no buffer or screen contents in the file)
-        const st = logisimIo5cSettings(nativeType, attr);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        let inst = createComponentInstance(nativeType, 0, 0);
-        inst = configureIo5c({ ...inst, state: { ...inst.state, ...st.state } }, st.cfg);
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const first = st.ports[0];
-        place(
-          inst,
-          idOf(first.key)!,
-          at(loc, first.off),
-          nativeType === 'telnet' ? label : undefined,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        continue;
-      }
-      if (nativeType === 'textLabel') {
-        // Logisim's Text (no pins, no facing): its anchor on the (scaled) loc, the font size as written. Evolution
-        // drops a Text with no text while loading (2.7.1 keeps it, invisible): it is left out
-        const st = logisimTextSettings(attr, evolutionFile);
-        if (st.cfg.text === '') continue;
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        const p = scaled(loc);
-        const t = configureText(createComponentInstance('textLabel', 0, 0), st.cfg);
-        components.push(textAt(t, p.x, p.y));
-        continue;
-      }
-      if (nativeType === 'image') {
-        // Evolution's Image (no pins, no facing, no label): its top-left corner on the (scaled) loc; the frame keeps
-        // evolution's size so the file goes back unchanged
-        const st = logisimImageSettings(attr);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        const p = scaled(loc);
-        components.push(configureImage(createComponentInstance('image', p.x, p.y), st.cfg));
-        continue;
-      }
-      if (nativeType === 'rgbVideo') {
-        // Evolution's RGB Video (no facing, no label): every pin on its connection point, our part unrotated, the
-        // screen black (evolution keeps no image in the file)
-        const st = logisimVideoSettings(attr);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        const inst = configureVideo(createComponentInstance('rgbVideo', 0, 0), st.cfg);
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const first = st.ports[0];
-        place(
-          inst,
-          idOf(first.key)!,
-          at(loc, first.off),
-          undefined,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        continue;
-      }
-      if (IO_IMPORT.has(nativeType)) {
-        // Every pin on its Logisim connection point; ours keeps its own drawing, turned like its facing (DIP switch,
-        // Aşama 5a parts; a joystick's body too, although evolution's stays put: connections are wires anyway)
-        const io5 = IO5_TYPES.has(nativeType);
-        const st = io5 ? logisimIo5Settings(nativeType, attr) : logisimIoSettings(nativeType, attr, evolutionFile);
-        for (const n of st.notes) warnings.push(`${where}: ${n}`);
-        let inst = createComponentInstance(nativeType, 0, 0);
-        inst = { ...inst, rotation: st.rot || undefined, state: { ...inst.state, ...st.state } };
-        inst = io5 ? configureIo5(inst, st.cfg as Partial<Io5Config>) : configureIo(inst, st.cfg as Partial<IoConfig>);
-        const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
-        const first = st.ports[0];
-        place(
-          inst,
-          idOf(first.key)!,
-          at(loc, first.off),
-          label,
-          st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
-            const id = idOf(k);
-            return id ? [[id, at(loc, off)]] : [];
-          })
-        );
-        continue;
-      }
-      if (nativeType === 'subcircuit' && part.sub) {
-        // Drawn like the file draws it, turned by its facing relative to the anchor's, the anchor on the (scaled) loc
-        const { def, inOffsets, outOffsets } = part.sub;
-        const turn = subRotation(part.sub, part.facing);
-        const inst = { ...createSubcircuitInstance(def, 0, 0, label || def.name), rotation: turn || undefined };
-        const lay = subcircuitLayout(def);
-        let a = { x: 0, y: 0 };
-        if (lay) {
-          // the anchor's body point after the turn, as updatePinPositions turns the pins (about the body centre)
-          const [cx, cy] = [lay.width / 2, lay.height / 2];
-          const [dx, dy] = [lay.anchor.x - cx, lay.anchor.y - cy];
-          const t = turn === 90 ? { x: cx - dy, y: cy + dx } : turn === 180 ? { x: cx - dx, y: cy - dy } : turn === 270 ? { x: cx + dy, y: cy - dx } : lay.anchor;
-          a = { x: Math.round(t.x / 10) * 10, y: Math.round(t.y / 10) * 10 };
-        }
-        const placed = updatePinPositions({ ...inst, x: anchor.x - a.x, y: anchor.y - a.y });
-        components.push(placed);
-        placed.inputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(inOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: false }));
-        placed.outputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(outOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: true }));
-        continue;
-      }
-
-      let inst = updatePinPositions(createComponentInstance(nativeType, 0, 0));
-      if (nativeType === 'tunnel') {
-        // Logisim tunnel: one connection point at loc; ours joins every tunnel with the same label (width follows the net)
-        const pin = inst.inputs[0];
-        inst = updatePinPositions({ ...inst, x: anchor.x - pin.x, y: anchor.y - pin.y, label: label || 'Tünel' });
-        components.push(inst);
-        attach.push({ at: loc, compId: inst.id, pinId: inst.inputs[0].id, isOutput: false });
-        continue;
-      }
-      // Wide input / output pins and constants keep their width (and a constant its value)
-      if ((nativeType === 'switch' || nativeType === 'led') && width > 1) inst = setBitWidth(inst, width);
-      if (nativeType === 'constant') {
-        inst = setBitWidth(inst, width);
-        const v = parseConstValue(attr.value ?? attr.val);
-        inst.state = { ...inst.state, constValue: width >= 32 ? v >>> 0 : v % 2 ** width };
-      }
-      if (nativeType === 'probe' && attr.radix && RADIX[attr.radix]) inst.state = { ...inst.state, radix: RADIX[attr.radix] };
-      const pinsOf = [...inst.inputs, ...inst.outputs];
-      if (pinsOf.length === 1) {
-        // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
-        inst = updatePinPositions({ ...inst, x: anchor.x - pinsOf[0].x, y: anchor.y - pinsOf[0].y });
-        if (label) inst.label = label;
-        // Logisim's pull attribute: 0 (default), 1 or X
-        if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
-        // Three-state input Pin: tristate="true" (2.7.1, early evolution) or behavior="tristate" (evolution 4+);
-        // without either the writer's default: 2.7.1's Pin is three-state, evolution's is not
-        if (nativeType === 'switch' && part.compName.trim().toLowerCase() === 'pin') {
-          const a = part.attr;
-          // a 2.7.1 Pin with a pull resistor reads 0/1 instead of floating (pull is not modelled here)
-          const pulled = a.pull === 'up' || a.pull === 'down';
-          const tri = a.behavior !== undefined ? a.behavior === 'tristate' : a.tristate !== undefined ? a.tristate === 'true' && !pulled : !evolutionFile && !pulled;
-          if (tri) inst = { ...inst, state: { ...inst.state, pinTristate: true, ...floatingSwitchState(width) } };
-        }
-        components.push(inst);
-        const pin = [...inst.inputs, ...inst.outputs][0];
-        attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
-        // A Logisim Pin is a port of its circuit when the circuit is used as a subcircuit
-        if (part.compName.trim().toLowerCase() === 'pin') {
-          pins.push({ loc, facing: part.facing, isOutput: part.isOutput, label: label || '', width, compId: inst.id, pinId: pin.id });
-        }
-        continue;
-      }
-
-      // Other chips: their Logisim geometry is not modelled; connect wire endpoints near each of our pins
-      inst = updatePinPositions({ ...inst, x: anchor.x, y: anchor.y });
-      if (label) inst.label = label;
-      components.push(inst);
-      warnings.push(`${where}: bağlantıları yaklaşık olarak kuruldu, kontrol edin.`);
-      for (const pin of [...inst.inputs, ...inst.outputs]) {
-        let best: Pt | null = null;
-        let bestD = 30;
-        for (const p of endpoints.values()) {
-          const sp = scaled(p);
-          const d = Math.hypot(sp.x - pin.x, sp.y - pin.y);
-          if (d < bestD) {
-            bestD = d;
-            best = p;
+        if (ARITH_TYPES.has(nativeType)) {
+          // Exact Logisim geometry: the frame's anchor is the Logisim loc, every pin on its connection point
+          const st = logisimArithSettings(nativeType, attr, fileSource);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = {
+            ...inst,
+            state: {
+              ...inst.state,
+              ...(st.mode ? { arithMode: st.mode } : {}),
+              ...(st.shiftType ? { shiftType: st.shiftType as 'll' } : {}),
+              ...(st.findType ? { findType: st.findType as 'low1' } : {}),
+            },
+          };
+          inst = configureArith(inst, { width: st.width, inputs: st.inputs });
+          const g = arithGeometry(nativeType, st.inputs);
+          inst = updatePinPositions({ ...inst, x: anchor.x - g.anchor.x, y: anchor.y - g.anchor.y });
+          if (label) inst.label = label;
+          components.push(inst);
+          for (const { key: k, off } of logisimArithPorts(nativeType, st.inputs)) {
+            const pin = [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k);
+            if (pin) attach.push({ at: at(loc, off), compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
           }
+          continue;
         }
-        if (best) attach.push({ at: best, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        if (MEM_TYPES.has(nativeType)) {
+          // Every pin on its Logisim connection point (classic or evolution look); ours is drawn classic
+          const st = memSettings(nativeType, attr, loc);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = configureMem(inst, { width: st.width, length: st.length, parallel: st.parallel });
+          const state = { ...inst.state, trigger: st.trigger };
+          if (nativeType === 'counter') {
+            if (st.max === undefined) delete state.counterMax;
+            else state.counterMax = st.max;
+            state.counterGoal = st.goal;
+          }
+          inst = { ...inst, state };
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const offOf = new Map(st.ports.map((p) => [p.key, p.off]));
+          const anchorKey = nativeType === 'shiftRegister' ? 'in' : 'q';
+          place(
+            inst,
+            idOf(anchorKey)!,
+            at(loc, offOf.get(anchorKey) ?? { x: 0, y: 0 }),
+            label,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          const wired = (k: string) => {
+            const off = offOf.get(k);
+            return !!off && netAt(at(loc, off)) !== null;
+          };
+          // Logisim 2.7.1 counts down while LD = 1 and CT is not 0; ours loads first, like evolution
+          if (nativeType === 'counter' && !evolutionFile && wired('ld'))
+            warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
+          if (nativeType === 'counter' && !evolutionFile && wired('ud'))
+            warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
+          continue;
+        }
+        if (isTtlType(nativeType)) {
+          // Evolution TTL chip: turned like its facing, every pin joined at its evolution connection point
+          const chip = ttlChipOf(nativeType)!;
+          const vccGnd = attr.VccGndPorts === 'true';
+          let inst = configureTtl(createComponentInstance(nativeType, 0, 0), { vccGnd });
+          inst = { ...inst, rotation: rot ? (rot as 90 | 180 | 270) : undefined };
+          if (attr.ShowInternalStructure === 'true') inst = { ...inst, state: { ...inst.state, ttlInternal: true } };
+          if (chip.expire) {
+            // 74123 R / C: kΩ / pF numbers (evolution also reads 10k, 4.7uF); an unreadable value keeps the default
+            const rc = ttlRcOf({});
+            const read = (name: string, unit: 'kohm' | 'pf', pair: [number, number], h: number) => {
+              const raw = attr[name];
+              if (raw === undefined) return;
+              const n = parseEng(raw, unit);
+              if (n === undefined) warnings.push(`${where}: ${name} = "${raw}" okunamadı (aralık dışı ya da geçersiz), varsayılan kullanıldı.`);
+              else pair[h] = n;
+            };
+            for (const h of [0, 1]) {
+              read(`${h + 1}Rext`, 'kohm', rc.rext, h);
+              read(`${h + 1}Cext`, 'pf', rc.cext, h);
+            }
+            inst = { ...inst, state: { ...inst.state, ttlRext: rc.rext, ttlCext: rc.cext } };
+          }
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const ports = ttlImportPorts(nativeType, vccGnd).map(({ key: k, off }) => ({ k, pt: at(loc, rotateOffset(off, rot)) }));
+          place(
+            inst,
+            idOf(ports[0].k)!,
+            ports[0].pt,
+            label,
+            ports.flatMap(({ k, pt }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, pt]] : [];
+            })
+          );
+          if (ttlEvoRemapped(chip))
+            warnings.push(
+              `${where}: Logisim-evolution'ın ${chip.id}'sı VCC/GND'yi ${ttlEvoPin(chip, chip.vcc)}/${ttlEvoPin(chip, chip.gnd)} bacaklarında tutuyor; burada gerçek dizilim (VCC ${chip.vcc}, GND ${chip.gnd}) kullanılır, bağlantılar aynı isimli bacaklara taşındı.`
+            );
+          continue;
+        }
+        if (RAM_TYPES.has(nativeType)) {
+          // Every pin on its Logisim connection point (2.7.1 or evolution layout); ours keeps its own drawing
+          const st = ramSettings(nativeType, attr);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          let inst = configureRam(createComponentInstance(nativeType, 0, 0), st.cfg);
+          const state = { ...inst.state };
+          if (nativeType === 'random') {
+            state.trigger = st.cfg.trigger;
+            if (st.seed) state.randomSeed = st.seed;
+          }
+          if ((nativeType === 'ram' || nativeType === 'dualRam') && st.cfg.flavor === 'evolution') {
+            state.ramAsyncRead = st.asyncRead;
+            state.ramReadBehavior = st.readBehavior;
+          }
+          if (st.pages && Object.keys(st.pages).length) state.memPages = st.pages;
+          inst = { ...inst, state };
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const anchorKey = nativeType === 'random' ? 'out' : 'd';
+          const anchorOff = st.ports.find((p) => p.key === anchorKey)!.off;
+          place(
+            inst,
+            idOf(anchorKey)!,
+            at(loc, anchorOff),
+            label,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          continue;
+        }
+        if (BFH_TYPES.has(nativeType)) {
+          // Evolution BFH part (no facing): every pin on its evolution connection point, our part unrotated
+          const st = logisimBfhSettings(nativeType, attr);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          const inst = configureBfh(createComponentInstance(nativeType, 0, 0), { binBits: st.bits });
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const first = st.ports[0];
+          place(
+            inst,
+            idOf(first.key)!,
+            at(loc, first.off),
+            label,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          continue;
+        }
+        if (IO5C_TYPES.has(nativeType)) {
+          // Keyboard / TTY / Telnet (no facing): every pin on its Logisim connection point, our part unrotated, empty
+          // (Logisim keeps no buffer or screen contents in the file)
+          const st = logisimIo5cSettings(nativeType, attr);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = configureIo5c({ ...inst, state: { ...inst.state, ...st.state } }, st.cfg);
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const first = st.ports[0];
+          place(
+            inst,
+            idOf(first.key)!,
+            at(loc, first.off),
+            nativeType === 'telnet' ? label : undefined,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          continue;
+        }
+        if (nativeType === 'textLabel') {
+          // Logisim's Text (no pins, no facing): its anchor on the (scaled) loc, the font size as written. Evolution
+          // drops a Text with no text while loading (2.7.1 keeps it, invisible): it is left out
+          const st = logisimTextSettings(attr, evolutionFile);
+          if (st.cfg.text === '') continue;
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          const p = scaled(loc);
+          const t = configureText(createComponentInstance('textLabel', 0, 0), st.cfg);
+          components.push(textAt(t, p.x, p.y));
+          continue;
+        }
+        if (nativeType === 'image') {
+          // Evolution's Image (no pins, no facing, no label): its top-left corner on the (scaled) loc; the frame keeps
+          // evolution's size so the file goes back unchanged
+          const st = logisimImageSettings(attr);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          const p = scaled(loc);
+          components.push(configureImage(createComponentInstance('image', p.x, p.y), st.cfg));
+          continue;
+        }
+        if (nativeType === 'rgbVideo') {
+          // Evolution's RGB Video (no facing, no label): every pin on its connection point, our part unrotated, the
+          // screen black (evolution keeps no image in the file)
+          const st = logisimVideoSettings(attr);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          const inst = configureVideo(createComponentInstance('rgbVideo', 0, 0), st.cfg);
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const first = st.ports[0];
+          place(
+            inst,
+            idOf(first.key)!,
+            at(loc, first.off),
+            undefined,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          continue;
+        }
+        if (IO_IMPORT.has(nativeType)) {
+          // Every pin on its Logisim connection point; ours keeps its own drawing, turned like its facing (DIP switch,
+          // Aşama 5a parts; a joystick's body too, although evolution's stays put: connections are wires anyway)
+          const io5 = IO5_TYPES.has(nativeType);
+          const st = io5 ? logisimIo5Settings(nativeType, attr) : logisimIoSettings(nativeType, attr, evolutionFile);
+          for (const n of st.notes) warnings.push(`${where}: ${n}`);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = { ...inst, rotation: st.rot || undefined, state: { ...inst.state, ...st.state } };
+          inst = io5 ? configureIo5(inst, st.cfg as Partial<Io5Config>) : configureIo(inst, st.cfg as Partial<IoConfig>);
+          const idOf = (k: string) => [...inst.inputs, ...inst.outputs].find((p) => pinKey(inst, p) === k)?.id;
+          const first = st.ports[0];
+          place(
+            inst,
+            idOf(first.key)!,
+            at(loc, first.off),
+            label,
+            st.ports.flatMap(({ key: k, off }): Array<[string, Pt]> => {
+              const id = idOf(k);
+              return id ? [[id, at(loc, off)]] : [];
+            })
+          );
+          continue;
+        }
+        if (nativeType === 'subcircuit' && part.sub) {
+          // Drawn like the file draws it, turned by its facing relative to the anchor's, the anchor on the (scaled) loc
+          const { def, inOffsets, outOffsets } = part.sub;
+          const turn = subRotation(part.sub, part.facing);
+          const inst = { ...createSubcircuitInstance(def, 0, 0, label || def.name), rotation: turn || undefined };
+          const lay = subcircuitLayout(def);
+          let a = { x: 0, y: 0 };
+          if (lay) {
+            // the anchor's body point after the turn, as updatePinPositions turns the pins (about the body centre)
+            const [cx, cy] = [lay.width / 2, lay.height / 2];
+            const [dx, dy] = [lay.anchor.x - cx, lay.anchor.y - cy];
+            const t = turn === 90 ? { x: cx - dy, y: cy + dx } : turn === 180 ? { x: cx - dx, y: cy - dy } : turn === 270 ? { x: cx + dy, y: cy - dx } : lay.anchor;
+            a = { x: Math.round(t.x / 10) * 10, y: Math.round(t.y / 10) * 10 };
+          }
+          const placed = updatePinPositions({ ...inst, x: anchor.x - a.x, y: anchor.y - a.y });
+          components.push(placed);
+          placed.inputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(inOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: false }));
+          placed.outputs.forEach((p, k) => attach.push({ at: at(loc, rotateOffset(outOffsets[k], turn)), compId: placed.id, pinId: p.id, isOutput: true }));
+          continue;
+        }
+
+        let inst = updatePinPositions(createComponentInstance(nativeType, 0, 0));
+        if (nativeType === 'tunnel') {
+          // Logisim tunnel: one connection point at loc; ours joins every tunnel with the same label (width follows the net)
+          const pin = inst.inputs[0];
+          inst = updatePinPositions({ ...inst, x: anchor.x - pin.x, y: anchor.y - pin.y, label: label || 'Tünel' });
+          components.push(inst);
+          attach.push({ at: loc, compId: inst.id, pinId: inst.inputs[0].id, isOutput: false });
+          continue;
+        }
+        // Wide input / output pins and constants keep their width (and a constant its value)
+        if ((nativeType === 'switch' || nativeType === 'led') && width > 1) inst = setBitWidth(inst, width);
+        if (nativeType === 'constant') {
+          inst = setBitWidth(inst, width);
+          const v = parseConstValue(attr.value ?? attr.val);
+          inst.state = { ...inst.state, constValue: width >= 32 ? v >>> 0 : v % 2 ** width };
+        }
+        if (nativeType === 'probe' && attr.radix && RADIX[attr.radix]) inst.state = { ...inst.state, radix: RADIX[attr.radix] };
+        const pinsOf = [...inst.inputs, ...inst.outputs];
+        if (pinsOf.length === 1) {
+          // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
+          inst = updatePinPositions({ ...inst, x: anchor.x - pinsOf[0].x, y: anchor.y - pinsOf[0].y });
+          if (label) inst.label = label;
+          // Logisim's pull attribute: 0 (default), 1 or X
+          if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
+          // Three-state input Pin: tristate="true" (2.7.1, early evolution) or behavior="tristate" (evolution 4+);
+          // without either the writer's default: 2.7.1's Pin is three-state, evolution's is not
+          if (nativeType === 'switch' && part.compName.trim().toLowerCase() === 'pin') {
+            const a = part.attr;
+            // a 2.7.1 Pin with a pull resistor reads 0/1 instead of floating (pull is not modelled here)
+            const pulled = a.pull === 'up' || a.pull === 'down';
+            const tri = a.behavior !== undefined ? a.behavior === 'tristate' : a.tristate !== undefined ? a.tristate === 'true' && !pulled : !evolutionFile && !pulled;
+            if (tri) inst = { ...inst, state: { ...inst.state, pinTristate: true, ...floatingSwitchState(width) } };
+          }
+          components.push(inst);
+          const pin = [...inst.inputs, ...inst.outputs][0];
+          attach.push({ at: loc, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+          // A Logisim Pin is a port of its circuit when the circuit is used as a subcircuit
+          if (part.compName.trim().toLowerCase() === 'pin') {
+            pins.push({ loc, facing: part.facing, isOutput: part.isOutput, label: label || '', width, compId: inst.id, pinId: pin.id });
+          }
+          continue;
+        }
+
+        // Other chips: their Logisim geometry is not modelled; connect wire endpoints near each of our pins
+        inst = updatePinPositions({ ...inst, x: anchor.x, y: anchor.y });
+        if (label) inst.label = label;
+        components.push(inst);
+        warnings.push(`${where}: bağlantıları yaklaşık olarak kuruldu, kontrol edin.`);
+        for (const pin of [...inst.inputs, ...inst.outputs]) {
+          let best: Pt | null = null;
+          let bestD = 30;
+          for (const p of endpoints.values()) {
+            const sp = scaled(p);
+            const d = Math.hypot(sp.x - pin.x, sp.y - pin.y);
+            if (d < bestD) {
+              bestD = d;
+              best = p;
+            }
+          }
+          if (best) attach.push({ at: best, compId: inst.id, pinId: pin.id, isOutput: pin.type === 'output' });
+        }
+      } finally {
+        // The part a dynamic appearance element's path names by factory name and location (DynamicElement.Path)
+        const made = components.slice(before).find((c) => c.type === 'subcircuit' || DYNAMIC_ELEMENT_OF[c.type]);
+        const k = `${part.compName}(${part.loc.x},${part.loc.y})`;
+        if (made && !partAt.has(k)) partAt.set(k, made.id);
       }
     }
 
@@ -2460,7 +2521,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
 
     skipped.forEach((count, what) => warnings.unshift(`Desteklenmeyen bileşen atlandı: ${what}${count > 1 ? ` ×${count}` : ''}`));
 
-    return { sheet: { name: circuitName, components, wires, warnings }, pins, signature: sig.join(';') };
+    return { sheet: { name: circuitName, components, wires, warnings }, pins, signature: sig.join(';'), partAt };
   };
 
   const sheets: ImportedCircuitSheet[] = [];

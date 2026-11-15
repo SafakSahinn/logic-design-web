@@ -1,12 +1,14 @@
 import type {
   AppearanceDynamicElement,
   AppearanceDynamicShape,
+  AppearanceFont,
   CircuitComponentInstance,
   ComponentType,
   CustomSubcircuit,
 } from '../types/circuit';
 import { getIo5cConfig, getIoConfig, getMemConfig } from './circuitEngine';
 import { peekSubcircuitDefinition } from './subcircuitManager';
+import type { AppearanceSvgElement } from './subcircuitAppearance';
 
 /**
  * Dynamic appearance elements, after Logisim-evolution's DynamicElement and its shapes (LedShape, RgbLedShape,
@@ -172,4 +174,175 @@ export function registerText(target: CircuitComponentInstance | null, live: bool
     s += v.toString(16);
   }
   return s;
+}
+
+// ---- .circ form: the visible-* elements of an <appear> block (DynamicElement.toSvgElement / parseSvgElement) ----
+
+/** Evolution's factory name of the part each element shows (what a path names it by) */
+export const DYNAMIC_FACTORY: Record<AppearanceDynamicElement, string> = {
+  led: 'LED',
+  rgbled: 'RGBLED',
+  sevensegment: '7-Segment Display',
+  hexdigit: 'Hex Digit Display',
+  register: 'Register',
+  counter: 'Counter',
+  probe: 'Probe',
+  tty: 'TTY',
+  dotmatrix: 'DotMatrix',
+  ledbar: 'LedBar',
+};
+
+const DYNAMIC_TAGS = new Set<string>(Object.keys(DYNAMIC_FACTORY).map((e) => `visible-${e}`));
+
+/** The element a visible-* tag reads as (null: one evolution has but we do not: visible-vga, visible-soc-cpu) */
+export function dynamicElementOfTag(tag: string): AppearanceDynamicElement | null {
+  return DYNAMIC_TAGS.has(tag) ? (tag.slice(8) as AppearanceDynamicElement) : null;
+}
+
+/** One step of a path as the file writes it: the part's factory name and location */
+export interface DynamicPathStep {
+  name: string;
+  x: number;
+  y: number;
+}
+
+/** Java Integer.parseInt of a trimmed string */
+function javaInt(v: string): number {
+  const t = v.trim();
+  if (!/^[-+]?\d+$/.test(t)) throw new Error(`bad integer: ${v}`);
+  return parseInt(t, 10);
+}
+
+/**
+ * DynamicElement.Path.fromSvgString: "/Name(x,y)/Name(x,y)...", a "/" or "\" in a name escaped with a backslash.
+ * Throws on a malformed path, as evolution does.
+ */
+export function parseDynamicPath(s: string): DynamicPathStep[] {
+  if (!s.startsWith('/')) throw new Error(`Bad path: ${s}`);
+  const parts = s.slice(1).split(/(?<!\\)\//);
+  // (Java's split drops trailing empty strings)
+  while (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
+  return parts.map((ss) => {
+    const p = ss.lastIndexOf('(');
+    const c = ss.lastIndexOf(',');
+    const e = ss.lastIndexOf(')');
+    if (e !== ss.length - 1 || p <= 0 || c <= p) throw new Error(`Bad path element: ${ss}`);
+    return {
+      name: ss.slice(0, p).replace(/\\\//g, '/').replace(/\\\\/g, '\\'),
+      x: javaInt(ss.slice(p + 1, c)),
+      y: javaInt(ss.slice(c + 1, e)),
+    };
+  });
+}
+
+/** DynamicElement.Path.toSvgString */
+export function dynamicPathString(steps: DynamicPathStep[]): string {
+  return steps.map((st) => `/${st.name.replace(/\\/g, '\\\\').replace(/\//g, '\\/')}(${st.x},${st.y})`).join('');
+}
+
+const sameFont = (f: AppearanceFont, d: { family: string; size: number }) =>
+  f.family.toLowerCase() === d.family.toLowerCase() && f.size === d.size && !f.bold && !f.italic;
+
+/** SvgReader.getFontAttribute; undefined when it is the default font */
+function readFont(attr: (n: string) => string | null, prefix: string, dflt: { family: string; size: number }): AppearanceFont | undefined {
+  const size = attr(`${prefix}font-size`);
+  const f: AppearanceFont = {
+    family: attr(`${prefix}font-family`) || dflt.family,
+    size: size && /^[-+]?\d+$/.test(size) ? parseInt(size, 10) : dflt.size,
+  };
+  if (attr(`${prefix}font-style`) === 'italic') f.italic = true;
+  if (attr(`${prefix}font-weight`) === 'bold') f.bold = true;
+  return sameFont(f, dflt) ? undefined : f;
+}
+
+/** SvgCreator.setFontAttribute */
+function writeFont(out: Array<[string, string]>, f: AppearanceFont, prefix: string) {
+  out.push([`${prefix}font-family`, f.family], [`${prefix}font-size`, String(f.size)]);
+  if (f.italic) out.push([`${prefix}font-style`, 'italic']);
+  if (f.bold) out.push([`${prefix}font-weight`, 'bold']);
+}
+
+const LABEL_LOCS = new Set(['left', 'right', 'top', 'bottom', 'center']);
+
+/** Integer.valueOf (no trim) */
+function strictInt(v: string): number {
+  if (!/^[-+]?\d+$/.test(v)) throw new Error(`bad integer: ${v}`);
+  return parseInt(v, 10);
+}
+
+const scaleDefault = (element: AppearanceDynamicElement) =>
+  element === 'sevensegment' || element === 'hexdigit' ? DYNAMIC_DEFAULTS.segmentScale : DYNAMIC_DEFAULTS.matrixScale;
+const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'rgbled']);
+const HAS_VALUE_FONT = new Set<AppearanceDynamicElement>(['register', 'counter', 'probe']);
+const HAS_SCALE = new Set<AppearanceDynamicElement>(['sevensegment', 'hexdigit', 'dotmatrix', 'ledbar']);
+
+/**
+ * A visible-* element as evolution reads it (AppearanceSvgReader.createShape, then parseSvgElement): its corner
+ * from x / y (Java (int) of a double), the size recomputed for the part it shows (`target`), label, label font
+ * and colour, stroke width (none written = 0) and the element's own value-* attribute. Throws on a bad number,
+ * as evolution does (it then drops the element).
+ */
+export function dynamicShapeFromSvg(
+  element: AppearanceDynamicElement,
+  attr: (n: string) => string | null,
+  path: string[],
+  target: CircuitComponentInstance
+): AppearanceDynamicShape {
+  const coord = (n: string) => {
+    const t = (attr(n) ?? '').trim().replace(/[dDfF]$/, '');
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(t)) throw new Error(`bad ${n}`);
+    return Math.trunc(parseFloat(t));
+  };
+  const s: AppearanceDynamicShape = { kind: 'dynamic', element, x: coord('x'), y: coord('y'), width: 0, height: 0, path };
+  const sw = attr('stroke-width');
+  if (sw !== null) s.strokeWidth = javaInt(sw);
+  const label = attr('label');
+  if (label !== null) {
+    const l = label.trim().toLowerCase();
+    if (LABEL_LOCS.has(l)) s.label = l as NonNullable<AppearanceDynamicShape['label']>;
+  }
+  const lf = readFont(attr, '', DYNAMIC_DEFAULTS.labelFont);
+  if (lf) s.labelFont = lf;
+  const lc = attr('label-color');
+  if (lc !== null) {
+    // SvgReader.getColor: #rrggbb, anything else black
+    const c = /^#[0-9a-fA-F]{6}$/.test(lc) ? lc.toLowerCase() : '#000000';
+    if (c !== DYNAMIC_DEFAULTS.labelColor) s.labelColor = c;
+  }
+  if (HAS_RADIUS.has(element)) {
+    const r = attr('value-radius');
+    if (r !== null && strictInt(r) !== DYNAMIC_DEFAULTS.radius) s.radius = strictInt(r);
+  } else if (HAS_VALUE_FONT.has(element)) {
+    const vf = readFont(attr, 'value-', DYNAMIC_DEFAULTS.valueFont);
+    if (vf) s.valueFont = vf;
+  } else if (HAS_SCALE.has(element)) {
+    const sc = attr('value-scale');
+    if (sc !== null && strictInt(sc) !== scaleDefault(element)) s.scale = strictInt(sc);
+  }
+  return { ...s, ...dynamicElementSize(element, target, s) };
+}
+
+/**
+ * The visible-* element of a shape (DynamicElement.toSvgElement and the shapes' own attributes), `path` its path as
+ * the file names the parts; attributes sorted by name, as evolution's XML writer puts them
+ */
+export function dynamicShapeToSvg(s: AppearanceDynamicShape, path: string): AppearanceSvgElement {
+  const attrs: Array<[string, string]> = [
+    ['x', String(Math.round(s.x))],
+    ['y', String(Math.round(s.y))],
+    ['width', String(Math.round(s.width))],
+    ['height', String(Math.round(s.height))],
+  ];
+  if (s.label) attrs.push(['label', s.label]);
+  if (s.labelFont && !sameFont(s.labelFont, DYNAMIC_DEFAULTS.labelFont)) writeFont(attrs, s.labelFont, '');
+  const lc = s.labelColor?.slice(0, 7).toLowerCase();
+  if (lc && lc !== DYNAMIC_DEFAULTS.labelColor) attrs.push(['label-color', lc]);
+  // a new or read element without the attribute has width 0, so only 1 is left out
+  if ((s.strokeWidth ?? 0) !== 1) attrs.push(['stroke-width', String(s.strokeWidth ?? 0)]);
+  attrs.push(['path', path]);
+  if (HAS_RADIUS.has(s.element) && s.radius !== undefined && s.radius !== DYNAMIC_DEFAULTS.radius) attrs.push(['value-radius', String(s.radius)]);
+  if (HAS_VALUE_FONT.has(s.element) && s.valueFont && !sameFont(s.valueFont, DYNAMIC_DEFAULTS.valueFont)) writeFont(attrs, s.valueFont, 'value-');
+  if (HAS_SCALE.has(s.element) && s.scale !== undefined && s.scale !== scaleDefault(s.element)) attrs.push(['value-scale', String(s.scale)]);
+  attrs.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return { tag: `visible-${s.element}`, attrs };
 }

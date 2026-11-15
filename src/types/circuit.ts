@@ -539,7 +539,7 @@ export interface AppearanceDynamicShape {
   labelFont?: AppearanceFont;
   /** Label colour; unset = dark grey (#404040) */
   labelColor?: string;
-  /** Outline width (LED, RGB LED, dot matrix, LED bar; evolution 'stroke-width'); unset = 1 */
+  /** Outline width (LED, RGB LED, dot matrix, LED bar; evolution 'stroke-width'); unset = 0 (a new element, or one read without the attribute) */
   strokeWidth?: number;
   /** LED / RGB LED radius (evolution 'value-radius', 1-20); unset = 5 */
   radius?: number;

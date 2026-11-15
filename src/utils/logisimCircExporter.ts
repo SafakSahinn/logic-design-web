@@ -1,4 +1,4 @@
-import type { AppearanceShape, CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
+import type { AppearanceDynamicShape, AppearanceShape, CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
 import { getLogicalConnections } from './wiringEngine';
 import {
   ALU_OP_BITS,
@@ -48,6 +48,7 @@ import {
 } from './circuitEngine';
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
+import { DYNAMIC_ELEMENT_OF, DYNAMIC_FACTORY, dynamicPathString, dynamicShapeToSvg, type DynamicPathStep } from './dynamicElements';
 import { solveKMap } from './kmapSolver';
 import { memToRawText } from './memImage';
 import {
@@ -159,7 +160,8 @@ type Prim =
       kind: 'ram';
       part: ComponentType;
       attrs: string;
-      ports: Array<{ off: Pt; net: string; width: number; sink: boolean }>;
+      // (width unset: the net's, as a probe takes it)
+      ports: Array<{ off: Pt; net: string; width?: number; sink: boolean }>;
       lib?: number;
       name?: string;
       box?: { x0: number; y0: number; x1: number; y1: number };
@@ -237,6 +239,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   const topName = uniqueCircuitName(circuitName || 'main');
   const circuitXml: string[] = [];
   const subInfo = new Map<string, SubcircuitInfo>();
+  // per IC definition: where the parts a dynamic element can name were written in its circuit
+  const placedIn = new Map<string, Map<string, DynamicPathStep>>();
   const building = new Set<string>();
 
   // The <circuit> of an IC definition (built once, inner ICs first)
@@ -249,6 +253,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     const inPorts = def.ports.filter((p) => p.type === 'input');
     const outPorts = def.ports.filter((p) => p.type === 'output');
     const style = def.appearance?.style ?? 'chip';
+    // the circuit's parts first: a dynamic element of the drawing names its part by where it was written
+    const placed = new Map<string, DynamicPathStep>();
+    const body = buildCircuit(def.components, def.wires, def, depth + 1, placed);
+    placedIn.set(def.id, placed);
     let info: SubcircuitInfo;
     let head = '';
     if (style === 'chip' || style === 'classic') {
@@ -296,16 +304,46 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         const dy = sh.valign === 'top' ? ascent : sh.valign === 'bottom' ? -descent : Math.round((ascent - descent) / 2);
         return { ...sh, y: sh.y + dy, valign: 'baseline' };
       };
+      // A dynamic element's path: each part as written (an IC's parts in its own circuit), ending at the part
+      // evolution shows with that element; null when one of them did not go to the file as such
+      const dynamicPath = (sh: AppearanceDynamicShape): string | null => {
+        const steps: DynamicPathStep[] = [];
+        let parts: CircuitComponentInstance[] | undefined = def.components;
+        let at: Map<string, DynamicPathStep> | undefined = placed;
+        for (let i = 0; i < sh.path.length; i++) {
+          const c: CircuitComponentInstance | undefined = parts?.find((q) => q.id === sh.path[i]);
+          const st = at?.get(sh.path[i]);
+          if (!c || !st) return null;
+          steps.push(st);
+          if (i < sh.path.length - 1) {
+            if (c.type !== 'subcircuit') return null;
+            parts = c.state.subcircuitId ? getSubcircuitDefinition(c.state.subcircuitId)?.components : undefined;
+            at = c.state.subcircuitId ? placedIn.get(c.state.subcircuitId) : undefined;
+          }
+        }
+        return steps.length && steps[steps.length - 1].name === DYNAMIC_FACTORY[sh.element] ? dynamicPathString(steps) : null;
+      };
+      let dynamicWritten = 0;
       const drawing = (subcircuitAppearanceShapes(xdef) ?? []).flatMap((sh) => {
+        if (sh.kind === 'dynamic') {
+          const path = dynamicPath(sh);
+          if (path) {
+            dynamicWritten++;
+            return [`      ${svgXml(dynamicShapeToSvg(sh, path))}`];
+          }
+          warnings.push(`${def.name || def.id}: IC görünümündeki dinamik öğe (${sh.element}) dosyaya yazılamadı; gösterdiği parça Logisim'e o parça olarak aktarılmadı (ör. çıkış portunun LED'i Logisim'de Pin olur).`);
+          return [];
+        }
         const e = appearanceShapeToSvg(style === 'custom' ? sh : baselined(sh), portInfo, 'logisim');
         return e ? [`      ${svgXml(e)}`] : [];
       });
+      if (dynamicWritten)
+        warnings.push(`${def.name || def.id}: IC görünümündeki ${dynamicWritten} dinamik öğe yalnız Logisim-evolution'da var; Logisim 2.7.1 dosyayı açarken bunlar için hata gösterir, çizimin kalanını açar.`);
       head =
         `    <a name="appearance" val="${style}"/>\n` +
         (def.appearance?.fixedSize ? '    <a name="circuitnamedboxfixedsize" val="true"/>\n' : '') +
         `    <appear>\n${drawing.join('\n')}\n    </appear>\n`;
     }
-    const body = buildCircuit(def.components, def.wires, def, depth + 1);
     circuitXml.push(`  <circuit name="${xmlEsc(name)}">\n${head}${body}\n  </circuit>`);
     building.delete(def.id);
     subInfo.set(def.id, info);
@@ -313,7 +351,15 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   };
 
   // Builds the parts of one circuit (the canvas, or an IC definition with its ports as Pins)
-  const buildCircuit = (comps: CircuitComponentInstance[], levelWires: CircuitWire[], def: CustomSubcircuit | null, depth: number): string => {
+  // placed: where each part a dynamic appearance element can name was written (its factory name and location)
+  const buildCircuit = (
+    comps: CircuitComponentInstance[],
+    levelWires: CircuitWire[],
+    def: CustomSubcircuit | null,
+    depth: number,
+    placed?: Map<string, DynamicPathStep>
+  ): string => {
+    const partOf = new Map<Prim, string>();
     const blocks: { prims: Prim[] }[] = [];
     const fixed: Array<{ x: number; y: number; prim: Prim }> = [];
 
@@ -558,7 +604,16 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         case 'led':
         case 'probe':
         case 'buzzer':
-          if (inScope) break; // an IC's outputs reach the outside through its ports
+          if (inScope) {
+            // An IC's outputs reach the outside through its ports (the port's part is the circuit's output Pin); any
+            // other LED / probe stays a Logisim LED (1 bit, lib I/O) / Probe (lib Wiring), so the IC can show it on
+            // its drawing (a dynamic element)
+            if (def!.ports.some((q) => q.targetCompId === c.id) || c.type === 'buzzer' || (c.type === 'led' && w0(c.inputs[0]) !== 1)) break;
+            const attrs = c.label?.trim() ? `<a name="label" val="${xmlEsc(c.label.trim())}"/>` : '';
+            const net = pin(0);
+            P.push({ kind: 'ram', part: c.type, attrs, ports: [{ off: { x: 0, y: 0 }, net, width: c.type === 'led' ? 1 : undefined, sink: true }], lib: c.type === 'led' ? 5 : 0, name: c.type === 'led' ? 'LED' : 'Probe' });
+            break;
+          }
           c.inputs.forEach((p, i) => {
             const l = c.inputs.length === 1 ? label : `${label}_${p.name}`;
             // A probe follows its net's width; every other display has a fixed width
@@ -1191,6 +1246,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       }
       if (openInputs)
         warnings.push(`${label}: boştaki giriş(ler)i Logisim'e x (sürücüsüz OPEN tüneli) olarak aktarıldı; kapılarla kurulan karşılığı bazı çıkışlarda simülatörden farklı sonuç verebilir.`);
+      // The part a dynamic appearance element can name (by the written factory name and location)
+      const shown = c.type === 'subcircuit' || DYNAMIC_ELEMENT_OF[c.type] ? P.find((q) => q.kind === 'ram' || q.kind === 'mem' || q.kind === 'sub') : undefined;
+      if (shown) partOf.set(shown, c.id);
       if (P.length) blocks.push({ prims: P });
     }
 
@@ -1238,6 +1296,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       // Logisim AbstractGate input spacing for size 50
       const [ss, sd, sl] = n <= 3 ? [-10, 20, 20] : [-5, 10, 10];
       return Array.from({ length: n }, (_, i) => (n % 2 ? ss * (n - 1) + sd * i : ss * n + sd * i + (i >= n / 2 ? sl : 0)));
+    };
+    const written = (p: Prim, name: string, x: number, y: number) => {
+      const id = partOf.get(p);
+      if (id && placed) placed.set(id, { name, x, y });
     };
     const emit = (p: Prim, x: number, y: number) => {
       switch (p.kind) {
@@ -1365,14 +1427,17 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           logisimArithPorts(p.part, p.inputs).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
         case 'mem':
+          written(p, LOGISIM_MEM_NAME[p.part] ?? '', x, y);
           xml.push(`    <comp lib="4" loc="(${x},${y})" name="${LOGISIM_MEM_NAME[p.part]}">${p.attrs}</comp>`);
           memPorts(p.part, p.length, p.parallel).forEach(({ off }, k) => tunnel(x + off.x, y + off.y, p.nets[k], p.sinks[k], p.widths[k]));
           break;
         case 'ram':
+          written(p, p.name ?? LOGISIM_RAM_NAME[p.part] ?? '', x, y);
           xml.push(`    <comp lib="${p.lib ?? 4}" loc="(${x},${y})" name="${xmlEsc(p.name ?? LOGISIM_RAM_NAME[p.part] ?? '')}">${p.attrs}</comp>`);
           for (const q of p.ports) tunnel(x + q.off.x, y + q.off.y, q.net, q.sink, q.width);
           break;
         case 'sub':
+          written(p, p.circuit, x, y);
           xml.push(`    <comp loc="(${x},${y})" name="${xmlEsc(p.circuit)}"${p.facing === 'east' ? '/>' : `><a name="facing" val="${p.facing}"/></comp>`}`);
           p.inOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.ins[i], true, p.inW[i]));
           p.outOff.forEach((o, i) => tunnel(x + o.x, y + o.y, p.outs[i], false, p.outW[i]));
