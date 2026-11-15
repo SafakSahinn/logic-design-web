@@ -493,7 +493,61 @@ export type AppearanceShape =
     }
   | { kind: 'image'; x: number; y: number; width: number; height: number; src: string; scale?: string; license?: string; attribution?: string }
   | { kind: 'port'; x: number; y: number; portId: string }
-  | { kind: 'anchor'; x: number; y: number; facing: 'east' | 'west' | 'north' | 'south' };
+  | { kind: 'anchor'; x: number; y: number; facing: 'east' | 'west' | 'north' | 'south' }
+  | AppearanceDynamicShape;
+
+/**
+ * Evolution's dynamic appearance elements (DynamicElement, the visible-* tags): a part somewhere inside the
+ * circuit shown live on the IC body. The name is the tag without "visible-".
+ */
+export type AppearanceDynamicElement =
+  | 'led'
+  | 'rgbled'
+  | 'sevensegment'
+  | 'hexdigit'
+  | 'register'
+  | 'counter'
+  | 'probe'
+  | 'tty'
+  | 'dotmatrix'
+  | 'ledbar';
+
+/** Font of a dynamic element's label or value (evolution writes family, size, style) */
+export interface AppearanceFont {
+  family: string;
+  size: number;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+export interface AppearanceDynamicShape {
+  kind: 'dynamic';
+  element: AppearanceDynamicElement;
+  /** Top-left corner and size (evolution's bounds, without the stroke) */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /**
+   * Ids of the parts leading to the shown one: path[0] is in this circuit, every later one inside the IC before
+   * it (evolution's DynamicElement.Path)
+   */
+  path: string[];
+  /** Where the shown part's label goes (evolution 'label'); unset = none */
+  label?: 'top' | 'bottom' | 'left' | 'right' | 'center';
+  /** Label font; unset = SansSerif plain 7 */
+  labelFont?: AppearanceFont;
+  /** Label colour; unset = dark grey (#404040) */
+  labelColor?: string;
+  /** Outline width (LED, RGB LED, dot matrix, LED bar; evolution 'stroke-width'); unset = 1 */
+  strokeWidth?: number;
+  /** LED / RGB LED radius (evolution 'value-radius', 1-20); unset = 5 */
+  radius?: number;
+  /** 7-segment / hex digit (1-6, unset 2) or dot matrix / LED bar (1-10, unset 4) scale (evolution 'value-scale') */
+  scale?: number;
+  /** Register / counter / probe value font (evolution 'value-font-*'); unset = monospaced plain 10 */
+  valueFont?: AppearanceFont;
+}
 
 export interface CircuitAnnotation {
   id: string;

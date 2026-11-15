@@ -4,6 +4,7 @@ import type {
   SubcircuitAppearanceStyle,
   SubcircuitPortDefinition,
 } from '../types/circuit';
+import { dynamicShapeValid } from './dynamicElements';
 
 /**
  * Subcircuit appearances, after Logisim-evolution 5 (com.cburch.logisim.circuit.appear): an IC body is a
@@ -315,7 +316,8 @@ export function subcircuitAppearanceShapes(def: CustomSubcircuit): AppearanceSha
   // Ports the drawing lacks (added to the circuit after it was drawn) go next to it, like evolution adds them
   const have = new Set(shapes.flatMap((s) => (s.kind === 'port' ? [s.portId] : [])));
   const missing = def.ports.filter((p) => !have.has(p.id));
-  const out = shapes.filter((s) => s.kind !== 'port' || def.ports.some((p) => p.id === s.portId));
+  // A dynamic element whose part is gone (or is another part now) is dropped, as evolution removes it
+  const out = shapes.filter((s) => (s.kind === 'port' ? def.ports.some((p) => p.id === s.portId) : s.kind !== 'dynamic' || dynamicShapeValid(def, s)));
   if (!out.some((s) => s.kind === 'anchor')) {
     const first = out.find((s) => s.kind === 'port');
     out.push({ kind: 'anchor', x: first?.x ?? 0, y: first?.y ?? 0, facing: 'east' });
@@ -368,6 +370,13 @@ export function shapesBounds(shapes: AppearanceShape[]): { minX: number; minY: n
         add(s.x, s.y);
         add(s.x + s.width, s.y + s.height);
         break;
+      case 'dynamic': {
+        // DynamicElement.getBounds: the box, grown by half the stroke from width 2 on
+        const g = (s.strokeWidth ?? 0) >= 2 ? Math.trunc((s.strokeWidth ?? 0) / 2) : 0;
+        add(s.x - g, s.y - g);
+        add(s.x + s.width + g, s.y + s.height + g);
+        break;
+      }
       case 'line':
         add(s.x1, s.y1);
         add(s.x2, s.y2);
@@ -574,6 +583,8 @@ export function appearanceShapeToSvg(
       }
       return { tag: 'circ-port', attrs: [['dir', info.isInput ? 'in' : 'out'], ['pin', pin], ['x', n(s.x)], ['y', n(s.y)]] };
     }
+    case 'dynamic':
+      return null;
     case 'anchor':
       if (format === 'logisim')
         return { tag: 'circ-anchor', attrs: [['facing', s.facing], ['height', '6'], ['width', '6'], ['x', n(s.x - 3)], ['y', n(s.y - 3)]] };

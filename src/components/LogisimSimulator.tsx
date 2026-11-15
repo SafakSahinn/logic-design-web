@@ -114,6 +114,7 @@ import {
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
 import { AppearanceShapesSvg } from './AppearanceShapes';
+import { resolveDynamicLive, resolveDynamicTemplate } from '../utils/dynamicElements';
 import AppearanceEditor from './AppearanceEditor';
 import { APPEARANCE_STYLE_OPTIONS, appearanceWithStyle, relayoutInstances } from '../utils/appearanceEdit';
 import { IMAGE_FILE_ACCEPT, clipboardImageSource, fileToImageSource, optimizeImageSource, whiteTransparentSource } from '../utils/imageOps';
@@ -5386,7 +5387,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <g>
               <title>{`${comp.state.subcircuitCode || 'IC'} · ${comp.state.subcircuitName || comp.label || ''}`}</title>
               <rect x={0} y={0} width={layout.width} height={layout.height} fill="transparent" stroke={isSelected ? '#3b82f6' : 'none'} strokeWidth={1.5} strokeDasharray="4,3" />
-              <AppearanceShapesSvg shapes={layout.shapes} dark={cadTheme === 'dark'} />
+              <AppearanceShapesSvg
+                shapes={layout.shapes}
+                dark={cadTheme === 'dark'}
+                dyn={(s) => {
+                  // A dynamic element shows the part inside this instance's state; its settings from the definition until then
+                  const live = resolveDynamicLive(comp, s.path);
+                  const def = peekSubcircuitDefinition(comp.state.subcircuitId);
+                  return { live, target: live ?? (def ? resolveDynamicTemplate(def, s.path) : null) };
+                }}
+              />
             </g>
           );
         }

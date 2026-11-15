@@ -24,9 +24,10 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import type { AppearanceShape, CustomSubcircuit, SubcircuitAppearance } from '../types/circuit';
+import type { AppearanceDynamicShape, AppearanceShape, CustomSubcircuit, SubcircuitAppearance } from '../types/circuit';
 import { AppearanceShapeSvg } from './AppearanceShapes';
 import { shapesBounds } from '../utils/subcircuitAppearance';
+import { resolveDynamicTemplate } from '../utils/dynamicElements';
 import {
   editorStartShapes,
   hitShape,
@@ -121,6 +122,8 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
   }, []);
 
   const portName = useMemo(() => new Map(def.ports.map((p) => [p.id, p])), [def]);
+  // Dynamic elements are drawn as without a simulation (evolution's editor paints them with no state)
+  const editorDyn = useCallback((s: AppearanceDynamicShape) => ({ target: resolveDynamicTemplate(def, s.path), live: null }), [def]);
 
   /** One undo step: remember the drawing as it is now */
   const remember = useCallback(() => {
@@ -632,7 +635,7 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
               {shapes.map((s, i) =>
                 isElement(s) ? null : (
                   <g key={i} data-shape={i}>
-                    <AppearanceShapeSvg shape={s} dark={dark} />
+                    <AppearanceShapeSvg shape={s} dark={dark} dyn={editorDyn} />
                   </g>
                 )
               )}
