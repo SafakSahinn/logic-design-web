@@ -102,7 +102,9 @@ import {
   splitterThreads,
   getComponentSize,
   nextSwitchBit,
+  getClockConfig,
   switchBits,
+  tickClocks,
   switchStateFor,
   configureImage,
   getImageConfig,
@@ -1029,13 +1031,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   }, [redoStack, components, wires, annotations]);
 
   // Continuous Clock Generator Loop. A clock with its own clockRateHz (set from its toolbar)
-  // runs at that rate, the others follow the global clockHz. Each clock toggles every
-  // half period (500 / hz ms); the timer ticks at the half period of the fastest clock.
+  // runs at that rate, the others follow the global clockHz. Clocks of one rate get a tick
+  // together every half period (500 / hz ms) and take the level their high / low durations and
+  // phase give for that tick (Logisim); the timer runs at the half period of the fastest clock.
   const clockRatesKey = components
     .filter((c) => c.type === 'clock')
     .map((c) => `${c.id}=${c.state?.clockRateHz ?? clockHz}`)
     .join(',');
-  // Time accumulated toward each clock's next edge; kept across effect re-runs because the
+  // Time accumulated toward each rate's next tick; kept across effect re-runs because the
   // effect restarts on every tick (wires change), which would otherwise stall slower clocks
   const clockPhaseRef = useRef<Record<string, number>>({});
   useEffect(() => {
@@ -1052,38 +1055,28 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // Decide the edges here, outside the state updater, so the updater stays pure
       // (React may call it twice)
       const phases = clockPhaseRef.current;
-      const toggling = new Set<string>();
-      for (const { id, hz } of clocks) {
+      const ticking: Set<string>[] = [];
+      for (const hz of new Set(clocks.map((c) => c.hz))) {
         const halfPeriod = Math.max(30, 500 / hz);
-        const elapsed = (phases[id] ?? 0) + intervalMs;
+        const elapsed = (phases[hz] ?? 0) + intervalMs;
         if (elapsed + 1 < halfPeriod) {
-          phases[id] = elapsed;
+          phases[hz] = elapsed;
         } else {
-          phases[id] = elapsed - halfPeriod;
-          toggling.add(id);
+          phases[hz] = elapsed - halfPeriod;
+          ticking.push(new Set(clocks.filter((c) => c.hz === hz).map((c) => c.id)));
         }
       }
-      if (toggling.size === 0) return;
+      if (ticking.length === 0) return;
 
       setComponents((prev) => {
-        let clockChanged = false;
-        const updated = prev.map((comp) => {
-          if (comp.type === 'clock' && toggling.has(comp.id)) {
-            clockChanged = true;
-            return {
-              ...comp,
-              state: { ...comp.state, on: !comp.state.on },
-            };
-          }
-          return comp;
-        });
-
-        if (clockChanged) {
-          const sim = simulateCircuit(updated, wires);
-          setWires(sim.wires);
-          return sim.components;
-        }
-        return prev;
+        // A tick that changes no level (inside a long high / low stretch) still has to be counted
+        const updated = ticking.reduce((list, ids) => tickClocks(list, ids), prev);
+        if (updated === prev) return prev;
+        const levelChanged = updated.some((c, i) => c !== prev[i] && c.state.on !== prev[i].state.on);
+        if (!levelChanged) return updated;
+        const sim = simulateCircuit(updated, wires);
+        setWires(sim.wires);
+        return sim.components;
       });
     }, intervalMs);
 
@@ -1305,13 +1298,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const handleSingleStep = () => {
     setStepCount((c) => c + 1);
     setComponents((prevComps) => {
-      // Toggle clock if present on manual step
-      const withClockTick = prevComps.map((c) => {
-        if (c.type === 'clock') {
-          return { ...c, state: { ...c.state, on: !c.state.on } };
-        }
-        return c;
-      });
+      // One tick for every clock on a manual step
+      const withClockTick = tickClocks(prevComps);
 
       const step = simulateCircuitStep(withClockTick, wires);
       setWires(step.wires);
@@ -1487,6 +1475,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
     setComponents((prev) => {
+      // A click on a clock is one tick for every clock, as Logisim's poke ("all clocks tick together")
+      if (prev.some((c) => c.id === compId && c.type === 'clock')) {
+        const ticked = tickClocks(prev);
+        playSwitchSound(!!ticked.find((c) => c.id === compId)?.state.on);
+        const sim = simulateCircuit(ticked, wires);
+        setWires(sim.wires);
+        return sim.components;
+      }
       let toggledTo = false;
       const updated = prev.map((c) => {
         if (c.id === compId) {
@@ -4681,6 +4677,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       case 'clock': {
         const isOn = !!comp.state.on;
+        // Two cycles of the wave, the low part first, in the proportion of the low / high durations
+        const { high: clkHigh, low: clkLow } = getClockConfig(comp);
+        const clkLowW = Math.min(10, Math.max(2, Math.round((12 * clkLow) / (clkHigh + clkLow))));
+        const clkWave = [12, 24].map((x0) => `L ${x0 + clkLowW},30 L ${x0 + clkLowW},22 L ${x0 + 12},22${x0 === 12 ? ' L 24,30' : ''}`).join(' ');
         return (
           <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer group" filter="url(#gateShadow)">
             {/* Quartz Crystal Metallic Can Case */}
@@ -4702,7 +4702,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
             {/* Clock Square Wave Icon */}
             <path
-              d="M 12,30 L 18,30 L 18,22 L 24,22 L 24,30 L 30,30 L 30,22 L 36,22"
+              d={`M 12,30 ${clkWave}`}
               fill="none"
               stroke="#475569"
               strokeWidth={1.8}

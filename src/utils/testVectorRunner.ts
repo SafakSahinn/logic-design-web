@@ -6,6 +6,8 @@ import {
   MEM_TYPES,
   RAM_TYPES,
   floatingSwitchState,
+  resetClockState,
+  tickClocks,
   getInputSignalNames,
   simulateCircuit,
 } from './circuitEngine';
@@ -19,7 +21,7 @@ import { TTL_SEQ_TYPES } from './ttlChips';
  *   wide one), optional <set> and <seq> columns, one value per column on every following line, # comments.
  *   Input columns are driven, output and clock columns are checked. <DC> = any value, <float> = floating.
  *   A row with <seq> 0 is combinational: the circuit is reset before it. Rows of one <set> (> 0) run in
- *   <seq> order without a reset; every step after the first starts with a clock tick (all clocks toggle).
+ *   <seq> order without a reset; every step after the first starts with a clock tick (every clock moves one tick).
  * - The app's older one: "inputs | expected outputs", inputs and outputs in canvas order, every row
  *   combinational.
  *
@@ -28,7 +30,7 @@ import { TTL_SEQ_TYPES } from './ttlChips';
  * spaces, and <clk> for the only clock are accepted as well.
  *
  * Reset (a new set or a combinational row): flip-flops, latches, registers, counters, shift registers and IC
- * insides start at 0, the random generator restarts from its seed, clocks go to 0. RAM and ROM keep their
+ * insides start at 0, the random generator restarts from its seed, clocks go to tick 0 (low, unless a phase offset says high). RAM and ROM keep their
  * contents and inputs that have no column keep their canvas values: that is the circuit's power-up state in the
  * generated HDL as well.
  */
@@ -374,7 +376,7 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
       delete st.randomCur;
       delete st.randomValue;
     }
-    if (c.type === 'clock') st.on = false;
+    if (c.type === 'clock') resetClockState(st);
     // A three-state input pin starts floating again, as Logisim resets its pin state
     if (c.type === 'switch' && st.pinTristate) {
       delete st.portValue;
@@ -511,8 +513,8 @@ export function evaluateTestRows(
       curWires = sim.wires;
       oscillating = !!sim.oscillating;
     } else if (!oscillating) {
-      // Clock tick first (Logisim-evolution toggles every clock, then sets the step's inputs)
-      const ticked = comps.map((c) => (clockIds.has(c.id) ? { ...cloneComp(c), state: { ...c.state, on: !c.state.on } } : c));
+      // Clock tick first (Logisim-evolution ticks every clock, then sets the step's inputs)
+      const ticked = tickClocks(comps).map((c) => (clockIds.has(c.id) ? cloneComp(c) : c));
       const sim = simulateCircuit(ticked, curWires);
       comps = sim.components;
       curWires = sim.wires;

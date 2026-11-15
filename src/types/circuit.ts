@@ -175,6 +175,13 @@ export interface CircuitComponentInstance {
     frequencyHz?: number;
     /** Clock's own rate chosen in its toolbar; unset = follow the global clock speed */
     clockRateHz?: number;
+    /** Clock: ticks it stays high / low and its phase offset in ticks (Logisim highDuration / lowDuration,
+     *  evolution phaseOffset); unset = 1 / 1 / 0. A tick is half a period of the clock's rate. */
+    clockHigh?: number;
+    clockLow?: number;
+    clockPhase?: number;
+    /** Clock: ticks it has seen since the last reset (clocks of one rate share it); unset = 0 */
+    clockTick?: number;
     lastClockTick?: number;
     ledColor?: 'green' | 'red' | 'blue' | 'yellow';
     /** Splitter: end of each incoming bit, LSB first (0 = none, 1..fanout; Logisim bit0..bitN); unset = default spread of 2 bits */

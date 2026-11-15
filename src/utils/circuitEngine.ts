@@ -2887,6 +2887,60 @@ export function setBitWidth(comp: CircuitComponentInstance, width: number): Circ
   return updatePinPositions(next);
 }
 
+// ---- Clock durations (Logisim highDuration / lowDuration, evolution phaseOffset) -------------------
+// Time is counted in ticks, as in Logisim: a clock is low for `low` ticks, then high for `high` ticks, and
+// `phase` shifts it forward. Tick 0 is the reset state. A tick is half a period of the clock's rate (the
+// run loop's toggle interval), so the default 1 / 1 clock toggles on every tick.
+
+export const CLOCK_DURATION_MAX = 2147483647;
+
+export interface ClockConfig {
+  high: number;
+  low: number;
+  phase: number;
+}
+
+const clockInt = (v: unknown, min: number, dflt: number): number => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n >= min ? Math.min(n, CLOCK_DURATION_MAX) : dflt;
+};
+
+export function getClockConfig(c: CircuitComponentInstance): ClockConfig {
+  return {
+    high: clockInt(c.state.clockHigh, 1, 1),
+    low: clockInt(c.state.clockLow, 1, 1),
+    phase: clockInt(c.state.clockPhase, 0, 0),
+  };
+}
+
+/** Is the clock high at this tick? (evolution Clock.ClockState.updateTick; 2.7.1 is the same with phase 0) */
+export function clockLevelAt(tick: number, cfg: ClockConfig): boolean {
+  const cycle = cfg.high + cfg.low;
+  return (tick + (cfg.phase % cycle)) % cycle >= cfg.low;
+}
+
+/**
+ * One tick for the clocks in `ids` (all clocks when omitted). They move to the same tick count, one past
+ * the furthest of them, so a clock added later falls in step with the others (Logisim has one tick count
+ * for the whole simulation). Returns the same array when there is no such clock.
+ */
+export function tickClocks(components: CircuitComponentInstance[], ids?: Set<string>): CircuitComponentInstance[] {
+  const picked = (c: CircuitComponentInstance) => c.type === 'clock' && (!ids || ids.has(c.id));
+  let tick = -1;
+  for (const c of components) if (picked(c)) tick = Math.max(tick, c.state.clockTick ?? 0);
+  if (tick < 0) return components;
+  tick += 1;
+  return components.map((c) =>
+    picked(c) ? { ...c, state: { ...c.state, clockTick: tick, on: clockLevelAt(tick, getClockConfig(c)) } } : c
+  );
+}
+
+/** The clock at tick 0 (after a reset, or freshly loaded) */
+export function resetClockState(state: CircuitComponentInstance['state']): void {
+  delete state.clockTick;
+  state.on = clockLevelAt(0, getClockConfig({ state } as CircuitComponentInstance));
+}
+
 // ---- Three-state input pin (Logisim Pin 'tristate', evolution behavior="tristate") ----------------
 // It starts floating and a click cycles a bit 0 → 1 → Z → 0, like Logisim's poke. Floating bits live in
 // portValue (1 bit) / portBits (wide), the fields an outside driver of an IC port uses as well.
