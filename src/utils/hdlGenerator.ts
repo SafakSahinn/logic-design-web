@@ -35,6 +35,7 @@ import {
   getVideoConfig,
   VIDEO_COLOR_MODELS,
   joystickValue,
+  getClockConfig,
   portPokeOf,
   rtcValue,
 } from './circuitEngine';
@@ -479,6 +480,10 @@ function buildModule(
       const pn = names.make(/clk|saat|clock/i.test(label) ? label : `clk_${label}`, 'clk');
       addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
       if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
+      // The clock is an input of the module: its durations only shape the simulator's (and the testbench's) wave
+      const ck = getClockConfig(c);
+      if (ck.high !== 1 || ck.low !== 1 || ck.phase !== 0)
+        warnings.push(`${pn}: saat simülatörde ${ck.high} tik yüksek / ${ck.low} tik düşük${ck.phase ? `, faz kayması ${ck.phase} tik` : ''}; burada saat dışarıdan gelen bir giriştir, bu dalga biçimi yalnız test tezgâhında uygulanır.`);
     } else if (c.type === 'dipSwitch') {
       // one input port, bit i = switch i+1
       const pn = names.make(`in_${label}`, 'in_dip');

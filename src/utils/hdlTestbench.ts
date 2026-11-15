@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import { portPokeOf, simulateCircuit } from './circuitEngine';
+import { clockLevelAt, getClockConfig, portPokeOf, simulateCircuit } from './circuitEngine';
 import { getTopLevelPorts, getTopModuleName, type PortDecl } from './hdlGenerator';
 import { cellText, circuitHasState, parseTestVector, type TvRow, type TvSignal } from './testVectorRunner';
 
@@ -17,7 +17,8 @@ import { cellText, circuitHasState, parseTestVector, type TvRow, type TvSignal }
  *   the inputs and clocks put back.
  *
  * The power-up state is the generated HDL's: memory parts at 0, RAM / ROM at their contents, inputs that have
- * no column at their canvas values, clocks at 0, which is the runner's reset state too.
+ * no column at their canvas values, clocks at their tick-0 level (0 unless a phase offset makes it 1), which is
+ * the runner's reset state too.
  */
 
 export const MAX_INSTANCES = 128;
@@ -46,6 +47,9 @@ interface TbPlan {
   held: Map<string, Bit[]>;
   /** Port names that are clocks */
   clocks: string[];
+  /** Per clock: does its level change on the tick before a row? (indexed like rows; false on reset rows).
+   *  A clock with high / low durations or a phase keeps its level over some ticks, as in the runner. */
+  clockFlips: Map<string, boolean[]>;
   /** Is a row a reset (start of a sequence / combinational row)? */
   resets: boolean[];
   /** One instance runs everything although the circuit has memory */
@@ -77,11 +81,14 @@ function plan(
   const canvas = simulateCircuit(components.map((c) => ({ ...c, inputs: c.inputs.map((p) => ({ ...p })), outputs: c.outputs.map((p) => ({ ...p })), state: { ...c.state } })), wires).components;
   const held = new Map<string, Bit[]>();
   const clocks: string[] = [];
+  const clockCfg = new Map<string, ReturnType<typeof getClockConfig>>();
   for (const p of ports) {
     if (p.dir !== 'in') continue;
     if (p.source?.type === 'clock') {
       clocks.push(p.name);
-      held.set(p.name, [0]);
+      const src = components.find((c) => c.id === p.source?.compId);
+      clockCfg.set(p.name, getClockConfig(src ?? ({ state: {} } as CircuitComponentInstance)));
+      held.set(p.name, [clockLevelAt(0, clockCfg.get(p.name)!) ? 1 : 0]);
       continue;
     }
     const comp = canvas.find((c) => c.id === p.source?.compId);
@@ -105,6 +112,23 @@ function plan(
     resets.push(r.seq === 0 || curSeq === 0 || r.set !== curSet);
     curSet = r.set;
     curSeq = r.seq;
+  }
+  // The runner gives every clock one tick before each row that is no reset; a reset is tick 0
+  const clockFlips = new Map<string, boolean[]>();
+  for (const name of clocks) {
+    const cfg = clockCfg.get(name)!;
+    let tick = 0;
+    clockFlips.set(
+      name,
+      resets.map((reset) => {
+        if (reset) {
+          tick = 0;
+          return false;
+        }
+        tick += 1;
+        return clockLevelAt(tick, cfg) !== clockLevelAt(tick - 1, cfg);
+      })
+    );
   }
   const stateful = circuitHasState(components.filter((c) => c.type !== 'clock'));
   let groups: number[][] = [];
@@ -140,7 +164,7 @@ function plan(
     notes.push('Tohumu 0 olan rastgele sayı üreteci simülatörde her açılışta farklı başlar; beklenen değerleri tutmayabilir.');
   }
   const name = `${top}_tb`;
-  return { plan: { top, name, ports, columns: tv.columns, rows: tv.rows, groups, held, clocks, resets, merged, notes }, errors: [] };
+  return { plan: { top, name, ports, columns: tv.columns, rows: tv.rows, groups, held, clocks, clockFlips, resets, merged, notes }, errors: [] };
 }
 
 const msbText = (bits: Bit[]) =>
@@ -224,7 +248,7 @@ export function generateVerilogTestbench(
         for (const p of P.ports) if (p.dir === 'in') L.push(`    ${sig(g, p.name)} = ${vLit(P.held.get(p.name)!)};`);
         L.push(`    #${STEP_NS};`);
       } else if (!P.resets[ri]) {
-        for (const c of P.clocks) L.push(`    ${sig(g, c)} = ~${sig(g, c)};`);
+        for (const c of P.clocks) if (P.clockFlips.get(c)![ri]) L.push(`    ${sig(g, c)} = ~${sig(g, c)};`);
         L.push(`    #${STEP_NS};`);
       }
       P.columns.forEach((col, i) => {
@@ -360,7 +384,7 @@ export function generateVhdlTestbench(
         for (const p of P.ports) if (p.dir === 'in') L.push(`    ${sig(g, p.name)} <= ${hLit(P.held.get(p.name)!)};`);
         L.push(`    wait for ${STEP_NS} ns;`);
       } else if (!P.resets[ri]) {
-        for (const c of P.clocks) L.push(`    ${sig(g, c)} <= not ${sig(g, c)};`);
+        for (const c of P.clocks) if (P.clockFlips.get(c)![ri]) L.push(`    ${sig(g, c)} <= not ${sig(g, c)};`);
         L.push(`    wait for ${STEP_NS} ns;`);
       }
       P.columns.forEach((col, i) => {
