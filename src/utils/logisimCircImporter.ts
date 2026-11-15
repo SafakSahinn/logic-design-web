@@ -95,6 +95,8 @@ import {
   splitterDistribution,
   updatePinPositions,
   floatingSwitchState,
+  getClockConfig,
+  resetClockState,
 } from './circuitEngine';
 import { rawTextToMem } from './memImage';
 import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from './subcircuitManager';
@@ -2392,6 +2394,21 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
           inst = updatePinPositions({ ...inst, x: anchor.x - pinsOf[0].x, y: anchor.y - pinsOf[0].y });
           if (label) inst.label = label;
+          // Clock durations in ticks (2.7.1 has no phaseOffset); it starts at tick 0
+          if (nativeType === 'clock') {
+            const a = part.attr;
+            const st = { ...inst.state };
+            if (a.highDuration !== undefined) st.clockHigh = Number(a.highDuration);
+            if (a.lowDuration !== undefined) st.clockLow = Number(a.lowDuration);
+            if (a.phaseOffset !== undefined) st.clockPhase = Number(a.phaseOffset);
+            const cfg = getClockConfig({ ...inst, state: st });
+            for (const k of ['clockHigh', 'clockLow', 'clockPhase'] as const) delete st[k];
+            if (cfg.high !== 1) st.clockHigh = cfg.high;
+            if (cfg.low !== 1) st.clockLow = cfg.low;
+            if (cfg.phase !== 0) st.clockPhase = cfg.phase;
+            resetClockState(st);
+            inst.state = st;
+          }
           // Logisim's pull attribute: 0 (default), 1 or X
           if (nativeType === 'pullResistor') inst.state = { ...inst.state, pullValue: pull === '1' ? 1 : pull === 'X' ? 'X' : 0 };
           // Three-state input Pin: tristate="true" (2.7.1, early evolution) or behavior="tristate" (evolution 4+);

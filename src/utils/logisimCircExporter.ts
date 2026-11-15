@@ -87,7 +87,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getTtlConfig } from './circuitEngine';
+import { getClockConfig, getTtlConfig } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -129,7 +129,7 @@ type Prim =
   | { kind: 'ff'; type: 'D' | 'T' | 'JK'; a?: string; b?: string; clk?: string; q?: string; qn?: string; reset?: string; preset?: string }
   | { kind: 'const'; value: number; out: string; width?: number }
   | { kind: 'inpin'; label: string; out: string; width?: number; tristate?: boolean }
-  | { kind: 'clock'; label: string; out: string }
+  | { kind: 'clock'; label: string; out: string; high: number; low: number; phase: number }
   // width undefined: the width of the net (a probe follows it)
   | { kind: 'outpin'; label: string; in: string; width?: number }
   | { kind: 'pull'; value: 0 | 1 | 'X'; at: string }
@@ -517,7 +517,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           if (inScope && c.outputs[0] && alias.has(c.outputs[0].id)) break;
           if (inScope) P.push({ kind: 'const', value: 0, out: out(0) });
           else {
-            P.push({ kind: 'clock', label, out: out(0) });
+            P.push({ kind: 'clock', label, out: out(0), ...getClockConfig(c) });
             inputs.push({ label, compId: c.id, pinIndex: 0 });
           }
           break;
@@ -1388,7 +1388,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           tunnel(x, y, p.out, false, p.width ?? 1);
           break;
         case 'clock':
-          xml.push(`    <comp lib="0" loc="(${x},${y})" name="Clock"><a name="label" val="${xmlEsc(p.label)}"/></comp>`);
+          // Durations in ticks; the defaults (1 / 1 / 0) stay out. phaseOffset is evolution's, 2.7.1 skips it
+          xml.push(
+            `    <comp lib="0" loc="(${x},${y})" name="Clock">${p.high !== 1 ? `<a name="highDuration" val="${p.high}"/>` : ''}${p.low !== 1 ? `<a name="lowDuration" val="${p.low}"/>` : ''}${p.phase !== 0 ? `<a name="phaseOffset" val="${p.phase}"/>` : ''}<a name="label" val="${xmlEsc(p.label)}"/></comp>`
+          );
           tunnel(x, y, p.out, false, 1);
           break;
         case 'outpin': {
