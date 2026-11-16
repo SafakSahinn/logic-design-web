@@ -40,6 +40,8 @@ export type ComponentType =
   | 'twoPinLed'
   // Logisim-evolution Input/Output-Extra Buzzer, a tone generator next to our own buzzer (Aşama 5h-d)
   | 'evoBuzzer'
+  // Logisim-evolution Input/Output-Extra Digital Oscilloscope: draws its inputs' levels at each clock change (Aşama 5h-e)
+  | 'digitalOscilloscope'
   // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
   | 'powerOnReset'
   | 'doNotConnect'
@@ -271,6 +273,25 @@ export interface CircuitComponentInstance {
     buzzerHz?: number;
     buzzerVol?: number;
     buzzerPw?: number;
+    /** Digital oscilloscope: clock cycles shown, 4-35 (Logisim-evolution 'nState'; twice as many columns); unset = 10 */
+    oscStates?: number;
+    /** Digital oscilloscope: dashed lines at the clock's rising / falling / both edges or none (evolution 'frontlines');
+     *  unset = rising */
+    oscFrontLines?: 'no' | 'rising' | 'falling' | 'both';
+    /** Digital oscilloscope: the clock's own trace and the cycle numbers are hidden (evolution 'showclock' false);
+     *  unset = shown */
+    oscHideClock?: boolean;
+    /** Digital oscilloscope: frame colour '#rrggbb' (evolution 'color'); unset = #00d0d0 */
+    oscColor?: string;
+    /** Digital oscilloscope run state (evolution DiagramState): one row per input, the clock first, each column a
+     *  character '1' / '0' / '-' (not known); the column being written (-1 = none yet); the clock level last seen
+     *  (0 / 1 / 'X' / 'E', 'N' = wired to nothing; unset = 'X'); whether the columns scroll left; the cycle number
+     *  (evolution clocknumber, a byte). Not saved in .circ files */
+    oscRows?: string[];
+    oscUsed?: number;
+    oscLastClk?: 0 | 1 | 'X' | 'E' | 'N';
+    oscMoveBack?: boolean;
+    oscClockNo?: number;
     /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
     porSize?: 'wide' | 'medium' | 'narrow';
     /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */

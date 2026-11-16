@@ -1611,6 +1611,244 @@ export function configureVideo(comp: CircuitComponentInstance, patch: Partial<Vi
   return updatePinPositions({ ...comp, inputs, outputs: [], state });
 }
 
+// ---- Logisim-evolution Digital Oscilloscope (std/io/extra DigitalOscilloscope + DiagramState) ------------------
+// A white panel in a coloured frame with one trace per input (plus the clock's own on top), 2 * nState columns 15 px
+// wide. Every change of the clock's level adds a column (both edges: a cycle is two columns); while the clock stays
+// put the newest column follows the inputs. Pins (evolution, around the clock port at (0, 0)): the clock and the
+// inputs down the left side 30 px apart, enable and clear on the bottom edge at x = 20 and 30. Evolution's body
+// starts 42 px above the clock (10 without the clock trace); ours adds room above so the pins stay on the grid and
+// the box is a whole number of 20 px (so it turns on the grid). Evolution has no facing; ours turns like any part.
+
+export const OSC_MIN_INPUTS = 1;
+export const OSC_MAX_INPUTS = 32;
+export const OSC_MIN_STATES = 4;
+export const OSC_MAX_STATES = 35;
+export const OSC_DEFAULT_STATES = 10;
+export const OSC_DEFAULT_INPUTS = 3;
+export const OSC_DEFAULT_COLOR = '#00d0d0';
+export type OscFrontLines = 'no' | 'rising' | 'falling' | 'both';
+export type OscLevel = 0 | 1 | 'X' | 'E' | 'N';
+
+export interface OscConfig {
+  inputs: number;
+  states: number;
+  showClock: boolean;
+  frontLines: OscFrontLines;
+  color: string;
+}
+
+export function getOscConfig(comp: CircuitComponentInstance): OscConfig {
+  const st = comp.state;
+  return {
+    inputs: clampRange(comp.inputs.length > 3 ? comp.inputs.length - 3 : OSC_DEFAULT_INPUTS, OSC_MIN_INPUTS, OSC_MAX_INPUTS),
+    states: clampRange(st.oscStates ?? OSC_DEFAULT_STATES, OSC_MIN_STATES, OSC_MAX_STATES),
+    showClock: st.oscHideClock !== true,
+    frontLines: st.oscFrontLines ?? 'rising',
+    color: st.oscColor ?? OSC_DEFAULT_COLOR,
+  };
+}
+
+/** Pin keys in evolution's port order: clock, inputs 1..n, enable, clear */
+export function oscPinKeys(inputs: number): string[] {
+  return ['clk', ...Array.from({ length: inputs }, (_, i) => `in${i + 1}`), 'en', 'clr'];
+}
+
+const oscPinLabel = (key: string) => (key === 'clk' ? 'CLK' : key === 'en' ? 'EN' : key === 'clr' ? 'CLR' : key.slice(2));
+
+/**
+ * Box, evolution body and pins (unrotated, from the box's top-left corner). Evolution: getOffsetBounds is
+ * (0, -10 - 32 * showclock, nState * 30 + 35, height) with height (n + 1) * 30 + 32 (clock shown) or n * 30 + 30;
+ * ports at (0, 30 i) for i = 0 (clock) .. n, enable (20, 30 n + 20), clear (30, 30 n + 20). bodyY is where the
+ * evolution body's top edge sits in our box; clockY the clock pin's height
+ */
+export function oscGeometry(cfg: Pick<OscConfig, 'inputs' | 'states' | 'showClock'>): {
+  width: number;
+  height: number;
+  bodyY: number;
+  bodyW: number;
+  bodyH: number;
+  clockY: number;
+  pins: Record<string, { x: number; y: number }>;
+} {
+  const n = cfg.inputs;
+  const bodyW = cfg.states * 30 + 35;
+  const bodyH = cfg.showClock ? (n + 1) * 30 + 32 : n * 30 + 30;
+  const bottom = 30 * n + 20;
+  const width = Math.ceil(bodyW / 20) * 20;
+  const height = Math.ceil((bottom + (cfg.showClock ? 50 : 10)) / 20) * 20;
+  const clockY = height - bottom;
+  const pins: Record<string, { x: number; y: number }> = { clk: { x: 0, y: clockY } };
+  for (let i = 1; i <= n; i++) pins[`in${i}`] = { x: 0, y: clockY + 30 * i };
+  pins.en = { x: 20, y: height };
+  pins.clr = { x: 30, y: height };
+  return { width, height, bodyY: clockY - (cfg.showClock ? 42 : 10), bodyW, bodyH, clockY, pins };
+}
+
+function oscMeta(): ComponentMetadata {
+  const cfg = { inputs: OSC_DEFAULT_INPUTS, states: OSC_DEFAULT_STATES, showClock: true };
+  const g = oscGeometry(cfg);
+  return {
+    type: 'digitalOscilloscope',
+    name: 'Dijital Osiloskop',
+    category: 'outputs',
+    width: g.width,
+    height: g.height,
+    inputs: oscPinKeys(cfg.inputs).map((k) => ({ id: k, name: oscPinLabel(k), type: 'input' as const, relX: g.pins[k].x, relY: g.pins[k].y })),
+    outputs: [],
+    description:
+      'Dijital osiloskop (Logisim-evolution Digital Oscilloscope): CLK girişinin her seviye değişiminde (iki kenarda da) girişlerin (1-32) seviyelerini yeni bir sütuna çizer; 4-35 saat çevrimi (iki katı sütun) görünür, dolunca eski sütunlar sola kayar. EN 0 iken durur, CLR 1 iken çizim silinir. Saat izi, çevrim numaraları ve kenar çizgileri (yükselen, düşen, ikisi) isteğe bağlı',
+  };
+}
+
+/** A Java byte: keep the low 8 bits, signed */
+const javaByte = (v: number) => ((v + 128) & 255) - 128;
+
+export interface OscRun {
+  rows: string[];
+  used: number;
+  last: OscLevel;
+  moveBack: boolean;
+  clockNo: number;
+}
+
+/** The run state of an oscilloscope, fresh (evolution's new DiagramState) when there is none of the right size */
+export function oscRunOf(comp: CircuitComponentInstance): OscRun {
+  const cfg = getOscConfig(comp);
+  const len = 2 * cfg.states;
+  const rows = comp.state.oscRows;
+  const ok = rows && rows.length === cfg.inputs + 1 && rows.every((r) => r.length === len);
+  return {
+    rows: ok ? [...rows] : new Array<string>(cfg.inputs + 1).fill('-'.repeat(len)),
+    used: Math.min(comp.state.oscUsed ?? -1, len - 1),
+    last: comp.state.oscLastClk ?? 'X',
+    moveBack: comp.state.oscMoveBack === true,
+    clockNo: comp.state.oscClockNo ?? cfg.states,
+  };
+}
+
+/** Store a run state (fields left unset at their fresh values) */
+function oscStoreRun(state: CircuitComponentInstance['state'], r: OscRun, states: number): void {
+  state.oscRows = r.rows.every((row) => !/[01]/.test(row)) ? undefined : r.rows;
+  state.oscUsed = r.used === -1 ? undefined : r.used;
+  state.oscLastClk = r.last === 'X' ? undefined : r.last;
+  state.oscMoveBack = r.moveBack ? true : undefined;
+  state.oscClockNo = r.clockNo === states ? undefined : r.clockNo;
+}
+
+/**
+ * DiagramState.updateSize: a diagram made for other sizes keeps what fits. While the columns have not filled up the
+ * old cells stay at the start; once full, the newest columns go to the end and the panel keeps scrolling (also when
+ * it grows). The cycle number moves by half the change in columns
+ */
+function oscResizeRun(r: OscRun, oldRows: number, oldLen: number, rows: number, len: number): OscRun {
+  if (rows === oldRows && len === oldLen) return r;
+  const clockNo = javaByte(r.clockNo + Math.trunc((len - oldLen) / 2));
+  const cells: string[][] = Array.from({ length: rows }, () => new Array<string>(len).fill('-'));
+  let used = r.used;
+  let moveBack: boolean;
+  if (r.used < len - 1) {
+    for (let i = 0; i < rows && i < oldRows; i++) for (let j = 0; j < len && j < oldLen; j++) cells[i][j] = r.rows[i][j];
+    moveBack = false;
+  } else {
+    for (let i = 0; i < rows && i < oldRows; i++) {
+      let h = oldLen - 1;
+      for (let j = len - 1; j >= 0 && h >= 0; j--) {
+        cells[i][j] = r.rows[i][h - (oldLen - r.used - 1)];
+        h--;
+      }
+    }
+    used = len - 1;
+    moveBack = true;
+  }
+  return { rows: cells.map((c) => c.join('')), used, last: r.last, moveBack, clockNo };
+}
+
+/**
+ * New oscilloscope settings: number of inputs (1-32), cycles shown (4-35), the clock trace shown or not. Pins keep
+ * their ids by key; a diagram already drawn is resized as evolution's updateSize does
+ */
+export function configureOsc(comp: CircuitComponentInstance, patch: { inputs?: number; states?: number; showClock?: boolean }): CircuitComponentInstance {
+  const cur = getOscConfig(comp);
+  const n = clampRange(patch.inputs ?? cur.inputs, OSC_MIN_INPUTS, OSC_MAX_INPUTS);
+  const s = clampRange(patch.states ?? cur.states, OSC_MIN_STATES, OSC_MAX_STATES);
+  const show = patch.showClock ?? cur.showClock;
+  const state = { ...comp.state };
+  if (n !== cur.inputs || s !== cur.states) {
+    const r = oscResizeRun(oscRunOf(comp), cur.inputs + 1, 2 * cur.states, n + 1, 2 * s);
+    oscStoreRun(state, r, s);
+  }
+  if (s === OSC_DEFAULT_STATES) delete state.oscStates;
+  else state.oscStates = s;
+  if (show) delete state.oscHideClock;
+  else state.oscHideClock = true;
+  const oldPins = new Map<string, CircuitPin>();
+  for (const p of comp.inputs) oldPins.set(pinKey(comp, p), p);
+  const inputs = oscPinKeys(n).map((key) => {
+    const base = oldPins.get(key) ?? newPin(comp, key, oscPinLabel(key), 'input');
+    return { ...pinWithWidth(base, 1), name: oscPinLabel(key) };
+  });
+  const next = updatePinPositions({ ...comp, inputs, outputs: [], state });
+  // Evolution's location is the clock port: the box grows around it, so the clock (and every input) stays put
+  const was = comp.inputs.find((p) => pinKey(comp, p) === 'clk');
+  const now = next.inputs[0];
+  if (!was || (was.x === now.x && was.y === now.y)) return next;
+  return updatePinPositions({ ...next, x: next.x + was.x - now.x, y: next.y + was.y - now.y });
+}
+
+/**
+ * DigitalOscilloscope.propagate on a run state. Acts while the clock is not x (a clock wired to nothing counts:
+ * evolution reads it as NIL), clear is not 1 and enable is not 0. The first level seen is only remembered; each
+ * change of level then adds a column (or, once full, scrolls left and writes the last one; a rising edge then also
+ * counts a cycle, 99 wraps to 1) holding every input's level, the clock's included. While the clock stays put the
+ * newest column follows the inputs (not the clock row). Clear = 1 empties the panel and forgets the clock level.
+ * When stopped (enable 0 or clock x) nothing changes, not even the remembered clock level
+ */
+export function oscStep(r: OscRun, len: number, levels: OscLevel[]): OscRun {
+  const rows = r.rows.length;
+  const clock = levels[0];
+  const en = levels[rows];
+  const clr = levels[rows + 1];
+  const ch = (v: OscLevel) => (v === 1 ? '1' : v === 0 ? '0' : '-');
+  const next: OscRun = { ...r, rows: [...r.rows] };
+  const put = (i: number, j: number, c: string) => {
+    const row = next.rows[i];
+    if (row[j] !== c) next.rows[i] = row.slice(0, j) + c + row.slice(j + 1);
+  };
+  if (clock !== 'X' && clr !== 1 && en !== 0) {
+    const last = next.last;
+    next.last = clock;
+    if (last !== 'X') {
+      if (last !== clock) {
+        if (next.used < len - 1) next.used++;
+        if (next.moveBack) {
+          next.rows = next.rows.map((row) => row.slice(1) + row[len - 1]);
+          if (clock === 1) {
+            const c = javaByte(next.clockNo + 1);
+            next.clockNo = c < 100 ? c : 1;
+          }
+        }
+        if (next.used === len - 1) next.moveBack = true;
+        for (let i = 0; i < rows; i++) put(i, next.used, ch(levels[i]));
+      } else if (next.used !== -1) {
+        for (let i = 1; i < rows; i++) put(i, next.used, ch(levels[i]));
+      }
+    }
+  } else if (clr === 1) {
+    next.rows = next.rows.map(() => '-'.repeat(len));
+    next.used = -1;
+    next.last = 'X';
+    next.moveBack = false;
+    next.clockNo = javaByte(len / 2);
+  }
+  return next;
+}
+
+/** Cycle number evolution writes above the n-th high clock column from the left (k = 1 for the first) */
+export function oscCycleNumber(clockNo: number, states: number, k: number): number {
+  const nck = states - k;
+  return clockNo - nck > 0 ? clockNo - nck : 100 + (clockNo - nck - 1);
+}
+
 // ---- Logisim-evolution Base library Image of Aşama 5e -------------------------------------------------------
 // image = 'Image' (std/base/Image.java + ImageAttributes): a picture in a frame whose top-left corner is the part's
 // location; no pins, no logic, not in HDL. The picture is kept as evolution keeps it: the source string itself
@@ -2281,6 +2519,8 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'Ses üreteci (Logisim-evolution Buzzer): EN 1 iken F girişindeki frekansta (14 bit, Hz ya da 0,1 Hz) ses çalar; 20 Hz - 20 kHz dışında susar. Ses V girişiyle (1-32 bit), kare dalganın doluluk oranı PW girişiyle (8 bit, 128 = %50) ayarlanır. Dalga biçimi sinüs, kare, üçgen, testere ya da gürültü; kanal sol, sağ ya da ikisi',
   },
+  // Logisim-evolution Digital Oscilloscope (Input/Output-Extra): oscGeometry gives the box and pins for its settings
+  digitalOscilloscope: oscMeta(),
   // Logisim-evolution Power-on Reset: the wide body (200 x 40); getComponentSize gives the other sizes
   powerOnReset: {
     type: 'powerOnReset',
@@ -2956,6 +3196,8 @@ export function createComponentInstance(
   // A new slider is evolution's: 8 bits, left to right, the knob at the start
   if (type === 'slider') return configureSlider(inst, { width: SLIDER_MAX_BITS });
   // A new evolution buzzer is evolution's: a 7-bit volume, the duty cycle input on the bottom, the label above the body
+  // A new oscilloscope is evolution's: 3 inputs, 10 cycles, the clock trace shown, the label above the body
+  if (type === 'digitalOscilloscope') return configureOsc({ ...inst, state: { ...inst.state, labelPos: 'top' } }, {});
   if (type === 'evoBuzzer') return configureEvoBuzzer({ ...inst, state: { ...inst.state, labelPos: 'top' } }, { volWidth: EVO_BUZZER_DEFAULT_VOL_WIDTH });
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
   if (PLEXER_TYPES.has(type)) {
@@ -3042,6 +3284,10 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   if (comp.type === 'textLabel') {
     const l = textLayout(getTextConfig(comp));
     return { width: l.width, height: l.height };
+  }
+  if (comp.type === 'digitalOscilloscope') {
+    const g = oscGeometry(getOscConfig(comp));
+    return { width: g.width, height: g.height };
   }
   const ttl = ttlChipOf(comp.type);
   if (ttl) return ttlSize(ttl);
@@ -5322,6 +5568,18 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
   }
 
+  if (comp.type === 'digitalOscilloscope') {
+    const g = oscGeometry(getOscConfig(comp));
+    return {
+      ...comp,
+      inputs: comp.inputs.map((pin) => {
+        const at = g.pins[pinKey(comp, pin)] ?? { x: 0, y: 0 };
+        const p = rotatePoint(at.x, at.y);
+        return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+      }),
+    };
+  }
+
   if (comp.type === 'evoBuzzer') {
     const l = evoBuzzerLayout(comp);
     const keys = ['freq', 'en', 'vol', 'pw'] as const;
@@ -6311,6 +6569,19 @@ export function simulateCircuitStep(
           comp.state.buzzerVol = vol;
           comp.state.buzzerPw = pw;
           hasChanged = true;
+        }
+        break;
+      }
+      case 'digitalOscilloscope': {
+        // Logisim-evolution DigitalOscilloscope.propagate (oscStep). A pin wired to nothing reads as NIL ('N'),
+        // which is neither x nor a level: an open clock still runs (but never changes), open enable / clear do
+        // not stop or clear it, an open input draws nothing
+        const cfg = getOscConfig(comp);
+        const levels = comp.inputs.map((p) => (!isPinConnected(p.id) ? 'N' : readBits(p, 1)[0]) as OscLevel);
+        const before = oscRunOf(comp);
+        const r = oscStep(before, 2 * cfg.states, levels);
+        if (r.used !== before.used || r.last !== before.last || r.moveBack !== before.moveBack || r.clockNo !== before.clockNo || r.rows.some((row, i) => row !== before.rows[i])) {
+          oscStoreRun(comp.state, r, cfg.states);
         }
         break;
       }
