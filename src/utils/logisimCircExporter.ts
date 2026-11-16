@@ -89,7 +89,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getClockConfig, getTtlConfig } from './circuitEngine';
+import { getClockConfig, getPorConfig, getTtlConfig, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -893,6 +893,40 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (c.type === 'transistor' && !warnings.some((x) => x.startsWith('Transistör:')))
             warnings.push(`Transistör: tek transistör Logisim 2.7.1'de her seviyeyi geçirir (Logisim-evolution'da ve burada P tipi yalnız 1'i, N tipi yalnız 0'ı); devre 2.7.1'de farklı çalışabilir.`);
+          break;
+        }
+        case 'powerOnReset': {
+          // Logisim-evolution's part (lib Wiring, name POR): its only connection point, the output, is loc; the
+          // body lies behind it by facing. Every attribute is written out. It has no label in Logisim
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const cfg = getPorConfig(c);
+          const { width: bw, height: bh } = porSizeOf(cfg.size);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const attrs =
+            a('facing', facing) +
+            a('porsize', cfg.size === 'medium' ? 1 : cfg.size === 'narrow' ? 2 : 3) +
+            a('porTransition', cfg.startHigh ? 1 : 2) +
+            a('PorHighDuration', cfg.seconds);
+          const box =
+            facing === 'east'
+              ? { x0: -bw, y0: -bh / 2, x1: 0, y1: bh / 2 }
+              : facing === 'west'
+                ? { x0: 0, y0: -bh / 2, x1: bw, y1: bh / 2 }
+                : facing === 'south'
+                  ? { x0: -bh / 2, y0: -bw, x1: bh / 2, y1: 0 }
+                  : { x0: -bh / 2, y0: 0, x1: bh / 2, y1: bw };
+          P.push({ kind: 'ram', part: c.type, attrs, ports: [{ off: { x: 0, y: 0 }, net: out(0), width: 1, sink: false }], lib: 0, name: 'POR', box });
+          // (once per file: the part has no label to tell one from another)
+          if (!warnings.some((x) => x.startsWith('Açılış sıfırlaması:')))
+            warnings.push(`Açılış sıfırlaması: Logisim-evolution parçası (Power-on Reset); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          break;
+        }
+        case 'doNotConnect': {
+          // Logisim-evolution's mark (lib Wiring, name NoConnect) on its pin
+          const net = pin(0);
+          P.push({ kind: 'ram', part: c.type, attrs: `<a name="width" val="${w0(c.inputs[0])}"/>`, ports: [{ off: { x: 0, y: 0 }, net, width: w0(c.inputs[0]), sink: true }], lib: 0, name: 'NoConnect' });
+          if (!warnings.some((x) => x.startsWith('Bağlanmaz işareti:')))
+            warnings.push(`Bağlanmaz işareti: Logisim-evolution parçası (Do Not Connect); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
           break;
         }
         case 'splitter4':

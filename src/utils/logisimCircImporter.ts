@@ -96,6 +96,7 @@ import {
   updatePinPositions,
   floatingSwitchState,
   getClockConfig,
+  getPorConfig,
   resetClockState,
 } from './circuitEngine';
 import { rawTextToMem } from './memImage';
@@ -166,6 +167,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'pull resistor') return 'pullResistor';
   if (n === 'transistor') return 'transistor';
   if (n === 'transmission gate') return 'transmissionGate';
+  if (n === 'por') return 'powerOnReset';
+  if (n === 'noconnect') return 'doNotConnect';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -228,7 +231,7 @@ const IO_IMPORT = new Set<ComponentType>([...IO_TYPES, 'sevenSegment', ...IO5_TY
 const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
-  'multiplexer', 'demultiplexer', 'transistor', 'transmissionGate',
+  'multiplexer', 'demultiplexer', 'transistor', 'transmissionGate', 'doNotConnect',
 ]);
 // Logisim's most inputs per gate; ours takes as many
 const MAX_IMPORT_GATE_INPUTS = 32;
@@ -2442,6 +2445,19 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
           inst.state = { ...inst.state, constValue: width >= 32 ? v >>> 0 : v % 2 ** width };
         }
         if (nativeType === 'probe' && attr.radix && RADIX[attr.radix]) inst.state = { ...inst.state, radix: RADIX[attr.radix] };
+        // Power-on reset: evolution's porsize 3 wide (default) / 1 medium / 2 narrow, porTransition 1 high to low
+        // (default) / 2 low to high, PorHighDuration in seconds (default 2); it faces as the file says
+        if (nativeType === 'powerOnReset') {
+          const a = part.attr;
+          const st = { ...inst.state };
+          if (a.porsize === '1') st.porSize = 'medium';
+          else if (a.porsize === '2') st.porSize = 'narrow';
+          if (a.porTransition === '2') st.porTransition = 'lh';
+          const sec = getPorConfig({ ...inst, state: { ...st, porDuration: a.PorHighDuration === undefined ? undefined : Number(a.PorHighDuration) } }).seconds;
+          if (sec !== 2) st.porDuration = sec;
+          inst = updatePinPositions({ ...inst, rotation: rot as 0 | 90 | 180 | 270, state: st });
+        }
+        if (nativeType === 'doNotConnect' && width > 1) inst = setBitWidth(inst, width);
         const pinsOf = [...inst.inputs, ...inst.outputs];
         if (pinsOf.length === 1) {
           // Single-pin parts (pins, probes, LEDs, clocks, constants): the Logisim loc IS the pin
