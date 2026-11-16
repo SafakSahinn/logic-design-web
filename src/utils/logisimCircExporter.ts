@@ -83,13 +83,14 @@ import {
   logisimPlexerPorts,
   logisimRamPorts,
   logisimTransistorPorts,
+  logisimPlaOutput,
   logisimSplitterEnds,
   type LogisimPlexer,
   type LogisimRamLook,
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getClockConfig, getPorConfig, getTtlConfig, porSizeOf } from './circuitEngine';
+import { getClockConfig, getPlaConfig, getPorConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -226,7 +227,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  * 7-segment / hex digit displays, LED matrix, RAM and ROM either: it skips the attribute and reads the rest alike.
  */
 const LABELLED_PARTS = new Set<ComponentType>([
-  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
+  'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -893,6 +894,37 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (c.type === 'transistor' && !warnings.some((x) => x.startsWith('Transistör:')))
             warnings.push(`Transistör: tek transistör Logisim 2.7.1'de her seviyeyi geçirir (Logisim-evolution'da ve burada P tipi yalnız 1'i, N tipi yalnız 0'ı); devre 2.7.1'de farklı çalışabilir.`);
+          break;
+        }
+        case 'pla': {
+          // Logisim-evolution's part (lib Gates, name PLA): the input on loc, the output 50 ahead by facing, the
+          // body 25 to either side of that line. The program is the text evolution writes (one row a line, as the
+          // element's text). Evolution reads a missing or empty table as its 2 x 2 default and takes the widths from
+          // it, so a program without rows is left out at 2 x 2 and otherwise written as one row giving 0 for every
+          // input (the same outputs as no row)
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const cfg = getPlaConfig(c);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const rows = cfg.rows.length || (cfg.inWidth === 2 && cfg.outWidth === 2) ? cfg.rows : [{ in: 'x'.repeat(cfg.inWidth), out: '0'.repeat(cfg.outWidth) }];
+          const table = plaTableText(rows).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const attrs = a('facing', facing) + a('in_width', cfg.inWidth) + a('out_width', cfg.outWidth) + (table ? `<a name="table">${table}</a>` : '');
+          const o = logisimPlaOutput(facing);
+          const box = { x0: Math.min(0, o.x) - (o.x ? 0 : 25), y0: Math.min(0, o.y) - (o.y ? 0 : 25), x1: Math.max(0, o.x) + (o.x ? 0 : 25), y1: Math.max(0, o.y) + (o.y ? 0 : 25) };
+          P.push({
+            kind: 'ram',
+            part: c.type,
+            attrs,
+            ports: [
+              { off: { x: 0, y: 0 }, net: pin(0), width: cfg.inWidth, sink: true },
+              { off: o, net: out(0), width: cfg.outWidth, sink: false },
+            ],
+            lib: 1,
+            name: 'PLA',
+            box,
+          });
+          // (once per file)
+          if (!warnings.some((x) => x.startsWith('PLA:')))
+            warnings.push(`PLA: Logisim-evolution parçası; Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
           break;
         }
         case 'powerOnReset': {

@@ -17,6 +17,8 @@ import {
   configureArith,
   configureBitExtender,
   configureBitSelector,
+  configurePla,
+  parsePlaTable,
   configureMem,
   configurePlexer,
   configureRam,
@@ -167,6 +169,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'pull resistor') return 'pullResistor';
   if (n === 'transistor') return 'transistor';
   if (n === 'transmission gate') return 'transmissionGate';
+  if (n === 'pla') return 'pla';
   if (n === 'por') return 'powerOnReset';
   if (n === 'noconnect') return 'doNotConnect';
   if (n === 'constant') {
@@ -317,6 +320,9 @@ export function logisimTransistorPorts(facing: string, selloc: string): { source
   const b = { x: 20 * (dx - dy), y: 20 * (dx + dy) };
   return { source: { x: 40 * dx, y: 40 * dy }, gate: flip ? a : b, gate2: flip ? b : a };
 }
+/** Logisim-evolution PLA (Pla.updatePorts): the input on loc, the output 50 ahead of it by facing */
+export const logisimPlaOutput = (facing: string): Pt =>
+  facing === 'west' ? { x: -50, y: 0 } : facing === 'north' ? { x: 0, y: -50 } : facing === 'south' ? { x: 0, y: 50 } : { x: 50, y: 0 };
 /**
  * Logisim 2.7.1 names the same side differently ('gate': tl = top / left, br = bottom / right): facing east or
  * west its top is evolution's 'tr', facing north or south its left is evolution's 'bl'. Both ways (the mapping
@@ -1942,6 +1948,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? BIT_SELECTOR_POINTS[facing] ?? BIT_SELECTOR_POINTS.east
               : nativeType === 'transistor' || nativeType === 'transmissionGate'
               ? ((t) => (nativeType === 'transistor' ? [t.source, t.gate] : [t.source, t.gate, t.gate2]))(logisimTransistorPorts(facing, transistorSelloc(attr, facing)))
+              : nativeType === 'pla'
+              ? [logisimPlaOutput(facing)]
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2133,6 +2141,25 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             [inst.inputs[0].id, at(loc, t.source)],
             [inst.inputs[1].id, at(loc, t.gate)],
             ...(inst.inputs[2] ? ([[inst.inputs[2].id, at(loc, t.gate2)]] as Array<[string, Pt]>) : []),
+          ]);
+          continue;
+        }
+        if (nativeType === 'pla') {
+          // Logisim-evolution's PLA: the input on loc, the output 50 ahead. The widths are those of the program's
+          // rows (evolution sets them from the table, which it reads last); a missing table or one without a row
+          // is evolution's default empty 2 x 2 table, whatever widths were written before it
+          const parsed = parsePlaTable(attr.table ?? '');
+          for (const e of parsed?.errors ?? []) warnings.push(`${where}: PLA tablosunda ${e}; satır alınmadı.`);
+          const tooWide = /^[01x]{33,}\s|\s[01]{33,}\s*(#|$)/m.test(attr.table ?? '');
+          if (!parsed && tooWide) warnings.push(`${where}: PLA tablosu 32 bitten geniş; burada en çok 32 bit olduğundan tablo alınmadı.`);
+          let inst = configurePla(
+            createComponentInstance('pla', 0, 0),
+            parsed ? { inWidth: parsed.inWidth, outWidth: parsed.outWidth, rows: parsed.rows } : { inWidth: 2, outWidth: 2, rows: [] }
+          );
+          inst = { ...inst, rotation: rot as 0 | 90 | 180 | 270 };
+          place(inst, inst.inputs[0].id, loc, label, [
+            [inst.inputs[0].id, loc],
+            [inst.outputs[0].id, at(loc, logisimPlaOutput(part.facing))],
           ]);
           continue;
         }
