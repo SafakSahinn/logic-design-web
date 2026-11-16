@@ -37,6 +37,8 @@ import {
   getSliderConfig,
   SLIDER_MAX_BITS,
   TWO_PIN_LED_DEFAULTS,
+  configureEvoBuzzer,
+  getEvoBuzzerConfig,
   configureMem,
   configurePlexer,
   configureRam,
@@ -932,6 +934,99 @@ const twoPinLedAttrs: AttrDef[] = [
   ledColorAttrOf('ledReverseColor', 'Ters renk', 'Çift renkli LED ters yönde sürülünce rengi (Logisim-evolution "Reverse Color")', TWO_PIN_LED_DEFAULTS.reverse, [], (c) => !!c.state.ledBipolar),
 ];
 
+// ---- Evolution buzzer (Logisim-evolution Input/Output-Extra Buzzer) ------------------------------------------------
+const evoBuzzerAttrs: AttrDef[] = [
+  {
+    key: 'buzzerDHz',
+    label: 'Frekans birimi',
+    kind: 'buttons',
+    title: 'F girişinin birimi (Logisim-evolution "Frequency"): Hz ya da 0,1 Hz (dHz; değer 10\'a bölünüp küsuratı atılır)',
+    options: [
+      { value: 'hz', label: 'Hz' },
+      { value: 'dhz', label: '0,1 Hz (dHz)' },
+    ],
+    get: (c) => (getEvoBuzzerConfig(c).dHz ? 'dhz' : 'hz'),
+    set: (c, v) => ((getEvoBuzzerConfig(c).dHz ? 'dhz' : 'hz') === v ? null : withState(c, { buzzerDHz: v === 'dhz' ? true : undefined })),
+  },
+  {
+    key: 'buzzerVolWidth',
+    label: 'Ses bit',
+    kind: 'select',
+    title: 'V (ses yüksekliği) girişinin genişliği (1-32, Logisim-evolution "Volume Bit Width"); en büyük değer tam ses',
+    options: numberOptions(1, 32),
+    get: (c) => getEvoBuzzerConfig(c).volWidth,
+    set: (c, v) => (getEvoBuzzerConfig(c).volWidth === Number(v) ? null : { comp: configureEvoBuzzer(c, { volWidth: Number(v) }), stateOnly: true }),
+  },
+  {
+    key: 'buzzerWave',
+    label: 'Dalga biçimi',
+    kind: 'select',
+    title: 'Çalınan dalganın biçimi (Logisim-evolution "Waveform"); kare dalganın doluluk oranı PW girişinden',
+    options: [
+      { value: 'sine', label: 'Sinüs' },
+      { value: 'square', label: 'Kare' },
+      { value: 'triangle', label: 'Üçgen' },
+      { value: 'sawtooth', label: 'Testere dişi' },
+      { value: 'noise', label: 'Gürültü' },
+    ],
+    get: (c) => getEvoBuzzerConfig(c).wave,
+    set: (c, v) => (getEvoBuzzerConfig(c).wave === v ? null : withState(c, { buzzerWave: v === 'sine' ? undefined : (v as 'square' | 'triangle' | 'sawtooth' | 'noise') })),
+  },
+  {
+    key: 'buzzerChannel',
+    label: 'Kanal',
+    kind: 'buttons',
+    title: 'Sesin çıktığı kanal (Logisim-evolution "Channel")',
+    options: [
+      { value: 'both', label: 'İkisi' },
+      { value: 'left', label: 'Sol' },
+      { value: 'right', label: 'Sağ' },
+    ],
+    get: (c) => getEvoBuzzerConfig(c).channel,
+    set: (c, v) => (getEvoBuzzerConfig(c).channel === v ? null : withState(c, { buzzerChannel: v === 'both' ? undefined : (v as 'left' | 'right') })),
+  },
+  {
+    key: 'buzzerSmoothLevel',
+    label: 'Yumuşatma',
+    kind: 'select',
+    title: 'Dalgaya uygulanan hareketli ortalama geçişi sayısı (0-10, Logisim-evolution "Smooth Level"); sinüse uygulanmaz, 0 = kapalı',
+    options: numberOptions(0, 10),
+    get: (c) => getEvoBuzzerConfig(c).smoothLevel,
+    set: (c, v) => (getEvoBuzzerConfig(c).smoothLevel === Number(v) ? null : withState(c, { buzzerSmoothLevel: Number(v) === 2 ? undefined : Number(v) })),
+  },
+  {
+    key: 'buzzerSmoothWidth',
+    label: 'Yumuşatma genişliği',
+    kind: 'select',
+    title: 'Hareketli ortalamanın yarı genişliği, örnek sayısı (1-10, Logisim-evolution "Smooth Width")',
+    options: numberOptions(1, 10),
+    get: (c) => getEvoBuzzerConfig(c).smoothWidth,
+    set: (c, v) => (getEvoBuzzerConfig(c).smoothWidth === Number(v) ? null : withState(c, { buzzerSmoothWidth: Number(v) === 2 ? undefined : Number(v) })),
+  },
+  // The other pins stay; wires on the duty cycle input follow it to the other side
+  {
+    key: 'selectLoc',
+    label: 'PW bacağı',
+    kind: 'buttons',
+    title: 'Doluluk oranı (PW) girişinin bulunduğu kenar (Logisim-evolution "Select Location")',
+    options: [
+      { value: 'bl', label: 'Alt / Sol' },
+      { value: 'tr', label: 'Üst / Sağ' },
+    ],
+    get: (c) => getEvoBuzzerConfig(c).selectLoc,
+    set: (c, v) => {
+      if (getEvoBuzzerConfig(c).selectLoc === v) return null;
+      const next = configureEvoBuzzer(c, { selectLoc: v as 'bl' | 'tr' });
+      const remap = new Map<string, string | null>();
+      for (const p of c.inputs) {
+        const sp = snapPt10(p);
+        remap.set(`${sp.x},${sp.y}`, p.id);
+      }
+      return { comp: next, remap };
+    },
+  },
+];
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -1204,6 +1299,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'twoPinLed':
       list.push(...twoPinLedAttrs);
+      break;
+    case 'evoBuzzer':
+      list.push(...evoBuzzerAttrs);
       break;
     case 'powerOnReset':
       list.push(porSizeAttr, porTransitionAttr, porDurationAttr);

@@ -78,6 +78,9 @@ import {
   sliderPositionAt,
   twoPinLedColor,
   twoPinLedState,
+  evoBuzzerSamples,
+  evoBuzzerSounding,
+  getEvoBuzzerConfig,
   getPorConfig,
   porSizeOf,
   porActive,
@@ -442,6 +445,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
+  evoBuzzer: { label: 'Ses Üreteci', badge: 'evo Buzzer' },
   rgbVideo: { label: 'RGB Video', badge: 'VGA' },
   asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
   keyboard: { label: 'Klavye', badge: 'KBD' },
@@ -1875,6 +1879,72 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
     }
   }, [components, isRunning, isSoundMuted, clockHz, getAudioContext]);
+
+  // Logisim-evolution buzzers: each sounding one (inside subcircuits too) loops the clip evolution's sound thread
+  // would build for it, made again when its frequency, volume, duty cycle or settings change
+  const evoBuzzerSoundsRef = useRef(new Map<string, { src: AudioBufferSourceNode; key: string }>());
+  useEffect(() => {
+    const want = new Map<string, { key: string; comp: CircuitComponentInstance }>();
+    if (isRunning && !isSoundMuted) {
+      const walk = (list: CircuitComponentInstance[], path: string) => {
+        for (const c of list) {
+          if (c.type === 'evoBuzzer' && evoBuzzerSounding(c)) {
+            const g = getEvoBuzzerConfig(c);
+            const st = c.state;
+            want.set(path + c.id, { key: [st.buzzerHz, st.buzzerVol, st.buzzerPw, g.wave, g.channel, g.smoothLevel, g.smoothWidth].join('|'), comp: c });
+          } else if (c.type === 'subcircuit' && c.state.subcircuitInternal) walk(c.state.subcircuitInternal.components, `${path}${c.id}/`);
+        }
+      };
+      walk(components, '');
+    }
+    const playing = evoBuzzerSoundsRef.current;
+    for (const [id, s] of playing) {
+      if (want.get(id)?.key === s.key) continue;
+      try {
+        s.src.stop();
+        s.src.disconnect();
+      } catch {
+        // already stopped
+      }
+      playing.delete(id);
+    }
+    if (want.size === 0) return;
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    for (const [id, w] of want) {
+      if (playing.has(id)) continue;
+      const g = getEvoBuzzerConfig(w.comp);
+      const st = w.comp.state;
+      try {
+        const snd = evoBuzzerSamples({ hz: st.buzzerHz ?? 0, vol: st.buzzerVol ?? 0, pw: st.buzzerPw ?? 128, wave: g.wave, channel: g.channel, smoothLevel: g.smoothLevel, smoothWidth: g.smoothWidth });
+        const buf = ctx.createBuffer(2, snd.left.length, snd.sampleRate);
+        buf.getChannelData(0).set(snd.left);
+        buf.getChannelData(1).set(snd.right);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        src.connect(ctx.destination);
+        src.start();
+        playing.set(id, { src, key: w.key });
+      } catch {
+        // autoplay policy or an unsupported sample rate
+      }
+    }
+  }, [components, isRunning, isSoundMuted, getAudioContext]);
+  useEffect(() => {
+    const playing = evoBuzzerSoundsRef.current;
+    return () => {
+      for (const s of playing.values()) {
+        try {
+          s.src.stop();
+          s.src.disconnect();
+        } catch {
+          // already stopped
+        }
+      }
+      playing.clear();
+    };
+  }, []);
 
   // Clean up audio on unmount
   useEffect(() => {
@@ -5214,6 +5284,32 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      // Logisim-evolution Buzzer.paintInstance: a dark round body with three grey rings, a cross and a black middle
+      case 'evoBuzzer': {
+        const line = isSelected ? '#2563eb' : '#000000';
+        const g = getEvoBuzzerConfig(comp);
+        const hz = comp.state.buzzerHz;
+        const on = evoBuzzerSounding(comp);
+        const why = !comp.state.buzzerOn ? 'EN 1 değil' : `${hz} Hz çalınabilir aralık (20 Hz - 20 kHz) dışında`;
+        return (
+          <g>
+            <title>{`Ses üreteci (${{ sine: 'sinüs', square: 'kare', triangle: 'üçgen', sawtooth: 'testere dişi', noise: 'gürültü' }[g.wave]}): ${on ? `${hz} Hz çalıyor` : `susuyor, ${why}`}. Girişler F (frekans), EN, V (ses) ve PW (doluluk oranı)`}</title>
+            <circle cx={20} cy={20} r={20} fill="#404040" />
+            <g stroke="#808080" strokeWidth={2} fill="none">
+              <circle cx={20} cy={20} r={8} />
+              <circle cx={20} cy={20} r={12} />
+              <circle cx={20} cy={20} r={16} />
+            </g>
+            <g stroke="#404040" strokeWidth={2}>
+              <line x1={4} y1={20} x2={36} y2={20} />
+              <line x1={20} y1={4} x2={20} y2={36} />
+            </g>
+            <circle cx={20} cy={20} r={5} fill="#000000" />
+            <circle cx={20} cy={20} r={20} fill="none" stroke={line} strokeWidth={2} />
+          </g>
+        );
+      }
+
       case 'tunnel': {
         const lbl = comp.label || 'Tünel';
         const isHigh = comp.inputs[0]?.value === 1 || comp.outputs[0]?.value === 1;
@@ -7563,7 +7659,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'audio',
       title: 'Ses & Donanım',
       icon: '🔊',
-      types: ['buzzer'] as ComponentType[],
+      types: ['buzzer', 'evoBuzzer'] as ComponentType[],
     },
     // TTL chips (Aşama 4), one group per kind, only the kinds that have chips
     ...(Object.keys(TTL_GROUP_TITLES) as TtlGroup[])
