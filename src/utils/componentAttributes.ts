@@ -39,6 +39,14 @@ import {
   TWO_PIN_LED_DEFAULTS,
   configureEvoBuzzer,
   getEvoBuzzerConfig,
+  configureOsc,
+  getOscConfig,
+  OSC_DEFAULT_COLOR,
+  OSC_MIN_INPUTS,
+  OSC_MAX_INPUTS,
+  OSC_MIN_STATES,
+  OSC_MAX_STATES,
+  type OscFrontLines,
   configureMem,
   configurePlexer,
   configureRam,
@@ -1027,6 +1035,88 @@ const evoBuzzerAttrs: AttrDef[] = [
   },
 ];
 
+// ---- Digital oscilloscope (Logisim-evolution Input/Output-Extra Digital Oscilloscope) ------------------------------
+// Pins keep their ids by key: wires on the clock / inputs / enable / clear follow them when the box changes, wires of
+// a removed input stay as open ends. A drawn diagram is resized as evolution does
+const oscResize = (c: CircuitComponentInstance, patch: { inputs?: number; states?: number; showClock?: boolean }): AttrEdit | null => {
+  const next = configureOsc(c, patch);
+  const keep = new Set(next.inputs.map((p) => p.id));
+  const remap = new Map<string, string | null>();
+  for (const p of c.inputs) {
+    const sp = snapPt10(p);
+    remap.set(`${sp.x},${sp.y}`, keep.has(p.id) ? p.id : null);
+  }
+  return { comp: next, remap };
+};
+const oscAttrs: AttrDef[] = [
+  {
+    key: 'oscInputs',
+    label: 'Giriş sayısı',
+    kind: 'select',
+    title: 'Çizilen giriş sayısı, saatten ayrı (1-32, Logisim-evolution "Number Of Inputs")',
+    options: numberOptions(OSC_MIN_INPUTS, OSC_MAX_INPUTS),
+    get: (c) => getOscConfig(c).inputs,
+    set: (c, v) => (getOscConfig(c).inputs === Number(v) ? null : oscResize(c, { inputs: Number(v) })),
+  },
+  {
+    key: 'oscStates',
+    label: 'Saat çevrimi',
+    kind: 'select',
+    title: 'Görünen saat çevrimi sayısı (4-35, Logisim-evolution "Number of States"); her çevrim iki sütun (iki kenar)',
+    options: numberOptions(OSC_MIN_STATES, OSC_MAX_STATES),
+    get: (c) => getOscConfig(c).states,
+    set: (c, v) => (getOscConfig(c).states === Number(v) ? null : oscResize(c, { states: Number(v) })),
+  },
+  {
+    key: 'oscFrontLines',
+    label: 'Kenar çizgileri',
+    kind: 'buttons',
+    title: 'Saatin hangi kenarlarında kesikli dikey çizgi çizilir (Logisim-evolution "Draw Clock Front Line")',
+    options: [
+      { value: 'no', label: 'Yok' },
+      { value: 'rising', label: 'Yükselen' },
+      { value: 'falling', label: 'Düşen' },
+      { value: 'both', label: 'İkisi' },
+    ],
+    get: (c) => getOscConfig(c).frontLines,
+    set: (c, v) => (getOscConfig(c).frontLines === v ? null : withState(c, { oscFrontLines: v === 'rising' ? undefined : (v as OscFrontLines) })),
+  },
+  {
+    key: 'oscShowClock',
+    label: 'Saat izi',
+    kind: 'buttons',
+    title: 'Saatin kendi izi ve çevrim numaraları en üstte gösterilir mi (Logisim-evolution "Show Clock")',
+    options: [
+      { value: 'yes', label: 'Göster' },
+      { value: 'no', label: 'Gizle' },
+    ],
+    get: (c) => (getOscConfig(c).showClock ? 'yes' : 'no'),
+    set: (c, v) => ((getOscConfig(c).showClock ? 'yes' : 'no') === v ? null : oscResize(c, { showClock: v === 'yes' })),
+  },
+  {
+    key: 'oscColor',
+    label: 'Çerçeve rengi',
+    kind: 'buttons',
+    title: 'Çerçevenin rengi; saat izi, eksenler ve kenar çizgileri bu rengin koyu tonları (Logisim-evolution "Border Color")',
+    options: (c) =>
+      colorChoices(
+        [
+          { value: OSC_DEFAULT_COLOR, label: 'Turkuaz', swatch: OSC_DEFAULT_COLOR },
+          { value: '#f0c000', label: 'Sarı', swatch: '#f0c000' },
+          { value: '#40c040', label: 'Yeşil', swatch: '#40c040' },
+          { value: '#8080ff', label: 'Mavi', swatch: '#8080ff' },
+          { value: '#c0c0c0', label: 'Gri', swatch: '#c0c0c0' },
+        ],
+        c.state.oscColor
+      ),
+    get: (c) => getOscConfig(c).color,
+    set: (c, v) => {
+      const color = String(v).toLowerCase();
+      return getOscConfig(c).color === color ? null : withState(c, { oscColor: color === OSC_DEFAULT_COLOR ? undefined : color });
+    },
+  },
+];
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -1302,6 +1392,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'evoBuzzer':
       list.push(...evoBuzzerAttrs);
+      break;
+    case 'digitalOscilloscope':
+      list.push(...oscAttrs);
       break;
     case 'powerOnReset':
       list.push(porSizeAttr, porTransitionAttr, porDurationAttr);

@@ -80,6 +80,10 @@ import {
   twoPinLedState,
   evoBuzzerSamples,
   evoBuzzerSounding,
+  getOscConfig,
+  oscGeometry,
+  oscRunOf,
+  oscCycleNumber,
   getEvoBuzzerConfig,
   getPorConfig,
   porSizeOf,
@@ -446,6 +450,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
   evoBuzzer: { label: 'Ses Üreteci', badge: 'evo Buzzer' },
+  digitalOscilloscope: { label: 'Dijital Osiloskop', badge: 'Osilo' },
   rgbVideo: { label: 'RGB Video', badge: 'VGA' },
   asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
   keyboard: { label: 'Klavye', badge: 'KBD' },
@@ -6266,6 +6271,92 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      // Logisim-evolution DigitalOscilloscope.paintInstance: a frame in the chosen colour around a white panel, a
+      // grey axis with an arrow per trace, the traces (the clock's in a darker shade of the colour, the inputs black;
+      // high = 20 px above the axis, nothing where a level was not known), dashed lines at the chosen clock edges and
+      // the cycle numbers above the high clock columns, the clock mark at CLK. Our box has room above evolution's body
+      case 'digitalOscilloscope': {
+        const cfg = getOscConfig(comp);
+        const g = oscGeometry(cfg);
+        const r = oscRunOf(comp);
+        const len = 2 * cfg.states;
+        const sc = cfg.showClock ? 1 : 0;
+        const nRows = cfg.inputs + sc;
+        const W = g.bodyW;
+        const H = g.bodyH;
+        const darker = (hex: string, times: number) => {
+          let [cr, cg, cb] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) || 0);
+          // java.awt.Color.darker: each channel times 0.7, cut to an integer
+          for (let k = 0; k < times; k++) [cr, cg, cb] = [cr, cg, cb].map((v) => Math.floor(v * 0.7));
+          return `rgb(${cr},${cg},${cb})`;
+        };
+        const frame = isSelected ? '#3b82f6' : io5Stroke;
+        const fl = cfg.frontLines;
+        const row0 = r.rows[0];
+        const edgeLines: number[] = [];
+        if (fl !== 'no')
+          for (let j = 1; j < len; j++) {
+            const rise = row0[j] === '1' && row0[j - 1] === '0';
+            const fall = row0[j] === '0' && row0[j - 1] === '1';
+            if (((fl === 'rising' || fl === 'both') && rise) || ((fl === 'falling' || fl === 'both') && fall)) edgeLines.push(j);
+          }
+        const traces: React.ReactNode[] = [];
+        const numbers: React.ReactNode[] = [];
+        let nck = cfg.states;
+        for (let i = 0; i < nRows; i++) {
+          const d = r.rows[i + (sc ? 0 : 1)];
+          const lowY = 10 + 30 * i + 30 + 2 * sc;
+          const highY = 20 + 30 * i + 2 * sc;
+          const ax = 10 + 15 * len;
+          // (evolution tests its own row i here, not the drawn row)
+          const tail = r.moveBack && r.rows[i][len - 1] !== '-';
+          const traceColor = sc && i === 0 ? darker(cfg.color, 2) : '#000000';
+          let path = '';
+          for (let j = 0; j < len; j++) {
+            const x = 10 + 15 * j;
+            if (j > 0 && d[j] !== d[j - 1] && d[j] !== '-' && d[j - 1] !== '-') path += `M${x} ${highY}V${lowY}`;
+            if (d[j] === '1') {
+              path += `M${x} ${highY}H${x + 15}`;
+              if (j === len - 1) path += `M${x + 15} ${highY}V${lowY}`;
+              if (i === 0 && fl !== 'no' && sc) {
+                nck--;
+                numbers.push(
+                  <text key={`n${j}`} x={x + 7} y={15} textAnchor="middle" dominantBaseline="central" fill={darker(cfg.color, 1)} style={{ fontSize: 8, fontFamily: 'sans-serif' }} className="select-none">
+                    {oscCycleNumber(r.clockNo, cfg.states, cfg.states - nck)}
+                  </text>
+                );
+              }
+            } else if (d[j] === '0') path += `M${x} ${lowY}H${x + 15}`;
+          }
+          traces.push(
+            <g key={i}>
+              <line x1={10} y1={lowY} x2={ax + 4} y2={lowY} stroke={darker(cfg.color, 3)} strokeWidth={1} />
+              {tail && <line x1={ax} y1={lowY} x2={ax + 4} y2={lowY} stroke="#000000" strokeWidth={2} />}
+              <polygon points={`${ax + 4},${lowY - 3} ${ax + 13},${lowY} ${ax + 4},${lowY + 3}`} fill={tail ? '#000000' : darker(cfg.color, 3)} />
+              {path && <path d={path} stroke={traceColor} strokeWidth={2} fill="none" strokeLinecap="square" />}
+            </g>
+          );
+        }
+        const cy = g.clockY - g.bodyY;
+        const status = r.used < 0 ? 'henüz sütun yok' : `${r.used + 1}/${len} sütun dolu${r.moveBack ? ', eski sütunlar sola kayıyor' : ''}`;
+        return (
+          <g>
+            <title>{`Dijital osiloskop: ${cfg.inputs} giriş, ${cfg.states} saat çevrimi (${len} sütun); ${status}. CLK'nin her seviye değişimi bir sütun ekler; EN 0 iken durur, CLR 1 iken çizim silinir`}</title>
+            <g transform={`translate(0,${g.bodyY})`}>
+              <rect x={0} y={0} width={W} height={H} rx={5} fill={cfg.color} stroke={frame} strokeWidth={isSelected ? 3 : 2} />
+              <rect x={10} y={10} width={W - 20} height={H - 20} rx={2.5} fill="#ffffff" />
+              {edgeLines.map((j) => (
+                <line key={`e${j}`} x1={10 + 15 * j} y1={10} x2={10 + 15 * j} y2={H - 10} stroke={darker(cfg.color, 1)} strokeWidth={0.5} strokeDasharray="6 4" />
+              ))}
+              {traces}
+              {numbers}
+              <rect x={10} y={10} width={W - 20} height={H - 20} rx={2.5} fill="none" stroke="#000000" strokeWidth={2} />
+              <path d={`M1 ${cy - 3}L4 ${cy}L1 ${cy + 3}`} fill="none" stroke={io5Stroke} strokeWidth={2} />
+            </g>
+          </g>
+        );
+      }
+
       case 'rgbVideo': {
         // Logisim-evolution Video.paintInstance (x2): rounded box, the screen frame 12 in and the image 14 in at
         // 2 * scale units per pixel, the clock triangle at CLK pointing in, and the blinking cursor (1 s on, 1 s off,
@@ -7653,7 +7744,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'twoPinLed', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel', 'image'] as ComponentType[],
+      types: ['led', 'twoPinLed', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'digitalOscilloscope', 'textLabel', 'image'] as ComponentType[],
     },
     {
       id: 'audio',
