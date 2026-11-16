@@ -35,6 +35,9 @@ export type ComponentType =
   // (changeover) switch (Aşama 5h-a)
   | 'passSwitch'
   | 'twoWaySwitch'
+  // Logisim-evolution Input/Output-Extra: a slider giving a number and an LED with an anode and a cathode (Aşama 5h-b)
+  | 'slider'
+  | 'twoPinLed'
   // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
   | 'powerOnReset'
   | 'doNotConnect'
@@ -226,8 +229,19 @@ export interface CircuitComponentInstance {
     switchClosed?: boolean;
     /** Two-way switch: one input to two outputs or two inputs to one output (Logisim-evolution 'mode'); unset = 1in2out */
     twoWayMode?: '1in2out' | '2in1out';
-    /** Pass / two-way switch body colour, '#rrggbb' (Logisim-evolution 'color'); unset = white */
+    /** Pass / two-way switch / slider body colour, '#rrggbb' (Logisim-evolution 'color'); unset = white */
     switchColor?: string;
+    /** Slider: knob position along the track in pixels, 0-255 (evolution SliderValue.sliderPosition). Run state, not
+     *  saved in a .circ; unset = the start of the track (0, or 255 right to left), giving 0 */
+    sliderPos?: number;
+    /** Slider: the value grows from right to left (Logisim-evolution 'Direction' right_to_left); unset = left to right */
+    sliderRtl?: boolean;
+    /** Two-pin LED: colour when it is off (Logisim-evolution 'offcolor'); unset = #404040 */
+    ledOffColor?: string;
+    /** Two-pin LED: lights in its reverse colour when the cathode is 1 and the anode 0 (evolution 'bipolar'); unset = false */
+    ledBipolar?: boolean;
+    /** Two-pin LED: colour of a bipolar LED driven in reverse (evolution 'reversecolor'); unset = #00f000 */
+    ledReverseColor?: string;
     /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
     porSize?: 'wide' | 'medium' | 'narrow';
     /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */

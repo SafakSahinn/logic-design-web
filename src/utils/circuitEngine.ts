@@ -2236,6 +2236,33 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     ],
     description: 'İki yollu (değiştirici) anahtar (Logisim-evolution TwoWaySwitch): tıklayınca kol öbür tarafa geçer. 1 giriş / 2 çıkış kipinde giriş koldaki çıkışa gider, öbür çıkış boşta (x); 2 giriş / 1 çıkış kipinde çıkış koldaki girişi alır',
   },
+  // Logisim-evolution Input/Output-Extra Slider: a 275 x 30 body (the track 255 pixels long) placed 5 below the box top
+  // and 5 short of its output side, so the output stays on the grid. Unlike evolution, the body turns with the part
+  slider: {
+    type: 'slider',
+    name: 'Kaydırıcı (Slider)',
+    category: 'inputs',
+    width: 280,
+    height: 40,
+    inputs: [],
+    outputs: [{ id: 'out', name: 'out', type: 'output', relX: 280, relY: 20 }],
+    description: 'Kaydırıcı (Logisim-evolution Slider): düğmesi fareyle sürüklenir, çıkış düğmenin konumuna göre 0 ile 2^genişlik - 1 arası bir sayı (1-8 bit). Yön soldan sağa ya da sağdan sola seçilir',
+  },
+  // Logisim-evolution TWOPINLED: a 20 x 20 round body with the anode and the cathode on opposite sides (facing west in
+  // evolution = not turned here: the anode on the left)
+  twoPinLed: {
+    type: 'twoPinLed',
+    name: 'İki Uçlu LED (Two-Pin LED)',
+    category: 'outputs',
+    width: 20,
+    height: 20,
+    inputs: [
+      { id: 'anode', name: 'A', type: 'input', relX: 0, relY: 10 },
+      { id: 'cathode', name: 'K', type: 'input', relX: 20, relY: 10 },
+    ],
+    outputs: [],
+    description: 'İki uçlu LED (Logisim-evolution Two-Pin LED): anot 1 ve katot 0 iken yanar. Çift renkli (bipolar) seçilirse katot 1 ve anot 0 iken ters yön rengiyle yanar; başka her durumda söner',
+  },
   // Logisim-evolution Power-on Reset: the wide body (200 x 40); getComponentSize gives the other sizes
   powerOnReset: {
     type: 'powerOnReset',
@@ -2891,6 +2918,8 @@ export function createComponentInstance(
   if (type === 'pla') return configurePla(inst, { inWidth: 2, outWidth: 2, rows: [] });
   // A new two-way switch is evolution's default: one input to two outputs, on the first side
   if (type === 'twoWaySwitch') return configureExtraSwitch(inst, { width: 1, mode: '1in2out' });
+  // A new slider is evolution's: 8 bits, left to right, the knob at the start
+  if (type === 'slider') return configureSlider(inst, { width: SLIDER_MAX_BITS });
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
   if (PLEXER_TYPES.has(type)) {
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
@@ -3462,6 +3491,107 @@ export function configureExtraSwitch(
     outputs: mode === '1in2out' ? [pin(comp.outputs, 0, 'out0', 'output'), pin(comp.outputs, 1, 'out1', 'output')] : [pin(comp.outputs, 0, 'out', 'output')],
     state: { ...comp.state, twoWayMode: mode },
   });
+}
+
+// ---- Slider / two-pin LED (Logisim-evolution std/io/extra Slider, TwoPinLed) -----------------------------------
+export const SLIDER_MAX_BITS = 8;
+/** Last knob position: the track is 255 pixels long, one pixel a step of the full 8-bit value */
+export const SLIDER_MAX_POS = (1 << SLIDER_MAX_BITS) - 1;
+
+export interface SliderConfig {
+  width: number;
+  rtl: boolean;
+}
+
+export function getSliderConfig(comp: CircuitComponentInstance): SliderConfig {
+  return { width: comp.outputs[0]?.width ?? 1, rtl: comp.state.sliderRtl === true };
+}
+
+/** Knob position in pixels from the left end of the track (evolution draws a new slider at the value-0 end) */
+export function sliderPosition(comp: CircuitComponentInstance): number {
+  return comp.state.sliderPos ?? (comp.state.sliderRtl ? SLIDER_MAX_POS : 0);
+}
+
+/**
+ * SliderValue.getCurrentValue: the position read from the direction's start, as an 8-bit number cut to the width
+ * by dropping its low bits. A slider never moved gives 0 whatever its direction (evolution has no data yet)
+ */
+export function sliderValue(comp: CircuitComponentInstance): number {
+  if (comp.state.sliderPos === undefined) return 0;
+  const { width, rtl } = getSliderConfig(comp);
+  const pos = sliderPosition(comp);
+  return (rtl ? SLIDER_MAX_POS - pos : pos) >> (SLIDER_MAX_BITS - width);
+}
+
+/** A slider turned by 90 / 180 degrees is drawn turned once more by 180, so its value grows to the right / upwards */
+export const sliderFlipped = (comp: CircuitComponentInstance): boolean => {
+  const rot = comp.rotation || 0;
+  return rot === 90 || rot === 180;
+};
+
+/**
+ * Knob position under a canvas point: the point taken back into the unturned drawing (the body 5 from the box's
+ * left, the track starting 10 further), as evolution's Poker.mouseDragged measures it from the body's left edge
+ */
+export function sliderPositionAt(comp: CircuitComponentInstance, x: number, y: number): { pos: number; along: number; across: number } {
+  const turn = ((comp.rotation || 0) + (sliderFlipped(comp) ? 180 : 0)) % 360;
+  const cx = comp.x + 140;
+  const cy = comp.y + 20;
+  const dx = x - cx;
+  const dy = y - cy;
+  // undo a clockwise turn by `turn` degrees
+  const [ux, uy] = turn === 90 ? [dy, -dx] : turn === 180 ? [-dx, -dy] : turn === 270 ? [-dy, dx] : [dx, dy];
+  const along = ux + 140;
+  const across = uy + 20;
+  return { pos: along - 15, along, across };
+}
+
+/** The knob moved to a position (SliderValue.setSliderPosition: clamped to the track) */
+export function setSliderPosition(comp: CircuitComponentInstance, pos: number): CircuitComponentInstance {
+  const p = Math.max(0, Math.min(SLIDER_MAX_POS, Math.round(pos)));
+  return comp.state.sliderPos === p ? comp : { ...comp, state: { ...comp.state, sliderPos: p } };
+}
+
+/**
+ * New width (1-8) / direction of a slider. A new direction mirrors a moved knob, so the value stays
+ * (SliderValue.setDirection); a knob never moved stays at the new direction's start
+ */
+export function configureSlider(comp: CircuitComponentInstance, patch: { width?: number; rtl?: boolean }): CircuitComponentInstance {
+  const cur = getSliderConfig(comp);
+  const w = Math.max(1, Math.min(SLIDER_MAX_BITS, Math.round(patch.width ?? cur.width)));
+  const rtl = patch.rtl ?? cur.rtl;
+  const state = { ...comp.state };
+  if (rtl !== cur.rtl && state.sliderPos !== undefined) state.sliderPos = SLIDER_MAX_POS - state.sliderPos;
+  if (rtl) state.sliderRtl = true;
+  else delete state.sliderRtl;
+  return updatePinPositions({
+    ...comp,
+    outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out', 'out', 'output'), w)],
+    state,
+  });
+}
+
+export type TwoPinLedState = 'off' | 'forward' | 'reverse';
+
+/**
+ * TwoPinLed.propagate: forward when the anode is 1 and the cathode 0; reverse (bipolar LEDs only) when the anode is
+ * 0 and the cathode 1; off for anything else (an open pin or x / E included)
+ */
+export function twoPinLedState(comp: CircuitComponentInstance): TwoPinLedState {
+  const a = comp.inputs[0]?.value;
+  const k = comp.inputs[1]?.value;
+  if (a === 1 && k === 0) return 'forward';
+  if (comp.state.ledBipolar && a === 0 && k === 1) return 'reverse';
+  return 'off';
+}
+
+export const TWO_PIN_LED_DEFAULTS = { on: '#f00000', off: '#404040', reverse: '#00f000' } as const;
+
+/** Fill colour of a two-pin LED in a state (evolution paints reverse in the off colour unless bipolar) */
+export function twoPinLedColor(comp: CircuitComponentInstance, st: TwoPinLedState): string {
+  if (st === 'forward') return comp.state.ioOnColor ?? TWO_PIN_LED_DEFAULTS.on;
+  if (st === 'reverse' && comp.state.ledBipolar) return comp.state.ledReverseColor ?? TWO_PIN_LED_DEFAULTS.reverse;
+  return comp.state.ledOffColor ?? TWO_PIN_LED_DEFAULTS.off;
 }
 
 /** Logisim BitSelector.updatePorts: enough select bits to number every group (at least 1). */
@@ -5806,6 +5936,12 @@ export function simulateCircuitStep(
         } else setBitsOut(0, pass(on ? 1 : 0));
         break;
       }
+      case 'slider': {
+        // Logisim-evolution Slider.propagate: always a known value, the knob's
+        const w = getSliderConfig(comp).width;
+        setBitsOut(0, numberToBits(sliderValue(comp), w));
+        break;
+      }
       case 'pla': {
         // Logisim-evolution Pla.propagate: the output is always a fully defined value, the first fitting row's or 0.
         // An input with nothing attached reads 0 (evolution finds no bus there: Value.NIL, whose long value is 0);
@@ -6060,6 +6196,7 @@ export function simulateCircuitStep(
         break;
       }
       case 'led':
+      case 'twoPinLed':
       case 'probe':
       case 'buzzer':
       case 'textLabel':
@@ -7555,6 +7692,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'dipSwitch' &&
       c.type !== 'asciiKeyboard' &&
       c.type !== 'joystick' &&
+      c.type !== 'slider' &&
       c.type !== 'matrixKeypad' &&
       c.type !== 'portIo' &&
       c.type !== 'realTimeClock' &&
