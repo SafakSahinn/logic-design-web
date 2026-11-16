@@ -41,6 +41,7 @@ import {
   EXTRA_SWITCH_TYPES,
   sliderValue,
   getPlaConfig,
+  getPlaRomConfig,
   plaMatch,
   portPokeOf,
   rtcValue,
@@ -1898,6 +1899,45 @@ function buildModule(
           body.push(`  ${sub.moduleName} ${inst} (`, maps.map(([pn, sig]) => `    .${pn}(${sig})`).join(',\n'), `  );`);
         } else {
           body.push(`  ${inst} : entity work.${sub.moduleName}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
+        }
+        break;
+      }
+      case 'plaRom': {
+        // Logisim-evolution has no HDL for its PlaRom: written here as the sum of products it draws, each output the
+        // OR of its dotted AND gates, each gate the AND of its dotted input bits or their inverses. Where the
+        // simulator gives E (a gate without a dot, an output without one, an open input) the HDL has no such value:
+        // an empty gate is left out of the OR and an output with no gate is 0. A chip select at its inactive level
+        // floats the output, as in the simulator; an open chip select keeps the part working
+        if (!out[0]) break;
+        const cfg = getPlaRomConfig(c);
+        const pin = c.inputs[0];
+        const attached = !!pin && (isConnected(pin.id) || portBound.has(pin.id));
+        const r = attached ? readBits(pin.id, cfg.inputs) : undefined;
+        const zeroBit = L.zero;
+        const csPin = c.inputs[1];
+        const csOn = !!csPin && (isConnected(csPin.id) || portBound.has(csPin.id));
+        const cs = csOn ? inp(1) : '';
+        const gated = (e: string) => (csOn ? (cfg.csHigh ? L.mux(cs, e, L.hiZ) : L.mux(cs, L.hiZ, e)) : e);
+        if (!r || r.floating || r.mismatch) {
+          body.push(L.comment(r ? 'giriş tam tanımlı değil: simülatörde çıkış E, burada 0' : 'girişe hiçbir şey bağlı değil: simülatörde çıkış E, burada 0'));
+          for (let b = 0; b < cfg.outputs; b++) emit(cfg.outputs > 1 ? vecIndex(out[0], b) : out[0], gated(zeroBit));
+          break;
+        }
+        const v = cfg.inputs > 1 ? asName(compose(r.bits), cfg.inputs, `${nm}_in`) : inp(0);
+        const bitOf = (col: number) => (cfg.inputs > 1 ? vecIndex(v, cfg.inputs - 1 - col) : v);
+        const terms = cfg.and.map((row) => [...row].flatMap((ch, col) => (ch === '1' ? [bitOf(col)] : ch === '0' ? [L.not(bitOf(col))] : [])));
+        const empty = terms.map((t, i) => (t.length ? -1 : i)).filter((i) => i >= 0);
+        if (empty.length) body.push(L.comment(`noktasız VE kapısı (${empty.join(', ')}): simülatörde E, burada VEYA'ya katılmadı`));
+        const termName = terms.map((t, i) => {
+          if (!t.length) return '';
+          if (!cfg.or[i].includes('1')) return '';
+          return asName(L.and(t), 1, `${nm}_t${i}`);
+        });
+        for (let b = 0; b < cfg.outputs; b++) {
+          const col = cfg.outputs - 1 - b;
+          const ts = cfg.or.flatMap((s, i) => (s[col] === '1' && termName[i] ? [termName[i]] : []));
+          if (!ts.length) body.push(L.comment(`çıkış ${b}: bağlı (noktalı) VE kapısı yok, simülatörde E, burada 0`));
+          emit(cfg.outputs > 1 ? vecIndex(out[0], b) : out[0], gated(ts.length ? L.or(ts) : zeroBit));
         }
         break;
       }

@@ -19,6 +19,7 @@ import {
   binToBcdAdd3Cells,
   binToBcdBits,
   getPlaConfig,
+  getPlaRomConfig,
 } from './circuitEngine';
 import { TTL_SEQ_TYPES, ttlChipOf } from './ttlChips';
 import type { TtlChipId } from '../types/circuit';
@@ -456,6 +457,25 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       // constant multiply (0x5DEECE66D has 23 one bits: an adder of 48 - k bits per shifted copy, 18004) and
       // + 0xB (48 half adders, 672); the output is bits of the state, whatever its width
       return 48 * 28 + 2 * 48 * 14 + 18004 + 48 * 14;
+    case 'plaRom': {
+      // The logic the HDL describes (evolution has no count): an inverter per input bit used inverted, per AND gate
+      // of k > 1 literals NAND + NOT (2k + 2), per output of j > 1 gates NOR + NOT (2j + 2), and with a wired chip
+      // select a three-state buffer per output bit (6). Empty gates are left out, as in the HDL
+      const cfg = getPlaRomConfig(c);
+      const lits = (row: string) => [...row].filter((ch) => ch !== '-').length;
+      let total = 0;
+      for (let col = 0; col < cfg.inputs; col++) if (cfg.and.some((row) => row[col] === '0')) total += 2;
+      cfg.and.forEach((row, t) => {
+        const k = lits(row);
+        if (k > 1 && cfg.or[t].includes('1')) total += 2 * k + 2;
+      });
+      for (let col = 0; col < cfg.outputs; col++) {
+        const j = cfg.or.filter((s, t) => s[col] === '1' && lits(cfg.and[t]) > 0).length;
+        if (j > 1) total += 2 * j + 2;
+      }
+      if (c.inputs[1] && wired.has(c.inputs[1].id)) total += 6 * cfg.outputs;
+      return total;
+    }
     case 'pla': {
       // The logic the HDL describes (evolution has no count): an inverter per input bit for its complement, per
       // row an AND of its defined bits (NAND + NOT, 2k + 2) and a 2:1 MUX per output bit choosing it over the
@@ -559,6 +579,8 @@ export function analyzeCircuit(
                   ? withDetail(c.type.toUpperCase(), ramGroupDetail(c, wired))
                   : c.type === 'binToBcd'
                     ? `BINTOBCD (${binToBcdBits(c)} bit)`
+                    : c.type === 'plaRom'
+                    ? `PLA ROM (${getPlaRomConfig(c).inputs} giriş, ${getPlaRomConfig(c).terms} VE, ${getPlaRomConfig(c).outputs} çıkış)`
                     : c.type === 'pla'
                     ? `PLA (${getPlaConfig(c).inWidth} → ${getPlaConfig(c).outWidth} bit, ${getPlaConfig(c).rows.length} satır)`
                     : ttlChipOf(c.type)
