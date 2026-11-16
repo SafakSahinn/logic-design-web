@@ -19,6 +19,8 @@ import {
   configureBitSelector,
   configureExtraSwitch,
   configureSlider,
+  configurePlaRom,
+  parsePlaRomContents,
   TWO_PIN_LED_DEFAULTS,
   configurePla,
   parsePlaTable,
@@ -178,6 +180,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // Logisim-evolution Input/Output-Extra of Aşama 5h (2.7.1 has none)
   if (n === 'switch') return 'passSwitch';
   if (n === 'twowayswitch') return 'twoWaySwitch';
+  if (n === 'plarom') return 'plaRom';
   if (n === 'slider') return 'slider';
   if (n === 'twopinled') return 'twoPinLed';
   if (n === 'constant') {
@@ -353,6 +356,8 @@ export function logisimTwoPinLedPorts(facing: string): { anode: Pt; cathode: Pt 
   if (facing === 'south') return { anode: { x: 0, y: -10 }, cathode: { x: 0, y: 10 } };
   return { anode: { x: -10, y: 0 }, cathode: { x: 10, y: 0 } };
 }
+/** Logisim-evolution PlaRom.updateports, relative to loc (the input): input, output, chip select. It has no facing */
+export const LOGISIM_PLA_ROM_PORTS: readonly Pt[] = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 30, y: 30 }];
 /** Our rotation of a two-pin LED with evolution's facing (default west = not turned) */
 export const TWO_PIN_LED_ROTATION: Record<string, 0 | 90 | 180 | 270> = { west: 0, south: 90, east: 180, north: 270 };
 /** Our rotation of a two-way switch with evolution's facing (its ports: facing south / north they lie as ours turned by 270 / 90) */
@@ -1996,6 +2001,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? [logisimPassSwitchInput(facing)]
               : nativeType === 'twoWaySwitch'
               ? ((t) => [t.common, ...t.pair])(logisimTwoWayPorts(facing, twoWayModeOf(attr)))
+              : nativeType === 'plaRom'
+              ? [...LOGISIM_PLA_ROM_PORTS.slice(1)]
               : nativeType === 'twoPinLed'
               ? ((t) => [t.anode, t.cathode])(logisimTwoPinLedPorts(attr.facing || 'west'))
               : PLEXER_TYPES.has(nativeType)
@@ -2216,6 +2223,24 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               [pair[1].id, at(loc, t.pair[1])],
             ]);
           }
+          continue;
+        }
+        if (nativeType === 'plaRom') {
+          // Logisim-evolution's PlaRom: the input on loc, the output and the chip select at their fixed offsets (no
+          // facing). Attributes left out are evolution's defaults (4 inputs, 4 AND gates, 4 outputs, no dots, active
+          // low); "Contents" is read with the file's sizes, as evolution decodes it
+          const size = (v: string | undefined) => Math.max(1, Math.min(32, parseInt(v ?? '', 10) || 4));
+          const n = { inputs: size(attr.inputs), terms: size(attr.and), outputs: size(attr.outputs) };
+          const m = parsePlaRomContents(attr.Contents ?? '', n.inputs, n.terms, n.outputs);
+          if (m.bad) warnings.push(`${where}: PLA ROM içeriğinde okunamayan ${m.bad} değer atlandı (o noktalar boş).`);
+          let inst = createComponentInstance('plaRom', 0, 0);
+          inst = configurePlaRom(inst, { ...n, and: m.and, or: m.or, csHigh: attr.Select === 'high' });
+          const [pIn, pOut, pCs] = LOGISIM_PLA_ROM_PORTS;
+          place(inst, inst.inputs[0].id, at(loc, pIn), label, [
+            [inst.inputs[0].id, at(loc, pIn)],
+            [inst.outputs[0].id, at(loc, pOut)],
+            [inst.inputs[1].id, at(loc, pCs)],
+          ]);
           continue;
         }
         if (nativeType === 'slider' || nativeType === 'twoPinLed') {

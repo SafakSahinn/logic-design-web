@@ -93,7 +93,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { TWO_PIN_LED_DEFAULTS, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPorConfig, getSliderConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -233,7 +233,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
-  'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed',
+  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -1007,6 +1007,36 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (!warnings.some((x) => x.startsWith('Kaydırıcı:')))
             warnings.push(`Kaydırıcı: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Düğmenin konumu dosyaya yazılmaz (Logisim saklamaz), dosya açılınca çıkış 0. Kuzey / güney yönlü kaydırıcının gövdesi Logisim'de dönmez, yatay çizilir.`);
+          break;
+        }
+        case 'plaRom': {
+          // Logisim-evolution's PlaRom (lib Input/Output-Extra): the input on loc, the output 60 to the right, the
+          // chip select 30 right and 30 down; the body has no facing. Every attribute is written out, the matrices as
+          // evolution's "Contents" text
+          usesExtra = true;
+          const cfg = getPlaRomConfig(c);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const attrs =
+            a('inputs', cfg.inputs) +
+            a('and', cfg.terms) +
+            a('outputs', cfg.outputs) +
+            a('Contents', plaRomContents(cfg)) +
+            a('Select', cfg.csHigh ? 'high' : 'low');
+          P.push({
+            kind: 'ram',
+            part: c.type,
+            attrs,
+            ports: [
+              { off: { x: 0, y: 0 }, net: pin(0), width: cfg.inputs, sink: true },
+              { off: { x: 60, y: 0 }, net: out(0), width: cfg.outputs, sink: false },
+              { off: { x: 30, y: 30 }, net: pin(1), width: 1, sink: true },
+            ],
+            lib: EXTRA_LIB,
+            name: 'PlaRom',
+            box: { x0: 0, y0: -30, x1: 60, y1: 30 },
+          });
+          if (!warnings.some((x) => x.startsWith('PLA ROM:')))
+            warnings.push(`PLA ROM: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Logisim'de PLA ROM dönmez: döndürülmüş olanlar dönmemiş yazılır (bağlantılar korunur).`);
           break;
         }
         case 'twoPinLed': {
