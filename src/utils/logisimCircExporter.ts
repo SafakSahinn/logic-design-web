@@ -88,6 +88,8 @@ import {
   logisimTwoPinLedPorts,
   logisimEvoBuzzerPorts,
   logisimEvoBuzzerBox,
+  logisimOscPorts,
+  logisimOscBox,
   logisimTwoWayPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
@@ -95,7 +97,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -235,7 +237,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
-  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed', 'evoBuzzer',
+  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed', 'evoBuzzer', 'digitalOscilloscope',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -1068,6 +1070,35 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           });
           if (!warnings.some((x) => x.startsWith('İki uçlu LED:')))
             warnings.push(`İki uçlu LED: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          break;
+        }
+        case 'digitalOscilloscope': {
+          // Logisim-evolution's Digital Oscilloscope (lib Input/Output-Extra): the clock on loc, the inputs below it
+          // 30 apart, enable and clear on the bottom edge; the body has no facing. Every attribute is written out. The
+          // drawing is run state, not saved (evolution keeps it in its DiagramState only)
+          usesExtra = true;
+          const cfg = getOscConfig(c);
+          const t = logisimOscPorts(cfg.inputs);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const attrs =
+            a('inputs', cfg.inputs) +
+            a('nState', cfg.states) +
+            a('frontlines', cfg.frontLines) +
+            a('showclock', cfg.showClock ? 'true' : 'false') +
+            a('color', cfg.color);
+          P.push({
+            kind: 'ram',
+            part: c.type,
+            attrs,
+            ports: t.map((off, i) => ({ off, net: pin(i), width: 1, sink: true })),
+            lib: EXTRA_LIB,
+            name: 'Digital Oscilloscope',
+            box: logisimOscBox(cfg.inputs, cfg.states, cfg.showClock),
+          });
+          if (!warnings.some((x) => x.startsWith('Dijital osiloskop:')))
+            warnings.push(`Dijital osiloskop: Logisim-evolution parçası (Input/Output-Extra Digital Oscilloscope); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Logisim'de osiloskop dönmez: döndürülmüş olanlar dönmemiş yazılır (bağlantılar korunur).`);
+          if (c.state.oscRows && !warnings.some((x) => x.startsWith('Dijital osiloskop çizimi:')))
+            warnings.push(`Dijital osiloskop çizimi: osiloskoptaki dalga çizimi dosyaya yazılmadı (Logisim saklamaz), dosya açılınca osiloskop boş.`);
           break;
         }
         case 'evoBuzzer': {

@@ -20,6 +20,14 @@ import {
   configureExtraSwitch,
   configureSlider,
   configureEvoBuzzer,
+  configureOsc,
+  OSC_DEFAULT_COLOR,
+  OSC_DEFAULT_INPUTS,
+  OSC_DEFAULT_STATES,
+  OSC_MIN_INPUTS,
+  OSC_MAX_INPUTS,
+  OSC_MIN_STATES,
+  OSC_MAX_STATES,
   configurePlaRom,
   parsePlaRomContents,
   TWO_PIN_LED_DEFAULTS,
@@ -186,6 +194,7 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'twopinled') return 'twoPinLed';
   // (evolution's Buzzer; our own buzzer is written as output Pins, never under this name)
   if (n === 'buzzer') return 'evoBuzzer';
+  if (n === 'digital oscilloscope') return 'digitalOscilloscope';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -380,6 +389,21 @@ export function logisimEvoBuzzerBox(facing: string): { x0: number; y0: number; x
 /** Our rotation of an evolution buzzer with evolution's facing (default west = not turned: the inputs on the left) */
 export const EVO_BUZZER_ROTATION: Record<string, 0 | 90 | 180 | 270> = { west: 0, north: 90, east: 180, south: 270 };
 export const EVO_BUZZER_WAVES = { Sine: 'sine', Square: 'square', Triangle: 'triangle', Sawtooth: 'sawtooth', Noise: 'noise' } as const;
+/**
+ * Logisim-evolution DigitalOscilloscope.updateports, relative to loc (the clock): the clock, the inputs 30 apart below
+ * it, enable (20, 30 n + 20) and clear (30, 30 n + 20). It has no facing
+ */
+export function logisimOscPorts(inputs: number): Pt[] {
+  return [
+    ...Array.from({ length: inputs + 1 }, (_, i) => ({ x: 0, y: 30 * i })),
+    { x: 20, y: 30 * inputs + 20 },
+    { x: 30, y: 30 * inputs + 20 },
+  ];
+}
+/** Body of a digital oscilloscope relative to loc (DigitalOscilloscope.getOffsetBounds) */
+export function logisimOscBox(inputs: number, states: number, showClock: boolean): { x0: number; y0: number; x1: number; y1: number } {
+  return { x0: 0, y0: showClock ? -42 : -10, x1: states * 30 + 35, y1: 30 * inputs + 20 };
+}
 /** Logisim-evolution PlaRom.updateports, relative to loc (the input): input, output, chip select. It has no facing */
 export const LOGISIM_PLA_ROM_PORTS: readonly Pt[] = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 30, y: 30 }];
 /** Our rotation of a two-pin LED with evolution's facing (default west = not turned) */
@@ -2032,6 +2056,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? ((t) => [t.anode, t.cathode])(logisimTwoPinLedPorts(attr.facing || 'west'))
               : nativeType === 'evoBuzzer'
               ? ((t) => [t.freq, t.vol, t.pw])(logisimEvoBuzzerPorts(attr.facing || 'west', attr.selloc ?? 'bl'))
+              : nativeType === 'digitalOscilloscope'
+              ? logisimOscPorts(Math.max(OSC_MIN_INPUTS, Math.min(OSC_MAX_INPUTS, parseInt(attr.inputs ?? '', 10) || OSC_DEFAULT_INPUTS))).slice(1)
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2304,6 +2330,28 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               [inst.inputs[1].id, at(loc, t.cathode)],
             ]);
           }
+          continue;
+        }
+        if (nativeType === 'digitalOscilloscope') {
+          // Logisim-evolution's Digital Oscilloscope: the clock on loc, the inputs below, enable and clear on the bottom
+          // edge. Attributes left out are evolution's defaults (3 inputs, 10 cycles, rising edge lines, the clock shown,
+          // colour #00d0d0)
+          const int = (v: string | undefined, lo: number, hi: number, d: number) => {
+            const n = parseInt(v ?? '', 10);
+            return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d;
+          };
+          const n = int(attr.inputs, OSC_MIN_INPUTS, OSC_MAX_INPUTS, OSC_DEFAULT_INPUTS);
+          const fl = (['no', 'rising', 'falling', 'both'] as const).find((v) => v === attr.frontlines) ?? 'rising';
+          const color = /^#[0-9a-f]{6}/i.test(attr.color ?? '') ? attr.color!.slice(0, 7).toLowerCase() : OSC_DEFAULT_COLOR;
+          let inst = createComponentInstance('digitalOscilloscope', 0, 0);
+          inst.state = {
+            ...inst.state,
+            ...(fl !== 'rising' ? { oscFrontLines: fl } : {}),
+            ...(color !== OSC_DEFAULT_COLOR ? { oscColor: color } : {}),
+          };
+          inst = configureOsc(inst, { inputs: n, states: int(attr.nState, OSC_MIN_STATES, OSC_MAX_STATES, OSC_DEFAULT_STATES), showClock: attr.showclock !== 'false' });
+          const t = logisimOscPorts(n);
+          place(inst, inst.inputs[0].id, loc, label, inst.inputs.map((p, i) => [p.id, at(loc, t[i])] as [string, Pt]));
           continue;
         }
         if (nativeType === 'evoBuzzer') {
