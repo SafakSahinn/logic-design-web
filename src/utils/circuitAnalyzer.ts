@@ -133,7 +133,7 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 // Telnet are the outside world's in the HDL too, so no transistors are counted for their buffers)
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'powerOnReset', 'passSwitch', 'twoWaySwitch', 'slider'];
 // Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
-const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo', 'twoPinLed'];
+const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'twoPinLed', 'tty', 'rgbVideo'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
 // (gates whose input count is not part of their name in the transistor table)
 const FIXED_INPUT_GATES = ['not', 'buffer', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
