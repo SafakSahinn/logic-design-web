@@ -84,13 +84,15 @@ import {
   logisimRamPorts,
   logisimTransistorPorts,
   logisimPlaOutput,
+  logisimPassSwitchInput,
+  logisimTwoWayPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
   type LogisimRamLook,
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getClockConfig, getPlaConfig, getPorConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
+import { getClockConfig, getExtraSwitchConfig, getPlaConfig, getPorConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -98,6 +100,8 @@ const TTL_LIB = 6;
 const BFH_LIB = 7;
 /** Library number of Logisim's #Base (its Text; evolution's Image, Aşama 5e) in the exported file */
 const BASE_LIB = 8;
+/** Library number of evolution's #Input/Output-Extra (Aşama 5h) in the exported file */
+const EXTRA_LIB = 9;
 
 /*
  * Logisim 2.7 (.circ) export.
@@ -228,6 +232,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
+  'passSwitch', 'twoWaySwitch',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -243,6 +248,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesBfh = false;
   // and the Base library, only for a Text or an Image (2.7.1's Base has Text, but no Image)
   let usesBase = false;
+  let usesExtra = false;
   let usesImage = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
@@ -925,6 +931,51 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (!warnings.some((x) => x.startsWith('PLA:')))
             warnings.push(`PLA: Logisim-evolution parçası; Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          break;
+        }
+        case 'passSwitch':
+        case 'twoWaySwitch': {
+          // Logisim-evolution's parts (lib Input/Output-Extra, names Switch / TwoWaySwitch). The switch has its
+          // output on loc, the two-way switch the middle of its body. Every attribute is written out; the lever's
+          // position is run state that Logisim does not save
+          usesExtra = true;
+          const cfg = getExtraSwitchConfig(c);
+          const rot = ((c.rotation ?? 0) / 90) % 4;
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const color = a('color', (c.state.switchColor ?? '#ffffff').toLowerCase());
+          let ports: Array<{ off: Pt; net: string; width: number; sink: boolean }>;
+          let attrs: string;
+          let box: { x0: number; y0: number; x1: number; y1: number };
+          if (c.type === 'passSwitch') {
+            const facing = (['east', 'south', 'west', 'north'] as const)[rot];
+            attrs = a('facing', facing) + a('width', cfg.width) + color;
+            ports = [
+              { off: { x: 0, y: 0 }, net: out(0), width: cfg.width, sink: false },
+              { off: logisimPassSwitchInput(facing), net: pin(0), width: cfg.width, sink: true },
+            ];
+            box = facing === 'east' ? { x0: -20, y0: -15, x1: 0, y1: 15 } : facing === 'west' ? { x0: 0, y0: -15, x1: 20, y1: 15 } : facing === 'south' ? { x0: -15, y0: -20, x1: 15, y1: 0 } : { x0: -15, y0: 0, x1: 15, y1: 20 };
+          } else {
+            const facing = (['east', 'north', 'west', 'south'] as const)[rot];
+            attrs = a('mode', cfg.mode) + a('facing', facing) + a('width', cfg.width) + color;
+            const t = logisimTwoWayPorts(facing, cfg.mode);
+            ports =
+              cfg.mode === '1in2out'
+                ? [
+                    { off: t.common, net: pin(0), width: cfg.width, sink: true },
+                    { off: t.pair[0], net: out(0), width: cfg.width, sink: false },
+                    { off: t.pair[1], net: out(1), width: cfg.width, sink: false },
+                  ]
+                : [
+                    { off: t.common, net: out(0), width: cfg.width, sink: false },
+                    { off: t.pair[0], net: pin(0), width: cfg.width, sink: true },
+                    { off: t.pair[1], net: pin(1), width: cfg.width, sink: true },
+                  ];
+            box = facing === 'east' || facing === 'west' ? { x0: -20, y0: -15, x1: 20, y1: 15 } : { x0: -15, y0: -20, x1: 15, y1: 20 };
+          }
+          P.push({ kind: 'ram', part: c.type, attrs, ports, lib: EXTRA_LIB, name: c.type === 'passSwitch' ? 'Switch' : 'TwoWaySwitch', box });
+          // (once per file)
+          if (!warnings.some((x) => x.startsWith('Geçiş / iki yollu anahtar:')))
+            warnings.push(`Geçiş / iki yollu anahtar: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Anahtarların konumu dosyaya yazılmaz (Logisim saklamaz), dosya açılınca hepsi açık / ilk tarafta.`);
           break;
         }
         case 'powerOnReset': {
@@ -1696,7 +1747,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}

@@ -17,6 +17,7 @@ import {
   configureArith,
   configureBitExtender,
   configureBitSelector,
+  configureExtraSwitch,
   configurePla,
   parsePlaTable,
   configureMem,
@@ -172,6 +173,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'pla') return 'pla';
   if (n === 'por') return 'powerOnReset';
   if (n === 'noconnect') return 'doNotConnect';
+  // Logisim-evolution Input/Output-Extra of Aşama 5h (2.7.1 has none)
+  if (n === 'switch') return 'passSwitch';
+  if (n === 'twowayswitch') return 'twoWaySwitch';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -235,6 +239,7 @@ const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
   'multiplexer', 'demultiplexer', 'transistor', 'transmissionGate', 'doNotConnect',
+  'passSwitch', 'twoWaySwitch',
 ]);
 // Logisim's most inputs per gate; ours takes as many
 const MAX_IMPORT_GATE_INPUTS = 32;
@@ -320,6 +325,26 @@ export function logisimTransistorPorts(facing: string, selloc: string): { source
   const b = { x: 20 * (dx - dy), y: 20 * (dx + dy) };
   return { source: { x: 40 * dx, y: 40 * dy }, gate: flip ? a : b, gate2: flip ? b : a };
 }
+/** Logisim-evolution Switch (std/io/extra): the output on loc, the input 20 behind it by facing */
+export const logisimPassSwitchInput = (facing: string): Pt =>
+  facing === 'west' ? { x: 20, y: 0 } : facing === 'north' ? { x: 0, y: 20 } : facing === 'south' ? { x: 0, y: -20 } : { x: -20, y: 0 };
+/**
+ * Logisim-evolution TwoWaySwitch.updatePorts, relative to loc (the middle of the body): the common end and the
+ * pair (first, second side). The pair's first end is the upper one facing east / west, the left one facing north /
+ * south. Facing south the common end of a 1in2out switch is the lower one (evolution draws the body turned the
+ * other way, its ports are as here)
+ */
+export function logisimTwoWayPorts(facing: string, mode: '1in2out' | '2in1out'): { common: Pt; pair: [Pt, Pt] } {
+  const c = mode === '1in2out' ? -20 : 20;
+  const p = -c;
+  if (facing === 'west') return { common: { x: -c, y: 0 }, pair: [{ x: -p, y: -10 }, { x: -p, y: 10 }] };
+  if (facing === 'south') return { common: { x: 0, y: -c }, pair: [{ x: -10, y: -p }, { x: 10, y: -p }] };
+  if (facing === 'north') return { common: { x: 0, y: c }, pair: [{ x: -10, y: p }, { x: 10, y: p }] };
+  return { common: { x: c, y: 0 }, pair: [{ x: p, y: -10 }, { x: p, y: 10 }] };
+}
+/** Our rotation of a two-way switch with evolution's facing (its ports: facing south / north they lie as ours turned by 270 / 90) */
+const twoWayModeOf = (attr: Record<string, string>): '1in2out' | '2in1out' => (attr.mode === '2in1out' ? '2in1out' : '1in2out');
+export const TWO_WAY_ROTATION: Record<string, 0 | 90 | 180 | 270> = { east: 0, west: 180, south: 270, north: 90 };
 /** Logisim-evolution PLA (Pla.updatePorts): the input on loc, the output 50 ahead of it by facing */
 export const logisimPlaOutput = (facing: string): Pt =>
   facing === 'west' ? { x: -50, y: 0 } : facing === 'north' ? { x: 0, y: -50 } : facing === 'south' ? { x: 0, y: 50 } : { x: 50, y: 0 };
@@ -1931,11 +1956,11 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // (the RGB Video's width is its screen width in pixels, the Image's its frame width, not a bit width)
       if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image' && nativeType !== 'textLabel')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
-      const rot = FACING_ROTATION[facing] ?? 0;
+      const rot = nativeType === 'twoWaySwitch' ? TWO_WAY_ROTATION[facing] ?? 0 : FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel') occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel' && nativeType !== 'twoWaySwitch') occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1950,6 +1975,10 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? ((t) => (nativeType === 'transistor' ? [t.source, t.gate] : [t.source, t.gate, t.gate2]))(logisimTransistorPorts(facing, transistorSelloc(attr, facing)))
               : nativeType === 'pla'
               ? [logisimPlaOutput(facing)]
+              : nativeType === 'passSwitch'
+              ? [logisimPassSwitchInput(facing)]
+              : nativeType === 'twoWaySwitch'
+              ? ((t) => [t.common, ...t.pair])(logisimTwoWayPorts(facing, twoWayModeOf(attr)))
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2142,6 +2171,32 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             [inst.inputs[1].id, at(loc, t.gate)],
             ...(inst.inputs[2] ? ([[inst.inputs[2].id, at(loc, t.gate2)]] as Array<[string, Pt]>) : []),
           ]);
+          continue;
+        }
+        if (nativeType === 'passSwitch' || nativeType === 'twoWaySwitch') {
+          // Logisim-evolution's Switch (output on loc, input behind it) / TwoWaySwitch (loc in the middle of the body,
+          // the common end and the pair by facing and mode). The lever starts open / on the first side (run state)
+          const mode = twoWayModeOf(attr);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = { ...inst, rotation: rot as 0 | 90 | 180 | 270 };
+          const color = /^#[0-9a-fA-F]{6}$/.test(attr.color ?? '') ? attr.color!.toLowerCase() : undefined;
+          if (color && color !== '#ffffff') inst.state = { ...inst.state, switchColor: color };
+          inst = configureExtraSwitch(inst, { width, mode });
+          if (nativeType === 'passSwitch') {
+            place(inst, inst.outputs[0].id, loc, label, [
+              [inst.outputs[0].id, loc],
+              [inst.inputs[0].id, at(loc, logisimPassSwitchInput(part.facing))],
+            ]);
+          } else {
+            const t = logisimTwoWayPorts(part.facing, mode);
+            const common = mode === '1in2out' ? inst.inputs[0] : inst.outputs[0];
+            const pair = mode === '1in2out' ? inst.outputs : inst.inputs;
+            place(inst, common.id, at(loc, t.common), label, [
+              [common.id, at(loc, t.common)],
+              [pair[0].id, at(loc, t.pair[0])],
+              [pair[1].id, at(loc, t.pair[1])],
+            ]);
+          }
           continue;
         }
         if (nativeType === 'pla') {
