@@ -28,6 +28,9 @@ import {
   configureBitSelector,
   configurePla,
   getPlaConfig,
+  configurePlaRom,
+  getPlaRomConfig,
+  PLA_ROM_MAX,
   configureExtraSwitch,
   getExtraSwitchConfig,
   configureSlider,
@@ -503,6 +506,36 @@ const plaAttrs: AttrDef[] = [
     options: WIDTH_OPTIONS,
     get: (c) => getPlaConfig(c).outWidth,
     set: (c, v) => (getPlaConfig(c).outWidth === Number(v) ? null : resized(c, configurePla(c, { outWidth: Number(v) }))),
+  },
+];
+
+// PLA ROM (Logisim-evolution "Bit width in", "Number of And gates", "Bit width out", "Select"): a new size keeps the
+// dots of the columns and gates that stay (the first, most significant columns and the top gates)
+const PLA_ROM_SIZES = numberOptions(1, PLA_ROM_MAX);
+const plaRomSizeAttr = (key: 'inputs' | 'terms' | 'outputs', label: string, title: string): AttrDef => ({
+  key: `plaRom_${key}`,
+  label,
+  kind: 'select',
+  title,
+  options: PLA_ROM_SIZES,
+  get: (c) => getPlaRomConfig(c)[key],
+  set: (c, v) => (getPlaRomConfig(c)[key] === Number(v) ? null : resized(c, configurePlaRom(c, { [key]: Number(v) }))),
+});
+const plaRomAttrs: AttrDef[] = [
+  plaRomSizeAttr('inputs', 'Giriş bit', `Giriş sayısı (1-${PLA_ROM_MAX}); matristeki ilk (en anlamlı) sütunlar korunur, yeniler boş`),
+  plaRomSizeAttr('terms', 'VE kapısı', `VE kapısı sayısı (1-${PLA_ROM_MAX}); üstteki kapılar korunur, yeniler boş`),
+  plaRomSizeAttr('outputs', 'Çıkış bit', `Çıkış sayısı (1-${PLA_ROM_MAX}); ilk (en anlamlı) sütunlar korunur, yeniler boş`),
+  {
+    key: 'plaRomCsHigh',
+    label: 'Seçme (sel)',
+    kind: 'buttons',
+    title: 'Parçayı çalıştıran seçme girişi seviyesi (Logisim-evolution "Select"); öbür seviyede çıkış boşta kalır. Bağlanmamış, x ya da E seçme girişi parçayı çalıştırır',
+    options: [
+      { value: 'low', label: '0 iken etkin' },
+      { value: 'high', label: '1 iken etkin' },
+    ],
+    get: (c) => (getPlaRomConfig(c).csHigh ? 'high' : 'low'),
+    set: (c, v) => ((getPlaRomConfig(c).csHigh ? 'high' : 'low') === v ? null : { comp: configurePlaRom(c, { csHigh: v === 'high' }), stateOnly: true }),
   },
 ];
 
@@ -1111,6 +1144,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'pla':
       list.push(...plaAttrs);
+      break;
+    case 'plaRom':
+      list.push(...plaRomAttrs);
       break;
     case 'bitExtender':
       list.push(...bitExtenderAttrs);

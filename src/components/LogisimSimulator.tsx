@@ -87,6 +87,9 @@ import {
   getPlaConfig,
   configurePla,
   plaRowComment,
+  getPlaRomConfig,
+  configurePlaRom,
+  plaRomSelected,
   getIoConfig,
   matrixDots,
   segmentsLit,
@@ -259,6 +262,7 @@ import { ChronogramPanel } from './ChronogramPanel';
 import { useChronoLogFile } from './useChronoLogFile';
 import MemoryHexEditor from './MemoryHexEditor';
 import PlaTableEditor from './PlaTableEditor';
+import PlaRomEditor from './PlaRomEditor';
 
 /**
  * A saved part this version can draw and simulate. Parts of an unknown type (the fixed 4-bit parts removed in
@@ -405,6 +409,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   oddParity: { label: 'Tek Eşlik', badge: 'Odd Parity' },
   evenParity: { label: 'Çift Eşlik', badge: 'Even Parity' },
   pla: { label: 'PLA', badge: 'Program' },
+  plaRom: { label: 'PLA ROM', badge: 'VE / VEYA' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   transistor: { label: 'Transistör', badge: 'P / N' },
@@ -823,6 +828,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Hex editor of a parametric RAM / ROM (paged contents)
   const [memEditorCompId, setMemEditorCompId] = useState<string | null>(null);
   const [plaEditorCompId, setPlaEditorCompId] = useState<string | null>(null);
+  const [plaRomEditorCompId, setPlaRomEditorCompId] = useState<string | null>(null);
 
   // Automated Test Vector / Testbench Runner state
   const [showTestbenchModal, setShowTestbenchModal] = useState<boolean>(false);
@@ -2710,6 +2716,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast(`PLA programı güncellendi (${rows.length} satır).`);
   };
 
+  // Save a PLA ROM's edited matrices (undoable; the sizes stay those of the part)
+  const handleSavePlaRomEditor = (and: string[], or: string[]) => {
+    if (!plaRomEditorCompId) return;
+    recordHistory();
+    const updated = components.map((c) => (c.id === plaRomEditorCompId ? configurePlaRom(c, { and, or }) : c));
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    setPlaRomEditorCompId(null);
+    showToast('PLA ROM matrisi güncellendi.');
+  };
+
   // Run Testbench Handler
   const handleRunTestbench = () => {
     try {
@@ -3845,6 +3863,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // PLA: double-click opens its program (evolution's "Edit PLA Program…")
       if (comp.type === 'pla') {
         setPlaEditorCompId(comp.id);
+        return;
+      }
+      // PLA ROM: double-click opens its matrix (evolution's "Edit…")
+      if (comp.type === 'plaRom') {
+        setPlaRomEditorCompId(comp.id);
         return;
       }
       // Image: double-click chooses its picture (it has no label)
@@ -5042,6 +5065,43 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 {shown}
               </text>
             </g>
+          </g>
+        );
+      }
+
+      // Logisim-evolution PlaRom.paintInstance: a white rounded 60 x 60 box with "PLA ROM" in its upper third, the sizes
+      // (inputs x AND gates x outputs) below and "sel" over the chip select, the texts upright whatever the facing.
+      // Double-click edits the matrix
+      case 'plaRom': {
+        const cfg = getPlaRomConfig(comp);
+        const rot = comp.rotation || 0;
+        const cs = comp.inputs[1]?.value;
+        const on = plaRomSelected(cfg.csHigh, cs === 0 || cs === 1 ? cs : 'X');
+        const dots = cfg.and.join('').replace(/-/g, '').length + cfg.or.join('').replace(/0/g, '').length;
+        return (
+          <g>
+            <title>{`PLA ROM, ${cfg.inputs} giriş, ${cfg.terms} VE kapısı, ${cfg.outputs} çıkış, ${dots} nokta. Seçme girişi (sel) ${cfg.csHigh ? '1' : '0'} iken etkin${on ? '' : ' (şimdi pasif, çıkış boşta)'}. Çift tıklayınca matris düzenlenir`}</title>
+            <rect x={0} y={0} width={60} height={60} rx={6} fill={cadTheme === 'dark' ? fillColor : '#ffffff'} stroke={strokeColor} strokeWidth={2} />
+            <g transform={rot ? `rotate(${-rot}, 30, 30)` : undefined}>
+              <text x={30} y={20} textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight="bold" className={`${gateTextClass} select-none`}>
+                PLA ROM
+              </text>
+              <text x={30} y={36} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold" className={`${gateTextClass} select-none`}>
+                {`${cfg.inputs}x${cfg.terms}x${cfg.outputs}`}
+              </text>
+            </g>
+            <text
+              x={30}
+              y={52}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={8}
+              transform={rot ? `rotate(${-rot}, 30, 52)` : undefined}
+              fill={cadTheme === 'dark' ? '#94a3b8' : '#475569'}
+              className="select-none"
+            >
+              sel
+            </text>
           </g>
         );
       }
@@ -7470,7 +7530,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'gates',
       title: 'Temel Mantık Kapıları',
       icon: '🚪',
-      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'pla'] as ComponentType[],
+      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'pla', 'plaRom'] as ComponentType[],
     },
     {
       id: 'plexers',
@@ -11705,6 +11765,13 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   Düzenle… ({getPlaConfig(first).rows.length} satır)
                 </button>
               </div>
+            ) : single && first.type === 'plaRom' ? (
+              <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                <span className={`text-[11px] font-semibold ${rowLabel}`}>Matris</span>
+                <button onClick={() => setPlaRomEditorCompId(first.id)} className={btnCls(false)} title="VE / VEYA matrisini düzenle (parçaya çift tıklamak da açar)">
+                  Düzenle…
+                </button>
+              </div>
             ) : null;
             const imageToolsRow = single && first.type === 'image' && (() => {
               const ok = !!imageShownSize(getImageConfig(first).src);
@@ -13895,6 +13962,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               onClose={() => setMemEditorCompId(null)}
               onToast={showToast}
             />
+          ) : null;
+        })()}
+
+      {/* Matrix editor of a PLA ROM */}
+      {plaRomEditorCompId &&
+        (() => {
+          const target = components.find((c) => c.id === plaRomEditorCompId && c.type === 'plaRom');
+          return target ? (
+            <PlaRomEditor key={target.id} comp={target} dark={cadTheme === 'dark'} onSave={handleSavePlaRomEditor} onClose={() => setPlaRomEditorCompId(null)} />
           ) : null;
         })()}
 
