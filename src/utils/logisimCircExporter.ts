@@ -85,6 +85,7 @@ import {
   logisimTransistorPorts,
   logisimPlaOutput,
   logisimPassSwitchInput,
+  logisimTwoPinLedPorts,
   logisimTwoWayPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
@@ -92,7 +93,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getClockConfig, getExtraSwitchConfig, getPlaConfig, getPorConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPorConfig, getSliderConfig, getTtlConfig, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -232,7 +233,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
-  'passSwitch', 'twoWaySwitch',
+  'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -350,11 +351,13 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
         return steps.length && steps[steps.length - 1].name === DYNAMIC_FACTORY[sh.element] ? dynamicPathString(steps) : null;
       };
       let dynamicWritten = 0;
+      let twoPinLedWritten = 0;
       const drawing = (subcircuitAppearanceShapes(xdef) ?? []).flatMap((sh) => {
         if (sh.kind === 'dynamic') {
           const path = dynamicPath(sh);
           if (path) {
             dynamicWritten++;
+            if (sh.element === 'two-pin-led') twoPinLedWritten++;
             return [`      ${svgXml(dynamicShapeToSvg(sh, path))}`];
           }
           warnings.push(`${def.name || def.id}: IC görünümündeki dinamik öğe (${sh.element}) dosyaya yazılamadı; gösterdiği parça Logisim'e o parça olarak aktarılmadı (ör. çıkış portunun LED'i Logisim'de Pin olur).`);
@@ -365,6 +368,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       });
       if (dynamicWritten)
         warnings.push(`${def.name || def.id}: IC görünümündeki ${dynamicWritten} dinamik öğe yalnız Logisim-evolution'da var; Logisim 2.7.1 dosyayı açarken bunlar için hata gösterir, çizimin kalanını açar.`);
+      if (twoPinLedWritten)
+        warnings.push(`${def.name || def.id}: IC görünümündeki ${twoPinLedWritten} iki uçlu LED öğesini (visible-two-pin-led) Logisim-evolution yazar ama geri okuyamaz: dosyayı açarken hata gösterir, bu öğeleri atlar ve kalanını açar. Bu program okur.`);
       head =
         `    <a name="appearance" val="${style}"/>\n` +
         (def.appearance?.fixedSize ? '    <a name="circuitnamedboxfixedsize" val="true"/>\n' : '') +
@@ -976,6 +981,61 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (!warnings.some((x) => x.startsWith('Geçiş / iki yollu anahtar:')))
             warnings.push(`Geçiş / iki yollu anahtar: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Anahtarların konumu dosyaya yazılmaz (Logisim saklamaz), dosya açılınca hepsi açık / ilk tarafta.`);
+          break;
+        }
+        case 'slider': {
+          // Logisim-evolution's Slider (lib Input/Output-Extra): the output on loc. Evolution's body does not turn: it
+          // lies behind loc facing east / west, below / above its middle facing north / south. Every attribute is
+          // written out; the knob's position is run state that Logisim does not save
+          usesExtra = true;
+          const cfg = getSliderConfig(c);
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const radix = c.state.radix ?? '2';
+          const attrs =
+            a('facing', facing) +
+            a('width', cfg.width) +
+            a('radix', radix === '10s' ? '10signed' : radix === '10u' ? '10unsigned' : radix) +
+            a('color', (c.state.switchColor ?? '#ffffff').toLowerCase()) +
+            a('Direction', cfg.rtl ? 'right_to_left' : 'left_to_right');
+          const box =
+            facing === 'east' ? { x0: -275, y0: -15, x1: 0, y1: 15 }
+            : facing === 'west' ? { x0: 0, y0: -15, x1: 275, y1: 15 }
+            : facing === 'north' ? { x0: -137, y0: 0, x1: 138, y1: 30 }
+            : { x0: -137, y0: -30, x1: 138, y1: 0 };
+          P.push({ kind: 'ram', part: c.type, attrs, ports: [{ off: { x: 0, y: 0 }, net: out(0), width: cfg.width, sink: false }], lib: EXTRA_LIB, name: 'Slider', box });
+          // (once per file)
+          if (!warnings.some((x) => x.startsWith('Kaydırıcı:')))
+            warnings.push(`Kaydırıcı: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Düğmenin konumu dosyaya yazılmaz (Logisim saklamaz), dosya açılınca çıkış 0. Kuzey / güney yönlü kaydırıcının gövdesi Logisim'de dönmez, yatay çizilir.`);
+          break;
+        }
+        case 'twoPinLed': {
+          // Logisim-evolution's TWOPINLED (lib Input/Output-Extra): loc in the middle of the body, the anode and the
+          // cathode 10 to either side. Its default facing, west, has the anode on the left, as ours unturned
+          usesExtra = true;
+          const facing = (['west', 'south', 'east', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const t = logisimTwoPinLedPorts(facing);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const attrs =
+            a('facing', facing) +
+            a('color', (c.state.ioOnColor ?? TWO_PIN_LED_DEFAULTS.on).toLowerCase()) +
+            a('offcolor', (c.state.ledOffColor ?? TWO_PIN_LED_DEFAULTS.off).toLowerCase()) +
+            a('bipolar', c.state.ledBipolar ? 'true' : 'false') +
+            a('reversecolor', (c.state.ledReverseColor ?? TWO_PIN_LED_DEFAULTS.reverse).toLowerCase());
+          P.push({
+            kind: 'ram',
+            part: c.type,
+            attrs,
+            ports: [
+              { off: t.anode, net: pin(0), width: 1, sink: true },
+              { off: t.cathode, net: pin(1), width: 1, sink: true },
+            ],
+            lib: EXTRA_LIB,
+            name: 'TWOPINLED',
+            box: { x0: -10, y0: -10, x1: 10, y1: 10 },
+          });
+          if (!warnings.some((x) => x.startsWith('İki uçlu LED:')))
+            warnings.push(`İki uçlu LED: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
           break;
         }
         case 'powerOnReset': {

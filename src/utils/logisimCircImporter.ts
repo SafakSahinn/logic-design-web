@@ -18,6 +18,8 @@ import {
   configureBitExtender,
   configureBitSelector,
   configureExtraSwitch,
+  configureSlider,
+  TWO_PIN_LED_DEFAULTS,
   configurePla,
   parsePlaTable,
   configureMem,
@@ -176,6 +178,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // Logisim-evolution Input/Output-Extra of Aşama 5h (2.7.1 has none)
   if (n === 'switch') return 'passSwitch';
   if (n === 'twowayswitch') return 'twoWaySwitch';
+  if (n === 'slider') return 'slider';
+  if (n === 'twopinled') return 'twoPinLed';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -239,7 +243,7 @@ const WIDE_IMPORT = new Set<ComponentType>([
   'switch', 'probe', 'led', 'constant', 'tunnel', 'pullResistor', 'splitter', 'bitExtender', 'bitSelector', 'subcircuit',
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter',
   'multiplexer', 'demultiplexer', 'transistor', 'transmissionGate', 'doNotConnect',
-  'passSwitch', 'twoWaySwitch',
+  'passSwitch', 'twoWaySwitch', 'slider',
 ]);
 // Logisim's most inputs per gate; ours takes as many
 const MAX_IMPORT_GATE_INPUTS = 32;
@@ -342,6 +346,15 @@ export function logisimTwoWayPorts(facing: string, mode: '1in2out' | '2in1out'):
   if (facing === 'north') return { common: { x: 0, y: c }, pair: [{ x: -10, y: p }, { x: 10, y: p }] };
   return { common: { x: c, y: 0 }, pair: [{ x: p, y: -10 }, { x: p, y: 10 }] };
 }
+/** Logisim-evolution TwoPinLed.updatePorts, relative to loc (the middle of the body): facing west the anode on the left */
+export function logisimTwoPinLedPorts(facing: string): { anode: Pt; cathode: Pt } {
+  if (facing === 'east') return { anode: { x: 10, y: 0 }, cathode: { x: -10, y: 0 } };
+  if (facing === 'north') return { anode: { x: 0, y: 10 }, cathode: { x: 0, y: -10 } };
+  if (facing === 'south') return { anode: { x: 0, y: -10 }, cathode: { x: 0, y: 10 } };
+  return { anode: { x: -10, y: 0 }, cathode: { x: 10, y: 0 } };
+}
+/** Our rotation of a two-pin LED with evolution's facing (default west = not turned) */
+export const TWO_PIN_LED_ROTATION: Record<string, 0 | 90 | 180 | 270> = { west: 0, south: 90, east: 180, north: 270 };
 /** Our rotation of a two-way switch with evolution's facing (its ports: facing south / north they lie as ours turned by 270 / 90) */
 const twoWayModeOf = (attr: Record<string, string>): '1in2out' | '2in1out' => (attr.mode === '2in1out' ? '2in1out' : '1in2out');
 export const TWO_WAY_ROTATION: Record<string, 0 | 90 | 180 | 270> = { east: 0, west: 180, south: 270, north: 90 };
@@ -1918,7 +1931,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       const label = attr.label || undefined;
       const facing = attr.facing || 'east';
       const size = parseInt(attr.size ?? '', 10) || 0;
-      const width = num(attr.width, 1);
+      // (evolution leaves default attributes out: a slider is 8 bits wide by default)
+      const width = num(attr.width, compName.trim().toLowerCase() === 'slider' ? 8 : 1);
       const inputsAttr = parseInt(attr.inputs ?? '', 10) || 0;
       const leftHanded = attr.control === 'left';
       const outMode = attr.out === '0Z' || attr.out === 'Z1' ? attr.out : undefined;
@@ -1956,11 +1970,14 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // (the RGB Video's width is its screen width in pixels, the Image's its frame width, not a bit width)
       if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image' && nativeType !== 'textLabel')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
-      const rot = nativeType === 'twoWaySwitch' ? TWO_WAY_ROTATION[facing] ?? 0 : FACING_ROTATION[facing] ?? 0;
+      const rot =
+        nativeType === 'twoWaySwitch' ? TWO_WAY_ROTATION[facing] ?? 0
+        : nativeType === 'twoPinLed' ? TWO_PIN_LED_ROTATION[attr.facing || 'west'] ?? 0
+        : FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel' && nativeType !== 'twoWaySwitch') occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel' && nativeType !== 'twoWaySwitch' && nativeType !== 'twoPinLed') occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -1979,6 +1996,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? [logisimPassSwitchInput(facing)]
               : nativeType === 'twoWaySwitch'
               ? ((t) => [t.common, ...t.pair])(logisimTwoWayPorts(facing, twoWayModeOf(attr)))
+              : nativeType === 'twoPinLed'
+              ? ((t) => [t.anode, t.cathode])(logisimTwoPinLedPorts(attr.facing || 'west'))
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2195,6 +2214,42 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               [common.id, at(loc, t.common)],
               [pair[0].id, at(loc, t.pair[0])],
               [pair[1].id, at(loc, t.pair[1])],
+            ]);
+          }
+          continue;
+        }
+        if (nativeType === 'slider' || nativeType === 'twoPinLed') {
+          // Logisim-evolution's Slider (output on loc) / TWOPINLED (loc in the middle, anode and cathode 10 to either
+          // side). Attributes left out are evolution's defaults; the slider's knob starts at 0 (run state)
+          const hex = (v: string | undefined) => (/^#[0-9a-fA-F]{6}$/.test(v ?? '') ? v!.toLowerCase() : undefined);
+          let inst = createComponentInstance(nativeType, 0, 0);
+          inst = { ...inst, rotation: rot as 0 | 90 | 180 | 270 };
+          if (nativeType === 'slider') {
+            const color = hex(attr.color);
+            const radix = RADIX[attr.radix ?? ''];
+            inst.state = {
+              ...inst.state,
+              ...(color && color !== '#ffffff' ? { switchColor: color } : {}),
+              ...(radix && radix !== '2' ? { radix } : {}),
+            };
+            inst = configureSlider(inst, { width, rtl: attr.Direction === 'right_to_left' });
+            place(inst, inst.outputs[0].id, loc, label, [[inst.outputs[0].id, loc]]);
+          } else {
+            const on = hex(attr.color);
+            const off = hex(attr.offcolor);
+            const rev = hex(attr.reversecolor);
+            inst.state = {
+              ...inst.state,
+              ...(on && on !== TWO_PIN_LED_DEFAULTS.on ? { ioOnColor: on } : {}),
+              ...(off && off !== TWO_PIN_LED_DEFAULTS.off ? { ledOffColor: off } : {}),
+              ...(rev && rev !== TWO_PIN_LED_DEFAULTS.reverse ? { ledReverseColor: rev } : {}),
+              ...(attr.bipolar === 'true' ? { ledBipolar: true } : {}),
+            };
+            inst = updatePinPositions(inst);
+            const t = logisimTwoPinLedPorts(attr.facing || 'west');
+            place(inst, inst.inputs[0].id, at(loc, t.anode), label, [
+              [inst.inputs[0].id, at(loc, t.anode)],
+              [inst.inputs[1].id, at(loc, t.cathode)],
             ]);
           }
           continue;
