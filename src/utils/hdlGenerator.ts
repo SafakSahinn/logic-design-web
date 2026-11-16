@@ -37,6 +37,8 @@ import {
   joystickValue,
   getClockConfig,
   getPorConfig,
+  getExtraSwitchConfig,
+  EXTRA_SWITCH_TYPES,
   getPlaConfig,
   plaMatch,
   portPokeOf,
@@ -201,7 +203,7 @@ function wrap(e: string): string {
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor', 'doNotConnect'];
-const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate'];
+const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate', 'passSwitch', 'twoWaySwitch'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
 // encoder always has one) or three-state unselected outputs
 const plexerFloats = (c: CircuitComponentInstance) =>
@@ -850,6 +852,22 @@ function buildModule(
     }
   };
 
+  // Pass / two-way switch levers (evolution has no HDL for these parts): on the top level an input of the module
+  // (a board switch), inside an IC the lever's current position (an IC has no pins of its own for it)
+  const leverExpr = new Map<string, string>();
+  for (const c of comps) {
+    if (!EXTRA_SWITCH_TYPES.has(c.type)) continue;
+    const what = c.type === 'passSwitch' ? 'geçiş anahtarı' : 'iki yollu anahtar';
+    if (spec.subPorts) {
+      leverExpr.set(c.id, c.state.switchClosed ? L.one : L.zero);
+      warnings.push(`${c.label || what}: IC içinde ${what}nın kolu şimdiki konumunda sabit (${c.state.switchClosed ? (c.type === 'passSwitch' ? 'kapalı' : 'ikinci taraf') : c.type === 'passSwitch' ? 'açık' : 'ilk taraf'}).`);
+      continue;
+    }
+    const pn = names.make(c.label ? `sw_${c.label}` : 'sw', 'sw');
+    addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type, pins: [] } });
+    leverExpr.set(c.id, pn);
+  }
+
   // --- component behaviour ------------------------------------------------
   for (const c of internalComps) {
     const nm = compNames.get(c.id)!;
@@ -963,6 +981,26 @@ function buildModule(
         body.push(L.comment('iletim kapısı: iki kapı aynı seviyedeyken (ya da tanımsızken) simülatörde çıkış E, burada yüksek empedans'));
         const sel = L.and([L.not(inp(1)), inp(2)]);
         emit(out[0], L.mux(lang === 'vhdl' ? wrap(sel) : sel, gateIn(0), hiZW));
+        break;
+      }
+      case 'passSwitch':
+      case 'twoWaySwitch': {
+        // The lever (1 = closed / second side) picks what each output gets: the input on its side or high
+        // impedance. An input with nothing attached drives nothing in the simulator either
+        const w = getExtraSwitchConfig(c).width;
+        const zW = w > 1 ? (lang === 'verilog' ? `${w}'bz` : "(others => 'Z')") : L.hiZ;
+        const data = (i: number) => {
+          const pin = c.inputs[i];
+          if (!pin || !(isConnected(pin.id) || portBound.has(pin.id))) return zW;
+          return w > 1 ? compose(wideBits(i)) : inp(i);
+        };
+        const lever = leverExpr.get(c.id) ?? L.zero;
+        body.push(L.comment(`kol: ${lever} (1 = ${c.type === 'passSwitch' ? 'kapalı' : 'ikinci taraf'})`));
+        if (c.type === 'passSwitch') emit(out[0], L.mux(lever, data(0), zW));
+        else if (c.inputs.length === 1) {
+          if (out[0]) emit(out[0], L.mux(lever, zW, data(0)));
+          if (out[1]) emit(out[1], L.mux(lever, data(0), zW));
+        } else emit(out[0], L.mux(lever, data(1), data(0)));
         break;
       }
       case 'splitter4':

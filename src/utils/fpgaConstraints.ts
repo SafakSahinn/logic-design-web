@@ -133,7 +133,7 @@ export function generateFpgaConstraints(
     if (type === 'clock') {
       if (!clockPort) clockPort = p.name;
       else unassigned.push(p.name);
-    } else if (type === 'switch' || type === 'dipSwitch') {
+    } else if (type === 'switch' || type === 'dipSwitch' || type === 'passSwitch' || type === 'twoWaySwitch') {
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);

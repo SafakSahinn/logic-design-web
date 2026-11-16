@@ -131,7 +131,7 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 
 // Board / outside I/O parts (a keypad's columns and a port's pins come from outside like a switch; the keyboard and
 // Telnet are the outside world's in the HDL too, so no transistors are counted for their buffers)
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'powerOnReset'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'powerOnReset', 'passSwitch', 'twoWaySwitch'];
 // Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
