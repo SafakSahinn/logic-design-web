@@ -62,6 +62,8 @@ export type ComponentType =
   | 'evenParity'
   // Logisim-evolution Gates: programmable logic array, a table of input patterns and their outputs (Aşama 5g-e)
   | 'pla'
+  // Logisim-evolution Input/Output-Extra: PLA ROM, an AND matrix of input literals and an OR matrix of the AND terms (Aşama 5h-c)
+  | 'plaRom'
   | 'triState'
   | 'controlledInverter'
   // Outputs
@@ -219,6 +221,14 @@ export interface CircuitComponentInstance {
     plaRows?: PlaRow[];
     /** PLA: index of the row the current input selects (-1: none, the output is 0); set by the simulation */
     plaHit?: number;
+    /** PLA ROM: the AND matrix, one string per AND gate (top first), one character per input bit, most significant
+     *  first: '1' the input, '0' the inverted input, '-' not connected (evolution PlaRomData inputAnd); unset = no dots */
+    plaRomAnd?: string[];
+    /** PLA ROM: the OR matrix, one string per AND gate, one character per output bit, most significant first: '1' the
+     *  gate feeds that output's OR (evolution PlaRomData andOutput) */
+    plaRomOr?: string[];
+    /** PLA ROM: the chip select is active high (Logisim-evolution 'Select' high); unset = active low */
+    plaRomCsHigh?: boolean;
     /** Bit extender: how the extra high bits are filled (Logisim 'type'); unset = zero */
     extendType?: 'zero' | 'one' | 'sign' | 'input';
     /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0

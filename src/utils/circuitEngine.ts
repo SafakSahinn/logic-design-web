@@ -2453,6 +2453,21 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 50, relY: 30, width: 2 }],
     description: 'Programlanabilir mantık dizisi (Logisim-evolution PLA): tablodaki satırlar yukarıdan aşağı denenir, giriş desenine uyan ilk satırın çıkışı verilir (x = fark etmez); hiçbir satır uymazsa çıkış 0',
   },
+  // Logisim-evolution Input/Output-Extra PlaRom: a 60 x 60 body, the input on the left middle, the output on the right
+  // middle and the chip select in the middle of the bottom (evolution's bounds 0, -30, 60, 60 from the input)
+  plaRom: {
+    type: 'plaRom',
+    name: 'PLA ROM (AND / OR Matrisi)',
+    category: 'gates',
+    width: 60,
+    height: 60,
+    inputs: [
+      { id: 'in', name: 'in', type: 'input', relX: 0, relY: 30, width: 4 },
+      { id: 'cs', name: 'sel', type: 'input', relX: 30, relY: 60 },
+    ],
+    outputs: [{ id: 'out', name: 'out', type: 'output', relX: 60, relY: 30, width: 4 }],
+    description: 'PLA ROM (Logisim-evolution PLA ROM): her VE kapısı seçilen girişlerin kendisini ya da tersini VE\'ler, her çıkış kendisine bağlanan VE kapılarını VEYA\'lar. Matris çift tıklayınca açılan şemada noktalar konarak programlanır; seçme (sel) girişi pasifken çıkış boşta',
+  },
   triState: {
     type: 'triState',
     name: '3 Durumlu Tampon (Tri-State)',
@@ -2916,6 +2931,8 @@ export function createComponentInstance(
   if (type === 'bitExtender') return configureBitExtender(inst, {});
   // A new PLA is evolution's: 2 input bits, 2 output bits, an empty program
   if (type === 'pla') return configurePla(inst, { inWidth: 2, outWidth: 2, rows: [] });
+  // A new PLA ROM is evolution's: 4 inputs, 4 AND gates, 4 outputs, no dots, chip select active low
+  if (type === 'plaRom') return configurePlaRom(inst, { inputs: 4, terms: 4, outputs: 4 });
   // A new two-way switch is evolution's default: one input to two outputs, on the first side
   if (type === 'twoWaySwitch') return configureExtraSwitch(inst, { width: 1, mode: '1in2out' });
   // A new slider is evolution's: 8 bits, left to right, the knob at the start
@@ -3491,6 +3508,177 @@ export function configureExtraSwitch(
     outputs: mode === '1in2out' ? [pin(comp.outputs, 0, 'out0', 'output'), pin(comp.outputs, 1, 'out1', 'output')] : [pin(comp.outputs, 0, 'out', 'output')],
     state: { ...comp.state, twoWayMode: mode },
   });
+}
+
+// ---- PLA ROM (Logisim-evolution std/io/extra PlaRom + PlaRomData) ----------------------------------------------
+// Unlike the PLA's priority table this is a real two-level array: each AND gate takes the input bits it has a dot on
+// (the bit or its inverse), each output ORs the AND gates it has a dot on. Columns run most significant bit first, as
+// evolution's editor draws them, so a matrix row string reads left to right like the editor.
+export const PLA_ROM_MAX = 32;
+
+export interface PlaRomConfig {
+  inputs: number;
+  terms: number;
+  outputs: number;
+  /** Per AND gate, per input bit (most significant first): '1' the bit, '0' its inverse, '-' none */
+  and: string[];
+  /** Per AND gate, per output bit (most significant first): '1' feeds the output */
+  or: string[];
+  csHigh: boolean;
+}
+
+const clampPlaRom = (n: number) => Math.max(1, Math.min(PLA_ROM_MAX, Math.round(n) || 1));
+// A matrix row at a new width: evolution's updateSize keeps the first (left, most significant) columns and adds empty
+// ones on the right
+const plaRomFit = (s: string | undefined, n: number, allowed: string, empty: string): string => {
+  const clean = [...(s ?? '')].slice(0, n).map((ch) => (allowed.includes(ch) ? ch : empty)).join('');
+  return clean + empty.repeat(n - clean.length);
+};
+
+export function getPlaRomConfig(comp: CircuitComponentInstance): PlaRomConfig {
+  const inputs = comp.inputs[0]?.width ?? 1;
+  const outputs = comp.outputs[0]?.width ?? 1;
+  const terms = comp.state.plaRomAnd?.length || 4;
+  return {
+    inputs,
+    terms,
+    outputs,
+    and: Array.from({ length: terms }, (_, t) => plaRomFit(comp.state.plaRomAnd?.[t], inputs, '01-', '-')),
+    or: Array.from({ length: terms }, (_, t) => plaRomFit(comp.state.plaRomOr?.[t], outputs, '01', '0')),
+    csHigh: comp.state.plaRomCsHigh === true,
+  };
+}
+
+/**
+ * New sizes (1-32 each) / matrices / chip select of a PLA ROM. Like evolution's updateSize the dots of the gates and
+ * columns that stay are kept, new ones are empty (pin ids are kept)
+ */
+export function configurePlaRom(
+  comp: CircuitComponentInstance,
+  patch: { inputs?: number; terms?: number; outputs?: number; and?: string[]; or?: string[]; csHigh?: boolean }
+): CircuitComponentInstance {
+  const cur = getPlaRomConfig(comp);
+  const inputs = clampPlaRom(patch.inputs ?? cur.inputs);
+  const outputs = clampPlaRom(patch.outputs ?? cur.outputs);
+  const terms = clampPlaRom(patch.terms ?? cur.terms);
+  const andSrc = patch.and ?? cur.and;
+  const orSrc = patch.or ?? cur.or;
+  const state = {
+    ...comp.state,
+    plaRomAnd: Array.from({ length: terms }, (_, t) => plaRomFit(andSrc[t], inputs, '01-', '-')),
+    plaRomOr: Array.from({ length: terms }, (_, t) => plaRomFit(orSrc[t], outputs, '01', '0')),
+  };
+  if (patch.csHigh ?? cur.csHigh) state.plaRomCsHigh = true;
+  else delete state.plaRomCsHigh;
+  return updatePinPositions({
+    ...comp,
+    inputs: [
+      pinWithWidth(comp.inputs[0] ?? newPin(comp, 'in', 'in', 'input'), inputs),
+      pinWithWidth(comp.inputs[1] ?? newPin(comp, 'cs', 'sel', 'input'), 1),
+    ],
+    outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out', 'out', 'output'), outputs)],
+    state,
+  });
+}
+
+/** The chip select lets the part work: anything but the inactive level (open, x and E included) enables it (PlaRom.propagate) */
+export const plaRomSelected = (csHigh: boolean, cs: SignalValue): boolean => !((cs === 0 && csHigh) || (cs === 1 && !csHigh));
+
+/**
+ * PlaRomData.setAndValue: per AND gate, 0 if a dotted literal is defined and 0; otherwise E if a dotted input is
+ * undefined (x, E, open); otherwise 1. A gate without a dot is E. `input` is LSB first
+ */
+export function plaRomTermValues(cfg: PlaRomConfig, input: SignalValue[]): SignalValue[] {
+  return cfg.and.map((row) => {
+    let dot = false;
+    let err = false;
+    for (let c = 0; c < cfg.inputs; c++) {
+      const ch = row[c];
+      if (ch !== '0' && ch !== '1') continue;
+      dot = true;
+      const v = input[cfg.inputs - 1 - c];
+      if (v !== 0 && v !== 1) err = true;
+      else if ((ch === '1') !== (v === 1)) return 0;
+    }
+    return dot && !err ? 1 : 'E';
+  });
+}
+
+/**
+ * PlaRomData.setOutputValue: per output, the OR (Logisim Value.or) of its dotted gates: 1 if one is 1, 0 if all are
+ * 0, E otherwise; an output without a dot is E. Returned LSB first, as the output pin takes it
+ */
+export function plaRomOutputValues(cfg: PlaRomConfig, terms: SignalValue[]): SignalValue[] {
+  return Array.from({ length: cfg.outputs }, (_, bit): SignalValue => {
+    const col = cfg.outputs - 1 - bit;
+    let dot = false;
+    let acc: SignalValue = 0;
+    for (let t = 0; t < cfg.terms; t++) {
+      if (cfg.or[t][col] !== '1') continue;
+      dot = true;
+      const v = terms[t];
+      if (v === 1) acc = 1;
+      else if (v !== 0 && acc !== 1) acc = 'E';
+    }
+    return dot ? acc : 'E';
+  });
+}
+
+/** Evolution's "Contents" text: the AND matrix (0 none, 1 inverse, 2 the bit) then the OR matrix (0 / 1), each as
+ *  runs ("v*n " for three or more, else "v " each); no dot at all gives "" (PlaRomData.saveData) */
+export function plaRomContents(cfg: PlaRomConfig): string {
+  const runs = (vals: string[]) => {
+    let out = '';
+    for (let i = 0; i < vals.length; ) {
+      let j = i;
+      while (j < vals.length && vals[j] === vals[i]) j++;
+      const n = j - i;
+      out += n >= 3 ? `${vals[i]}*${n} ` : `${vals[i]} `.repeat(n);
+      i = j;
+    }
+    return out;
+  };
+  const a = cfg.and.flatMap((row) => [...row].map((ch) => (ch === '0' ? '1' : ch === '1' ? '2' : '0')));
+  const o = cfg.or.flatMap((row) => [...row]);
+  if (!a.some((v) => v !== '0') && !o.some((v) => v !== '0')) return '';
+  return runs(a) + runs(o);
+}
+
+/**
+ * Reads evolution's "Contents" text into matrices of the given sizes (PlaRomData.decodeSavedData): values fill the
+ * AND matrix gate by gate, then the OR matrix; "v*n" repeats v n times. A value out of range leaves its place empty
+ * (evolution prints an error and skips it), values past the end are ignored. `bad` counts the unreadable entries
+ */
+export function parsePlaRomContents(text: string, inputs: number, terms: number, outputs: number): { and: string[]; or: string[]; bad: number } {
+  const andM = Array.from({ length: terms }, () => new Array<string>(inputs).fill('-'));
+  const orM = Array.from({ length: terms }, () => new Array<string>(outputs).fill('0'));
+  let bad = 0;
+  let cnt = 0;
+  const write = (v: number) => {
+    if (cnt < inputs * terms) {
+      const r = Math.floor(cnt / inputs);
+      const ch = v === 0 ? '-' : v === 1 ? '0' : v === 2 ? '1' : null;
+      if (ch === null) bad++;
+      else andM[r][cnt - r * inputs] = ch;
+    } else if (cnt < inputs * terms + outputs * terms) {
+      const k = cnt - inputs * terms;
+      const r = Math.floor(k / outputs);
+      if (v === 0 || v === 1) orM[r][k - r * outputs] = v ? '1' : '0';
+      else bad++;
+    }
+    cnt++;
+  };
+  for (const tok of (text ?? '').split(/\s+/).filter(Boolean)) {
+    const m = /^(-?\d+)(?:\*(\d+))?$/.exec(tok);
+    if (!m) {
+      bad++;
+      continue;
+    }
+    const v = parseInt(m[1], 10);
+    const n = m[2] === undefined ? 1 : parseInt(m[2], 10);
+    for (let i = 0; i < n && cnt < (inputs + outputs) * terms; i++) write(v);
+  }
+  return { and: andM.map((r) => r.join('')), or: orM.map((r) => r.join('')), bad };
 }
 
 // ---- Slider / two-pin LED (Logisim-evolution std/io/extra Slider, TwoPinLed) -----------------------------------
@@ -5954,6 +6142,20 @@ export function simulateCircuitStep(
         setBitsOut(0, Array.from({ length: cfg.outWidth }, (_, i) => (row?.out[row.out.length - 1 - i] === '1' ? 1 : 0)));
         break;
       }
+      case 'plaRom': {
+        // Logisim-evolution PlaRom.propagate: a chip select at its inactive level floats the output; otherwise the AND
+        // gates take their dotted literals and the outputs OR their dotted gates. An open input reads as x (evolution
+        // finds no value there and keeps its first, unknown one)
+        const cfg = getPlaRomConfig(comp);
+        const cs = isPinConnected(comp.inputs[1]?.id) ? readBits(comp.inputs[1], 1)[0] : 'X';
+        if (!plaRomSelected(cfg.csHigh, cs)) {
+          setBitsOut(0, fillBits(cfg.outputs, 'Z'));
+          break;
+        }
+        const inBits = isPinConnected(comp.inputs[0]?.id) ? readBits(comp.inputs[0], cfg.inputs) : fillBits(cfg.inputs, 'X');
+        setBitsOut(0, plaRomOutputValues(cfg, plaRomTermValues(cfg, inBits)));
+        break;
+      }
       case 'bitExtender': {
         // Logisim Value.extendWidth: the low bits pass as they are (x/E included, extra ones cut off),
         // new high bits are 0, 1, the top input bit (sign) or the extension input (x when open)
@@ -7428,8 +7630,8 @@ const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor'
 const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
 // (a transistor / transmission gate has no formula in Logisim's analyzer either: its output can float)
-// (nor has a PLA: Logisim's analyzer cannot read its table)
-const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate', 'pla', 'passSwitch', 'twoWaySwitch']);
+// (nor has a PLA or a PLA ROM: Logisim's analyzer cannot read their matrices)
+const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate', 'pla', 'plaRom', 'passSwitch', 'twoWaySwitch']);
 
 interface BooleanExprContext {
   driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;
