@@ -71,6 +71,13 @@ import {
   transistorGateOnTop,
   twoWayPairSwapped,
   getExtraSwitchConfig,
+  getSliderConfig,
+  setSliderPosition,
+  sliderFlipped,
+  sliderPosition,
+  sliderPositionAt,
+  twoPinLedColor,
+  twoPinLedState,
   getPorConfig,
   porSizeOf,
   porActive,
@@ -404,6 +411,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   transmissionGate: { label: 'İletim Kapısı', badge: 'Transmission Gate' },
   passSwitch: { label: 'Geçiş Anahtarı', badge: 'Switch' },
   twoWaySwitch: { label: 'İki Yollu Anahtar', badge: 'Two-Way' },
+  slider: { label: 'Kaydırıcı', badge: 'Slider' },
+  twoPinLed: { label: 'İki Uçlu LED', badge: 'Anot / Katot' },
   powerOnReset: { label: 'Açılış Sıfırlaması', badge: 'Power-on Reset' },
   doNotConnect: { label: 'Bağlanmaz', badge: 'Do Not Connect' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
@@ -1673,6 +1682,33 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       pokeComponent(comp.id, (c) => ((c.state.joyX ?? 0) === 0 && (c.state.joyY ?? 0) === 0 ? c : setJoystick(c, 0, 0)));
     };
     move(e);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  // Slider: as evolution's Poker, a press on the knob (its 12 x 12 hit box) starts a drag that moves the knob with the
+  // mouse along the track. Only a selected slider takes it; elsewhere the press selects / moves the part
+  const handleSliderDown = (e: React.MouseEvent, comp: CircuitComponentInstance) => {
+    if (e.button !== 0 || !selectedCompIds.includes(comp.id) || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const toCanvas = (ev: { clientX: number; clientY: number }) => ({
+      x: (ev.clientX - rect.left - panOffset.x) / zoom,
+      y: (ev.clientY - rect.top - panOffset.y) / zoom,
+    });
+    const p0 = toCanvas(e);
+    const hit = sliderPositionAt(comp, p0.x, p0.y);
+    const knob = sliderPosition(comp);
+    if (hit.along < knob + 10 || hit.along > knob + 22 || hit.across < 19 || hit.across > 31) return;
+    e.stopPropagation();
+    const move = (ev: { clientX: number; clientY: number }) => {
+      const p = toCanvas(ev);
+      const pos = sliderPositionAt(comp, p.x, p.y).pos;
+      pokeComponent(comp.id, (c) => setSliderPosition(c, pos));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
   };
@@ -3832,7 +3868,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo', 'passSwitch', 'twoWaySwitch'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo', 'passSwitch', 'twoWaySwitch', 'slider'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -5070,6 +5106,50 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <circle cx={px} cy={py(0)} r={2} fill={line} />
             <circle cx={px} cy={py(1)} r={2} fill={line} />
             <line x1={cx} y1={20} x2={px} y2={py(on ? 1 : 0)} stroke={line} strokeWidth={2} strokeLinecap="round" />
+          </g>
+        );
+      }
+
+      // Logisim-evolution Slider.paintInstance in the 275 x 30 body 5 below the box top: a rounded outline in the body
+      // colour, the track 10 above the bottom, the dark grey knob and the output value above it in the chosen base.
+      // Turned by 90 / 180 degrees the drawing is turned once more by 180, so the value always grows to the right / up
+      case 'slider': {
+        const flip = sliderFlipped(comp);
+        const pos = sliderPosition(comp);
+        const line = isSelected ? '#2563eb' : '#000000';
+        const out = comp.outputs[0];
+        const w = getSliderConfig(comp).width;
+        const bits = w > 1 ? (out?.bits && out.bits.length === w ? out.bits : new Array<SignalValue>(w).fill('X')) : [out?.value ?? 'X'];
+        return (
+          <g onMouseDown={(e) => handleSliderDown(e, comp)} className="cursor-pointer">
+            <title>{`Kaydırıcı, ${w} bit, ${getSliderConfig(comp).rtl ? 'sağdan sola' : 'soldan sağa'}. Seçiliyken düğmesi sürüklenir`}</title>
+            <rect x={0} y={0} width={280} height={40} fill="transparent" stroke="none" />
+            <g transform={flip ? 'rotate(180, 140, 20)' : undefined}>
+              <rect x={5} y={5} width={275} height={30} rx={5} fill={comp.state.switchColor ?? '#ffffff'} stroke={line} strokeWidth={2} />
+              <line x1={15} y1={25} x2={270} y2={25} stroke={line} strokeWidth={2} />
+              <rect x={pos + 10} y={20} width={10} height={10} rx={2} fill="#404040" stroke={line} strokeWidth={2} />
+              <text x={142} y={11} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold" fontFamily="sans-serif" fill="#000000" className="select-none">
+                {formatBits(bits, comp.state.radix ?? '2')}
+              </text>
+            </g>
+          </g>
+        );
+      }
+
+      // Logisim-evolution TwoPinLed.paintInstance (facing west, anode on the left): a round LED in its state's colour
+      // with the diode symbol through it, the triangle pointing from the anode to the cathode
+      case 'twoPinLed': {
+        const st = twoPinLedState(comp);
+        const line = isSelected ? '#2563eb' : '#000000';
+        return (
+          <g>
+            <title>{`İki uçlu LED${comp.state.ledBipolar ? ' (çift renkli)' : ''}: ${st === 'forward' ? 'yanıyor' : st === 'reverse' ? 'ters yönde yanıyor' : 'sönük'}. Sol uç anot, sağ uç katot`}</title>
+            <circle cx={10} cy={10} r={9} fill={twoPinLedColor(comp, st)} stroke={line} strokeWidth={2} />
+            <g stroke={line} strokeWidth={1} fill={line}>
+              <line x1={0} y1={10} x2={20} y2={10} />
+              <polygon points="7,5 7,15 13,10" />
+              <line x1={13} y1={6} x2={13} y2={14} />
+            </g>
           </g>
         );
       }
@@ -7384,7 +7464,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect', 'passSwitch', 'twoWaySwitch'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect', 'passSwitch', 'twoWaySwitch', 'slider'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -7417,7 +7497,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'displays',
       title: 'Göstergeler & Çıkışlar',
       icon: '💡',
-      types: ['led', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel', 'image'] as ComponentType[],
+      types: ['led', 'twoPinLed', 'rgbLed', 'ledBar', 'sevenSegment', 'hexDigit', 'dotMatrix', 'tty', 'rgbVideo', 'textLabel', 'image'] as ComponentType[],
     },
     {
       id: 'audio',

@@ -74,6 +74,7 @@ const FONT_FAMILIES = ['SansSerif', 'Serif', 'Monospaced', 'Dialog', 'DialogInpu
 /** Names of the dynamic elements' parts (evolution shows the factory's display name) */
 const ELEMENT_NAMES: Record<AppearanceDynamicElement, string> = {
   led: 'LED',
+  'two-pin-led': 'İki Uçlu LED',
   rgbled: 'RGB LED',
   sevensegment: '7 Segment Gösterge',
   hexdigit: 'Onaltılık Gösterge',
@@ -93,8 +94,8 @@ const LABEL_POSITIONS: Array<[NonNullable<AppearanceDynamicShape['label']> | '',
   ['center', 'Orta'],
 ];
 /** Which attributes each element has (evolution's getAttributes of each shape) */
-const HAS_STROKE = new Set<AppearanceDynamicElement>(['led', 'rgbled', 'dotmatrix', 'ledbar']);
-const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'rgbled']);
+const HAS_STROKE = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled', 'dotmatrix', 'ledbar']);
+const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled']);
 const HAS_SEG_SCALE = new Set<AppearanceDynamicElement>(['sevensegment', 'hexdigit']);
 const HAS_MATRIX_SCALE = new Set<AppearanceDynamicElement>(['dotmatrix', 'ledbar']);
 const HAS_VALUE_FONT = new Set<AppearanceDynamicElement>(['register', 'counter', 'probe']);

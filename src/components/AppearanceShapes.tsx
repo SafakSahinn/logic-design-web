@@ -1,7 +1,7 @@
 import React from 'react';
 import type { AppearanceDynamicShape, AppearanceFont, AppearancePaint, AppearanceShape, CircuitComponentInstance } from '../types/circuit';
 import { formatBits } from '../types/logic';
-import { matrixDots, getIoConfig, rgbLedBits, segmentsLit, ttyScreen } from '../utils/circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, matrixDots, getIoConfig, rgbLedBits, segmentsLit, ttyScreen, twoPinLedColor, twoPinLedState } from '../utils/circuitEngine';
 import { DYNAMIC_DEFAULTS, ledBarFacing, registerText } from '../utils/dynamicElements';
 import { appearanceTextBox } from '../utils/subcircuitAppearance';
 
@@ -155,6 +155,57 @@ export function DynamicShapeSvg({ shape: s, dark, dyn }: { shape: AppearanceDyna
       return (
         <g>
           <ellipse cx={x + w / 2} cy={y + h / 2} rx={Math.max(0, w / 2 - 1)} ry={Math.max(0, h / 2 - 1)} fill={fill} stroke={stroke} strokeWidth={sw} />
+          {label}
+        </g>
+      );
+    }
+    case 'two-pin-led': {
+      // TwoPinLedShape.paintDynamic: the LED in its state's colour (the off colour without a simulation), outlined
+      // in the stroke width, and the diode symbol of TwoPinLedShape.drawDiodeSymbol for the part's facing
+      const part = target ?? live;
+      const fill = part ? twoPinLedColor(part, live ? twoPinLedState(live) : 'off') : TWO_PIN_LED_DEFAULTS.off;
+      const cx = x + Math.trunc(w / 2);
+      const cy = y + Math.trunc(h / 2);
+      const r = Math.trunc(w / 2);
+      const jr = (v: number) => Math.floor(v + 0.5);
+      const base = jr(0.4 * r);
+      const tip = jr(0.2 * r);
+      const half = jr(0.45 * r);
+      const bar = jr(half * 0.8);
+      const off = Math.max(1, Math.trunc(r / 8));
+      const rot = part?.rotation ?? 0;
+      let sym: React.ReactElement;
+      if (rot === 0 || rot === 180) {
+        // facing west (ours unturned): the triangle points right; facing east: left
+        const d = rot === 0 ? 1 : -1;
+        const bx = cx - d * base + off;
+        const tx = cx + d * tip + off;
+        sym = (
+          <>
+            <line x1={cx - r} y1={cy} x2={cx + r} y2={cy} />
+            <polygon points={`${bx},${cy - half} ${bx},${cy + half} ${tx},${cy}`} />
+            <line x1={tx} y1={cy - bar} x2={tx} y2={cy + bar} />
+          </>
+        );
+      } else {
+        // facing south (ours turned 90): the triangle points down; facing north: up (evolution shifts it sideways)
+        const d = rot === 90 ? 1 : -1;
+        const by = cy - d * base;
+        const ty = cy + d * tip;
+        sym = (
+          <>
+            <line x1={cx} y1={cy - r} x2={cx} y2={cy + r} />
+            <polygon points={`${cx - half + off},${by} ${cx + half + off},${by} ${cx + off},${ty}`} />
+            <line x1={cx - bar + off} y1={ty} x2={cx + bar + off} y2={ty} />
+          </>
+        );
+      }
+      return (
+        <g>
+          <ellipse cx={x + w / 2} cy={y + h / 2} rx={Math.max(0, w / 2 - 1)} ry={Math.max(0, h / 2 - 1)} fill={fill} stroke={black} strokeWidth={sw} />
+          <g stroke={black} strokeWidth={1} fill={black}>
+            {sym}
+          </g>
           {label}
         </g>
       );

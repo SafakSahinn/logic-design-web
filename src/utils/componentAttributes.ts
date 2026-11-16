@@ -30,6 +30,10 @@ import {
   getPlaConfig,
   configureExtraSwitch,
   getExtraSwitchConfig,
+  configureSlider,
+  getSliderConfig,
+  SLIDER_MAX_BITS,
+  TWO_PIN_LED_DEFAULTS,
   configureMem,
   configurePlexer,
   configureRam,
@@ -818,6 +822,83 @@ const extraSwitchColorAttr: AttrDef = {
   },
 };
 
+// ---- Slider / two-pin LED (Logisim-evolution Input/Output-Extra) -----------------------------------------------
+const sliderWidthAttr: AttrDef = {
+  key: 'sliderWidth',
+  label: 'Bit genişliği',
+  kind: 'select',
+  title: `Çıkışın bit sayısı (1-${SLIDER_MAX_BITS}, Logisim-evolution "Data Bits"); düğmenin 8 bitlik konumunun üst bitleri`,
+  options: Array.from({ length: SLIDER_MAX_BITS }, (_, i) => ({ value: i + 1, label: String(i + 1) })),
+  get: (c) => getSliderConfig(c).width,
+  set: (c, v) => (getSliderConfig(c).width === Number(v) ? null : { comp: configureSlider(c, { width: Number(v) }), stateOnly: true }),
+};
+
+// A new direction mirrors the knob, so the value stays (evolution SliderValue.setDirection)
+const sliderDirAttr: AttrDef = {
+  key: 'sliderRtl',
+  label: 'Yön',
+  kind: 'buttons',
+  title: 'Değerin hangi uçtan büyüdüğü (Logisim-evolution "Direction"); yön değişince düğme aynalanır, değer aynı kalır',
+  options: [
+    { value: 'ltr', label: 'Soldan sağa' },
+    { value: 'rtl', label: 'Sağdan sola' },
+  ],
+  get: (c) => (getSliderConfig(c).rtl ? 'rtl' : 'ltr'),
+  set: (c, v) => ((getSliderConfig(c).rtl ? 'rtl' : 'ltr') === v ? null : { comp: configureSlider(c, { rtl: v === 'rtl' }), stateOnly: true }),
+};
+
+const LED_COLOR_CHOICES: AttrOption[] = [
+  { value: '#f00000', label: 'Kırmızı', swatch: '#f00000' },
+  { value: '#00f000', label: 'Yeşil', swatch: '#00f000' },
+  { value: '#0000ff', label: 'Mavi', swatch: '#0000ff' },
+  { value: '#ffff00', label: 'Sarı', swatch: '#ffff00' },
+  { value: '#ff8000', label: 'Turuncu', swatch: '#ff8000' },
+  { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+];
+
+const ledColorAttrOf = (
+  key: 'ioOnColor' | 'ledOffColor' | 'ledReverseColor',
+  label: string,
+  title: string,
+  dflt: string,
+  extra: AttrOption[] = [],
+  visible?: (c: CircuitComponentInstance) => boolean
+): AttrDef => ({
+  key,
+  label,
+  kind: 'buttons',
+  title,
+  options: (c) => colorChoices([...extra, ...LED_COLOR_CHOICES.filter((o) => !extra.some((e) => e.value === o.value))], c.state[key]),
+  get: (c) => c.state[key] ?? dflt,
+  set: (c, v) => {
+    const color = String(v).toLowerCase();
+    if ((c.state[key] ?? dflt) === color) return null;
+    return withState(c, { [key]: color === dflt ? undefined : color });
+  },
+  ...(visible ? { visible } : {}),
+});
+
+const twoPinLedAttrs: AttrDef[] = [
+  ledColorAttrOf('ioOnColor', 'Yanık renk', 'Anot 1, katot 0 iken LED\'in rengi (Logisim-evolution "On Color")', TWO_PIN_LED_DEFAULTS.on),
+  ledColorAttrOf('ledOffColor', 'Sönük renk', 'Sönükken LED\'in rengi (Logisim-evolution "Off Color")', TWO_PIN_LED_DEFAULTS.off, [
+    { value: TWO_PIN_LED_DEFAULTS.off, label: 'Koyu gri', swatch: TWO_PIN_LED_DEFAULTS.off },
+    { value: '#000000', label: 'Siyah', swatch: '#000000' },
+  ]),
+  {
+    key: 'ledBipolar',
+    label: 'Çift renkli',
+    kind: 'buttons',
+    title: 'Açıksa katot 1, anot 0 iken LED ters yön rengiyle yanar (Logisim-evolution "Bipolar"); kapalıysa o durumda söner',
+    options: [
+      { value: 'no', label: 'Hayır' },
+      { value: 'yes', label: 'Evet' },
+    ],
+    get: (c) => (c.state.ledBipolar ? 'yes' : 'no'),
+    set: (c, v) => ((c.state.ledBipolar ? 'yes' : 'no') === v ? null : withState(c, { ledBipolar: v === 'yes' ? true : undefined })),
+  },
+  ledColorAttrOf('ledReverseColor', 'Ters renk', 'Çift renkli LED ters yönde sürülünce rengi (Logisim-evolution "Reverse Color")', TWO_PIN_LED_DEFAULTS.reverse, [], (c) => !!c.state.ledBipolar),
+];
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -1081,6 +1162,12 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'twoWaySwitch':
       list.push(twoWayModeAttr, extraSwitchWidthAttr, extraSwitchColorAttr);
+      break;
+    case 'slider':
+      list.push(sliderWidthAttr, sliderDirAttr, radixAttr, extraSwitchColorAttr);
+      break;
+    case 'twoPinLed':
+      list.push(...twoPinLedAttrs);
       break;
     case 'powerOnReset':
       list.push(porSizeAttr, porTransitionAttr, porDurationAttr);

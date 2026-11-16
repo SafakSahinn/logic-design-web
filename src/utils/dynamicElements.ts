@@ -13,14 +13,16 @@ import type { AppearanceSvgElement } from './subcircuitAppearance';
 /**
  * Dynamic appearance elements, after Logisim-evolution's DynamicElement and its shapes (LedShape, RgbLedShape,
  * SevenSegmentShape, HexDigitShape, RegisterShape, CounterShape, ProbeShape, TtyShape, DotMatrixShape,
- * LedBarShape): a part somewhere inside an IC, reached through a path of part ids, drawn live on the IC body.
+ * LedBarShape, TwoPinLedShape): a part somewhere inside an IC, reached through a path of part ids, drawn live on the IC body.
  * Evolution offers one for every DynamicElementProvider part; ours are the same parts (the SoC / VGA ones have
- * no counterpart here, and evolution writes the two-pin LED and keypad shapes but cannot read them back).
+ * no counterpart here, and evolution writes the keypad shape but cannot read it back). Evolution cannot read the
+ * two-pin LED's visible-two-pin-led back either; it is read here all the same.
  */
 
 /** Our part types that can be shown on an IC body, and the element each one gets */
 export const DYNAMIC_ELEMENT_OF: Partial<Record<ComponentType, AppearanceDynamicElement>> = {
   led: 'led',
+  twoPinLed: 'two-pin-led',
   rgbLed: 'rgbled',
   sevenSegment: 'sevensegment',
   hexDigit: 'hexdigit',
@@ -35,6 +37,7 @@ export const DYNAMIC_ELEMENT_OF: Partial<Record<ComponentType, AppearanceDynamic
 /** Part type each element shows (to check that a path still ends at the right part) */
 export const DYNAMIC_ELEMENT_TYPE: Record<AppearanceDynamicElement, ComponentType> = {
   led: 'led',
+  'two-pin-led': 'twoPinLed',
   rgbled: 'rgbLed',
   sevensegment: 'sevenSegment',
   hexdigit: 'hexDigit',
@@ -154,6 +157,7 @@ export function dynamicElementSize(
 ): { width: number; height: number } {
   switch (element) {
     case 'led':
+    case 'two-pin-led':
     case 'rgbled': {
       const r = opt.radius ?? DYNAMIC_DEFAULTS.radius;
       return { width: 2 * r, height: 2 * r };
@@ -221,6 +225,7 @@ export function registerText(target: CircuitComponentInstance | null, live: bool
 /** Evolution's factory name of the part each element shows (what a path names it by) */
 export const DYNAMIC_FACTORY: Record<AppearanceDynamicElement, string> = {
   led: 'LED',
+  'two-pin-led': 'TWOPINLED',
   rgbled: 'RGBLED',
   sevensegment: '7-Segment Display',
   hexdigit: 'Hex Digit Display',
@@ -312,7 +317,7 @@ function strictInt(v: string): number {
 
 const scaleDefault = (element: AppearanceDynamicElement) =>
   element === 'sevensegment' || element === 'hexdigit' ? DYNAMIC_DEFAULTS.segmentScale : DYNAMIC_DEFAULTS.matrixScale;
-const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'rgbled']);
+const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled']);
 const HAS_VALUE_FONT = new Set<AppearanceDynamicElement>(['register', 'counter', 'probe']);
 const HAS_SCALE = new Set<AppearanceDynamicElement>(['sevensegment', 'hexdigit', 'dotmatrix', 'ledbar']);
 

@@ -574,6 +574,7 @@ export type AppearanceShape =
  */
 export type AppearanceDynamicElement =
   | 'led'
+  | 'two-pin-led'
   | 'rgbled'
   | 'sevensegment'
   | 'hexdigit'

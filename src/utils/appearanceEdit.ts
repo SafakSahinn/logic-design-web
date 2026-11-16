@@ -264,7 +264,7 @@ export function hitShape(s: AppearanceShape, p: Pt, tol: number): boolean {
       return Math.abs(p.x - s.x) <= Math.max(tol, 5) && Math.abs(p.y - s.y) <= Math.max(tol, 5);
     case 'dynamic': {
       // DynamicElement.contains: inside the box (an LED: inside its oval)
-      if (s.element === 'led' || s.element === 'rgbled') {
+      if (s.element === 'led' || s.element === 'two-pin-led' || s.element === 'rgbled') {
         const rx = s.width / 2 + tol;
         const ry = s.height / 2 + tol;
         return ((p.x - s.x - s.width / 2) / rx) ** 2 + ((p.y - s.y - s.height / 2) / ry) ** 2 <= 1;
