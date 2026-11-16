@@ -53,6 +53,8 @@ export type ComponentType =
   | 'xnor'
   | 'oddParity'
   | 'evenParity'
+  // Logisim-evolution Gates: programmable logic array, a table of input patterns and their outputs (Aşama 5g-e)
+  | 'pla'
   | 'triState'
   | 'controlledInverter'
   // Outputs
@@ -159,6 +161,16 @@ export interface CircuitPin {
   y: number;
 }
 
+/** One row of a PLA program, written as in Logisim-evolution's table text: most significant bit first */
+export interface PlaRow {
+  /** Input pattern, one character per input bit: 0, 1 or x (either) */
+  in: string;
+  /** Output value, one character per output bit: 0 or 1 */
+  out: string;
+  /** Shown in the body while this row is the matching one (up to a '#') */
+  comment?: string;
+}
+
 export interface CircuitComponentInstance {
   id: string;
   type: ComponentType;
@@ -196,6 +208,8 @@ export interface CircuitComponentInstance {
     splitBitEnd?: number[];
     /** Splitter: side the ends sit on relative to the combined end (Logisim 'appear'); unset = left */
     splitAppear?: 'left' | 'right' | 'center';
+    /** PLA: the program, top row first (Logisim-evolution 'table'); the first row matching the input gives the output; unset = no rows */
+    plaRows?: PlaRow[];
     /** Bit extender: how the extra high bits are filled (Logisim 'type'); unset = zero */
     extendType?: 'zero' | 'one' | 'sign' | 'input';
     /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0

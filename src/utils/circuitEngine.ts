@@ -5,6 +5,7 @@ import type {
   CircuitWire,
   CircuitPin,
   CircuitPreset,
+  PlaRow,
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
@@ -2387,6 +2388,18 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 80, relY: 30 }],
     description: '1 olan girişlerin sayısı çift olduğunda 1 verir',
   },
+  // Logisim-evolution PLA: a 50 x 50 body whose ports sit 50 apart on its middle line. The part's box is 60 x 60
+  // (the body 5 below its top, 10 short of its right side), so the ports stay on the grid whatever the facing
+  pla: {
+    type: 'pla',
+    name: 'PLA (Programlanabilir Mantık Dizisi)',
+    category: 'gates',
+    width: 60,
+    height: 60,
+    inputs: [{ id: 'in', name: 'in', type: 'input', relX: 0, relY: 30, width: 2 }],
+    outputs: [{ id: 'out', name: 'out', type: 'output', relX: 50, relY: 30, width: 2 }],
+    description: 'Programlanabilir mantık dizisi (Logisim-evolution PLA): tablodaki satırlar yukarıdan aşağı denenir, giriş desenine uyan ilk satırın çıkışı verilir (x = fark etmez); hiçbir satır uymazsa çıkış 0',
+  },
   triState: {
     type: 'triState',
     name: '3 Durumlu Tampon (Tri-State)',
@@ -2848,6 +2861,8 @@ export function createComponentInstance(
   if (type === 'transistor') inst.state.transistorType = 'p';
   // A new bit extender is type zero (Logisim default), which has no extension input
   if (type === 'bitExtender') return configureBitExtender(inst, {});
+  // A new PLA is evolution's: 2 input bits, 2 output bits, an empty program
+  if (type === 'pla') return configurePla(inst, { inWidth: 2, outWidth: 2, rows: [] });
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
   if (PLEXER_TYPES.has(type)) {
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
@@ -3241,6 +3256,131 @@ export function configureBitExtender(
     outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out0', 'out', 'output'), outW)],
     state: { ...comp.state, extendType: type },
   });
+}
+
+// ---- PLA (Logisim-evolution std/gates Pla + PlaTable) -----------------------------------------------
+// The program is a list of rows "input pattern -> output value", tried top to bottom: the first row whose
+// pattern fits the input gives the output (it is a priority table, not an OR of product terms); no row: 0.
+
+/** Body of the PLA inside its 60 x 60 box, unrotated (evolution's bounds 0, -25, 50, 50 from the input port) */
+export const PLA_BODY = { x: 0, y: 5, width: 50, height: 50 };
+
+export interface PlaConfig {
+  inWidth: number;
+  outWidth: number;
+  rows: PlaRow[];
+}
+
+// A row pattern at a new width: the low bits stay, new high bits are 0 (PlaTable.Row.truncate)
+const plaFit = (bits: string, w: number, allowed: string): string => {
+  const clean = [...bits].map((ch) => (allowed.includes(ch) ? ch : '0')).join('');
+  return clean.length >= w ? clean.slice(clean.length - w) : '0'.repeat(w - clean.length) + clean;
+};
+
+export function getPlaConfig(comp: CircuitComponentInstance): PlaConfig {
+  return { inWidth: comp.inputs[0]?.width ?? 1, outWidth: comp.outputs[0]?.width ?? 1, rows: comp.state.plaRows ?? [] };
+}
+
+/** New PLA widths / program; the rows are cut or padded to the widths (pin ids are kept). */
+export function configurePla(
+  comp: CircuitComponentInstance,
+  patch: { inWidth?: number; outWidth?: number; rows?: PlaRow[] }
+): CircuitComponentInstance {
+  const cur = getPlaConfig(comp);
+  const inW = clampWidth(patch.inWidth ?? cur.inWidth);
+  const outW = clampWidth(patch.outWidth ?? cur.outWidth);
+  const rows = (patch.rows ?? cur.rows).map((r) => {
+    const row: PlaRow = { in: plaFit(r.in, inW, '01x'), out: plaFit(r.out, outW, '01') };
+    const comment = (r.comment ?? '').trim();
+    if (comment) row.comment = comment;
+    return row;
+  });
+  return updatePinPositions({
+    ...comp,
+    inputs: [pinWithWidth(comp.inputs[0] ?? newPin(comp, 'in', 'in', 'input'), inW)],
+    outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out', 'out', 'output'), outW)],
+    state: { ...comp.state, plaRows: rows },
+  });
+}
+
+/**
+ * The row the input selects (PlaTable.valueFor): the first one whose pattern fits. An input with any undefined
+ * bit (x, E, open) reads as all ones, as evolution's Value.toLongValue gives -1 for it.
+ */
+export function plaMatch(rows: PlaRow[], input: SignalValue[]): PlaRow | undefined {
+  const w = input.length;
+  const ones = input.some((b) => b !== 0 && b !== 1);
+  return rows.find((r) => {
+    for (let i = 0; i < w; i++) {
+      const ch = r.in[r.in.length - 1 - i] ?? '0';
+      if (ch === 'x') continue;
+      if ((ch === '1') !== (ones || input[i] === 1)) return false;
+    }
+    return true;
+  });
+}
+
+/** Text shown in the body for the input (PlaTable.commentFor): the matching row's comment up to a '#', "n/a" for no row */
+export function plaComment(rows: PlaRow[], input: SignalValue[]): string {
+  const row = plaMatch(rows, input);
+  if (!row) return 'n/a';
+  const c = row.comment ?? '';
+  const cut = c.indexOf('#');
+  return (cut >= 0 ? c.slice(0, cut) : c).trim();
+}
+
+/** The program as evolution writes it: one "inputs outputs # comment" line per row */
+export function plaTableText(rows: PlaRow[]): string {
+  return rows.map((r) => `${r.in} ${r.out}${r.comment?.trim() ? ` # ${r.comment.trim()}` : ''}\n`).join('');
+}
+
+/**
+ * Reads a program text like evolution's PlaTable.parse: per line "0x1 10" or "0 x 1 || 1 0", an optional
+ * "# comment" after it; other lines are skipped. The first row sets the widths, rows of another width are
+ * reported and left out. No row at all: null.
+ */
+export function parsePlaTable(text: string): { inWidth: number; outWidth: number; rows: PlaRow[]; errors: string[] } | null {
+  const rows: PlaRow[] = [];
+  const errors: string[] = [];
+  let inW = 0;
+  let outW = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const hash = raw.indexOf('#');
+    const io = (hash >= 0 ? raw.slice(0, hash) : raw).trim();
+    const comment = hash >= 0 ? raw.slice(hash + 1).trim() : '';
+    let a: string;
+    let b: string;
+    if (/^[01x]+\s+[01]+$/.test(io)) [a, b] = io.split(/\s+/);
+    else if (io.includes('||')) {
+      const cut = io.indexOf('||');
+      a = io.slice(0, cut).replace(/[|\s]/g, '');
+      b = io.slice(cut + 1).replace(/[|\s]/g, '');
+      if (!a && !b) continue;
+      const badIn = [...a].find((ch) => !'01x'.includes(ch));
+      const badOut = [...b].find((ch) => !'01x'.includes(ch));
+      if (badIn !== undefined || badOut !== undefined) {
+        errors.push(`"${io}" satırında geçersiz ${badIn !== undefined ? 'giriş' : 'çıkış'} biti: ${badIn ?? badOut}`);
+        continue;
+      }
+      // (an x among the outputs counts as 0, as evolution computes it)
+      b = b.replace(/x/g, '0');
+    } else continue;
+    if (rows.length === 0) {
+      inW = a.length;
+      outW = b.length;
+    }
+    if (a.length !== inW) {
+      errors.push(`"${io}" satırında tam ${inW} giriş biti olmalı`);
+      continue;
+    }
+    if (b.length !== outW) {
+      errors.push(`"${io}" satırında tam ${outW} çıkış biti olmalı`);
+      continue;
+    }
+    rows.push(comment ? { in: a, out: b, comment } : { in: a, out: b });
+  }
+  if (rows.length === 0 || inW < 1 || outW < 1 || inW > MAX_BIT_WIDTH || outW > MAX_BIT_WIDTH) return null;
+  return { inWidth: inW, outWidth: outW, rows, errors };
 }
 
 /** Logisim BitSelector.updatePorts: enough select bits to number every group (at least 1). */
@@ -5552,6 +5692,16 @@ export function simulateCircuitStep(
         );
         break;
       }
+      case 'pla': {
+        // Logisim-evolution Pla.propagate: the output is always a fully defined value, the first fitting row's or 0.
+        // An input with nothing attached reads 0 (evolution finds no bus there: Value.NIL, whose long value is 0);
+        // an attached but undriven one is x like any other
+        const cfg = getPlaConfig(comp);
+        const inBits = isPinConnected(comp.inputs[0]?.id) ? readBits(comp.inputs[0], cfg.inWidth) : new Array<SignalValue>(cfg.inWidth).fill(0);
+        const row = plaMatch(cfg.rows, inBits);
+        setBitsOut(0, Array.from({ length: cfg.outWidth }, (_, i) => (row?.out[row.out.length - 1 - i] === '1' ? 1 : 0)));
+        break;
+      }
       case 'bitExtender': {
         // Logisim Value.extendWidth: the low bits pass as they are (x/E included, extra ones cut off),
         // new high bits are 0, 1, the top input bit (sign) or the extension input (x when open)
@@ -7025,7 +7175,8 @@ const SKIP_OPEN_INPUT_GATES = new Set(['and', 'or', 'nand', 'nor', 'xor', 'xnor'
 const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
 // (a transistor / transmission gate has no formula in Logisim's analyzer either: its output can float)
-const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate']);
+// (nor has a PLA: Logisim's analyzer cannot read its table)
+const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate', 'pla']);
 
 interface BooleanExprContext {
   driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;
