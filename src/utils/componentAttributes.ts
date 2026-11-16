@@ -40,6 +40,10 @@ import {
   configureEvoBuzzer,
   getEvoBuzzerConfig,
   configureOsc,
+  configurePg,
+  pgStateCount,
+  PG_MIN_STATES,
+  PG_MAX_STATES,
   getOscConfig,
   OSC_DEFAULT_COLOR,
   OSC_MIN_INPUTS,
@@ -1048,6 +1052,18 @@ const oscResize = (c: CircuitComponentInstance, patch: { inputs?: number; states
   }
   return { comp: next, remap };
 };
+// ---- Programmable generator (Logisim-evolution Input/Output-Extra Programmable Generator): the durations are edited
+// in their own window (the attribute panel's "Süreler" row); a new state count keeps the first states' durations
+const pgStatesAttr: AttrDef = {
+  key: 'pgStates',
+  label: 'Durum sayısı',
+  kind: 'select',
+  title: 'Üretecin durum sayısı (1-32, Logisim-evolution "Nr. of States"); değişince ilk durumların süreleri kalır, yeniler 1 / 1 olur ve üreteç ilk durumdan başlar',
+  options: numberOptions(PG_MIN_STATES, PG_MAX_STATES),
+  get: (c) => pgStateCount(c),
+  set: (c, v) => (pgStateCount(c) === Number(v) ? null : { comp: configurePg(c, { states: Number(v) }), stateOnly: true }),
+};
+
 const oscAttrs: AttrDef[] = [
   {
     key: 'oscInputs',
@@ -1392,6 +1408,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'evoBuzzer':
       list.push(...evoBuzzerAttrs);
+      break;
+    case 'programmableGenerator':
+      list.push(pgStatesAttr);
       break;
     case 'digitalOscilloscope':
       list.push(...oscAttrs);

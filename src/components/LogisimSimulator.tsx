@@ -82,6 +82,11 @@ import {
   evoBuzzerSounding,
   getOscConfig,
   oscGeometry,
+  pgTick,
+  pgStateCount,
+  pgDecode,
+  clearPg,
+  setPgDurations,
   oscRunOf,
   oscCycleNumber,
   getEvoBuzzerConfig,
@@ -270,6 +275,7 @@ import { useChronoLogFile } from './useChronoLogFile';
 import MemoryHexEditor from './MemoryHexEditor';
 import PlaTableEditor from './PlaTableEditor';
 import PlaRomEditor from './PlaRomEditor';
+import PgEditor from './PgEditor';
 
 /**
  * A saved part this version can draw and simulate. Parts of an unknown type (the fixed 4-bit parts removed in
@@ -424,6 +430,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   passSwitch: { label: 'Geçiş Anahtarı', badge: 'Switch' },
   twoWaySwitch: { label: 'İki Yollu Anahtar', badge: 'Two-Way' },
   slider: { label: 'Kaydırıcı', badge: 'Slider' },
+  programmableGenerator: { label: 'Prog. Üreteç', badge: 'Prog. Gen' },
   twoPinLed: { label: 'İki Uçlu LED', badge: 'Anot / Katot' },
   powerOnReset: { label: 'Açılış Sıfırlaması', badge: 'Power-on Reset' },
   doNotConnect: { label: 'Bağlanmaz', badge: 'Do Not Connect' },
@@ -838,6 +845,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [memEditorCompId, setMemEditorCompId] = useState<string | null>(null);
   const [plaEditorCompId, setPlaEditorCompId] = useState<string | null>(null);
   const [plaRomEditorCompId, setPlaRomEditorCompId] = useState<string | null>(null);
+  const [pgEditorCompId, setPgEditorCompId] = useState<string | null>(null);
 
   // Automated Test Vector / Testbench Runner state
   const [showTestbenchModal, setShowTestbenchModal] = useState<boolean>(false);
@@ -1089,9 +1097,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // runs at that rate, the others follow the global clockHz. Clocks of one rate get a tick
   // together every half period (500 / hz ms) and take the level their high / low durations and
   // phase give for that tick (Logisim); the timer runs at the half period of the fastest clock.
+  // Programmable generators take the simulation's global tick: they always run at the global clockHz
   const clockRatesKey = components
-    .filter((c) => c.type === 'clock')
-    .map((c) => `${c.id}=${c.state?.clockRateHz ?? clockHz}`)
+    .filter((c) => c.type === 'clock' || c.type === 'programmableGenerator')
+    .map((c) => `${c.id}=${c.type === 'clock' ? c.state?.clockRateHz ?? clockHz : clockHz}`)
     .join(',');
   // Time accumulated toward each rate's next tick; kept across effect re-runs because the
   // effect restarts on every tick (wires change), which would otherwise stall slower clocks
@@ -1569,6 +1578,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           return { ...c, state: st };
         });
         const sim = simulateCircuit(restarted, wires);
+        setWires(sim.wires);
+        return sim.components;
+      }
+      // A click on a programmable generator is one tick of its own (evolution's poke)
+      if (prev.some((c) => c.id === compId && c.type === 'programmableGenerator')) {
+        const ticked = prev.map((c) => (c.id === compId ? pgTick(c) : c));
+        playSwitchSound(!!ticked.find((c) => c.id === compId)?.state.on);
+        const sim = simulateCircuit(ticked, wires);
         setWires(sim.wires);
         return sim.components;
       }
@@ -2803,6 +2820,29 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast('PLA ROM matrisi güncellendi.');
   };
 
+  // Save a programmable generator's durations (undoable). The editor's Clear starts it over at its first state, as
+  // evolution's clearValues; a plain save keeps the state it is in
+  const handleSavePgEditor = (high: number[], low: number[], cleared: boolean) => {
+    if (!pgEditorCompId) return;
+    recordHistory();
+    const updated = components.map((c) => (c.id === pgEditorCompId ? setPgDurations(cleared ? clearPg(c) : c, high, low) : c));
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    setPgEditorCompId(null);
+    showToast('Üreteç süreleri güncellendi.');
+  };
+
+  // Evolution's "Clear contents" on a programmable generator: every duration 1, back to the first state (undoable)
+  const handleClearPg = (compId: string) => {
+    recordHistory();
+    const updated = components.map((c) => (c.id === compId && c.type === 'programmableGenerator' ? clearPg(c) : c));
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    showToast('Üreteç süreleri 1 yapıldı, ilk durumdan başlıyor.');
+  };
+
   // Run Testbench Handler
   const handleRunTestbench = () => {
     try {
@@ -3966,7 +4006,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo', 'passSwitch', 'twoWaySwitch', 'slider'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'programmableGenerator', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo', 'passSwitch', 'twoWaySwitch', 'slider'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -4103,6 +4143,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const rows: Row[] = [];
       if (c.type === 'clock') {
         rows.push({ key: c.id, name: `${name} (CLK)`, kind: 'clock', width: 1, value: c.state.on ? 1 : 0 });
+      } else if (c.type === 'programmableGenerator') {
+        // a source like a clock, but not a time base (evolution logs it as a 1-bit value)
+        rows.push({ key: c.id, name: `${name} (PG)`, kind: 'input', width: 1, value: c.state.on ? 1 : 0 });
       } else if (c.type === 'switch' || c.type === 'pushbutton') {
         // A wide switch is one bus row (evolution chronogram), named with its width
         const w = c.type === 'switch' ? c.outputs[0]?.width ?? 1 : 1;
@@ -5266,6 +5309,29 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               <text x={142} y={11} textAnchor="middle" dominantBaseline="central" fontSize={10} fontWeight="bold" fontFamily="sans-serif" fill="#000000" className="select-none">
                 {formatBits(bits, comp.state.radix ?? '2')}
               </text>
+            </g>
+          </g>
+        );
+      }
+
+      // Logisim-evolution ProgrammableGenerator.paintInstance: Probe's 20 x 20 box with round corners filled in the
+      // output level's colour (evolution's 1 / 0 colours), a small white wave (up while the output is 1) and a white
+      // 'P'-like mark. The marks stay upright when the part turns, as evolution draws them
+      case 'programmableGenerator': {
+        const on = !!comp.state.on;
+        const line = isSelected ? '#2563eb' : '#000000';
+        const n = pgStateCount(comp);
+        const d = pgDecode(comp.state.pgContents, n);
+        const cur = Math.min(comp.state.pgCur ?? 0, n - 1);
+        const ys = on ? '15 13 13 17 17 15' : '15 17 17 13 13 15';
+        const pts = [11, 11, 14, 14, 17, 17].map((x, i) => `${x},${ys.split(' ')[i]}`).join(' ');
+        return (
+          <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer">
+            <title>{`Programlanabilir üreteç: ${n} durum; çıkış ${on ? 1 : 0}, durum ${cur + 1} (yüksek ${d.high[cur]}, düşük ${d.low[cur]} tik), bu durumda ${comp.state.pgTicks ?? 0} tik. Simülasyonun her tikinde ilerler; seçiliyken tıklamak tek tik ilerletir, süreler öznitelik panelinden düzenlenir`}</title>
+            <rect x={1} y={1} width={18} height={18} rx={5} fill={on ? '#00d200' : '#006400'} stroke={line} strokeWidth={2} />
+            <g transform={comp.rotation ? `rotate(${-comp.rotation} 10 10)` : undefined} fill="none" stroke="#ffffff">
+              <polyline points={pts} strokeWidth={1} />
+              <polyline points="5,15 5,5 11,5 11,10 6,10" strokeWidth={2} />
             </g>
           </g>
         );
@@ -7711,7 +7777,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect', 'passSwitch', 'twoWaySwitch', 'slider'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'programmableGenerator', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect', 'passSwitch', 'twoWaySwitch', 'slider'] as ComponentType[],
     },
     {
       id: 'gates',
@@ -11952,6 +12018,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   Düzenle… ({getPlaConfig(first).rows.length} satır)
                 </button>
               </div>
+            ) : single && first.type === 'programmableGenerator' ? (
+              <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                <span className={`text-[11px] font-semibold ${rowLabel}`}>Süreler</span>
+                <div className="flex flex-wrap gap-1">
+                  <button onClick={() => setPgEditorCompId(first.id)} className={btnCls(false)} title="Her durumun yüksek / düşük süresini düzenle (Logisim-evolution &quot;Edit&quot;)">
+                    Düzenle… ({pgStateCount(first)} durum)
+                  </button>
+                  <button onClick={() => handleClearPg(first.id)} className={btnCls(false)} title="Bütün süreleri 1 yap ve ilk durumdan başlat (Logisim-evolution &quot;Clear contents&quot;)">
+                    Temizle
+                  </button>
+                </div>
+              </div>
             ) : single && first.type === 'plaRom' ? (
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>Matris</span>
@@ -14158,6 +14236,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const target = components.find((c) => c.id === plaRomEditorCompId && c.type === 'plaRom');
           return target ? (
             <PlaRomEditor key={target.id} comp={target} dark={cadTheme === 'dark'} onSave={handleSavePlaRomEditor} onClose={() => setPlaRomEditorCompId(null)} />
+          ) : null;
+        })()}
+
+      {/* Duration editor of a programmable generator */}
+      {pgEditorCompId &&
+        (() => {
+          const target = components.find((c) => c.id === pgEditorCompId && c.type === 'programmableGenerator');
+          return target ? (
+            <PgEditor key={target.id} comp={target} dark={cadTheme === 'dark'} onSave={handleSavePgEditor} onClose={() => setPgEditorCompId(null)} />
           ) : null;
         })()}
 
