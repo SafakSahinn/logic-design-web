@@ -178,6 +178,12 @@ export function generateFpgaConstraints(
       const label = components.find((x) => x.id === p.source?.compId)?.label;
       const what = `Ses üreteci "${label || 'Ses üreteci'}" portları (frekans, EN, ses, doluluk oranı) kartta doğrudan ses vermez: bunları kart saatiyle sayan bir ton (PWM) üretecine ya da ses kodeğine bağlayın, çıkışını kartın ses / buzzer pinine atayın.`;
       if (!notes.includes(what)) notes.push(what);
+    } else if (type === 'digitalOscilloscope') {
+      // A measuring instrument: its signals go to a logic analyzer, not to a board LED or display
+      for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
+      const label = components.find((x) => x.id === p.source?.compId)?.label;
+      const what = `Dijital osiloskop "${label || 'Osiloskop'}" portları (CLK, girişler, EN, CLR) kartta bir gösterge değil: FPGA'nın gömülü mantık analizörüyle (Xilinx ILA, Intel SignalTap) izleyin ya da harici bir mantık analizörüne giden pinlere elle atayın.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'keyboard' || type === 'tty' || type === 'telnet') {
       // No board resource behind them: one note per part
       for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
