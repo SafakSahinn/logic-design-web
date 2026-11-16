@@ -28,6 +28,8 @@ import {
   configureBitSelector,
   configurePla,
   getPlaConfig,
+  configureExtraSwitch,
+  getExtraSwitchConfig,
   configureMem,
   configurePlexer,
   configureRam,
@@ -766,6 +768,56 @@ const porDurationAttr: AttrDef = {
   },
 };
 
+// ---- Pass switch / two-way switch (Logisim-evolution Input/Output-Extra) ---------------------------------------
+const extraSwitchWidthAttr: AttrDef = {
+  key: 'extraSwitchWidth',
+  label: 'Bit genişliği',
+  kind: 'select',
+  title: 'Anahtarın geçirdiği bit sayısı (1-32, Logisim "Data Bits"); bütün uçlar bu genişlikte',
+  options: WIDTH_OPTIONS,
+  get: (c) => getExtraSwitchConfig(c).width,
+  set: (c, v) => (getExtraSwitchConfig(c).width === Number(v) ? null : { comp: configureExtraSwitch(c, { width: Number(v) }), stateOnly: true }),
+};
+
+// The ends swap sides (the body stays); wires on the old ends are left open, as in evolution
+const twoWayModeAttr: AttrDef = {
+  key: 'twoWayMode',
+  label: 'Kip',
+  kind: 'buttons',
+  title: '1 giriş / 2 çıkış: giriş koldaki çıkışa gider. 2 giriş / 1 çıkış: çıkış koldaki girişi alır (Logisim-evolution "Mode")',
+  options: [
+    { value: '1in2out', label: '1 giriş → 2 çıkış' },
+    { value: '2in1out', label: '2 giriş → 1 çıkış' },
+  ],
+  get: (c) => getExtraSwitchConfig(c).mode,
+  set: (c, v) => (getExtraSwitchConfig(c).mode === v ? null : { comp: configureExtraSwitch(c, { mode: v as '1in2out' | '2in1out' }) }),
+};
+
+const extraSwitchColorAttr: AttrDef = {
+  key: 'switchColor',
+  label: 'Renk',
+  kind: 'buttons',
+  title: 'Gövdenin rengi (Logisim-evolution "Color"); beyaz iki yollu anahtarda gövdeyi boş bırakır',
+  options: (c) =>
+    colorChoices(
+      [
+        { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+        { value: '#ff0000', label: 'Kırmızı', swatch: '#ff0000' },
+        { value: '#00ff00', label: 'Yeşil', swatch: '#00ff00' },
+        { value: '#0000ff', label: 'Mavi', swatch: '#0000ff' },
+        { value: '#ffff00', label: 'Sarı', swatch: '#ffff00' },
+        { value: '#808080', label: 'Gri', swatch: '#808080' },
+      ],
+      c.state.switchColor
+    ),
+  get: (c) => c.state.switchColor ?? '#ffffff',
+  set: (c, v) => {
+    const color = String(v).toLowerCase();
+    if ((c.state.switchColor ?? '#ffffff') === color) return null;
+    return withState(c, { switchColor: color === '#ffffff' ? undefined : color });
+  },
+};
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -1023,6 +1075,12 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'transmissionGate':
       list.push(transistorGateLocAttr);
+      break;
+    case 'passSwitch':
+      list.push(extraSwitchWidthAttr, extraSwitchColorAttr);
+      break;
+    case 'twoWaySwitch':
+      list.push(twoWayModeAttr, extraSwitchWidthAttr, extraSwitchColorAttr);
       break;
     case 'powerOnReset':
       list.push(porSizeAttr, porTransitionAttr, porDurationAttr);

@@ -69,6 +69,8 @@ import {
   pinKey as plexerPinKey,
   plexerLayout,
   transistorGateOnTop,
+  twoWayPairSwapped,
+  getExtraSwitchConfig,
   getPorConfig,
   porSizeOf,
   porActive,
@@ -288,6 +290,13 @@ export interface CircuitSheet {
 }
 
 // Pin dot colour per signal value (Logisim: blue = floating/unknown, red = error)
+// java.awt.Color.darker (each channel times 0.7) of a '#rrggbb' colour
+const darkerColor = (hex: string): string => {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (shift: number) => Math.floor(((n >> shift) & 255) * 0.7).toString(16).padStart(2, '0');
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
+};
+
 const pinDotFill = (v: SignalValue): string =>
   v === 1 ? '#16a34a' : v === 'E' ? '#ef4444' : v === 'Z' || v === 'X' ? '#4f46e5' : '#64748b';
 
@@ -393,6 +402,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   transistor: { label: 'Transistör', badge: 'P / N' },
   transmissionGate: { label: 'İletim Kapısı', badge: 'Transmission Gate' },
+  passSwitch: { label: 'Geçiş Anahtarı', badge: 'Switch' },
+  twoWaySwitch: { label: 'İki Yollu Anahtar', badge: 'Two-Way' },
   powerOnReset: { label: 'Açılış Sıfırlaması', badge: 'Power-on Reset' },
   doNotConnect: { label: 'Bağlanmaz', badge: 'Do Not Connect' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
@@ -1602,6 +1613,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       setWires(sim.wires);
       return sim.components;
     });
+  };
+
+  // Pass / two-way switch click (first click selects the part): the lever moves, as evolution's poke
+  const handleExtraSwitch = (e: React.MouseEvent, compId: string) => {
+    e.stopPropagation();
+    if (!selectedCompIds.includes(compId)) {
+      setSelectedCompIds([compId]);
+      setSelectedWireIds([]);
+      return;
+    }
+    const cur = components.find((c) => c.id === compId);
+    playSwitchSound(!cur?.state.switchClosed);
+    pokeComponent(compId, (c) => ({ ...c, state: { ...c.state, switchClosed: !c.state.switchClosed } }));
   };
 
   // Port I/O pin click (first click selects the part): floating -> 0 -> 1 -> floating, as evolution's PortPoker
@@ -3808,7 +3832,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         return;
       }
       // Interactive canvas controls should NOT open the rename modal on rapid double-click
-      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo'].includes(comp.type)) {
+      if (['pushbutton', 'switch', 'dipSwitch', 'clock', 'asciiKeyboard', 'keyboard', 'joystick', 'matrixKeypad', 'portIo', 'passSwitch', 'twoWaySwitch'].includes(comp.type)) {
         return;
       }
       setRenameModalCompId(comp.id);
@@ -4994,6 +5018,61 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <path d="M5,5 L15,15 M5,15 L15,5" stroke={isSelected ? strokeColor : '#ff0000'} strokeWidth={getBitWidth(comp) > 1 ? 2.5 : 1.5} strokeLinecap="round" />
           </g>
         );
+
+      // Logisim-evolution Switch.paint (facing east: the 'vertical' rocker, DEPTH 3) in the 20 x 30 body 5 below the
+      // box top: a darker side and the face in the body colour, the face tilted towards the lever's side
+      case 'passSwitch': {
+        const on = !!comp.state.switchClosed;
+        const face = comp.state.switchColor ?? '#ffffff';
+        const side = darkerColor(face);
+        const line = isSelected ? '#2563eb' : '#000000';
+        const pts = (xs: number[], ys: number[]) => xs.map((x, i) => `${x},${ys[i]}`).join(' ');
+        return (
+          <g onClick={(e) => handleExtraSwitch(e, comp.id)} className="cursor-pointer" strokeWidth={1}>
+            <rect x={0} y={0} width={20} height={40} fill="transparent" stroke="none" />
+            {on ? (
+              <>
+                <polygon points={pts([3, 20, 20, 3, 0], [5, 5, 35, 35, 8])} fill={side} stroke={line} />
+                <polygon points={pts([0, 17, 20, 3], [8, 8, 35, 35])} fill={face} stroke={line} />
+                <path d="M17,8 L20,5 M2,21 H18 M11,30 L10,26" stroke={line} fill="none" />
+                <ellipse cx={8.5} cy={14} rx={1.5} ry={2} fill="none" stroke={line} />
+              </>
+            ) : (
+              <>
+                <polygon points={pts([3, 20, 20, 3, 0], [5, 5, 35, 35, 32])} fill={side} stroke={line} />
+                <polygon points={pts([3, 20, 17, 0], [5, 5, 32, 32])} fill={face} stroke={line} />
+                <path d="M2,18 H18 M17,32 L20,35 M8,27 L9,23" stroke={line} fill="none" />
+                <ellipse cx={10.5} cy={11} rx={1.5} ry={2} fill="none" stroke={line} />
+              </>
+            )}
+          </g>
+        );
+      }
+
+      // Logisim-evolution TwoWaySwitch.paint in the 40 x 30 body 5 below the box top: a rounded outline (filled
+      // only with a colour other than white), a dot on each end and the lever from the common end to the pair's
+      // end on its side. The first of the pair is the upper end on screen, so turned by 90 / 180 degrees it is
+      // drawn at the bottom of the unrotated body
+      case 'twoWaySwitch': {
+        const on = !!comp.state.switchClosed;
+        const color = comp.state.switchColor ?? '#ffffff';
+        const line = isSelected ? '#2563eb' : '#000000';
+        const oneIn = getExtraSwitchConfig(comp).mode === '1in2out';
+        const cx = oneIn ? 5 : 35;
+        const px = oneIn ? 35 : 5;
+        const swap = twoWayPairSwapped(comp);
+        const py = (i: number) => (swap ? 30 - 20 * i : 10 + 20 * i);
+        return (
+          <g onClick={(e) => handleExtraSwitch(e, comp.id)} className="cursor-pointer">
+            <rect x={0} y={0} width={40} height={40} fill="transparent" stroke="none" />
+            <rect x={0} y={5} width={40} height={30} rx={3} fill={color === '#ffffff' ? 'transparent' : color} stroke={line} strokeWidth={1} />
+            <circle cx={cx} cy={20} r={2} fill={line} />
+            <circle cx={px} cy={py(0)} r={2} fill={line} />
+            <circle cx={px} cy={py(1)} r={2} fill={line} />
+            <line x1={cx} y1={20} x2={px} y2={py(on ? 1 : 0)} stroke={line} strokeWidth={2} strokeLinecap="round" />
+          </g>
+        );
+      }
 
       case 'tunnel': {
         const lbl = comp.label || 'Tünel';
@@ -7305,7 +7384,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect', 'passSwitch', 'twoWaySwitch'] as ComponentType[],
     },
     {
       id: 'gates',
