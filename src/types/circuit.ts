@@ -38,6 +38,8 @@ export type ComponentType =
   // Logisim-evolution Input/Output-Extra: a slider giving a number and an LED with an anode and a cathode (Aşama 5h-b)
   | 'slider'
   | 'twoPinLed'
+  // Logisim-evolution Input/Output-Extra Buzzer, a tone generator next to our own buzzer (Aşama 5h-d)
+  | 'evoBuzzer'
   // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
   | 'powerOnReset'
   | 'doNotConnect'
@@ -252,6 +254,23 @@ export interface CircuitComponentInstance {
     ledBipolar?: boolean;
     /** Two-pin LED: colour of a bipolar LED driven in reverse (evolution 'reversecolor'); unset = #00f000 */
     ledReverseColor?: string;
+    /** Evolution buzzer: the frequency input counts in Hz or in tenths of a Hz (Logisim-evolution 'freq_measure'); unset = Hz */
+    buzzerDHz?: boolean;
+    /** Evolution buzzer: waveform (evolution 'waveform'); unset = sine */
+    buzzerWave?: 'sine' | 'square' | 'triangle' | 'sawtooth' | 'noise';
+    /** Evolution buzzer: sound channel, both / left / right (evolution 'channel' 3 / 1 / 2); unset = both */
+    buzzerChannel?: 'both' | 'left' | 'right';
+    /** Evolution buzzer: smoothing passes 0-10 and their half width 1-10 (evolution 'smooth_level' / 'smooth_width',
+     *  not for the sine); unset = 2 / 2 */
+    buzzerSmoothLevel?: number;
+    buzzerSmoothWidth?: number;
+    /** Evolution buzzer run state, the inputs as Buzzer.propagate reads them into its sound data: playing (enable 1),
+     *  the frequency in Hz, the volume (0-32767, 0.5 when the volume input is open or not fully known) and the duty
+     *  cycle (0-255, 128 when unknown) */
+    buzzerOn?: boolean;
+    buzzerHz?: number;
+    buzzerVol?: number;
+    buzzerPw?: number;
     /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
     porSize?: 'wide' | 'medium' | 'narrow';
     /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */

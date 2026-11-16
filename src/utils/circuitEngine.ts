@@ -2263,6 +2263,24 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [],
     description: 'İki uçlu LED (Logisim-evolution Two-Pin LED): anot 1 ve katot 0 iken yanar. Çift renkli (bipolar) seçilirse katot 1 ve anot 0 iken ters yön rengiyle yanar; başka her durumda söner',
   },
+  // Logisim-evolution Buzzer (Input/Output-Extra): a 40 x 40 round body, the frequency, enable and volume inputs on one
+  // side (facing west in evolution = not turned here: on the left) and the duty cycle in the middle of the bottom
+  // ('bl') or top ('tr') side. evoBuzzerLayout places them for every turn
+  evoBuzzer: {
+    type: 'evoBuzzer',
+    name: 'Ses Üreteci (evo Buzzer)',
+    category: 'outputs',
+    width: 40,
+    height: 40,
+    inputs: [
+      { id: 'freq', name: 'F', type: 'input', relX: 0, relY: 10, width: 14 },
+      { id: 'en', name: 'EN', type: 'input', relX: 0, relY: 20 },
+      { id: 'vol', name: 'V', type: 'input', relX: 0, relY: 30, width: 7 },
+      { id: 'pw', name: 'PW', type: 'input', relX: 20, relY: 40, width: 8 },
+    ],
+    outputs: [],
+    description: 'Ses üreteci (Logisim-evolution Buzzer): EN 1 iken F girişindeki frekansta (14 bit, Hz ya da 0,1 Hz) ses çalar; 20 Hz - 20 kHz dışında susar. Ses V girişiyle (1-32 bit), kare dalganın doluluk oranı PW girişiyle (8 bit, 128 = %50) ayarlanır. Dalga biçimi sinüs, kare, üçgen, testere ya da gürültü; kanal sol, sağ ya da ikisi',
+  },
   // Logisim-evolution Power-on Reset: the wide body (200 x 40); getComponentSize gives the other sizes
   powerOnReset: {
     type: 'powerOnReset',
@@ -2937,6 +2955,8 @@ export function createComponentInstance(
   if (type === 'twoWaySwitch') return configureExtraSwitch(inst, { width: 1, mode: '1in2out' });
   // A new slider is evolution's: 8 bits, left to right, the knob at the start
   if (type === 'slider') return configureSlider(inst, { width: SLIDER_MAX_BITS });
+  // A new evolution buzzer is evolution's: a 7-bit volume, the duty cycle input on the bottom, the label above the body
+  if (type === 'evoBuzzer') return configureEvoBuzzer({ ...inst, state: { ...inst.state, labelPos: 'top' } }, { volWidth: EVO_BUZZER_DEFAULT_VOL_WIDTH });
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
   if (PLEXER_TYPES.has(type)) {
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
@@ -3780,6 +3800,137 @@ export function twoPinLedColor(comp: CircuitComponentInstance, st: TwoPinLedStat
   if (st === 'forward') return comp.state.ioOnColor ?? TWO_PIN_LED_DEFAULTS.on;
   if (st === 'reverse' && comp.state.ledBipolar) return comp.state.ledReverseColor ?? TWO_PIN_LED_DEFAULTS.reverse;
   return comp.state.ledOffColor ?? TWO_PIN_LED_DEFAULTS.off;
+}
+
+// ---- Evolution buzzer (Logisim-evolution std/io/extra Buzzer) --------------------------------------------------
+export const EVO_BUZZER_DEFAULT_VOL_WIDTH = 7;
+export const EVO_BUZZER_FREQ_BITS = 14;
+export const EVO_BUZZER_PW_BITS = 8;
+export type EvoBuzzerWave = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'noise';
+export type EvoBuzzerChannel = 'both' | 'left' | 'right';
+
+export interface EvoBuzzerConfig {
+  volWidth: number;
+  dHz: boolean;
+  wave: EvoBuzzerWave;
+  channel: EvoBuzzerChannel;
+  smoothLevel: number;
+  smoothWidth: number;
+  selectLoc: 'bl' | 'tr';
+}
+
+export function getEvoBuzzerConfig(comp: CircuitComponentInstance): EvoBuzzerConfig {
+  const st = comp.state;
+  return {
+    volWidth: comp.inputs[2]?.width ?? 1,
+    dHz: st.buzzerDHz === true,
+    wave: st.buzzerWave ?? 'sine',
+    channel: st.buzzerChannel ?? 'both',
+    smoothLevel: st.buzzerSmoothLevel ?? 2,
+    smoothWidth: st.buzzerSmoothWidth ?? 2,
+    selectLoc: st.selectLoc === 'tr' ? 'tr' : 'bl',
+  };
+}
+
+/**
+ * Unrotated pin places of an evolution buzzer (Buzzer.updateports). Whatever the facing, evolution puts the frequency
+ * on the top / left of the enable and the volume on the bottom / right, and 'bl' / 'tr' names the bottom or left /
+ * top or right side of the screen for the duty cycle. This layout turns with the part, so turned 90 / 180 degrees
+ * the frequency and the volume swap locally, and turned 180 / 270 the duty cycle side swaps (as for the plexers)
+ */
+export function evoBuzzerLayout(comp: CircuitComponentInstance): Record<'freq' | 'en' | 'vol' | 'pw', { x: number; y: number }> {
+  const rot = comp.rotation || 0;
+  const pairFlip = rot === 90 || rot === 180;
+  const selFlip = rot === 180 || rot === 270;
+  const edge = (comp.state.selectLoc === 'tr') !== selFlip ? 0 : 40;
+  return {
+    freq: { x: 0, y: pairFlip ? 30 : 10 },
+    en: { x: 0, y: 20 },
+    vol: { x: 0, y: pairFlip ? 10 : 30 },
+    pw: { x: 20, y: edge },
+  };
+}
+
+/** New volume width (1-32) / duty cycle side of an evolution buzzer; the other inputs keep their fixed widths */
+export function configureEvoBuzzer(comp: CircuitComponentInstance, patch: { volWidth?: number; selectLoc?: 'bl' | 'tr' }): CircuitComponentInstance {
+  const cur = getEvoBuzzerConfig(comp);
+  const vw = Math.max(1, Math.min(32, Math.round(patch.volWidth ?? cur.volWidth)));
+  const state = { ...comp.state };
+  if ((patch.selectLoc ?? cur.selectLoc) === 'tr') state.selectLoc = 'tr';
+  else delete state.selectLoc;
+  const ids: [string, string, number][] = [['freq', 'F', EVO_BUZZER_FREQ_BITS], ['en', 'EN', 1], ['vol', 'V', vw], ['pw', 'PW', EVO_BUZZER_PW_BITS]];
+  const inputs = ids.map(([id, name, w], i) => {
+    const old = comp.inputs[i];
+    return pinWithWidth(old ?? newPin(comp, id, name, 'input'), w);
+  });
+  return updatePinPositions({ ...comp, inputs, state });
+}
+
+/** Does an evolution buzzer sound: enabled, with a frequency evolution's sound thread plays (20 Hz - 20 kHz) */
+export function evoBuzzerSounding(comp: CircuitComponentInstance): boolean {
+  const hz = comp.state.buzzerHz ?? 0;
+  return comp.state.buzzerOn === true && hz >= 20 && hz <= 20000;
+}
+
+/**
+ * The sound an evolution buzzer plays, sample for sample as Buzzer.Data.threadFunc builds its clip: a sample rate
+ * that holds a whole number of samples per period (ceil(44100 / hz) * hz), four periods of the waveform, smoothed by
+ * moving averages (not the sine), one second made of copies of the third period, scaled by the volume to 16-bit
+ * samples on the chosen channels. The clip loops while the buzzer plays. Returns the samples as -1..1 floats
+ */
+export function evoBuzzerSamples(
+  p: { hz: number; vol: number; pw: number; wave: EvoBuzzerWave; channel: EvoBuzzerChannel; smoothLevel: number; smoothWidth: number },
+  random: () => number = Math.random,
+): { sampleRate: number; left: Float32Array; right: Float32Array } {
+  const hz = p.hz;
+  const sampleRate = Math.ceil(44100 / hz) * hz;
+  const cycle = Math.max(1, Math.trunc(sampleRate / hz));
+  const duty = p.pw / 256;
+  const sine = (i: number) => Math.sin(i * hz * 2 * Math.PI);
+  const amp = (i: number): number => {
+    switch (p.wave) {
+      case 'square': return (hz * i) % 1 < duty ? 1 : -1;
+      case 'triangle': return (Math.asin(sine(i)) * 2) / Math.PI;
+      case 'sawtooth': return 2 * ((hz * i) % 1) - 1;
+      case 'noise': return random() * 2 - 1;
+      default: return sine(i);
+    }
+  };
+  const values = new Float64Array(4 * cycle);
+  for (let i = 0; i < values.length; i++) values[i] = amp(i / sampleRate);
+  const sw = p.smoothWidth;
+  if (p.wave !== 'sine' && p.smoothLevel > 0 && sw > 0) {
+    const nsig = new Float64Array(values.length);
+    for (let k = 0; k < p.smoothLevel; k++) {
+      let sum = 0;
+      for (let i = 0; i < values.length; i++) {
+        if (i > 2 * sw) {
+          nsig[i - sw - 1] = (sum - values[i - sw - 1]) / (2 * sw);
+          sum -= values[i - 2 * sw - 1];
+        }
+        sum += values[i];
+      }
+      // (a negative length makes evolution's System.arraycopy throw: its sound thread stops, the buzzer is silent)
+      const n = values.length - 2 * sw;
+      if (n < 0) return { sampleRate, left: new Float32Array(sampleRate), right: new Float32Array(sampleRate) };
+      values.set(nsig.subarray(sw, sw + n), sw);
+    }
+  }
+  const left = new Float32Array(sampleRate);
+  const right = new Float32Array(sampleRate);
+  const useL = p.channel !== 'right';
+  const useR = p.channel !== 'left';
+  for (let i = 0; i < sampleRate; i += cycle) {
+    for (let j = 0; j < Math.min(cycle, sampleRate - i); j++) {
+      // Java (short) Math.round(x): round half up, then keep the low 16 bits
+      let v = Math.floor(values[2 * cycle + j] * p.vol + 0.5);
+      v = ((v & 0xffff) << 16) >> 16;
+      const f = v / 32768;
+      if (useL) left[i + j] = f;
+      if (useR) right[i + j] = f;
+    }
+  }
+  return { sampleRate, left, right };
 }
 
 /** Logisim BitSelector.updatePorts: enough select bits to number every group (at least 1). */
@@ -5171,6 +5322,19 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
   }
 
+  if (comp.type === 'evoBuzzer') {
+    const l = evoBuzzerLayout(comp);
+    const keys = ['freq', 'en', 'vol', 'pw'] as const;
+    return {
+      ...comp,
+      inputs: comp.inputs.map((pin, i) => {
+        const at = l[keys[i] ?? 'en'];
+        const p = rotatePoint(at.x, at.y);
+        return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+      }),
+    };
+  }
+
   if (PLEXER_TYPES.has(comp.type)) {
     const l = plexerLayout(comp);
     const place = (pin: CircuitPin) => {
@@ -6122,6 +6286,32 @@ export function simulateCircuitStep(
           setBitsOut(0, on ? floating() : pass(0));
           setBitsOut(1, on ? pass(0) : floating());
         } else setBitsOut(0, pass(on ? 1 : 0));
+        break;
+      }
+      case 'evoBuzzer': {
+        // Logisim-evolution Buzzer.propagate: plays while enable is 1. A fully known frequency is taken in Hz (tenths
+        // of a Hz cut to whole Hz); one with an x / E bit is 440 Hz; an open frequency input reads 0 (evolution finds
+        // no bus there: Value.NIL, whose long value is 0), out of the playable range. The volume scales its input
+        // to 0-32767 and is 0.5 (in effect silent) when not fully known or open; the duty cycle is 128 then
+        const cfg = getEvoBuzzerConfig(comp);
+        const on = readBits(comp.inputs[1], 1)[0] === 1;
+        let hz: number;
+        if (!isPinConnected(comp.inputs[0]?.id)) hz = 0;
+        else {
+          const f = bitsToNumber(readBits(comp.inputs[0], EVO_BUZZER_FREQ_BITS));
+          hz = f === undefined ? 440 : cfg.dHz ? Math.trunc(f / 10) : f;
+        }
+        const pwv = isPinConnected(comp.inputs[3]?.id) ? bitsToNumber(readBits(comp.inputs[3], EVO_BUZZER_PW_BITS)) : undefined;
+        const pw = pwv ?? 128;
+        const vv = isPinConnected(comp.inputs[2]?.id) ? bitsToNumber(readBits(comp.inputs[2], cfg.volWidth)) : undefined;
+        const vol = vv === undefined ? 0.5 : (vv * 32767) / (2 ** cfg.volWidth - 1);
+        if (comp.state.buzzerOn !== on || comp.state.buzzerHz !== hz || comp.state.buzzerVol !== vol || comp.state.buzzerPw !== pw) {
+          comp.state.buzzerOn = on;
+          comp.state.buzzerHz = hz;
+          comp.state.buzzerVol = vol;
+          comp.state.buzzerPw = pw;
+          hasChanged = true;
+        }
         break;
       }
       case 'slider': {
