@@ -7,6 +7,7 @@ import {
   RAM_TYPES,
   floatingSwitchState,
   resetClockState,
+  resetPgState,
   restartPor,
   tickClocks,
   getInputSignalNames,
@@ -380,6 +381,7 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
       delete st.randomValue;
     }
     if (c.type === 'clock') resetClockState(st);
+    if (c.type === 'programmableGenerator') resetPgState(st);
     // Power on again: a new reset pulse starts
     if (c.type === 'powerOnReset') restartPor(st);
     // A three-state input pin starts floating again, as Logisim resets its pin state
@@ -507,7 +509,8 @@ export function evaluateTestRows(
   let curSet = -1;
   let curSeq = 0;
   let oscillating = false;
-  const clockIds = new Set(components.filter((c) => c.type === 'clock').map((c) => c.id));
+  // programmable generators take the tick as well
+  const clockIds = new Set(components.filter((c) => c.type === 'clock' || c.type === 'programmableGenerator').map((c) => c.id));
   for (const row of rows) {
     const reset = row.seq === 0 || curSeq === 0 || row.set !== curSet;
     curSet = row.set;

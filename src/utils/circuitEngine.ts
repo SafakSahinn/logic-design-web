@@ -1849,6 +1849,161 @@ export function oscCycleNumber(clockNo: number, states: number, k: number): numb
   return clockNo - nck > 0 ? clockNo - nck : 100 + (clockNo - nck - 1);
 }
 
+// ---- Logisim-evolution Programmable Generator (std/io/extra ProgrammableGenerator + ProgrammableGeneratorState) ------
+// A 1-bit source with a Probe-sized 20 x 20 body, the output on its facing side. It has 1-32 states, each a high and a
+// low duration in ticks: on every tick it counts one more tick in the current state, giving 1 for the state's first
+// `high` ticks and 0 for the next `low` ones, then it goes on to the next state (after the last, the first). Evolution
+// never calls its tick() (the part is switched off in its library for that), so there only a click steps it; ours
+// takes the simulation's ticks: every tick of the global clock rate, every manual step, and a click on a clock (all
+// ticks together), while a click on the generator itself is one tick of its own, as evolution's poke.
+
+export const PG_MIN_STATES = 1;
+export const PG_MAX_STATES = 32;
+export const PG_DEFAULT_STATES = 4;
+const JAVA_INT_MAX = 2147483647;
+
+export function pgStateCount(comp: CircuitComponentInstance): number {
+  return clampRange(comp.state.pgStates ?? PG_DEFAULT_STATES, PG_MIN_STATES, PG_MAX_STATES);
+}
+
+/** Java Integer.parseInt: an optional sign and decimal digits, inside the int range; undefined where Java throws */
+function javaParseInt(s: string): number | undefined {
+  if (!/^[+-]?\d+$/.test(s)) return undefined;
+  const n = Number(s);
+  return n >= -JAVA_INT_MAX - 1 && n <= JAVA_INT_MAX ? n : undefined;
+}
+
+/** Java String.split with a one-character literal separator: trailing empty strings are dropped */
+function javaSplit(s: string, sep: string): string[] {
+  const parts = s.split(sep);
+  if (parts.length === 1) return parts;
+  while (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
+  return parts;
+}
+
+/**
+ * The high and low durations a Contents string gives for n states (ProgrammableGeneratorState.decodeSavedData): every
+ * value missing is 1; values after the first 2n are dropped. Where evolution's parser throws (a word that is not a
+ * whole number, 'v*' without a count) evolution cannot use the part at all; ours keeps the values read before it
+ */
+export function pgDecode(contents: string | undefined, n: number): { high: number[]; low: number[] } {
+  const high = new Array<number>(n).fill(1);
+  const low = new Array<number>(n).fill(1);
+  if (!contents) return { high, low };
+  let cnt = 0;
+  const write = (v: number) => {
+    if (cnt < n) high[cnt] = v;
+    else if (cnt < 2 * n) low[cnt - n] = v;
+    cnt++;
+  };
+  for (const datum of javaSplit(contents, ' ')) {
+    if (cnt >= 2 * n) break;
+    if (datum.includes('*')) {
+      const tmp = javaSplit(datum, '*');
+      const count = tmp.length > 1 ? javaParseInt(tmp[1]) : undefined;
+      if (count === undefined) break;
+      if (count <= 0) continue;
+      const v = javaParseInt(tmp[0]);
+      if (v === undefined) break;
+      for (let j = 0; j < count && cnt < 2 * n; j++) write(v);
+    } else {
+      const v = javaParseInt(datum);
+      if (v === undefined) break;
+      write(v);
+    }
+  }
+  return { high, low };
+}
+
+/**
+ * The Contents string evolution saves (ProgrammableGeneratorState.saveData): the high durations then the low ones,
+ * three or more equal values in a row as 'v*n', each followed by a space; '' when every duration is 1
+ */
+export function pgEncode(high: number[], low: number[]): string {
+  const vals = [...high, ...low].map(String);
+  const size = vals.length;
+  if (vals.every((v) => v === '1')) return '';
+  let data = '';
+  let last = 'x';
+  let count = 0;
+  for (let i = 0; i < size; i++) {
+    const val = vals[i];
+    if (val === last) count++;
+    else if (last === 'x') {
+      last = val;
+      count++;
+    }
+    if (val !== last || i === size - 1) {
+      if (count >= 3) data += `${last}*${count} `;
+      else for (let j = 0; j < count; j++) data += `${last} `;
+      if (val !== last && i === size - 1) data += `${val} `;
+      count = 1;
+      last = val;
+    }
+  }
+  return data;
+}
+
+/**
+ * One tick (ProgrammableGenerator.tick / Poker): one more tick in the current state, on to the next state once the
+ * ticks pass high + low (a Java int sum), and the output 1 while ticks - 1 < high. Returns the same part when nothing
+ * changed (never: the tick count always moves)
+ */
+export function pgTick(comp: CircuitComponentInstance): CircuitComponentInstance {
+  const n = pgStateCount(comp);
+  const { high, low } = pgDecode(comp.state.pgContents, n);
+  let ticks = (comp.state.pgTicks ?? 0) + 1;
+  let cur = comp.state.pgCur ?? 0;
+  if (cur >= n) cur = 0;
+  if (ticks > ((high[cur] + low[cur]) | 0)) {
+    ticks = 1;
+    cur = cur + 1 >= n ? 0 : cur + 1;
+  }
+  const on = ticks - 1 < high[cur];
+  return { ...comp, state: { ...comp.state, pgTicks: ticks, pgCur: cur, on } };
+}
+
+/**
+ * A new number of states (ProgrammableGeneratorState.updateSize): the first states keep their durations, new ones get
+ * 1 / 1, the Contents string is written again, and the generator starts over at the first state (the output level
+ * stays until the next tick). The same number changes nothing
+ */
+export function configurePg(comp: CircuitComponentInstance, patch: { states?: number }): CircuitComponentInstance {
+  const n = pgStateCount(comp);
+  const next = clampRange(patch.states ?? n, PG_MIN_STATES, PG_MAX_STATES);
+  if (next === n) return comp;
+  const old = pgDecode(comp.state.pgContents, n);
+  const fresh = pgDecode('', next);
+  for (let i = 0; i < Math.min(n, next); i++) {
+    fresh.high[i] = old.high[i];
+    fresh.low[i] = old.low[i];
+  }
+  const state = { ...comp.state, pgStates: next, pgContents: pgEncode(fresh.high, fresh.low) };
+  delete state.pgTicks;
+  delete state.pgCur;
+  return { ...comp, state };
+}
+
+/** New durations from the editor (the run state stays, as evolution edits its live data) */
+export function setPgDurations(comp: CircuitComponentInstance, high: number[], low: number[]): CircuitComponentInstance {
+  return { ...comp, state: { ...comp.state, pgContents: pgEncode(high, low) } };
+}
+
+/** Evolution's "Clear contents" (clearValues): every duration 1 and back to the first state; the output level stays */
+export function clearPg(comp: CircuitComponentInstance): CircuitComponentInstance {
+  const state = { ...comp.state, pgContents: '' };
+  delete state.pgTicks;
+  delete state.pgCur;
+  return { ...comp, state };
+}
+
+/** Back to power-up (a simulation reset: evolution drops the part's data): first state, no ticks, output 0 */
+export function resetPgState(state: CircuitComponentInstance['state']): void {
+  delete state.pgTicks;
+  delete state.pgCur;
+  state.on = false;
+}
+
 // ---- Logisim-evolution Base library Image of Aşama 5e -------------------------------------------------------
 // image = 'Image' (std/base/Image.java + ImageAttributes): a picture in a frame whose top-left corner is the part's
 // location; no pins, no logic, not in HDL. The picture is kept as evolution keeps it: the source string itself
@@ -2485,6 +2640,18 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     inputs: [],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 280, relY: 20 }],
     description: 'Kaydırıcı (Logisim-evolution Slider): düğmesi fareyle sürüklenir, çıkış düğmenin konumuna göre 0 ile 2^genişlik - 1 arası bir sayı (1-8 bit). Yön soldan sağa ya da sağdan sola seçilir',
+  },
+  // Logisim-evolution Input/Output-Extra Programmable Generator: Probe's 20 x 20 body, the output on the facing side
+  // (east = not turned)
+  programmableGenerator: {
+    type: 'programmableGenerator',
+    name: 'Programlanabilir Üreteç (Programmable Generator)',
+    category: 'inputs',
+    width: 20,
+    height: 20,
+    inputs: [],
+    outputs: [{ id: 'out', name: 'out', type: 'output', relX: 20, relY: 10 }],
+    description: "Programlanabilir üreteç (Logisim-evolution Programmable Generator): 1-32 durumun her birinde önce \"yüksek\" süre kadar tik 1, sonra \"düşük\" süre kadar tik 0 verir, sonra sıradaki duruma geçer. Simülasyonun tikleriyle (genel saat hızı, adım, saate tıklama) ilerler; üstüne tıklamak tek tik ilerletir",
   },
   // Logisim-evolution TWOPINLED: a 20 x 20 round body with the anode and the cathode on opposite sides (facing west in
   // evolution = not turned here: the anode on the left)
@@ -3409,16 +3576,23 @@ export function clockLevelAt(tick: number, cfg: ClockConfig): boolean {
 /**
  * One tick for the clocks in `ids` (all clocks when omitted). They move to the same tick count, one past
  * the furthest of them, so a clock added later falls in step with the others (Logisim has one tick count
- * for the whole simulation). Returns the same array when there is no such clock.
+ * for the whole simulation). Programmable generators in `ids` (all of them when omitted) take the tick too, each
+ * with its own count. Returns the same array when there is no such part.
  */
 export function tickClocks(components: CircuitComponentInstance[], ids?: Set<string>): CircuitComponentInstance[] {
   const picked = (c: CircuitComponentInstance) => c.type === 'clock' && (!ids || ids.has(c.id));
+  const pickedPg = (c: CircuitComponentInstance) => c.type === 'programmableGenerator' && (!ids || ids.has(c.id));
   let tick = -1;
   for (const c of components) if (picked(c)) tick = Math.max(tick, c.state.clockTick ?? 0);
-  if (tick < 0) return components;
+  const anyPg = components.some(pickedPg);
+  if (tick < 0 && !anyPg) return components;
   tick += 1;
   return components.map((c) =>
-    picked(c) ? { ...c, state: { ...c.state, clockTick: tick, on: clockLevelAt(tick, getClockConfig(c)) } } : c
+    picked(c)
+      ? { ...c, state: { ...c.state, clockTick: tick, on: clockLevelAt(tick, getClockConfig(c)) } }
+      : pickedPg(c)
+        ? pgTick(c)
+        : c
   );
 }
 
@@ -5911,7 +6085,8 @@ export function simulateCircuitStep(
         comp.outputs[0].value = targetVal;
         hasChanged = true;
       }
-    } else if (comp.type === 'clock') {
+    } else if (comp.type === 'clock' || comp.type === 'programmableGenerator') {
+      // A programmable generator drives the level its last tick gave (ProgrammableGenerator.propagate: 'sending')
       const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
@@ -8356,6 +8531,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'asciiKeyboard' &&
       c.type !== 'joystick' &&
       c.type !== 'slider' &&
+      c.type !== 'programmableGenerator' &&
       c.type !== 'matrixKeypad' &&
       c.type !== 'portIo' &&
       c.type !== 'realTimeClock' &&

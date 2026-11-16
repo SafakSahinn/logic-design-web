@@ -42,6 +42,9 @@ export type ComponentType =
   | 'evoBuzzer'
   // Logisim-evolution Input/Output-Extra Digital Oscilloscope: draws its inputs' levels at each clock change (Aşama 5h-e)
   | 'digitalOscilloscope'
+  // Logisim-evolution Input/Output-Extra Programmable Generator: a 1-bit source stepping through high / low durations
+  // on the simulation's ticks (Aşama 5h-f; evolution's own copy is switched off there, as it never gets the ticks)
+  | 'programmableGenerator'
   // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
   | 'powerOnReset'
   | 'doNotConnect'
@@ -292,6 +295,15 @@ export interface CircuitComponentInstance {
     oscLastClk?: 0 | 1 | 'X' | 'E' | 'N';
     oscMoveBack?: boolean;
     oscClockNo?: number;
+    /** Programmable generator: number of states, 1-32 (Logisim-evolution 'nState'); unset = 4 */
+    pgStates?: number;
+    /** Programmable generator: the durations as evolution's 'Contents' string, the high durations of every state
+     *  first, then the low ones, in ticks, space separated, 'v*n' for n equal values in a row; '' / unset = all 1 */
+    pgContents?: string;
+    /** Programmable generator run state (evolution ProgrammableGeneratorState): ticks spent in the current state and
+     *  the current state (unset = 0); the output level is `on`. Not saved in .circ files */
+    pgTicks?: number;
+    pgCur?: number;
     /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
     porSize?: 'wide' | 'medium' | 'narrow';
     /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */
