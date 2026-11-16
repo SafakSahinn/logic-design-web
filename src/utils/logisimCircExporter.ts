@@ -97,7 +97,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, pgStateCount, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -237,7 +237,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
-  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed', 'evoBuzzer', 'digitalOscilloscope',
+  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'programmableGenerator', 'twoPinLed', 'evoBuzzer', 'digitalOscilloscope',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -985,6 +985,25 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           // (once per file)
           if (!warnings.some((x) => x.startsWith('Geçiş / iki yollu anahtar:')))
             warnings.push(`Geçiş / iki yollu anahtar: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz. Anahtarların konumu dosyaya yazılmaz (Logisim saklamaz), dosya açılınca hepsi açık / ilk tarafta.`);
+          break;
+        }
+        case 'programmableGenerator': {
+          // Logisim-evolution's Programmable Generator (lib Input/Output-Extra, _ID "ProgrammableGenerator"): the output
+          // on loc, Probe's 20 x 20 body behind it. Every attribute is written out, the durations as evolution's Contents
+          // string as it is. Evolution 5.0.0 has the part switched off in its library (it never got its clock ticks): opening
+          // such a file it reports each one as missing from the library and leaves it out; this program reads it
+          usesExtra = true;
+          const facing = (['east', 'south', 'west', 'north'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${xmlEsc(String(val))}"/>`;
+          const attrs = a('facing', facing) + a('nState', pgStateCount(c)) + a('Contents', c.state.pgContents ?? '');
+          const box =
+            facing === 'east' ? { x0: -20, y0: -10, x1: 0, y1: 10 }
+            : facing === 'west' ? { x0: 0, y0: -10, x1: 20, y1: 10 }
+            : facing === 'north' ? { x0: -10, y0: 0, x1: 10, y1: 20 }
+            : { x0: -10, y0: -20, x1: 10, y1: 0 };
+          P.push({ kind: 'ram', part: c.type, attrs, ports: [{ off: { x: 0, y: 0 }, net: out(0), width: 1, sink: false }], lib: EXTRA_LIB, name: 'ProgrammableGenerator', box });
+          if (!warnings.some((x) => x.startsWith('Programlanabilir üreteç:')))
+            warnings.push(`Programlanabilir üreteç: Logisim-evolution parçası (Input/Output-Extra ProgrammableGenerator) ama Logisim-evolution 5.0.0'da kütüphaneden çıkarılmış (saat tiklerini hiç almadığı için bozuk); evolution dosyayı açarken her üreteç için hata gösterir, üreteçleri atlar ve kalanını açar; 2.7.1 bu dosyayı açamaz. Bu program okur. Üretecin o anki durumu ve tik sayısı yazılmaz, dosya açılınca ilk durumdan başlar.`);
           break;
         }
         case 'slider': {

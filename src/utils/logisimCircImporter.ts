@@ -21,6 +21,10 @@ import {
   configureSlider,
   configureEvoBuzzer,
   configureOsc,
+  configurePg,
+  PG_MIN_STATES,
+  PG_MAX_STATES,
+  PG_DEFAULT_STATES,
   OSC_DEFAULT_COLOR,
   OSC_DEFAULT_INPUTS,
   OSC_DEFAULT_STATES,
@@ -195,6 +199,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   // (evolution's Buzzer; our own buzzer is written as output Pins, never under this name)
   if (n === 'buzzer') return 'evoBuzzer';
   if (n === 'digital oscilloscope') return 'digitalOscilloscope';
+  // (evolution 5.0.0 has it switched off in its library; files from this program and older evolution have it)
+  if (n === 'programmablegenerator') return 'programmableGenerator';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -2294,6 +2300,17 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             [inst.outputs[0].id, at(loc, pOut)],
             [inst.inputs[1].id, at(loc, pCs)],
           ]);
+          continue;
+        }
+        if (nativeType === 'programmableGenerator') {
+          // Logisim-evolution's Programmable Generator: the output on loc, facing east by default. Attributes left out
+          // are evolution's defaults (4 states, every duration 1); Contents is kept as it is (decodeSavedData reads it)
+          const n0 = parseInt(attr.nState ?? '', 10);
+          const states = Number.isFinite(n0) ? Math.max(PG_MIN_STATES, Math.min(PG_MAX_STATES, n0)) : PG_DEFAULT_STATES;
+          let inst = createComponentInstance('programmableGenerator', 0, 0);
+          inst = configurePg({ ...inst, rotation: rot as 0 | 90 | 180 | 270 }, { states });
+          inst = updatePinPositions({ ...inst, state: { ...inst.state, ...(attr.Contents ? { pgContents: attr.Contents } : {}) } });
+          place(inst, inst.outputs[0].id, loc, label, [[inst.outputs[0].id, loc]]);
           continue;
         }
         if (nativeType === 'slider' || nativeType === 'twoPinLed') {
