@@ -19,6 +19,7 @@ import {
   configureBitSelector,
   configureExtraSwitch,
   configureSlider,
+  configureEvoBuzzer,
   configurePlaRom,
   parsePlaRomContents,
   TWO_PIN_LED_DEFAULTS,
@@ -183,6 +184,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'plarom') return 'plaRom';
   if (n === 'slider') return 'slider';
   if (n === 'twopinled') return 'twoPinLed';
+  // (evolution's Buzzer; our own buzzer is written as output Pins, never under this name)
+  if (n === 'buzzer') return 'evoBuzzer';
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
@@ -356,6 +359,27 @@ export function logisimTwoPinLedPorts(facing: string): { anode: Pt; cathode: Pt 
   if (facing === 'south') return { anode: { x: 0, y: -10 }, cathode: { x: 0, y: 10 } };
   return { anode: { x: -10, y: 0 }, cathode: { x: 10, y: 0 } };
 }
+/**
+ * Logisim-evolution Buzzer.updateports, relative to loc (the enable input). The frequency is on the top / left of it and
+ * the volume on the bottom / right whatever the facing; the duty cycle 20 behind and 20 to the side 'selloc' names
+ * (bl = bottom facing east / west, left facing north / south)
+ */
+export function logisimEvoBuzzerPorts(facing: string, selloc: string): { freq: Pt; en: Pt; vol: Pt; pw: Pt } {
+  const tr = selloc === 'tr';
+  if (facing === 'north' || facing === 'south')
+    return { freq: { x: -10, y: 0 }, en: { x: 0, y: 0 }, vol: { x: 10, y: 0 }, pw: { x: tr ? 20 : -20, y: facing === 'south' ? -20 : 20 } };
+  return { freq: { x: 0, y: -10 }, en: { x: 0, y: 0 }, vol: { x: 0, y: 10 }, pw: { x: facing === 'east' ? -20 : 20, y: tr ? -20 : 20 } };
+}
+/** Body of an evolution buzzer relative to loc (Buzzer.getOffsetBounds): 40 x 40 behind the inputs */
+export function logisimEvoBuzzerBox(facing: string): { x0: number; y0: number; x1: number; y1: number } {
+  if (facing === 'east') return { x0: -40, y0: -20, x1: 0, y1: 20 };
+  if (facing === 'north') return { x0: -20, y0: 0, x1: 20, y1: 40 };
+  if (facing === 'south') return { x0: -20, y0: -40, x1: 20, y1: 0 };
+  return { x0: 0, y0: -20, x1: 40, y1: 20 };
+}
+/** Our rotation of an evolution buzzer with evolution's facing (default west = not turned: the inputs on the left) */
+export const EVO_BUZZER_ROTATION: Record<string, 0 | 90 | 180 | 270> = { west: 0, north: 90, east: 180, south: 270 };
+export const EVO_BUZZER_WAVES = { Sine: 'sine', Square: 'square', Triangle: 'triangle', Sawtooth: 'sawtooth', Noise: 'noise' } as const;
 /** Logisim-evolution PlaRom.updateports, relative to loc (the input): input, output, chip select. It has no facing */
 export const LOGISIM_PLA_ROM_PORTS: readonly Pt[] = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 30, y: 30 }];
 /** Our rotation of a two-pin LED with evolution's facing (default west = not turned) */
@@ -1978,6 +2002,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       const rot =
         nativeType === 'twoWaySwitch' ? TWO_WAY_ROTATION[facing] ?? 0
         : nativeType === 'twoPinLed' ? TWO_PIN_LED_ROTATION[attr.facing || 'west'] ?? 0
+        : nativeType === 'evoBuzzer' ? EVO_BUZZER_ROTATION[attr.facing || 'west'] ?? 0
         : FACING_ROTATION[facing] ?? 0;
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
@@ -2005,6 +2030,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               ? [...LOGISIM_PLA_ROM_PORTS.slice(1)]
               : nativeType === 'twoPinLed'
               ? ((t) => [t.anode, t.cathode])(logisimTwoPinLedPorts(attr.facing || 'west'))
+              : nativeType === 'evoBuzzer'
+              ? ((t) => [t.freq, t.vol, t.pw])(logisimEvoBuzzerPorts(attr.facing || 'west', attr.selloc ?? 'bl'))
               : PLEXER_TYPES.has(nativeType)
                 ? plexerSettings(nativeType as LogisimPlexer, attr).ports
                 : ARITH_TYPES.has(nativeType)
@@ -2277,6 +2304,40 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
               [inst.inputs[1].id, at(loc, t.cathode)],
             ]);
           }
+          continue;
+        }
+        if (nativeType === 'evoBuzzer') {
+          // Logisim-evolution's Buzzer: the enable input on loc, the frequency and the volume beside it, the duty cycle
+          // behind. Attributes left out are evolution's defaults (west, bl, Hz, 7-bit volume, sine, both channels,
+          // smoothing 2 / 2)
+          const int = (v: string | undefined, lo: number, hi: number, d: number) => {
+            const n = parseInt(v ?? '', 10);
+            return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d;
+          };
+          const facingE = attr.facing || 'west';
+          const selloc = attr.selloc === 'tr' ? 'tr' : 'bl';
+          const wave = EVO_BUZZER_WAVES[(attr.waveform ?? 'Sine') as keyof typeof EVO_BUZZER_WAVES] ?? 'sine';
+          const channel = attr.channel === '1' ? 'left' : attr.channel === '2' ? 'right' : 'both';
+          const level = int(attr.smooth_level, 0, 10, 2);
+          const sw = int(attr.smooth_width, 1, 10, 2);
+          let inst = createComponentInstance('evoBuzzer', 0, 0);
+          inst = { ...inst, rotation: EVO_BUZZER_ROTATION[facingE] ?? 0 };
+          inst.state = {
+            ...inst.state,
+            ...(attr.freq_measure === 'dHz' ? { buzzerDHz: true } : {}),
+            ...(wave !== 'sine' ? { buzzerWave: wave } : {}),
+            ...(channel !== 'both' ? { buzzerChannel: channel } : {}),
+            ...(level !== 2 ? { buzzerSmoothLevel: level } : {}),
+            ...(sw !== 2 ? { buzzerSmoothWidth: sw } : {}),
+          };
+          inst = configureEvoBuzzer(inst, { volWidth: int(attr.vol_width, 1, 32, 7), selectLoc: selloc });
+          const t = logisimEvoBuzzerPorts(facingE, selloc);
+          place(inst, inst.inputs[1].id, at(loc, t.en), label, [
+            [inst.inputs[0].id, at(loc, t.freq)],
+            [inst.inputs[1].id, at(loc, t.en)],
+            [inst.inputs[2].id, at(loc, t.vol)],
+            [inst.inputs[3].id, at(loc, t.pw)],
+          ]);
           continue;
         }
         if (nativeType === 'pla') {

@@ -86,6 +86,8 @@ import {
   logisimPlaOutput,
   logisimPassSwitchInput,
   logisimTwoPinLedPorts,
+  logisimEvoBuzzerPorts,
+  logisimEvoBuzzerBox,
   logisimTwoWayPorts,
   logisimSplitterEnds,
   type LogisimPlexer,
@@ -93,7 +95,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { TWO_PIN_LED_DEFAULTS, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -233,7 +235,7 @@ const svgXml = (e: AppearanceSvgElement) => {
  */
 const LABELLED_PARTS = new Set<ComponentType>([
   'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'not', 'buffer', 'triState', 'controlledInverter', 'pla',
-  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed',
+  'plaRom', 'passSwitch', 'twoWaySwitch', 'slider', 'twoPinLed', 'evoBuzzer',
   'sevenSegment', 'hexDigit', 'dotMatrix', 'ledBar', 'dipSwitch', 'rgbLed', 'matrixKeypad', 'portIo', 'telnet',
   // (inside an IC; on the canvas they are the circuit's output Pins)
   'led', 'probe',
@@ -1066,6 +1068,43 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           });
           if (!warnings.some((x) => x.startsWith('İki uçlu LED:')))
             warnings.push(`İki uçlu LED: Logisim-evolution parçası (Input/Output-Extra); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
+          break;
+        }
+        case 'evoBuzzer': {
+          // Logisim-evolution's Buzzer (lib Input/Output-Extra): the enable input on loc, the frequency and the volume
+          // beside it, the duty cycle behind. Its default facing, west, has the inputs on the left, as ours unturned.
+          // Every attribute is written out
+          usesExtra = true;
+          const facing = (['west', 'north', 'east', 'south'] as const)[((c.rotation ?? 0) / 90) % 4];
+          const cfg = getEvoBuzzerConfig(c);
+          const t = logisimEvoBuzzerPorts(facing, cfg.selectLoc);
+          const a = (name: string, val: string | number) => `<a name="${name}" val="${val}"/>`;
+          const wave = { sine: 'Sine', square: 'Square', triangle: 'Triangle', sawtooth: 'Sawtooth', noise: 'Noise' }[cfg.wave];
+          const attrs =
+            a('facing', facing) +
+            a('selloc', cfg.selectLoc) +
+            a('freq_measure', cfg.dHz ? 'dHz' : 'Hz') +
+            a('vol_width', cfg.volWidth) +
+            a('waveform', wave) +
+            a('channel', cfg.channel === 'left' ? 1 : cfg.channel === 'right' ? 2 : 3) +
+            a('smooth_level', cfg.smoothLevel) +
+            a('smooth_width', cfg.smoothWidth);
+          P.push({
+            kind: 'ram',
+            part: c.type,
+            attrs,
+            ports: [
+              { off: t.freq, net: pin(0), width: 14, sink: true },
+              { off: t.en, net: pin(1), width: 1, sink: true },
+              { off: t.vol, net: pin(2), width: cfg.volWidth, sink: true },
+              { off: t.pw, net: pin(3), width: 8, sink: true },
+            ],
+            lib: EXTRA_LIB,
+            name: 'Buzzer',
+            box: logisimEvoBuzzerBox(facing),
+          });
+          if (!warnings.some((x) => x.startsWith('Ses üreteci:')))
+            warnings.push(`Ses üreteci: Logisim-evolution parçası (Input/Output-Extra Buzzer); Logisim 2.7.1'de yok, 2.7.1 bu dosyayı açamaz.`);
           break;
         }
         case 'powerOnReset': {
