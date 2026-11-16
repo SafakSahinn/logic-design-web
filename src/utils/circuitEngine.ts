@@ -2209,6 +2209,28 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
     description: 'İletim kapısı (Logisim Transmission Gate): P kapısı 0 ve N kapısı 1 iken girişi olduğu gibi çıkışa geçirir, P = 1 ve N = 0 iken çıkış boşta; iki kapı aynı seviyedeyse ya da biri tanımsızsa hata (E)',
   },
+  // Logisim-evolution Power-on Reset: the wide body (200 x 40); getComponentSize gives the other sizes
+  powerOnReset: {
+    type: 'powerOnReset',
+    name: 'Açılış Sıfırlaması (Power-on Reset)',
+    category: 'inputs',
+    width: 200,
+    height: 40,
+    inputs: [],
+    outputs: [{ id: 'out', name: 'POR', type: 'output', relX: 200, relY: 20 }],
+    description: 'Açılış sıfırlaması (Logisim-evolution Power-on Reset): devre açıldığında 1-10 saniye boyunca başlangıç seviyesini verir, sonra öbür seviyeye geçip orada kalır; parçaya tıklamak darbeyi yeniden başlatır',
+  },
+  // Logisim-evolution Do Not Connect: a red cross on its single pin, which never drives
+  doNotConnect: {
+    type: 'doNotConnect',
+    name: 'Bağlanmaz (Do Not Connect)',
+    category: 'inputs',
+    width: 20,
+    height: 20,
+    inputs: [{ id: 'in', name: 'NC', type: 'input', relX: 10, relY: 10 }],
+    outputs: [],
+    description: 'Bağlanmaz işareti (Logisim-evolution Do Not Connect): bir ucun bilerek boş bırakıldığını gösteren kırmızı çarpı; hattı sürmez, yalnız bit genişliği taşır',
+  },
   dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
   joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu (Logisim Joystick): X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
   matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı (Logisim-evolution MatrixKeypad): basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
@@ -2846,11 +2868,13 @@ export function createComponentInstance(
 export const MULTI_INPUT_GATE_TYPES: ComponentType[] = ['and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity'];
 
 // Parts whose single pin can be wider than 1 bit (Logisim Pin and Constant); the pin's width is the part's width
-const WIDE_PIN_TYPES = new Set<ComponentType>(['switch', 'led', 'constant']);
+// (a do-not-connect mark has the width too, on its only pin, but keeps its size)
+const WIDE_PIN_TYPES = new Set<ComponentType>(['switch', 'led', 'constant', 'doNotConnect']);
+const WIDE_INPUT_PIN_TYPES = new Set<ComponentType>(['led', 'doNotConnect']);
 
 export function getBitWidth(comp: CircuitComponentInstance): number {
   if (!WIDE_PIN_TYPES.has(comp.type)) return 1;
-  return (comp.type === 'led' ? comp.inputs[0]?.width : comp.outputs[0]?.width) ?? 1;
+  return (WIDE_INPUT_PIN_TYPES.has(comp.type) ? comp.inputs[0]?.width : comp.outputs[0]?.width) ?? 1;
 }
 
 // Body size of a part: a pin wider than 1 bit is drawn like Logisim's, one 10px cell per bit, 8 bits a row;
@@ -2912,6 +2936,8 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
   }
   const ttl = ttlChipOf(comp.type);
   if (ttl) return ttlSize(ttl);
+  if (comp.type === 'powerOnReset') return porSizeOf(getPorConfig(comp).size);
+  if (comp.type === 'doNotConnect') return { width: meta.width, height: meta.height };
   if (comp.type === 'constant') return { width: Math.max(30, Math.ceil((Math.ceil(w / 4) * 8 + 14) / 10) * 10), height: 20 };
   if (w > 1) return { width: Math.min(w, 8) * 10 + 20, height: Math.ceil(w / 8) * 20 + 20 };
   return { width: meta?.width ?? 60, height: meta?.height ?? 50 };
@@ -2928,8 +2954,8 @@ export function setBitWidth(comp: CircuitComponentInstance, width: number): Circ
   };
   const next: CircuitComponentInstance = {
     ...comp,
-    inputs: comp.type === 'led' ? comp.inputs.map(pinW) : comp.inputs,
-    outputs: comp.type === 'led' ? comp.outputs : comp.outputs.map(pinW),
+    inputs: WIDE_INPUT_PIN_TYPES.has(comp.type) ? comp.inputs.map(pinW) : comp.inputs,
+    outputs: WIDE_INPUT_PIN_TYPES.has(comp.type) ? comp.outputs : comp.outputs.map(pinW),
     state: {
       ...comp.state,
       inputValue: comp.type === 'switch' && w > 1 ? (mask(comp.state.inputValue) ?? (comp.state.on ? 1 : 0)) : undefined,
@@ -2943,6 +2969,54 @@ export function setBitWidth(comp: CircuitComponentInstance, width: number): Circ
     Object.assign(next.state, floatingSwitchState(w));
   }
   return updatePinPositions(next);
+}
+
+// ---- Power-on reset (Logisim-evolution std/wiring PowerOnReset) -------------------------------------
+// The output holds the start level for `seconds` of real time after power-on (evolution runs a Swing timer,
+// whether the simulation runs or not), then the other level for good. Power-on is the first run of a session
+// that sees the part, a restart (a click on the part, evolution's poke) or a simulation reset.
+export interface PorConfig {
+  size: 'wide' | 'medium' | 'narrow';
+  /** The pulse is high and falls (evolution's default) / is low and rises */
+  startHigh: boolean;
+  seconds: number;
+}
+export const POR_MIN_SECONDS = 1;
+export const POR_MAX_SECONDS = 10;
+export function getPorConfig(comp: CircuitComponentInstance): PorConfig {
+  const s = comp.state;
+  const sec = Math.round(s.porDuration ?? 2);
+  return {
+    size: s.porSize ?? 'wide',
+    startHigh: s.porTransition !== 'lh',
+    seconds: Math.max(POR_MIN_SECONDS, Math.min(POR_MAX_SECONDS, Number.isFinite(sec) ? sec : 2)),
+  };
+}
+/** Body sizes of evolution's getOffsetBounds: wide 200 x 40, medium 40 x 40, narrow 20 x 20 */
+export const porSizeOf = (size: PorConfig['size']): { width: number; height: number } =>
+  size === 'medium' ? { width: 40, height: 40 } : size === 'narrow' ? { width: 20, height: 20 } : { width: 200, height: 40 };
+// One token per page load / process: timing state saved with a circuit belongs to the session that wrote it
+const POR_SESSION = Date.now();
+/** The wall clock the pulse is timed on (the real-time clock's source, which test rigs replace) */
+export const porNow = (): number => rtcFrozen ?? rtcClock();
+/** Is the pulse still running (the start level is out)? */
+export const porActive = (comp: CircuitComponentInstance): boolean => !(comp.state.porRun === POR_SESSION && comp.state.porDone);
+/** When the running pulse ends (wall clock, ms); undefined when it is over or has not been started by a run yet */
+export const porDeadline = (comp: CircuitComponentInstance): number | undefined =>
+  comp.state.porRun === POR_SESSION && !comp.state.porDone ? comp.state.porEnd : undefined;
+/** Power on again: the next run starts a new pulse */
+export function restartPor(state: CircuitComponentInstance['state']): void {
+  delete state.porEnd;
+  delete state.porDone;
+  delete state.porRun;
+}
+/** Advance the pulse to `now`; returns the state to keep (the same object when nothing changed) */
+function stepPor(comp: CircuitComponentInstance, now: number): CircuitComponentInstance['state'] {
+  const s = comp.state;
+  if (s.porRun !== POR_SESSION || (!s.porDone && s.porEnd === undefined))
+    return { ...s, porRun: POR_SESSION, porDone: undefined, porEnd: now + getPorConfig(comp).seconds * 1000 };
+  if (!s.porDone && now >= (s.porEnd as number)) return { ...s, porDone: true, porEnd: undefined };
+  return s;
 }
 
 // ---- Clock durations (Logisim highDuration / lowDuration, evolution phaseOffset) -------------------
@@ -4504,7 +4578,9 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
   const cx = size.width / 2;
   const cy = size.height / 2;
   // A wide switch/LED/constant keeps its pin on the middle of its side
-  const sizedPin = WIDE_PIN_TYPES.has(comp.type) && (comp.type === 'constant' || getBitWidth(comp) > 1)
+  const sizedPin = comp.type === 'powerOnReset'
+    ? { relX: size.width, relY: size.height / 2 }
+    : WIDE_PIN_TYPES.has(comp.type) && comp.type !== 'doNotConnect' && (comp.type === 'constant' || getBitWidth(comp) > 1)
     ? { relX: comp.type === 'led' ? 0 : size.width, relY: Math.round(size.height / 2 / 10) * 10 }
     : undefined;
 
@@ -4859,6 +4935,15 @@ export function simulateCircuitStep(
       }
     } else if (comp.type === 'clock') {
       const targetVal: SignalValue = comp.state.portValue ?? (comp.state.on ? 1 : 0);
+      if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
+        comp.outputs[0].value = targetVal;
+        hasChanged = true;
+      }
+    } else if (comp.type === 'powerOnReset') {
+      const st = stepPor(comp, porNow());
+      if (st !== comp.state) comp.state = st;
+      const start = getPorConfig(comp).startHigh ? 1 : 0;
+      const targetVal: SignalValue = comp.state.portValue ?? (porActive(comp) ? start : start ? 0 : 1);
       if (comp.outputs[0] && comp.outputs[0].value !== targetVal) {
         comp.outputs[0].value = targetVal;
         hasChanged = true;
@@ -7015,6 +7100,7 @@ function booleanExprOf(
   if (comp.type === 'gnd') return '0';
   if (comp.type === 'constant') return isWidePin(comp.outputs[0]) ? OPAQUE_EXPR : String((comp.state.constValue ?? 1) % 2);
   if (comp.type === 'clock') return 'CLK';
+  if (comp.type === 'powerOnReset') return 'POR';
 
   if (comp.type === 'led' || comp.type === 'probe' || comp.type === 'buzzer') {
     const inPin = comp.inputs[0];
@@ -7195,6 +7281,7 @@ function getObservableOutputs(components: CircuitComponentInstance[]) {
       c.type !== 'switch' &&
       c.type !== 'pushbutton' &&
       c.type !== 'clock' &&
+      c.type !== 'powerOnReset' &&
       c.type !== 'vcc' &&
       c.type !== 'gnd' &&
       c.type !== 'constant' &&

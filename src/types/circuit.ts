@@ -31,6 +31,9 @@ export type ComponentType =
   // Logisim Wiring: a single P / N transistor and the P + N pair (Aşama 5g-c)
   | 'transistor'
   | 'transmissionGate'
+  // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
+  | 'powerOnReset'
+  | 'doNotConnect'
   // Parametric DIP switch (Logisim-evolution DipSwitch, Aşama 3g)
   | 'dipSwitch'
   | 'asciiKeyboard'
@@ -198,6 +201,18 @@ export interface CircuitComponentInstance {
     /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0
      *  (Logisim-evolution 'type'); unset = p */
     transistorType?: 'p' | 'n';
+    /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
+    porSize?: 'wide' | 'medium' | 'narrow';
+    /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */
+    porTransition?: 'hl' | 'lh';
+    /** Power-on reset: length of the pulse in seconds, 1-10 (evolution 'PorHighDuration'); unset = 2 */
+    porDuration?: number;
+    /** Power-on reset: wall-clock time (ms) the running pulse ends at; valid only with porRun of this session */
+    porEnd?: number;
+    /** Power-on reset: the pulse is over */
+    porDone?: boolean;
+    /** Power-on reset: the session porEnd / porDone belong to (a circuit opened later powers on again) */
+    porRun?: number;
     /** Pull resistor: level an otherwise undriven net is pulled to (Logisim 'pull'); unset = 0 */
     pullValue?: 0 | 1 | 'X';
     /** Gate output value (Logisim 'out'): 0Z = open collector, Z1 = open emitter; unset = 01 */

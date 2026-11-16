@@ -7,6 +7,7 @@ import {
   RAM_TYPES,
   floatingSwitchState,
   resetClockState,
+  restartPor,
   tickClocks,
   getInputSignalNames,
   simulateCircuit,
@@ -147,6 +148,7 @@ function unsupportedInput(type: string, dir: string): string | undefined {
   if (type === 'joystick') return 'joystick test vektörüyle sürülemiyor (çubuğun konumu elle verilir)';
   if (type === 'matrixKeypad') return 'tuş takımının sütunları test vektörüyle sürülemiyor (simülatörde satırlardan ve basılı tuşlardan gelir)';
   if (type === 'realTimeClock') return 'gerçek zaman saati test vektörüyle sürülemiyor';
+  if (type === 'powerOnReset') return 'açılış sıfırlaması test vektörüyle sürülemiyor (testte darbenin başlangıç seviyesinde kalır)';
   if (type === 'keyboard') return 'klavyenin OUT / AV çıkışları test vektörüyle sürülemiyor (simülatörde tampondan gelir)';
   if (type === 'telnet') return "Telnet'in OUT / AV çıkışları test vektörüyle sürülemiyor (simülatörde ağdan gelen tampondan gelir)";
   return undefined;
@@ -377,6 +379,8 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
       delete st.randomValue;
     }
     if (c.type === 'clock') resetClockState(st);
+    // Power on again: a new reset pulse starts
+    if (c.type === 'powerOnReset') restartPor(st);
     // A three-state input pin starts floating again, as Logisim resets its pin state
     if (c.type === 'switch' && st.pinTristate) {
       delete st.portValue;
