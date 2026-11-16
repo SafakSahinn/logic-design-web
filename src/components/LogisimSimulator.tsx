@@ -272,6 +272,7 @@ import {
 } from '../utils/chronogram';
 import { ChronogramPanel } from './ChronogramPanel';
 import { useChronoLogFile } from './useChronoLogFile';
+import { LanguageSwitcher } from '../i18n/LanguageSwitcher';
 import MemoryHexEditor from './MemoryHexEditor';
 import PlaTableEditor from './PlaTableEditor';
 import PlaRomEditor from './PlaRomEditor';
@@ -8529,6 +8530,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             >
               {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
             </button>
+
+            <LanguageSwitcher theme={isDark ? 'dark' : 'light'} />
           </div>
         </div>
 
