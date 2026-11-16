@@ -1,5 +1,5 @@
-import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit } from '../types/circuit';
-import { numberToBits } from '../types/logic';
+import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit, PlaRow } from '../types/circuit';
+import { numberToBits, type SignalValue } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
 import {
   ALU_OP_BITS,
@@ -37,6 +37,8 @@ import {
   joystickValue,
   getClockConfig,
   getPorConfig,
+  getPlaConfig,
+  plaMatch,
   portPokeOf,
   rtcValue,
 } from './circuitEngine';
@@ -1843,6 +1845,50 @@ function buildModule(
         } else {
           body.push(`  ${inst} : entity work.${sub.moduleName}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
         }
+        break;
+      }
+      case 'pla': {
+        // Logisim-evolution PlaHdlGeneratorFactory: the rows tried top to bottom, the first fitting one gives the
+        // output, none: 0. Written as a Verilog ?: / VHDL when-else chain over "input masked by the row's defined
+        // bits equals its value" (a row of only x fits everything and ends the chain). An input that is not fully
+        // defined reads all ones in the simulator and one with nothing attached reads 0: both give a fixed row,
+        // written as that constant
+        if (!out[0]) break;
+        const cfg = getPlaConfig(c);
+        const pin = c.inputs[0];
+        const lsb = (s: string): (0 | 1)[] => [...s].reverse().map((ch) => (ch === '1' ? 1 : 0));
+        const valueOf = (row: PlaRow | undefined) => bitLiteral(row ? lsb(row.out) : new Array<0 | 1>(cfg.outWidth).fill(0));
+        const attached = !!pin && (isConnected(pin.id) || portBound.has(pin.id));
+        const r = attached ? readBits(pin.id, cfg.inWidth) : undefined;
+        if (!r || r.floating || r.mismatch) {
+          const level: SignalValue = r ? 1 : 0;
+          const row = plaMatch(cfg.rows, new Array<SignalValue>(cfg.inWidth).fill(level));
+          body.push(
+            L.comment(
+              r
+                ? 'giriş tam tanımlı değil: simülatördeki gibi bütün bitleri 1 okunur, sabit satır yazıldı'
+                : 'girişe hiçbir şey bağlı değil: simülatördeki gibi 0 okunur, sabit satır yazıldı'
+            )
+          );
+          emit(out[0], valueOf(row));
+          break;
+        }
+        const arms: Array<[string, string]> = [];
+        let last = valueOf(undefined);
+        const inExpr = cfg.rows.length ? asName(compose(r.bits), cfg.inWidth, `${nm}_in`) : '';
+        for (const row of cfg.rows) {
+          const mask = [...row.in].reverse().map((ch): 0 | 1 => (ch === 'x' ? 0 : 1));
+          if (!mask.includes(1)) {
+            last = valueOf(row);
+            break;
+          }
+          const val = bitLiteral(lsb(row.in.replace(/x/g, '0')));
+          const full = !mask.includes(0);
+          const masked = full ? inExpr : lang === 'verilog' ? `(${inExpr} & ${bitLiteral(mask)})` : `(${inExpr} and ${bitLiteral(mask)})`;
+          arms.push([lang === 'verilog' ? `(${masked} == ${val})` : `${masked} = ${val}`, valueOf(row)]);
+        }
+        if (lang === 'verilog') emit(out[0], arms.reduceRight((acc, [cond, v]) => `${cond} ? ${wrap(v)} : ${wrap(acc)}`, last));
+        else body.push(`  ${out[0]} <= ${arms.map(([cond, v]) => `${v} when ${cond} else `).join('')}${last};`);
         break;
       }
       case 'bitExtender': {

@@ -18,6 +18,7 @@ import {
   shifterDistBits,
   binToBcdAdd3Cells,
   binToBcdBits,
+  getPlaConfig,
 } from './circuitEngine';
 import { TTL_SEQ_TYPES, ttlChipOf } from './ttlChips';
 import type { TtlChipId } from '../types/circuit';
@@ -455,6 +456,20 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       // constant multiply (0x5DEECE66D has 23 one bits: an adder of 48 - k bits per shifted copy, 18004) and
       // + 0xB (48 half adders, 672); the output is bits of the state, whatever its width
       return 48 * 28 + 2 * 48 * 14 + 18004 + 48 * 14;
+    case 'pla': {
+      // The logic the HDL describes (evolution has no count): an inverter per input bit for its complement, per
+      // row an AND of its defined bits (NAND + NOT, 2k + 2) and a 2:1 MUX per output bit choosing it over the
+      // rows below (14 each). A row of only x needs no AND and ends the chain in place of the 0 default; the
+      // rows after it are never reached
+      const cfg = getPlaConfig(c);
+      let total = cfg.rows.length ? 2 * cfg.inWidth : 0;
+      for (const row of cfg.rows) {
+        const k = [...row.in].filter((ch) => ch !== 'x').length;
+        if (k === 0) break;
+        total += 2 * k + 2 + 14 * cfg.outWidth;
+      }
+      return total;
+    }
     case 'binToBcd':
       // Shift-and-add-3 array: one add-3 cell per binToBcdAdd3Cells entry. A cell is two-level NAND logic over
       // the 4 bits with 10-15 as don't cares (S3 = A3 + A2A0 + A2A1, S2 = A3A0 + A2A1'A0', S1 = A2'A1 + A1A0 +
@@ -544,6 +559,8 @@ export function analyzeCircuit(
                   ? withDetail(c.type.toUpperCase(), ramGroupDetail(c, wired))
                   : c.type === 'binToBcd'
                     ? `BINTOBCD (${binToBcdBits(c)} bit)`
+                    : c.type === 'pla'
+                    ? `PLA (${getPlaConfig(c).inWidth} → ${getPlaConfig(c).outWidth} bit, ${getPlaConfig(c).rows.length} satır)`
                     : ttlChipOf(c.type)
                       ? `TTL ${ttlChipOf(c.type)!.id} (${ttlChipOf(c.type)!.title})`
                       : c.type.toUpperCase();
