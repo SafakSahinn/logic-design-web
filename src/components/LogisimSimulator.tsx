@@ -68,6 +68,12 @@ import {
   pinKey as plexerPinKey,
   plexerLayout,
   transistorGateOnTop,
+  getPorConfig,
+  porSizeOf,
+  porActive,
+  porDeadline,
+  porNow,
+  restartPor,
   getIoConfig,
   matrixDots,
   segmentsLit,
@@ -381,6 +387,8 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   transistor: { label: 'Transistör', badge: 'P / N' },
   transmissionGate: { label: 'İletim Kapısı', badge: 'Transmission Gate' },
+  powerOnReset: { label: 'Açılış Sıfırlaması', badge: 'Power-on Reset' },
+  doNotConnect: { label: 'Bağlanmaz', badge: 'Do Not Connect' },
   controlledInverter: { label: 'Tri-State NOT', badge: 'Kontrollü Evirici' },
   switch: { label: 'Anahtar', badge: 'Toggle' },
   pushbutton: { label: 'Basma Butonu', badge: 'Pulse' },
@@ -1148,6 +1156,36 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     return () => clearTimeout(timer);
   }, [rtcTick, components, wires]);
 
+  // A running power-on reset pulse ends on the wall clock, whether the simulation runs or not (evolution's Swing
+  // timer): simulate again when the soonest one is due. A pulse no run has started yet (a part just placed or
+  // loaded) is due at once; inside an IC only pulses already started count
+  const porWake = useMemo(() => {
+    let soonest = Infinity;
+    const scan = (list: CircuitComponentInstance[], top: boolean) => {
+      for (const c of list) {
+        if (c.type === 'powerOnReset' && porActive(c)) {
+          const t = porDeadline(c) ?? (top ? 0 : undefined);
+          if (t !== undefined && t < soonest) soonest = t;
+        }
+        if (c.state.subcircuitInternal) scan(c.state.subcircuitInternal.components, false);
+      }
+    };
+    scan(components, true);
+    return soonest;
+  }, [components]);
+
+  useEffect(() => {
+    if (porWake === Infinity) return;
+    const timer = setTimeout(() => {
+      setComponents((prev) => {
+        const sim = simulateCircuit(prev, wires);
+        setWires(sim.wires);
+        return sim.components;
+      });
+    }, Math.max(0, Math.ceil(porWake - porNow()) + 5));
+    return () => clearTimeout(timer);
+  }, [porWake, components, wires]);
+
   // Read once at the first render: the mount effect removes it from the address (and may run twice in dev)
   const urlPresetIdRef = useRef<string | null>(
     typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('preset')
@@ -1480,6 +1518,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       return;
     }
     setComponents((prev) => {
+      // A click on a power-on reset starts its pulse again (evolution's poke)
+      if (prev.some((c) => c.id === compId && c.type === 'powerOnReset')) {
+        const restarted = prev.map((c) => {
+          if (c.id !== compId) return c;
+          const st = { ...c.state };
+          restartPor(st);
+          return { ...c, state: st };
+        });
+        const sim = simulateCircuit(restarted, wires);
+        setWires(sim.wires);
+        return sim.components;
+      }
       // A click on a clock is one tick for every clock, as Logisim's poke ("all clocks tick together")
       if (prev.some((c) => c.id === compId && c.type === 'clock')) {
         const ticked = tickClocks(prev);
@@ -4837,6 +4887,65 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         );
       }
 
+      // Logisim-evolution PowerOnReset.paintInstance: a white box; the wide one carries the name, the medium and
+      // narrow ones a small graph of the pulse (blue axes, red step) that stays upright whatever the facing.
+      // Ours only: the part of the step that is out now is drawn stronger. A click starts the pulse again
+      case 'powerOnReset': {
+        const cfg = getPorConfig(comp);
+        const { width: W, height: H } = porSizeOf(cfg.size);
+        const rot = comp.rotation || 0;
+        const active = porActive(comp);
+        const tip = `Açılış sıfırlaması: ${cfg.seconds} sn boyunca ${cfg.startHigh ? 1 : 0}, sonra ${cfg.startHigh ? 0 : 1}. ${active ? 'Darbe sürüyor' : 'Darbe bitti'}; tıklayınca yeniden başlar`;
+        if (cfg.size === 'wide') {
+          return (
+            <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer">
+              <title>{tip}</title>
+              <rect x={0} y={0} width={W} height={H} fill="#ffffff" stroke={strokeColor} strokeWidth={2} />
+              <text
+                x={W / 2}
+                y={H / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={16}
+                fontWeight={700}
+                fill="#000000"
+                className="select-none"
+                transform={rot === 180 ? `rotate(180, ${W / 2}, ${H / 2})` : undefined}
+              >
+                Power-On Reset
+              </text>
+            </g>
+          );
+        }
+        const narrow = cfg.size === 'narrow';
+        const off = narrow ? 7 : 13;
+        const yStart = cfg.startHigh ? off + 2 : H - 5;
+        const yEnd = cfg.startHigh ? H - 5 : off + 2;
+        return (
+          <g onClick={(e) => handleToggleSwitch(e, comp.id)} className="cursor-pointer">
+            <title>{tip}</title>
+            <rect x={0} y={0} width={W} height={H} fill="#ffffff" stroke={strokeColor} strokeWidth={2} />
+            <g fill="none" transform={rot ? `rotate(${-rot}, ${W / 2}, ${H / 2})` : undefined}>
+              <path d={`M3,${H - 4} H${W - 4} M4,${off} V${H - 3}`} stroke="#0000ff" strokeWidth={1} />
+              <path d={`M4,${yStart} H${W / 2} V${yEnd} H${W - 4}`} stroke="#ff0000" strokeWidth={1} />
+              <path d={active ? `M4,${yStart} H${W / 2}` : `M${W / 2},${yEnd} H${W - 4}`} stroke="#ff0000" strokeWidth={narrow ? 2 : 3} />
+              <text x={2} y={off - 1} fontSize={narrow ? 6 : 14} fontWeight={700} fill={isSelected ? strokeColor : '#000000'} className="select-none">
+                POR
+              </text>
+            </g>
+          </g>
+        );
+      }
+
+      // Logisim-evolution DoNotConnect: a red cross on the pin
+      case 'doNotConnect':
+        return (
+          <g fill="none">
+            <rect x={0} y={0} width={20} height={20} fill="transparent" stroke="none" />
+            <path d="M5,5 L15,15 M5,15 L15,5" stroke={isSelected ? strokeColor : '#ff0000'} strokeWidth={getBitWidth(comp) > 1 ? 2.5 : 1.5} strokeLinecap="round" />
+          </g>
+        );
+
       case 'tunnel': {
         const lbl = comp.label || 'Tünel';
         const isHigh = comp.inputs[0]?.value === 1 || comp.outputs[0]?.value === 1;
@@ -7147,7 +7256,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
       icon: '🔌',
-      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate'] as ComponentType[],
+      types: ['switch', 'pushbutton', 'dipSwitch', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'clock', 'vcc', 'gnd', 'constant', 'probe', 'splitter', 'splitter4', 'bitExtender', 'tunnel', 'pullResistor', 'transistor', 'transmissionGate', 'powerOnReset', 'doNotConnect'] as ComponentType[],
     },
     {
       id: 'gates',

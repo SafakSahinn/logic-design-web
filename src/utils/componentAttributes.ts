@@ -10,6 +10,10 @@ import {
   CLOCK_DURATION_MAX,
   clockLevelAt,
   getClockConfig,
+  getPorConfig,
+  restartPor,
+  POR_MIN_SECONDS,
+  POR_MAX_SECONDS,
   BIT_ADDER_MAX_INPUTS,
   LEVEL_TRIGGER_TYPES,
   MEM_TYPES,
@@ -694,6 +698,50 @@ const transistorGateLocAttr: AttrDef = {
   },
 };
 
+// ---- Power-on reset (Logisim-evolution std/wiring PowerOnReset) ---------------------------------------------
+const porSizeAttr: AttrDef = {
+  key: 'porSize',
+  label: 'Boyut',
+  kind: 'buttons',
+  title: 'Gövde boyutu (Logisim-evolution "Size"): geniş 200 x 40 (adı yazılı), orta 40 x 40 ve dar 20 x 20 (darbe grafiği)',
+  options: [
+    { value: 'wide', label: 'Geniş' },
+    { value: 'medium', label: 'Orta' },
+    { value: 'narrow', label: 'Dar' },
+  ],
+  get: (c) => getPorConfig(c).size,
+  set: (c, v) =>
+    getPorConfig(c).size === v ? null : resized(c, updatePinPositions({ ...c, state: { ...c.state, porSize: v as 'wide' | 'medium' | 'narrow' } })),
+};
+// The level follows the new setting at once (evolution keeps the levels of the pulse it started until a restart)
+const porTransitionAttr: AttrDef = {
+  key: 'porTransition',
+  label: 'Geçiş',
+  kind: 'buttons',
+  title: 'Darbenin yönü (Logisim-evolution "Transition"): açılışta 1 verip süre sonunda 0\'a düşer ya da açılışta 0 verip 1\'e çıkar',
+  options: [
+    { value: 'hl', label: '1 → 0' },
+    { value: 'lh', label: '0 → 1' },
+  ],
+  get: (c) => (getPorConfig(c).startHigh ? 'hl' : 'lh'),
+  set: (c, v) => ((getPorConfig(c).startHigh ? 'hl' : 'lh') === v ? null : withState(c, { porTransition: v as 'hl' | 'lh' })),
+};
+// A new length starts the pulse again
+const porDurationAttr: AttrDef = {
+  key: 'porDuration',
+  label: 'Süre (sn)',
+  kind: 'int',
+  title: 'Başlangıç seviyesinin sürdüğü gerçek süre, 1-10 saniye (Logisim-evolution "Duration"); simülasyon durmuş olsa da işler. Değiştirince darbe yeniden başlar',
+  get: (c) => getPorConfig(c).seconds,
+  set: (c, v) => {
+    const n = Math.min(POR_MAX_SECONDS, Math.max(POR_MIN_SECONDS, Math.round(Number(v)) || POR_MIN_SECONDS));
+    if (n === getPorConfig(c).seconds) return null;
+    const state = { ...c.state, porDuration: n };
+    restartPor(state);
+    return { comp: { ...c, state }, stateOnly: true };
+  },
+};
+
 // ---- Arithmetic (Logisim std/arith): like Logisim the part keeps its location, the main output; a bit adder
 // with more inputs grows around it
 function reconfigureArith(c: CircuitComponentInstance, patch: Partial<ArithConfig>): AttrEdit {
@@ -948,6 +996,12 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'transmissionGate':
       list.push(transistorGateLocAttr);
+      break;
+    case 'powerOnReset':
+      list.push(porSizeAttr, porTransitionAttr, porDurationAttr);
+      break;
+    case 'doNotConnect':
+      list.push(bitWidthAttr);
       break;
     case 'clock':
       list.push(clockRateAttr, clockHighAttr, clockLowAttr, clockPhaseAttr);
