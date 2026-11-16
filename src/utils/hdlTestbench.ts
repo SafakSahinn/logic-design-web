@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import { EXTRA_SWITCH_TYPES, clockLevelAt, getClockConfig, getPorConfig, portPokeOf, simulateCircuit } from './circuitEngine';
+import { EXTRA_SWITCH_TYPES, clockLevelAt, getClockConfig, getPorConfig, pgTick, portPokeOf, resetPgState, simulateCircuit } from './circuitEngine';
 import { getTopLevelPorts, getTopModuleName, type PortDecl } from './hdlGenerator';
 import { cellText, circuitHasState, parseTestVector, type TvRow, type TvSignal } from './testVectorRunner';
 
@@ -82,6 +82,7 @@ function plan(
   const held = new Map<string, Bit[]>();
   const clocks: string[] = [];
   const clockCfg = new Map<string, ReturnType<typeof getClockConfig>>();
+  const generators: string[] = [];
   for (const p of ports) {
     if (p.dir !== 'in') continue;
     if (p.source?.type === 'clock') {
@@ -89,6 +90,12 @@ function plan(
       const src = components.find((c) => c.id === p.source?.compId);
       clockCfg.set(p.name, getClockConfig(src ?? ({ state: {} } as CircuitComponentInstance)));
       held.set(p.name, [clockLevelAt(0, clockCfg.get(p.name)!) ? 1 : 0]);
+      continue;
+    }
+    if (p.source?.type === 'programmableGenerator') {
+      // Driven like a clock: 0 at power-up, then the level each tick of the runner gives it (flips below)
+      generators.push(p.name);
+      held.set(p.name, [0]);
       continue;
     }
     const comp = canvas.find((c) => c.id === p.source?.compId);
@@ -134,6 +141,31 @@ function plan(
       })
     );
   }
+  // A programmable generator starts over at a reset and takes one tick before each other row, as in the runner
+  for (const name of generators) {
+    const src = components.find((c) => c.id === ports.find((p) => p.name === name)?.source?.compId);
+    const fresh = () => {
+      const st = { ...(src?.state ?? {}) };
+      resetPgState(st);
+      return { ...(src as CircuitComponentInstance), state: st };
+    };
+    let g = fresh();
+    clockFlips.set(
+      name,
+      resets.map((reset) => {
+        if (reset) {
+          g = fresh();
+          return false;
+        }
+        const before = !!g.state.on;
+        g = pgTick(g);
+        return !!g.state.on !== before;
+      })
+    );
+    clocks.push(name);
+  }
+  if (generators.length > 0)
+    notes.push(`Programlanabilir üreteç portları (${generators.join(', ')}) saat gibi sürülür: sıfırlamada 0, sonraki her satırdan önce bir tik.`);
   const stateful = circuitHasState(components.filter((c) => c.type !== 'clock'));
   let groups: number[][] = [];
   if (stateful) {

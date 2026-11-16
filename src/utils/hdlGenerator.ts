@@ -202,7 +202,7 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
 // and a port I/O are blocks (their pins go both ways), see their cases below
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset', 'slider'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'programmableGenerator', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset', 'slider'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed', 'digitalOscilloscope', 'evoBuzzer', 'twoPinLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor', 'doNotConnect'];
 const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate', 'passSwitch', 'twoWaySwitch'];
@@ -490,6 +490,21 @@ function buildModule(
         if (outW > 1) setWideConstant(c.outputs[0].id, c.state.inputValue ?? 0, outW);
         else pinExpr.set(c.outputs[0].id, c.state.on ? L.one : L.zero);
       }
+      continue;
+    }
+    if (c.type === 'programmableGenerator') {
+      // Evolution has no HDL for it. Its waveform comes from the simulation's ticks: inside an IC the level it gives
+      // now, on the top level an input of the module (a board signal, or the testbench, gives the waveform)
+      const lvl = c.state.on ? 1 : 0;
+      if (spec.subPorts) {
+        if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) pinExpr.set(c.outputs[0].id, lvl ? L.one : L.zero);
+        warnings.push(`${c.label || 'Programlanabilir üreteç'}: IC içinde programlanabilir üreteç şimdiki seviyesinde sabit (${lvl}).`);
+        continue;
+      }
+      const pn = names.make(c.label ? `pg_${c.label}` : 'pg', 'pg');
+      addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
+      warnings.push(`${pn}: programlanabilir üreteç simülatörde her tikte kendi yüksek / düşük sürelerini izler; burada dışarıdan gelen bir giriştir (bu dalga biçimi yalnız test tezgâhında uygulanır).`);
       continue;
     }
     if (c.type === 'powerOnReset') {

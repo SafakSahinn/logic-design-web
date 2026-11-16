@@ -137,6 +137,11 @@ export function generateFpgaConstraints(
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
+    } else if (type === 'programmableGenerator') {
+      // Its waveform needs a sequencer on the board (a counter on the board clock); left for the user to wire
+      unassigned.push(p.name);
+      const what = `Programlanabilir üreteç portu ${p.name} atanmadı: kartta bu dalga biçimini kart saatiyle sayan bir sayaç / durum makinesi üretmeli, ya da bir dış sinyale bağlayın.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'powerOnReset') {
       // The pulse comes from outside: a button stands in for the board's reset circuit
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);

@@ -148,6 +148,7 @@ function unsupportedInput(type: string, dir: string): string | undefined {
   if (type === 'asciiKeyboard') return 'ASCII klavye test vektörüyle sürülemiyor';
   if (type === 'joystick') return 'joystick test vektörüyle sürülemiyor (çubuğun konumu elle verilir)';
   if (type === 'slider') return 'kaydırıcı test vektörüyle sürülemiyor (düğmenin konumu elle verilir)';
+  if (type === 'programmableGenerator') return 'programlanabilir üreteç test vektörüyle sürülemiyor (her tikte kendi sürelerinden gelir)';
   if (type === 'matrixKeypad') return 'tuş takımının sütunları test vektörüyle sürülemiyor (simülatörde satırlardan ve basılı tuşlardan gelir)';
   if (type === 'realTimeClock') return 'gerçek zaman saati test vektörüyle sürülemiyor';
   if (type === 'powerOnReset') return 'açılış sıfırlaması test vektörüyle sürülemiyor (testte darbenin başlangıç seviyesinde kalır)';
@@ -646,9 +647,10 @@ export function generateExhaustiveTestVector(
   const ins = signals.filter((s) => s.role === 'in' && !s.unsupported);
   const clocks = signals.filter((s) => s.role === 'clock');
   const outs = signals.filter((s) => s.role === 'out');
-  if (ins.length === 0 && clocks.length === 0) return '# Tuvalde test edilecek giriş (anahtar, buton, DIP anahtar) ya da saat bulunamadı.';
+  if (ins.length === 0 && clocks.length === 0 && !components.some((c) => c.type === 'programmableGenerator')) return '# Tuvalde test edilecek giriş (anahtar, buton, DIP anahtar) ya da saat bulunamadı.';
 
-  const sequential = clocks.length > 0 || circuitHasState(components);
+  // (a programmable generator moves on each tick, so its circuit is tested as a sequence too)
+  const sequential = clocks.length > 0 || circuitHasState(components) || components.some((c) => c.type === 'programmableGenerator');
   let swept = 0;
   let sweptBits = 0;
   while (swept < ins.length && sweptBits + ins[swept].width <= maxInputs) sweptBits += ins[swept++].width;
