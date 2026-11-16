@@ -31,6 +31,10 @@ export type ComponentType =
   // Logisim Wiring: a single P / N transistor and the P + N pair (Aşama 5g-c)
   | 'transistor'
   | 'transmissionGate'
+  // Logisim-evolution Input/Output-Extra: a switch that passes its input while closed, and a two-way
+  // (changeover) switch (Aşama 5h-a)
+  | 'passSwitch'
+  | 'twoWaySwitch'
   // Logisim-evolution Wiring: power-on reset pulse and the do-not-connect mark (Aşama 5g-d)
   | 'powerOnReset'
   | 'doNotConnect'
@@ -217,6 +221,13 @@ export interface CircuitComponentInstance {
     /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0
      *  (Logisim-evolution 'type'); unset = p */
     transistorType?: 'p' | 'n';
+    /** Pass switch: closed (passes its input); two-way switch: on the second side. Not saved in a .circ (Logisim
+     *  keeps it as run state); unset = open / first side */
+    switchClosed?: boolean;
+    /** Two-way switch: one input to two outputs or two inputs to one output (Logisim-evolution 'mode'); unset = 1in2out */
+    twoWayMode?: '1in2out' | '2in1out';
+    /** Pass / two-way switch body colour, '#rrggbb' (Logisim-evolution 'color'); unset = white */
+    switchColor?: string;
     /** Power-on reset: body size (Logisim-evolution 'porsize' 3 / 1 / 2); unset = wide */
     porSize?: 'wide' | 'medium' | 'narrow';
     /** Power-on reset: the pulse goes high to low (evolution 'porTransition' 1) or low to high (2); unset = hl */

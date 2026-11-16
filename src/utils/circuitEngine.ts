@@ -2210,6 +2210,32 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
     outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
     description: 'İletim kapısı (Logisim Transmission Gate): P kapısı 0 ve N kapısı 1 iken girişi olduğu gibi çıkışa geçirir, P = 1 ve N = 0 iken çıkış boşta; iki kapı aynı seviyedeyse ya da biri tanımsızsa hata (E)',
   },
+  // Logisim-evolution Input/Output-Extra Switch / TwoWaySwitch. Evolution's bodies are 30 high (20 x 30, 40 x 30)
+  // with the ports on their middle line, 10 apart; the boxes here are 40 high (the body 5 below their top), so the
+  // ports stay on the grid whatever the facing
+  passSwitch: {
+    type: 'passSwitch',
+    name: 'Geçiş Anahtarı (Switch)',
+    category: 'inputs',
+    width: 20,
+    height: 40,
+    inputs: [{ id: 'in', name: 'in', type: 'input', relX: 0, relY: 20 }],
+    outputs: [{ id: 'out', name: 'out', type: 'output', relX: 20, relY: 20 }],
+    description: 'Geçiş anahtarı (Logisim-evolution Switch): tıklayınca kapanır ya da açılır; kapalıyken girişi olduğu gibi çıkışa geçirir, açıkken çıkış boşta (x)',
+  },
+  twoWaySwitch: {
+    type: 'twoWaySwitch',
+    name: 'İki Yollu Anahtar (Two-Way Switch)',
+    category: 'inputs',
+    width: 40,
+    height: 40,
+    inputs: [{ id: 'in', name: 'in', type: 'input', relX: 0, relY: 20 }],
+    outputs: [
+      { id: 'out0', name: 'out0', type: 'output', relX: 40, relY: 10 },
+      { id: 'out1', name: 'out1', type: 'output', relX: 40, relY: 30 },
+    ],
+    description: 'İki yollu (değiştirici) anahtar (Logisim-evolution TwoWaySwitch): tıklayınca kol öbür tarafa geçer. 1 giriş / 2 çıkış kipinde giriş koldaki çıkışa gider, öbür çıkış boşta (x); 2 giriş / 1 çıkış kipinde çıkış koldaki girişi alır',
+  },
   // Logisim-evolution Power-on Reset: the wide body (200 x 40); getComponentSize gives the other sizes
   powerOnReset: {
     type: 'powerOnReset',
@@ -2863,6 +2889,8 @@ export function createComponentInstance(
   if (type === 'bitExtender') return configureBitExtender(inst, {});
   // A new PLA is evolution's: 2 input bits, 2 output bits, an empty program
   if (type === 'pla') return configurePla(inst, { inWidth: 2, outWidth: 2, rows: [] });
+  // A new two-way switch is evolution's default: one input to two outputs, on the first side
+  if (type === 'twoWaySwitch') return configureExtraSwitch(inst, { width: 1, mode: '1in2out' });
   // New plexers take Logisim-evolution's defaults: 1 select bit (priority encoder 3), MUX/DEMUX without enable
   if (PLEXER_TYPES.has(type)) {
     return configurePlexer(inst, { select: type === 'priorityEncoder' ? 3 : 1, width: 1, enable: type === 'decoder' });
@@ -3384,6 +3412,56 @@ export function parsePlaTable(text: string): { inWidth: number; outWidth: number
   }
   if (rows.length === 0 || inW < 1 || outW < 1 || inW > MAX_BIT_WIDTH || outW > MAX_BIT_WIDTH) return null;
   return { inWidth: inW, outWidth: outW, rows, errors };
+}
+
+// ---- Pass switch / two-way switch (Logisim-evolution std/io/extra Switch, TwoWaySwitch) -------------------
+export const EXTRA_SWITCH_TYPES = new Set<ComponentType>(['passSwitch', 'twoWaySwitch']);
+
+export interface ExtraSwitchConfig {
+  width: number;
+  /** two-way switch only */
+  mode: '1in2out' | '2in1out';
+}
+
+/** Two-way switch turned so that its unrotated pair order would put the first side lower / right on screen */
+export const twoWayPairSwapped = (comp: CircuitComponentInstance): boolean => {
+  const rot = comp.rotation || 0;
+  return rot === 90 || rot === 180;
+};
+
+export function getExtraSwitchConfig(comp: CircuitComponentInstance): ExtraSwitchConfig {
+  return { width: comp.outputs[0]?.width ?? 1, mode: comp.state.twoWayMode ?? '1in2out' };
+}
+
+/**
+ * New width / mode of a pass or two-way switch. The two-way switch's pins follow evolution's port order: the
+ * common end, then the pair (first, second side); in 1in2out the common end is the input 'in' and the pair the
+ * outputs 'out0' / 'out1', in 2in1out the pair are the inputs 'in0' / 'in1' and the common end the output 'out'.
+ * Pin ids are kept while the mode stays.
+ */
+export function configureExtraSwitch(
+  comp: CircuitComponentInstance,
+  patch: { width?: number; mode?: '1in2out' | '2in1out' }
+): CircuitComponentInstance {
+  const cur = getExtraSwitchConfig(comp);
+  const w = clampWidth(patch.width ?? cur.width);
+  if (comp.type === 'passSwitch') {
+    return updatePinPositions({
+      ...comp,
+      inputs: [pinWithWidth(comp.inputs[0] ?? newPin(comp, 'in', 'in', 'input'), w)],
+      outputs: [pinWithWidth(comp.outputs[0] ?? newPin(comp, 'out', 'out', 'output'), w)],
+    });
+  }
+  const mode = patch.mode ?? cur.mode;
+  const keep = mode === cur.mode && comp.state.twoWayMode !== undefined;
+  const pin = (list: CircuitPin[], i: number, id: string, type: 'input' | 'output') =>
+    pinWithWidth((keep ? list[i] : undefined) ?? newPin(comp, id, id, type), w);
+  return updatePinPositions({
+    ...comp,
+    inputs: mode === '1in2out' ? [pin(comp.inputs, 0, 'in', 'input')] : [pin(comp.inputs, 0, 'in0', 'input'), pin(comp.inputs, 1, 'in1', 'input')],
+    outputs: mode === '1in2out' ? [pin(comp.outputs, 0, 'out0', 'output'), pin(comp.outputs, 1, 'out1', 'output')] : [pin(comp.outputs, 0, 'out', 'output')],
+    state: { ...comp.state, twoWayMode: mode },
+  });
 }
 
 /** Logisim BitSelector.updatePorts: enough select bits to number every group (at least 1). */
@@ -4758,6 +4836,23 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
   }
 
+  // Two-way switch: the common end in the middle of one side (left for 1in2out, right for 2in1out), the pair on
+  // the other side. As in evolution the first of the pair is always the upper one on screen (the left one facing
+  // north / south), so turned by 90 or 180 degrees the pair swaps places
+  if (comp.type === 'twoWaySwitch') {
+    const at = (pin: CircuitPin, x: number, y: number) => {
+      const p = rotatePoint(x, y);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    const pairY = (i: number) => (twoWayPairSwapped(comp) ? 30 - 20 * i : 10 + 20 * i);
+    const oneIn = comp.inputs.length === 1;
+    return {
+      ...comp,
+      inputs: comp.inputs.map((pin, i) => (oneIn ? at(pin, 0, 20) : at(pin, 0, pairY(i)))),
+      outputs: comp.outputs.map((pin, i) => (oneIn ? at(pin, 40, pairY(i)) : at(pin, 40, 20))),
+    };
+  }
+
   if (PLEXER_TYPES.has(comp.type)) {
     const l = plexerLayout(comp);
     const place = (pin: CircuitPin) => {
@@ -5693,6 +5788,22 @@ export function simulateCircuitStep(
               ? src.map((v) => (v === weak ? 'Z' : v))
               : src.map((v) => (v === 'X' ? 'X' : 'E'))
         );
+        break;
+      }
+      case 'passSwitch':
+      case 'twoWaySwitch': {
+        // Logisim-evolution Switch / TwoWaySwitch.propagate: a closed switch passes its input as it is, an open one
+        // (and the two-way switch's side away from the lever) leaves its output floating. An input with nothing
+        // attached gives evolution's Value.NIL, which drives nothing either
+        const w = getExtraSwitchConfig(comp).width;
+        const on = !!comp.state.switchClosed;
+        const floating = () => new Array<SignalValue>(w).fill('Z');
+        const pass = (i: number) => (isPinConnected(comp.inputs[i]?.id) ? readBits(comp.inputs[i], w) : floating());
+        if (comp.type === 'passSwitch') setBitsOut(0, on ? pass(0) : floating());
+        else if (comp.inputs.length === 1) {
+          setBitsOut(0, on ? floating() : pass(0));
+          setBitsOut(1, on ? pass(0) : floating());
+        } else setBitsOut(0, pass(on ? 1 : 0));
         break;
       }
       case 'pla': {
@@ -7181,7 +7292,7 @@ const isWidePin = (p: CircuitPin | undefined) => (p?.width ?? 1) > 1;
 // Parts whose bits are only meaningful as a bus: their outputs are not single-bit formulas
 // (a transistor / transmission gate has no formula in Logisim's analyzer either: its output can float)
 // (nor has a PLA: Logisim's analyzer cannot read its table)
-const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate', 'pla']);
+const BUS_ONLY_TYPES = new Set(['splitter', 'bitExtender', 'bitSelector', 'transistor', 'transmissionGate', 'pla', 'passSwitch', 'twoWaySwitch']);
 
 interface BooleanExprContext {
   driverOf: (pinId: string) => { comp: CircuitComponentInstance; outIdx: number } | null;
