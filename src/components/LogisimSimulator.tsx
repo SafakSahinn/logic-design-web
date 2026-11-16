@@ -27,6 +27,7 @@ import type {
   CircuitPin,
   ComponentCategory,
   CircuitAnnotation,
+  PlaRow,
   TruthTableEntry,
   TruthTableData,
 } from '../types/circuit';
@@ -74,6 +75,9 @@ import {
   porDeadline,
   porNow,
   restartPor,
+  getPlaConfig,
+  configurePla,
+  plaRowComment,
   getIoConfig,
   matrixDots,
   segmentsLit,
@@ -245,6 +249,7 @@ import {
 import { ChronogramPanel } from './ChronogramPanel';
 import { useChronoLogFile } from './useChronoLogFile';
 import MemoryHexEditor from './MemoryHexEditor';
+import PlaTableEditor from './PlaTableEditor';
 
 /**
  * A saved part this version can draw and simulate. Parts of an unknown type (the fixed 4-bit parts removed in
@@ -383,6 +388,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   xnor: { label: 'XNOR', badge: 'Özel VEYA DEĞİL' },
   oddParity: { label: 'Tek Eşlik', badge: 'Odd Parity' },
   evenParity: { label: 'Çift Eşlik', badge: 'Even Parity' },
+  pla: { label: 'PLA', badge: 'Program' },
   triState: { label: 'Tri-State', badge: 'Kontrollü Tampon' },
   pullResistor: { label: 'Pull Direnci', badge: 'Pull' },
   transistor: { label: 'Transistör', badge: 'P / N' },
@@ -796,6 +802,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Hex Memory Editor Modal state (RAM & ROM Matrix)
   // Hex editor of a parametric RAM / ROM (paged contents)
   const [memEditorCompId, setMemEditorCompId] = useState<string | null>(null);
+  const [plaEditorCompId, setPlaEditorCompId] = useState<string | null>(null);
 
   // Automated Test Vector / Testbench Runner state
   const [showTestbenchModal, setShowTestbenchModal] = useState<boolean>(false);
@@ -2631,6 +2638,18 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast('Bellek içeriği güncellendi.');
   };
 
+  // Save a PLA's edited program (undoable; the widths stay those of the part)
+  const handleSavePlaEditor = (rows: PlaRow[]) => {
+    if (!plaEditorCompId) return;
+    recordHistory();
+    const updated = components.map((c) => (c.id === plaEditorCompId ? configurePla(c, { rows }) : c));
+    const sim = simulateCircuit(updated, wires);
+    setComponents(sim.components);
+    setWires(sim.wires);
+    setPlaEditorCompId(null);
+    showToast(`PLA programı güncellendi (${rows.length} satır).`);
+  };
+
   // Run Testbench Handler
   const handleRunTestbench = () => {
     try {
@@ -3762,6 +3781,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           showToast(`"${subDef.name}" (${subDef.chipCode || 'IC'}) içine girildi.${dropped > 0 ? ` ${dropped} tanınmayan bileşen gösterilmedi.` : ''}`);
           return;
         }
+      }
+      // PLA: double-click opens its program (evolution's "Edit PLA Program…")
+      if (comp.type === 'pla') {
+        setPlaEditorCompId(comp.id);
+        return;
       }
       // Image: double-click chooses its picture (it has no label)
       if (comp.type === 'image') {
@@ -4931,6 +4955,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               <path d={active ? `M4,${yStart} H${W / 2}` : `M${W / 2},${yEnd} H${W - 4}`} stroke="#ff0000" strokeWidth={narrow ? 2 : 3} />
               <text x={2} y={off - 1} fontSize={narrow ? 6 : 14} fontWeight={700} fill={isSelected ? strokeColor : '#000000'} className="select-none">
                 POR
+              </text>
+            </g>
+          </g>
+        );
+      }
+
+      // Logisim-evolution Pla.paintInstance: a 50 x 50 box with "PLA" in its upper third and, below it, the comment
+      // of the row the input selects ("n/a" for none), both upright whatever the facing. The box is drawn inside
+      // our 60 x 60 part, its ports on the middle line. Double-click edits the program
+      case 'pla': {
+        const cfg = getPlaConfig(comp);
+        const rot = comp.rotation || 0;
+        const row = cfg.rows[comp.state.plaHit ?? -1];
+        const full = plaRowComment(row);
+        const shown = full.length > 10 ? `${full.slice(0, 9)}…` : full;
+        return (
+          <g>
+            <title>{`PLA, ${cfg.inWidth} giriş / ${cfg.outWidth} çıkış bit, ${cfg.rows.length} satır. ${row ? `Giriş ${(comp.state.plaHit ?? 0) + 1}. satıra uyuyor${full ? `: ${full}` : ''}` : 'Girişe uyan satır yok, çıkış 0'}. Çift tıklayınca program düzenlenir`}</title>
+            <rect x={0} y={5} width={50} height={50} fill={fillColor} stroke={strokeColor} strokeWidth={2} />
+            <g transform={rot ? `rotate(${-rot}, 25, 30)` : undefined}>
+              <text x={25} y={21.7} textAnchor="middle" dominantBaseline="central" fontSize={12} fontWeight="bold" className={`${gateTextClass} select-none`}>
+                PLA
+              </text>
+              <text x={25} y={38.3} textAnchor="middle" dominantBaseline="central" fontSize={8} fontFamily="monospace" fill={cadTheme === 'dark' ? '#94a3b8' : '#475569'} className="select-none">
+                {shown}
               </text>
             </g>
           </g>
@@ -7262,7 +7311,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       id: 'gates',
       title: 'Temel Mantık Kapıları',
       icon: '🚪',
-      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter'] as ComponentType[],
+      types: ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'pla'] as ComponentType[],
     },
     {
       id: 'plexers',
@@ -11483,14 +11532,21 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               }
             };
 
-            const contentsRow = single && (first.type === 'ram' || first.type === 'rom' || first.type === 'dualRam') && (
+            const contentsRow = single && (first.type === 'ram' || first.type === 'rom' || first.type === 'dualRam') ? (
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>İçerik</span>
                 <button onClick={() => handleOpenHexEditor(first.id)} className={btnCls(false)} title="Kelimeleri onaltılı düzenleyicide aç">
                   Düzenle…
                 </button>
               </div>
-            );
+            ) : single && first.type === 'pla' ? (
+              <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
+                <span className={`text-[11px] font-semibold ${rowLabel}`}>Program</span>
+                <button onClick={() => setPlaEditorCompId(first.id)} className={btnCls(false)} title="PLA tablosunu düzenle (parçaya çift tıklamak da açar)">
+                  Düzenle… ({getPlaConfig(first).rows.length} satır)
+                </button>
+              </div>
+            ) : null;
             const imageToolsRow = single && first.type === 'image' && (() => {
               const ok = !!imageShownSize(getImageConfig(first).src);
               const cls = `${btnCls(false)} disabled:opacity-40 disabled:cursor-default`;
@@ -13678,6 +13734,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               dark={cadTheme === 'dark'}
               onSave={handleSaveMemEditor}
               onClose={() => setMemEditorCompId(null)}
+              onToast={showToast}
+            />
+          ) : null;
+        })()}
+
+      {/* Program editor of a PLA */}
+      {plaEditorCompId &&
+        (() => {
+          const target = components.find((c) => c.id === plaEditorCompId && c.type === 'pla');
+          return target ? (
+            <PlaTableEditor
+              key={target.id}
+              comp={target}
+              dark={cadTheme === 'dark'}
+              onSave={handleSavePlaEditor}
+              onClose={() => setPlaEditorCompId(null)}
               onToast={showToast}
             />
           ) : null;

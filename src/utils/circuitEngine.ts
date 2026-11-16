@@ -3322,7 +3322,10 @@ export function plaMatch(rows: PlaRow[], input: SignalValue[]): PlaRow | undefin
 
 /** Text shown in the body for the input (PlaTable.commentFor): the matching row's comment up to a '#', "n/a" for no row */
 export function plaComment(rows: PlaRow[], input: SignalValue[]): string {
-  const row = plaMatch(rows, input);
+  return plaRowComment(plaMatch(rows, input));
+}
+/** The body text for a row (the one the simulation found, state.plaHit): its comment up to a '#', "n/a" for none */
+export function plaRowComment(row: PlaRow | undefined): string {
   if (!row) return 'n/a';
   const c = row.comment ?? '';
   const cut = c.indexOf('#');
@@ -5699,6 +5702,8 @@ export function simulateCircuitStep(
         const cfg = getPlaConfig(comp);
         const inBits = isPinConnected(comp.inputs[0]?.id) ? readBits(comp.inputs[0], cfg.inWidth) : new Array<SignalValue>(cfg.inWidth).fill(0);
         const row = plaMatch(cfg.rows, inBits);
+        // (the body shows the row's comment, the editor marks the row)
+        comp.state.plaHit = row ? cfg.rows.indexOf(row) : -1;
         setBitsOut(0, Array.from({ length: cfg.outWidth }, (_, i) => (row?.out[row.out.length - 1 - i] === '1' ? 1 : 0)));
         break;
       }

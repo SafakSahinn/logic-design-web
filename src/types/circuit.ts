@@ -210,6 +210,8 @@ export interface CircuitComponentInstance {
     splitAppear?: 'left' | 'right' | 'center';
     /** PLA: the program, top row first (Logisim-evolution 'table'); the first row matching the input gives the output; unset = no rows */
     plaRows?: PlaRow[];
+    /** PLA: index of the row the current input selects (-1: none, the output is 0); set by the simulation */
+    plaHit?: number;
     /** Bit extender: how the extra high bits are filled (Logisim 'type'); unset = zero */
     extendType?: 'zero' | 'one' | 'sign' | 'input';
     /** Transistor: P type conducts on gate 0 and passes only 1, N type conducts on gate 1 and passes only 0

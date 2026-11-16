@@ -26,6 +26,8 @@ import {
   configureArith,
   configureBitExtender,
   configureBitSelector,
+  configurePla,
+  getPlaConfig,
   configureMem,
   configurePlexer,
   configureRam,
@@ -473,6 +475,28 @@ const splitterAttrs: AttrDef[] = [
       const bitEnd = String(v).split(',').map(Number);
       return getSplitterConfig(c).bitEnd.join(',') === bitEnd.join(',') ? null : resized(c, configureSplitter(c, { bitEnd }));
     },
+  },
+];
+
+// PLA (Logisim-evolution "Bit width in" / "Bit width out"): the rows are cut or padded with 0 to the new width
+const plaAttrs: AttrDef[] = [
+  {
+    key: 'plaInWidth',
+    label: 'Giriş bit',
+    kind: 'select',
+    title: 'Giriş genişliği (1-32); tablodaki giriş desenleri bu genişliğe kırpılır ya da üstten 0 ile uzatılır',
+    options: WIDTH_OPTIONS,
+    get: (c) => getPlaConfig(c).inWidth,
+    set: (c, v) => (getPlaConfig(c).inWidth === Number(v) ? null : resized(c, configurePla(c, { inWidth: Number(v) }))),
+  },
+  {
+    key: 'plaOutWidth',
+    label: 'Çıkış bit',
+    kind: 'select',
+    title: 'Çıkış genişliği (1-32); tablodaki çıkış değerleri bu genişliğe kırpılır ya da üstten 0 ile uzatılır',
+    options: WIDTH_OPTIONS,
+    get: (c) => getPlaConfig(c).outWidth,
+    set: (c, v) => (getPlaConfig(c).outWidth === Number(v) ? null : resized(c, configurePla(c, { outWidth: Number(v) }))),
   },
 ];
 
@@ -951,6 +975,9 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       break;
     case 'splitter':
       list.push(...splitterAttrs);
+      break;
+    case 'pla':
+      list.push(...plaAttrs);
       break;
     case 'bitExtender':
       list.push(...bitExtenderAttrs);
