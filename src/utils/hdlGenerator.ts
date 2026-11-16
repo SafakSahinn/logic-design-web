@@ -36,6 +36,7 @@ import {
   VIDEO_COLOR_MODELS,
   joystickValue,
   getClockConfig,
+  getPorConfig,
   portPokeOf,
   rtcValue,
 } from './circuitEngine';
@@ -195,9 +196,9 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
 // and a port I/O are blocks (their pins go both ways), see their cases below
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset'];
 const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
-const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor'];
+const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor', 'doNotConnect'];
 const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
 // encoder always has one) or three-state unselected outputs
@@ -473,6 +474,22 @@ function buildModule(
         if (outW > 1) setWideConstant(c.outputs[0].id, c.state.inputValue ?? 0, outW);
         else pinExpr.set(c.outputs[0].id, c.state.on ? L.one : L.zero);
       }
+      continue;
+    }
+    if (c.type === 'powerOnReset') {
+      // Evolution has no HDL for it. The pulse is real time: inside an IC the level it settles on, on the top
+      // level an input of the module (the board's reset circuit, or the testbench, gives the pulse)
+      const por = getPorConfig(c);
+      const levels = `${por.startHigh ? 1 : 0} → ${por.startHigh ? 0 : 1}`;
+      if (spec.subPorts) {
+        if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) pinExpr.set(c.outputs[0].id, por.startHigh ? L.zero : L.one);
+        warnings.push(`${c.label || 'Açılış sıfırlaması'}: simülatörde ${por.seconds} sn süren açılış darbesi (${levels}); burada darbenin bittiği seviyede sabit.`);
+        continue;
+      }
+      const pn = names.make(c.label ? `por_${c.label}` : 'por', 'por');
+      addPort({ name: pn, dir: 'in', width: 1, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
+      warnings.push(`${pn}: açılış sıfırlaması simülatörde ${por.seconds} sn süren bir darbedir (${levels}); burada dışarıdan gelen bir giriştir, darbeyi kartın sıfırlama devresi (ya da test tezgâhı) vermelidir.`);
       continue;
     }
     const label = c.label || c.type;

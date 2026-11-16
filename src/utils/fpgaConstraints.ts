@@ -137,6 +137,11 @@ export function generateFpgaConstraints(
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
+    } else if (type === 'powerOnReset') {
+      // The pulse comes from outside: a button stands in for the board's reset circuit
+      assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
+      const what = `Açılış sıfırlaması portu ${p.name} bir butona atandı: gerçek bir açılış darbesi için kartın sıfırlama devresine (ya da kart saatiyle sayan bir açılış sayacına) bağlayın.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'led' || type === 'probe' || type === 'ledBar') {
       assign('LED çıkışları', pools.led, p);
     } else if (type === 'rgbLed') {

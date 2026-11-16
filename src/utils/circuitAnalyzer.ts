@@ -130,7 +130,7 @@ const TTL_TRANSISTORS: Record<TtlChipId, number> = {
 
 // Board / outside I/O parts (a keypad's columns and a port's pins come from outside like a switch; the keyboard and
 // Telnet are the outside world's in the HDL too, so no transistors are counted for their buffers)
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'matrixKeypad', 'portIo', 'realTimeClock', 'keyboard', 'telnet', 'powerOnReset'];
 // Displays carry no logic (no transistors counted; the terminal and the RGB Video are the outside world's in the HDL)
 const OUTPUT_TYPES = ['led', 'probe', 'sevenSegment', 'hexDigit', 'buzzer', 'ledBar', 'dotMatrix', 'rgbLed', 'tty', 'rgbVideo'];
 const GATE_TYPES = ['not', 'buffer', 'and', 'or', 'nand', 'nor', 'xor', 'xnor', 'oddParity', 'evenParity', 'triState', 'controlledInverter', 'transistor', 'transmissionGate'];
@@ -155,7 +155,7 @@ function ramSyncRead(c: CircuitComponentInstance): boolean {
 }
 const breaksPath = (c: CircuitComponentInstance) => PATH_BREAK_TYPES.includes(c.type) || ramSyncRead(c);
 // Parts that are only wiring / display and add no logic level
-const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'tunnel', 'textLabel', 'image', 'splitter4', 'busSplitter', 'splitter', 'bitExtender'];
+const NO_DELAY_TYPES = [...INPUT_TYPES, ...OUTPUT_TYPES, 'doNotConnect', 'tunnel', 'textLabel', 'image', 'splitter4', 'busSplitter', 'splitter', 'bitExtender'];
 
 export interface CMOSGateStats {
   gateType: string;
@@ -513,7 +513,7 @@ export function analyzeCircuit(
       gateCount++;
     } else if (SEQUENTIAL_TYPES.includes(c.type)) {
       sequentialCount++;
-    } else if (!['tunnel', 'textLabel', 'image'].includes(c.type)) {
+    } else if (!['tunnel', 'textLabel', 'image', 'doNotConnect'].includes(c.type)) {
       combinationalCount++;
     }
   });

@@ -1,5 +1,5 @@
 import type { CircuitComponentInstance, CircuitWire } from '../types/circuit';
-import { clockLevelAt, getClockConfig, portPokeOf, simulateCircuit } from './circuitEngine';
+import { clockLevelAt, getClockConfig, getPorConfig, portPokeOf, simulateCircuit } from './circuitEngine';
 import { getTopLevelPorts, getTopModuleName, type PortDecl } from './hdlGenerator';
 import { cellText, circuitHasState, parseTestVector, type TvRow, type TvSignal } from './testVectorRunner';
 
@@ -96,6 +96,8 @@ function plan(
     const pinOf = (id: string) => comp?.outputs.find((q) => q.id === id) ?? comp?.inputs.find((q) => q.id === id);
     let bits: Bit[];
     if (comp?.type === 'switch' && comp.state.pinTristate) bits = Array<Bit>(p.width).fill('Z');
+    // A power-on reset is held at the level of its pulse, as the test runner's reset leaves it
+    else if (comp?.type === 'powerOnReset') bits = [getPorConfig(comp).startHigh ? 1 : 0];
     else if (comp?.type === 'portIo') bits = Array.from({ length: p.width }, (_, k) => portPokeOf(comp, k) as Bit);
     else if (pins.length === 1 && p.width > 1) {
       const q = pinOf(pins[0]);
