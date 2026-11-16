@@ -172,6 +172,12 @@ export function generateFpgaConstraints(
               ? `Joystick "${components.find((x) => x.id === p.source?.compId)?.label || 'Joystick'}" X / Y portları kartta yok: harici bir joystick / ADC'nin sayısal çıkışına ya da anahtarlara elle atayın.`
               : `Gerçek zaman saati portu ${p.name}: FPGA'da duvar saati yok; değeri harici bir RTC'den ya da kart saatiyle sayan bir sayaçtan verin.`;
       if (!notes.includes(what)) notes.push(what);
+    } else if (type === 'evoBuzzer') {
+      // No sound on the pins themselves: a tone generator (PWM / audio codec) outside the circuit plays it
+      for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));
+      const label = components.find((x) => x.id === p.source?.compId)?.label;
+      const what = `Ses üreteci "${label || 'Ses üreteci'}" portları (frekans, EN, ses, doluluk oranı) kartta doğrudan ses vermez: bunları kart saatiyle sayan bir ton (PWM) üretecine ya da ses kodeğine bağlayın, çıkışını kartın ses / buzzer pinine atayın.`;
+      if (!notes.includes(what)) notes.push(what);
     } else if (type === 'keyboard' || type === 'tty' || type === 'telnet') {
       // No board resource behind them: one note per part
       for (let i = 0; i < p.width; i++) unassigned.push(bitName(p, i));

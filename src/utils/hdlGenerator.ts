@@ -203,7 +203,7 @@ function wrap(e: string): string {
 // Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
 // and a port I/O are blocks (their pins go both ways), see their cases below
 const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset', 'slider'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed', 'twoPinLed'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed', 'evoBuzzer', 'twoPinLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor', 'doNotConnect'];
 const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate', 'passSwitch', 'twoWaySwitch'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -2513,9 +2513,11 @@ function buildModule(
                   { suffix: 'en', pins: c.inputs.slice(0, 1) },
                   { suffix: 'note', pins: c.inputs.slice(1, 5) },
                 ]
-              : c.type === 'hexDigit' || c.type === 'dotMatrix' || c.type === 'rgbLed'
+              : c.type === 'hexDigit' || c.type === 'dotMatrix' || c.type === 'rgbLed' || c.type === 'evoBuzzer'
                 ? // one port per input: the hex digit's 4-bit value and DP; each column / row / select vector of a
-                  // matrix; an RGB LED's red, green and blue (the input level: lit on 1, active low is the board pin's)
+                  // matrix; an RGB LED's red, green and blue (the input level: lit on 1, active low is the board pin's);
+                  // an evolution buzzer's frequency, enable, volume and duty cycle, for a tone generator outside
+                  // (evolution has no HDL for its Buzzer)
                   c.inputs.map((p) => {
                     const k = p.id.startsWith(`${c.id}_`) ? p.id.slice(c.id.length + 1) : p.id;
                     return { suffix: c.type === 'hexDigit' ? (k === 'dp' ? 'dp' : '') : k, pins: [p] };
