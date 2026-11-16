@@ -39,6 +39,7 @@ import {
   getPorConfig,
   getExtraSwitchConfig,
   EXTRA_SWITCH_TYPES,
+  sliderValue,
   getPlaConfig,
   plaMatch,
   portPokeOf,
@@ -200,8 +201,8 @@ function wrap(e: string): string {
 // ---------------------------------------------------------------------------
 // Joystick and real-time clock values come from outside (an FPGA pin / a board resource); a matrix keypad
 // and a port I/O are blocks (their pins go both ways), see their cases below
-const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset'];
-const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed'];
+const INPUT_TYPES = ['switch', 'pushbutton', 'clock', 'vcc', 'gnd', 'constant', 'dipSwitch', 'asciiKeyboard', 'joystick', 'realTimeClock', 'powerOnReset', 'slider'];
+const OUTPUT_TYPES = ['led', 'probe', 'buzzer', 'sevenSegment', 'hexDigit', 'ledBar', 'dotMatrix', 'rgbLed', 'twoPinLed'];
 const PASSIVE_TYPES = ['tunnel', 'textLabel', 'image', 'pullResistor', 'doNotConnect'];
 const TRI_TYPES = ['triState', 'controlledInverter', 'transistor', 'transmissionGate', 'passSwitch', 'twoWaySwitch'];
 // Plexers whose outputs can float: a floating disabled output (with an enable input; the priority
@@ -472,6 +473,16 @@ function buildModule(
       } else if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) setWideConstant(c.outputs[0].id, rtcValue(getIo5Config(c).rtcType), 32);
       continue;
     }
+    if (spec.subPorts && c.type === 'slider') {
+      // Inside an IC a slider is a constant at its knob's current value (an IC has no pins of its own for it)
+      const v = sliderValue(c);
+      if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) {
+        if (outW > 1) setWideConstant(c.outputs[0].id, v, outW);
+        else pinExpr.set(c.outputs[0].id, v ? L.one : L.zero);
+      }
+      warnings.push(`${c.label || 'Kaydırıcı'}: IC içinde kaydırıcı şimdiki değerinde sabit (${v}).`);
+      continue;
+    }
     if (spec.subPorts && (c.type === 'switch' || c.type === 'pushbutton')) {
       // Inside an IC an unbound switch is a constant at its current position
       if (c.outputs[0] && !pinExpr.has(c.outputs[0].id)) {
@@ -517,6 +528,11 @@ function buildModule(
         addPort({ name: pn, dir: 'in', width: p.width ?? 1, source: { compId: c.id, type: c.type, group: i ? 'y' : 'x', pins: [p.id] } });
         pinExpr.set(p.id, pn);
       });
+    } else if (c.type === 'slider') {
+      // The knob's value from outside, as wide as the slider (evolution has no HDL for it; on a board, switches)
+      const pn = names.make(`in_${label}`, 'in_sld');
+      addPort({ name: pn, dir: 'in', width: outW, source: { compId: c.id, type: c.type, pins: c.outputs.slice(0, 1).map((p) => p.id) } });
+      if (c.outputs[0]) pinExpr.set(c.outputs[0].id, pn);
     } else if (c.type === 'realTimeClock') {
       // The low 32 bits of the time, from outside (evolution has no HDL for the clock; an FPGA has no wall clock)
       const pn = names.make(`in_${label}`, 'in_rtc');
@@ -2436,6 +2452,21 @@ function buildModule(
     for (const c of comps) {
       if (!OUTPUT_TYPES.includes(c.type)) continue;
       const label = c.label || c.type;
+      if (c.type === 'twoPinLed') {
+        // Evolution has no HDL for it: 1 while the LED lights forward (anode 1, cathode 0); a bipolar LED also has
+        // a _rev output, 1 while it lights in reverse. An open pin keeps the LED off, as in the simulator. The
+        // outputs are the LED's state, not one of its pins, so a test vector cannot name them
+        const [an, ka] = [c.inputs[0]?.id, c.inputs[1]?.id];
+        const fwd = names.make(`out_${label}`, 'out_led');
+        addPort({ name: fwd, dir: 'out', width: 1, source: { compId: c.id, type: c.type, pins: [] } });
+        emit(fwd, L.and([inputExpr(an, L.zero), L.not(inputExpr(ka, L.one))]));
+        if (c.state.ledBipolar) {
+          const rev = names.make(`out_${label}_rev`, 'out_led_rev');
+          addPort({ name: rev, dir: 'out', width: 1, source: { compId: c.id, type: c.type, group: 'rev', pins: [] } });
+          emit(rev, L.and([L.not(inputExpr(an, L.one)), inputExpr(ka, L.zero)]));
+        }
+        continue;
+      }
       const groups: { suffix: string; pins: typeof c.inputs }[] =
         c.type === 'buzzer'
               ? [

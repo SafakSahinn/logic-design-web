@@ -146,6 +146,7 @@ function unsupportedInput(type: string, dir: string): string | undefined {
   if (dir === 'inout') return "Port I/O'nun giriş/çıkış portu test vektörüyle sürülemiyor (yön portun EN girişine bağlı)";
   if (type === 'asciiKeyboard') return 'ASCII klavye test vektörüyle sürülemiyor';
   if (type === 'joystick') return 'joystick test vektörüyle sürülemiyor (çubuğun konumu elle verilir)';
+  if (type === 'slider') return 'kaydırıcı test vektörüyle sürülemiyor (düğmenin konumu elle verilir)';
   if (type === 'matrixKeypad') return 'tuş takımının sütunları test vektörüyle sürülemiyor (simülatörde satırlardan ve basılı tuşlardan gelir)';
   if (type === 'realTimeClock') return 'gerçek zaman saati test vektörüyle sürülemiyor';
   if (type === 'powerOnReset') return 'açılış sıfırlaması test vektörüyle sürülemiyor (testte darbenin başlangıç seviyesinde kalır)';

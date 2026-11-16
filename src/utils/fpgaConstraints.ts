@@ -133,7 +133,7 @@ export function generateFpgaConstraints(
     if (type === 'clock') {
       if (!clockPort) clockPort = p.name;
       else unassigned.push(p.name);
-    } else if (type === 'switch' || type === 'dipSwitch' || type === 'passSwitch' || type === 'twoWaySwitch') {
+    } else if (type === 'switch' || type === 'dipSwitch' || type === 'passSwitch' || type === 'twoWaySwitch' || type === 'slider') {
       assign('Kayar anahtarlar (Switches)', pools.switch, p);
     } else if (type === 'pushbutton') {
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
@@ -142,7 +142,7 @@ export function generateFpgaConstraints(
       assign('Butonlar (Push Buttons)', pools.button.length ? pools.button : pools.switch, p);
       const what = `Açılış sıfırlaması portu ${p.name} bir butona atandı: gerçek bir açılış darbesi için kartın sıfırlama devresine (ya da kart saatiyle sayan bir açılış sayacına) bağlayın.`;
       if (!notes.includes(what)) notes.push(what);
-    } else if (type === 'led' || type === 'probe' || type === 'ledBar') {
+    } else if (type === 'led' || type === 'probe' || type === 'ledBar' || type === 'twoPinLed') {
       assign('LED çıkışları', pools.led, p);
     } else if (type === 'rgbLed') {
       // One LED per colour (evolution maps the RGB LED's three outputs like LEDs)
