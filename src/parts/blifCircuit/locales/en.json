@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "badge": "BLIF",
+    "name": "BLIF Circuit",
+    "description": "A gate-level netlist in BLIF format (for example from yosys write_blif); its pins come from .inputs and .outputs"
+  },
+  "attributes": {
+    "blif": {
+      "label": "BLIF",
+      "title": "The netlist text. Supported: .model, .inputs, .outputs, .names covers, .latch, .conn, .subckt/.gate of yosys gate cells or of other models in the text"
+    },
+    "summary": {
+      "label": "Netlist",
+      "title": "What the text describes, or why it cannot be used"
+    }
+  },
+  "summary": {
+    "ok": "{{model}}: {{inputs}} inputs, {{outputs}} outputs, {{cells}} cells",
+    "error": "Error: {{message}}"
+  },
+  "draw": {
+    "error": "BLIF error"
+  },
+  "errorAt": "line {{line}}: {{message}}",
+  "netlistErrors": {
+    "empty": "the text has no model",
+    "stray": "unexpected text \"{{text}}\"",
+    "badRow": "bad cover row \"{{row}}\" for {{inputs}} inputs",
+    "mixedCover": "a cover mixes rows for output 1 and output 0",
+    "badNames": ".names needs an output",
+    "badConn": ".conn needs two nets",
+    "badSubckt": "the cell type is missing",
+    "badPin": "bad pin connection \"{{text}}\"",
+    "duplicatePin": "pin {{pin}} is connected twice",
+    "unsupported": "{{directive}} is not supported",
+    "unknownDirective": "unknown directive {{directive}}",
+    "tooLarge": "the netlist has more than {{max}} cells",
+    "recursive": "model {{model}} instantiates itself",
+    "unknownPin": "{{cell}} has no pin {{pin}}",
+    "missingPin": "{{cell}} needs pin {{pin}}",
+    "unknownCell": "unknown cell type {{cell}}",
+    "badLatch": "bad .latch line",
+    "latchNoClock": ".latch without a clock is not supported",
+    "badLatchType": "latch type {{type}} is not supported",
+    "portTooWide": "port {{port}} is {{width}} bits wide (at most {{max}})"
+  },
+  "evo": {
+    "broken": "its text has an error ({{message}}); written as is, Logisim-evolution will not load it either",
+    "continuation": "line {{line}} continues with \"\\\", which Logisim-evolution does not join",
+    "cover": "line {{line}} has a .names truth table; Logisim-evolution only reads the constants $true / $false / $undef (map to its gate cells and use yosys write_blif -icells -conn)",
+    "cell": "line {{line}} uses cell {{cell}}, which Logisim-evolution does not know (it has BUF, NOT, AND, OR, XOR, NAND, NOR, NXOR, ANDNOT, ORNOT, MUX, DFF, DFFSR, DLATCH, PULLUP, PULLDOWN, BUS, TRIS, TRISI)",
+    "latch": "line {{line}} has a .latch, which Logisim-evolution skips without a word",
+    "models": "the text has more than one .model; Logisim-evolution needs a flat netlist (yosys synth -flatten)",
+    "importBroken": "the BLIF text cannot be used here ({{message}}); it is kept so it can be fixed"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "meta": {
+    "badge": "BLIF",
+    "name": "BLIF Devresi",
+    "description": "BLIF biçiminde kapı düzeyinde netlist (örneğin yosys write_blif çıktısı); pinleri .inputs ve .outputs satırlarından gelir"
+  },
+  "attributes": {
+    "blif": {
+      "label": "BLIF",
+      "title": "Netlist metni. Desteklenenler: .model, .inputs, .outputs, .names doğruluk tabloları, .latch, .conn, yosys kapı hücrelerinin ya da metindeki başka modellerin .subckt/.gate satırları"
+    },
+    "summary": {
+      "label": "Netlist",
+      "title": "Metnin tanımladığı devre ya da metnin neden kullanılamadığı"
+    }
+  },
+  "summary": {
+    "ok": "{{model}}: {{inputs}} giriş, {{outputs}} çıkış, {{cells}} hücre",
+    "error": "Hata: {{message}}"
+  },
+  "draw": {
+    "error": "BLIF hatası"
+  },
+  "errorAt": "satır {{line}}: {{message}}",
+  "netlistErrors": {
+    "empty": "metinde hiç model yok",
+    "stray": "beklenmeyen metin \"{{text}}\"",
+    "badRow": "{{inputs}} girişli tabloda hatalı satır \"{{row}}\"",
+    "mixedCover": "tablo, çıkışı 1 ve 0 olan satırları karıştırıyor",
+    "badNames": ".names satırında çıkış yok",
+    "badConn": ".conn iki net ister",
+    "badSubckt": "hücre tipi eksik",
+    "badPin": "hatalı pin bağlantısı \"{{text}}\"",
+    "duplicatePin": "{{pin}} pini iki kez bağlanmış",
+    "unsupported": "{{directive}} desteklenmiyor",
+    "unknownDirective": "bilinmeyen komut {{directive}}",
+    "tooLarge": "netlist {{max}} hücreden büyük",
+    "recursive": "{{model}} modeli kendini içeriyor",
+    "unknownPin": "{{cell}} hücresinde {{pin}} pini yok",
+    "missingPin": "{{cell}} hücresinin {{pin}} pini bağlı değil",
+    "unknownCell": "bilinmeyen hücre tipi {{cell}}",
+    "badLatch": "hatalı .latch satırı",
+    "latchNoClock": "saati olmayan .latch desteklenmiyor",
+    "badLatchType": "{{type}} latch tipi desteklenmiyor",
+    "portTooWide": "{{port}} portu {{width}} bit genişliğinde (en çok {{max}})"
+  },
+  "evo": {
+    "broken": "metninde hata var ({{message}}); olduğu gibi yazıldı, Logisim-evolution da açamaz",
+    "continuation": "{{line}}. satır \"\\\" ile devam ediyor; Logisim-evolution satırları birleştirmez",
+    "cover": "{{line}}. satırda .names doğruluk tablosu var; Logisim-evolution yalnızca $true / $false / $undef sabitlerini okur (kendi kapı hücrelerine eşleyip yosys write_blif -icells -conn kullanın)",
+    "cell": "{{line}}. satırdaki {{cell}} hücresini Logisim-evolution tanımıyor (tanıdıkları: BUF, NOT, AND, OR, XOR, NAND, NOR, NXOR, ANDNOT, ORNOT, MUX, DFF, DFFSR, DLATCH, PULLUP, PULLDOWN, BUS, TRIS, TRISI)",
+    "latch": "{{line}}. satırda .latch var; Logisim-evolution bunu sessizce atlar",
+    "models": "metinde birden çok .model var; Logisim-evolution düz bir netlist ister (yosys synth -flatten)",
+    "importBroken": "BLIF metni burada kullanılamıyor ({{message}}); düzeltilebilsin diye korundu"
+  }
+}

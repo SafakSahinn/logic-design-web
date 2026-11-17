@@ -150,7 +150,7 @@ import {
   imageShownSize,
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
-import { getPart, partName, partSize } from '../parts';
+import { PART_TOOLBOX_GROUPS, getPart, partName, partSize, partToolboxName, partsInGroup, toolboxGroupTitle, type ToolboxGroup } from '../parts';
 import { AppearanceShapesSvg } from './AppearanceShapes';
 import { resolveDynamicLive, resolveDynamicTemplate } from '../utils/dynamicElements';
 import AppearanceEditor from './AppearanceEditor';
@@ -409,6 +409,29 @@ const truthEntryTextClass = (v: TruthTableEntry): string =>
 
 // Probe display bases (Logisim RadixOption)
 const RADIX_LABEL: Record<Radix, string> = { '2': 'BIN', '8': 'OCT', '10u': 'DEC', '10s': '±DEC', '16': 'HEX' };
+
+/**
+ * Adds the parts of the component registry (Aşama 6+) to the desktop toolbox: each into its built-in group, or
+ * into a group of registry parts listed after the built-in groups and before the TTL groups.
+ */
+function withPartGroups<G extends { id: string; title: string; icon: string; types: ComponentType[] }>(groups: G[]) {
+  const merged = groups.map((g) => ({ ...g, types: [...g.types, ...partsInGroup(g.id as ToolboxGroup)] }));
+  const extra = PART_TOOLBOX_GROUPS.filter((g) => partsInGroup(g).length > 0).map((g) => ({
+    id: g,
+    // a getter, so the title follows the UI language although the list is memoized
+    get title() {
+      return toolboxGroupTitle(g);
+    },
+    icon: '🧾',
+    types: partsInGroup(g) as ComponentType[],
+  }));
+  const ttlAt = merged.findIndex((g) => g.id.startsWith('ttl_'));
+  const at = ttlAt < 0 ? merged.length : ttlAt;
+  return [...merged.slice(0, at), ...extra, ...merged.slice(at)];
+}
+
+/** Short toolbox name of a part type: the built-in table, or a registered part's own texts (Aşama 6+) */
+const compactNameOf = (type: string): { label: string; badge?: string } | undefined => COMPACT_COMPONENT_NAMES[type] ?? partToolboxName(type);
 
 // Compact labels & badges for single-line stable palette toolbar
 const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }> = {
@@ -7793,7 +7816,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   };
 
   // DESKTOP EDA: Toolbox Groups for Left Explorer Panel
-  const DESKTOP_TOOLBOX_GROUPS = useMemo(() => [
+  const DESKTOP_TOOLBOX_GROUPS = useMemo(() => withPartGroups([
     {
       id: 'wiring',
       title: 'Kablolama & Giriş / Çıkış',
@@ -7852,7 +7875,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           .map((c) => `ttl${c.id}` as ComponentType),
       }))
       .filter((g) => g.types.length > 0),
-  ], []);
+  ]), []);
 
   // Render Desktop Menu Bar (File, Edit, Simulation, Tools, View, Help)
   const renderDesktopMenuBar = () => {
@@ -8869,7 +8892,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const isOpen = toolboxCategoryOpen[group.id] || !!q;
             const filteredTypes = group.types.filter((t) => {
               if (!q) return true;
-              const meta = COMPACT_COMPONENT_NAMES[t];
+              const meta = compactNameOf(t);
               const label = meta?.label || t;
               const badge = meta?.badge || '';
               return (
@@ -8910,7 +8933,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     isDark ? 'border-slate-800/60 bg-slate-950/30' : 'border-slate-100 bg-slate-50/60'
                   }`}>
                     {filteredTypes.map((type) => {
-                      const meta = COMPACT_COMPONENT_NAMES[type] || { label: type };
+                      const meta = compactNameOf(type) || { label: type };
                       return (
                         <div
                           key={type}
@@ -10201,7 +10224,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       return meta.category === activeCategory;
                     })
                     .map((meta) => {
-                      const compact = COMPACT_COMPONENT_NAMES[meta.type];
+                      const compact = compactNameOf(meta.type);
                       return (
                         <button
                           key={meta.type}

@@ -14,6 +14,7 @@ import {
   simulateCircuit,
 } from './circuitEngine';
 import { getTopLevelPorts } from './hdlGenerator';
+import { getPart } from '../parts';
 import { TTL_SEQ_TYPES } from './ttlChips';
 
 /*
@@ -383,6 +384,8 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
     }
     if (c.type === 'clock') resetClockState(st);
     if (c.type === 'programmableGenerator') resetPgState(st);
+    // Parts of the component registry (Aşama 6+) reset their own run state
+    getPart(c.type)?.resetState?.(n);
     // Power on again: a new reset pulse starts
     if (c.type === 'powerOnReset') restartPor(st);
     // A three-state input pin starts floating again, as Logisim resets its pin state

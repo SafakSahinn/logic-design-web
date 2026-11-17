@@ -4,7 +4,7 @@
 // is added by one import line here. The old code imports the registry from this file, never from
 // ./registry directly, so the parts are always registered before the catalog is built.
 
-// (no parts yet; the first ones come with Aşama 6a)
+import './blifCircuit';
 
 export {
   allParts,
@@ -16,7 +16,11 @@ export {
   partSize,
   partText,
   partTextOptional,
+  partToolboxName,
+  partsInGroup,
   registerPart,
+  toolboxGroupTitle,
+  PART_TOOLBOX_GROUPS,
 } from './registry';
 export type {
   CircLibrary,
@@ -32,5 +36,6 @@ export type {
   PartAttrValue,
   PartDefinition,
   SimContext,
+  ToolboxGroup,
 } from './registry';
 export { PART_IDS, type PartId } from './ids';

@@ -8,10 +8,22 @@
 // Everything a hook needs from them is handed in through its context object. Only `import type` of the
 // shared types is allowed. This keeps the old code depending on the registry and never the other way.
 import type { ReactNode } from 'react';
-import i18n from '../i18n';
+import i18n, { registerNamespace } from '../i18n';
 import type { CircuitComponentInstance, CircuitWire, ComponentCategory, ComponentMetadata, PinDefinition } from '../types/circuit';
 import type { SignalValue } from '../types/logic';
 import type { PartId } from './ids';
+import en from './locales/en.json';
+import tr from './locales/tr.json';
+
+/** i18n namespace of the registry's own texts (toolbox group titles) */
+const REGISTRY_NAMESPACE = 'parts';
+registerNamespace(REGISTRY_NAMESPACE, { en, tr });
+
+/** Groups of the desktop toolbox a built-in part list already has */
+export type BuiltInToolboxGroup = 'wiring' | 'gates' | 'plexers' | 'arithmetic' | 'memory' | 'displays' | 'audio';
+/** Groups only registry parts fill; listed after the built-in groups, in this order, when they have parts */
+export const PART_TOOLBOX_GROUPS = ['hdl'] as const;
+export type ToolboxGroup = BuiltInToolboxGroup | (typeof PART_TOOLBOX_GROUPS)[number];
 
 /** What a part's simulate() gets from one step of simulateCircuitStep */
 export interface SimContext {
@@ -106,7 +118,8 @@ export type CircLibrary =
   | '#TTL'
   | '#BFH-Praktika'
   | '#Base'
-  | '#Input/Output-Extra';
+  | '#Input/Output-Extra'
+  | '#HDL-IP';
 
 /** A point relative to the Logisim part's loc, the part facing east */
 export interface CircPoint {
@@ -181,6 +194,8 @@ export interface PartDefinition {
   id: PartId;
   /** Palette tab; not 'custom', whose tab lists the user's ICs instead of the catalog */
   category: Exclude<ComponentCategory, 'custom'>;
+  /** Group of the desktop toolbox the part is listed in */
+  group: ToolboxGroup;
   /** Default body size, unrotated */
   width: number;
   height: number;
@@ -214,6 +229,11 @@ export interface PartDefinition {
    * driven. Without it the part is reported as not convertible and its outputs are tied to 0.
    */
   hdl?(comp: CircuitComponentInstance, ctx: HdlContext): void;
+  /**
+   * Puts the part's run state back to power-on when the circuit is reset (test vectors). `comp` is already a
+   * copy of the part with its own state object: assign to comp.state fields.
+   */
+  resetState?(comp: CircuitComponentInstance): void;
 }
 
 const parts = new Map<string, PartDefinition>();
@@ -245,6 +265,25 @@ export function partOfCirc(lib: string, name: string): PartDefinition | undefine
 /** Body size of a registered part, unrotated */
 export function partSize(def: PartDefinition, comp: CircuitComponentInstance): { width: number; height: number } {
   return def.size?.(comp) ?? { width: def.width, height: def.height };
+}
+
+/** The registered parts listed in a toolbox group, in registration order */
+export function partsInGroup(group: ToolboxGroup): PartId[] {
+  return [...parts.values()].filter((d) => d.group === group).map((d) => d.id);
+}
+
+/** Title of a group only registry parts fill, in the current UI language */
+export function toolboxGroupTitle(group: (typeof PART_TOOLBOX_GROUPS)[number]): string {
+  return i18n.t(`${REGISTRY_NAMESPACE}:groups.${group}`);
+}
+
+/**
+ * Toolbox entry of a registered part: its name and the short badge from "meta.badge" (when the part has one),
+ * or undefined for a type that is not a registered part.
+ */
+export function partToolboxName(type: string): { label: string; badge?: string } | undefined {
+  const def = parts.get(type);
+  return def && { label: partName(def.id), badge: partTextOptional(def.id, 'meta.badge') };
 }
 
 /** Display name of a part in the current UI language */
