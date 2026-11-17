@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "badge": "MEM",
+    "name": "SoC Memory",
+    "description": "A memory of a SoC (Logisim-evolution's SoC Memory): it answers the transactions of its bus in its address range; unwritten words read as random values"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Bus",
+      "title": "The SoC bus this memory answers on (Logisim-evolution's Connected bus)",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "startAddress": {
+      "label": "Start address (hex)",
+      "title": "First byte address of the memory; rounded down to a word boundary"
+    },
+    "memSize": {
+      "label": "Size",
+      "title": "Size of the memory in bytes (Logisim-evolution's Memory size: 2^10 to 2^26 bytes)"
+    },
+    "status": {
+      "label": "Status",
+      "title": "The address range the memory answers and how much has been written"
+    }
+  },
+  "status": {
+    "range": "{{start}} – {{end}}, {{words}} word(s) written",
+    "notConnected": "Not connected to a bus: choose one in the Bus attribute"
+  },
+  "body": {
+    "base": "Base: {{value}}",
+    "size": "Size: {{value}}",
+    "notConnected": "Not connected to a bus",
+    "missing": "Bus not found"
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the memory is not connected to a bus",
+    "badStartAddress": "\"{{value}}\" is not a 32-bit start address: 0x0 is used",
+    "badMemSize": "\"{{value}}\" is not a memory size ({{min}} to {{max}}, the size being 2^n bytes): {{used}} is used",
+    "contents": "The memory contents ({{words}} written word(s)) are not saved in the file, as in Logisim-evolution: after it is opened, unwritten words read as random values"
+  }
+}

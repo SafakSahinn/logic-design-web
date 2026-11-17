@@ -8,9 +8,13 @@ import './blifCircuit';
 import './vhdlEntity';
 import './verilogEntity';
 import './tclGeneric';
+import './socBus';
+import './socMemory';
 
 export {
   allParts,
+  copyParts,
+  createPart,
   getPart,
   mergePartCatalog,
   onSimulationRequest,
@@ -24,6 +28,7 @@ export {
   partsInGroup,
   registerPart,
   requestSimulation,
+  syncPartsForRun,
   toolboxGroupTitle,
   PART_TOOLBOX_GROUPS,
 } from './registry';

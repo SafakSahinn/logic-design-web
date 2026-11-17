@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "badge": "BUS",
+    "name": "SoC Veri Yolu",
+    "description": "Bir SoC'nin veri yolu (Logisim-evolution'ın SoC Bus'ı): işlemciler ve bellekler ona kabloyla bağlanmaz, Veri yolu özniteliklerinde onu seçer; gövde son işlemleri gösterir"
+  },
+  "attributes": {
+    "traceSize": {
+      "label": "Gösterilen işlem",
+      "title": "Gövdenin son kaç işlemi gösterdiği (Logisim-evolution'da Number of traces)"
+    },
+    "traceVisible": {
+      "label": "İzi göster",
+      "title": "Kapalıyken gövdede yalnız bir not çizilir; işlemci çalışırken daha hızlıdır",
+      "options": {
+        "on": "Göster",
+        "off": "Gizle"
+      }
+    },
+    "bus": {
+      "label": "Veri yolu",
+      "title": "Elle işlem gönderme ve bu veri yoluna bağlı parçalar"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Veri yoluna bağlı parçalar ve şimdiye kadarki işlemler"
+    }
+  },
+  "status": {
+    "summary": "{{slaves}} bağımlı birim bağlı, {{count}} işlem izlendi"
+  },
+  "pins": {
+    "reset": "Reset"
+  },
+  "trace": {
+    "index": "Sıra",
+    "master": "Ana: {{name}}",
+    "slave": "Bağımlı: {{name}}",
+    "noData": "Yok",
+    "empty": "Henüz işlem yok",
+    "hidden": "Daha hızlı simülasyon için iz gizli"
+  },
+  "editor": {
+    "open": "İşlem…",
+    "openTitle": "Bu veri yolu üzerinden elle okuma ya da yazma gönder; örneğin bir belleği işlemcisiz dene",
+    "clear": "İzi temizle",
+    "clearTitle": "İzlenen işlemleri unut"
+  },
+  "dialog": {
+    "title": "Veri yolu işlemi: {{name}}",
+    "master": "Elle",
+    "address": "Adres (hex)",
+    "data": "Yazılacak veri (hex)",
+    "width": "Genişlik",
+    "widths": {
+      "byte": "Bayt",
+      "half": "Yarım sözcük",
+      "word": "Sözcük"
+    },
+    "type": "Tür",
+    "read": "Oku",
+    "write": "Yaz",
+    "atomic": "Atomik",
+    "atomicTitle": "Tek işlemdeki okuma ve yazma atomik olmalıdır",
+    "run": "Gönder",
+    "runTitle": "İşlemi gönder (Enter)",
+    "close": "Kapat",
+    "badAddress": "Adresi en çok 8 basamaklı onaltılı bir sayı olarak girin.",
+    "badData": "Yazılacak veriyi genişliğe sığan onaltılı bir sayı olarak girin.",
+    "noType": "Okuma, yazma ya da ikisini seçin.",
+    "ok": "Tamam; {{name}} yanıtladı.",
+    "okRead": "Tamam; {{name}} içinden {{value}} okundu.",
+    "failed": "Başarısız: {{message}}",
+    "history": "Bu pencereden gönderilenler",
+    "slaves": "Bağlı bağımlı birimler",
+    "noSlaves": "Bu veri yoluna henüz bağımlı birim bağlı değil. Bir belleğin Veri yolu özniteliğinde bu veri yolunu seçin.",
+    "range": "{{start}} – {{end}}"
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: veri yoluna yeni bir kimlik verildi, eski kimliği seçen parçalar ona bağlı değil",
+    "badTraceSize": "\"{{value}}\" gösterilen işlem sayısı olarak okunamadı: {{used}} işlem gösteriliyor",
+    "traceSizeClamped": "Dosyada {{value}} işlem gösteriliyor; burada en çok {{max}} gösterilebildiği için {{max}} gösteriliyor"
+  }
+}

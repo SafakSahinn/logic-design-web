@@ -1,5 +1,6 @@
 {
   "groups": {
-    "hdl": "HDL & Netlist"
+    "hdl": "HDL & Netlist",
+    "soc": "SoC (Yonga Üstü Sistem)"
   }
 }

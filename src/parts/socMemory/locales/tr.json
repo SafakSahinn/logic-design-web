@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "badge": "MEM",
+    "name": "SoC Bellek",
+    "description": "Bir SoC'nin belleği (Logisim-evolution'ın SoC Memory'si): kendi adres aralığındaki veri yolu işlemlerini yanıtlar; hiç yazılmamış sözcükler rastgele okunur"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "Belleğin işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "startAddress": {
+      "label": "Başlangıç adresi (hex)",
+      "title": "Belleğin ilk bayt adresi; sözcük sınırına aşağı yuvarlanır"
+    },
+    "memSize": {
+      "label": "Boyut",
+      "title": "Belleğin bayt cinsinden boyutu (Logisim-evolution'da Memory size: 2^10 ile 2^26 bayt)"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Belleğin yanıtladığı adres aralığı ve ne kadarının yazıldığı"
+    }
+  },
+  "status": {
+    "range": "{{start}} – {{end}}, {{words}} sözcük yazıldı",
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden birini seçin"
+  },
+  "body": {
+    "base": "Taban: {{value}}",
+    "size": "Boyut: {{value}}",
+    "notConnected": "Veri yoluna bağlı değil",
+    "missing": "Veri yolu bulunamadı"
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: bellek bir veri yoluna bağlı değil",
+    "badStartAddress": "\"{{value}}\" 32 bitlik bir başlangıç adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badMemSize": "\"{{value}}\" bir bellek boyutu olarak okunamadı ({{min}} ile {{max}} arası, boyut 2^n bayt): {{used}} kullanılıyor",
+    "contents": "Bellek içeriği ({{words}} yazılmış sözcük) Logisim-evolution'daki gibi dosyaya kaydedilmez: dosya açıldıktan sonra yazılmamış sözcükler rastgele değer okur"
+  }
+}

@@ -22,7 +22,7 @@ registerNamespace(REGISTRY_NAMESPACE, { en, tr });
 /** Groups of the desktop toolbox a built-in part list already has */
 export type BuiltInToolboxGroup = 'wiring' | 'gates' | 'plexers' | 'arithmetic' | 'memory' | 'displays' | 'audio';
 /** Groups only registry parts fill; listed after the built-in groups, in this order, when they have parts */
-export const PART_TOOLBOX_GROUPS = ['hdl'] as const;
+export const PART_TOOLBOX_GROUPS = ['hdl', 'soc'] as const;
 export type ToolboxGroup = BuiltInToolboxGroup | (typeof PART_TOOLBOX_GROUPS)[number];
 
 /** What a part's simulate() gets from one step of simulateCircuitStep */
@@ -143,7 +143,8 @@ export type CircLibrary =
   | '#Base'
   | '#Input/Output-Extra'
   | '#HDL-IP'
-  | '#TCL';
+  | '#TCL'
+  | '#Soc';
 
 /** A point relative to the Logisim part's loc, the part facing east */
 export interface CircPoint {
@@ -175,6 +176,11 @@ export interface PartCirc {
    * none in Logisim. On import it is called with the part importAttrs() made.
    */
   ports(comp: CircuitComponentInstance): { inputs: (CircPoint | null)[]; outputs: (CircPoint | null)[] };
+  /**
+   * The Logisim body relative to loc, facing east, when it reaches beyond the pins (or has none): export keeps
+   * the other parts clear of it.
+   */
+  box?(comp: CircuitComponentInstance): { x0: number; y0: number; x1: number; y1: number };
   /**
    * The part with the file's attributes applied; `comp` is a new default part. Unreadable values keep the
    * default and give a translated text to `warn`. When it changes the pins, the importer places them again.
@@ -263,6 +269,28 @@ export interface PartDefinition {
    * copy of the part with its own state object: assign to comp.state fields.
    */
   resetState?(comp: CircuitComponentInstance): void;
+  /**
+   * A new part was made from the catalog (or a file importer made a default one): give it what must be unique per
+   * part, e.g. an id other parts refer to. Returns the part to use; `comp` is the fresh default and may be changed.
+   */
+  create?(comp: CircuitComponentInstance): CircuitComponentInstance;
+  /**
+   * The part was copied (copy/paste, duplicate, a duplicated sheet): `comp` is the copy with its new component id
+   * and its own state object. Give it new unique ids where the original's must not be shared (evo's copyInto), and
+   * record each change in `ctx.renamed` so that copies referring to the old id follow it (relink).
+   */
+  copied?(comp: CircuitComponentInstance, ctx: CopyContext): CircuitComponentInstance;
+  /**
+   * After all copies of one copy action went through copied(): `renamed` maps the ids that changed (old -> new).
+   * A copy that refers to another part by such an id (a SoC slave naming its bus) switches to the new one.
+   */
+  relink?(comp: CircuitComponentInstance, renamed: ReadonlyMap<string, string>): CircuitComponentInstance;
+  /**
+   * Called once at the start of every top-level simulation run with all parts of this type in the circuit (also
+   * with none), before the first step. Parts that keep shared run-time objects outside the circuit (SoC buses and
+   * their slaves) bring them in line with the circuit here: register new parts, drop deleted ones.
+   */
+  syncRun?(comps: CircuitComponentInstance[]): void;
 }
 
 const parts = new Map<string, PartDefinition>();
@@ -281,6 +309,51 @@ export function onSimulationRequest(listener: () => void): () => void {
 /** Asks the canvas to simulate the circuit again */
 export function requestSimulation(): void {
   for (const listener of simulationListeners) listener();
+}
+
+/** A new part of a registered type after its create() hook (the part itself for other types) */
+export function createPart(comp: CircuitComponentInstance): CircuitComponentInstance {
+  return parts.get(comp.type)?.create?.(comp) ?? comp;
+}
+
+/** What a copied() hook knows about the copy action it is part of */
+export interface CopyContext {
+  /**
+   * The parts that stay in the circuit the copies go to (not the copies themselves). An id held by none of them is
+   * free, so a copy may keep it: a cut-and-pasted bus keeps its id and its slaves left behind stay connected.
+   */
+  others: readonly CircuitComponentInstance[];
+  /** Ids changed by copied() hooks, old -> new; read by the relink() hooks */
+  renamed: Map<string, string>;
+}
+
+/**
+ * The copies of one copy action (paste, duplicate, a duplicated sheet) after the copied() hooks, then the relink()
+ * hooks of all of them, so that copies referring to each other by part-owned ids stay together. `others` are the
+ * parts that stay in the target circuit.
+ */
+export function copyParts(copies: readonly CircuitComponentInstance[], others: readonly CircuitComponentInstance[]): CircuitComponentInstance[] {
+  const ctx: CopyContext = { others, renamed: new Map() };
+  const out = copies.map((c) => parts.get(c.type)?.copied?.(c, ctx) ?? c);
+  if (ctx.renamed.size === 0) return out;
+  return out.map((c) => parts.get(c.type)?.relink?.(c, ctx.renamed) ?? c);
+}
+
+/** Runs the syncRun() hook of every registered part that has one, with that type's parts of the circuit */
+export function syncPartsForRun(components: readonly CircuitComponentInstance[]): void {
+  let byType: Map<string, CircuitComponentInstance[]> | null = null;
+  for (const def of parts.values()) {
+    if (!def.syncRun) continue;
+    if (!byType) {
+      byType = new Map();
+      for (const c of components) {
+        const list = byType.get(c.type);
+        if (list) list.push(c);
+        else byType.set(c.type, [c]);
+      }
+    }
+    def.syncRun(byType.get(def.id) ?? []);
+  }
 }
 
 /** i18n namespace of a part: its dictionaries are registered under "part.<id>" */

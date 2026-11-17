@@ -15,7 +15,7 @@ import { subcircuitLayout, type SubcircuitLayout } from './subcircuitAppearance'
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlRcOf, ttlNow, ttlSeqCopy, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
-import { getPart, mergePartCatalog, partSize, type PartId } from '../parts';
+import { createPart, getPart, mergePartCatalog, partSize, syncPartsForRun, type PartId } from '../parts';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
 
@@ -3393,7 +3393,8 @@ export function createComponentInstance(
   if (IO5C_TYPES.has(type)) return configureIo5c(inst, {});
   if (type === 'rgbVideo') return configureVideo(inst, {});
   if (isTtlType(type)) return configureTtl(inst, {});
-  return inst;
+  // Parts of the component registry (Aşama 6+) give a new part its unique ids
+  return createPart(inst);
 }
 
 // Logic gates whose inputs Logisim can negate one by one (AbstractGate), and that ignore open inputs
@@ -7109,6 +7110,8 @@ export function simulateCircuit(
   if (ownsRtc) rtcFrozen = rtcClock();
   const ownsTick = tickFrozen === null;
   if (ownsTick) tickFrozen = { tick: clockTickOf(components), run: ++runCounter };
+  // Registry parts with shared run-time objects (SoC buses) follow the circuit once per top-level run
+  if (ownsTick) syncPartsForRun(components);
   try {
     return simulateCircuitRun(components, wires, maxIterations);
   } finally {

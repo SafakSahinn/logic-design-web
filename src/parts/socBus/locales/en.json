@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "badge": "BUS",
+    "name": "SoC Bus",
+    "description": "The bus of a SoC (Logisim-evolution's SoC Bus): processors and memories are not wired to it but name it in their Bus attribute; the body shows the last transactions"
+  },
+  "attributes": {
+    "traceSize": {
+      "label": "Shown transactions",
+      "title": "How many of the last transactions the body shows (Logisim-evolution's Number of traces)"
+    },
+    "traceVisible": {
+      "label": "Show trace",
+      "title": "Off draws only a note on the body, which is faster while a processor runs",
+      "options": {
+        "on": "Shown",
+        "off": "Hidden"
+      }
+    },
+    "bus": {
+      "label": "Bus",
+      "title": "Transactions by hand and the parts attached to this bus"
+    },
+    "status": {
+      "label": "Status",
+      "title": "Parts attached to the bus and transactions so far"
+    }
+  },
+  "status": {
+    "summary": "{{slaves}} slave(s) attached, {{count}} transaction(s) traced"
+  },
+  "pins": {
+    "reset": "Reset"
+  },
+  "trace": {
+    "index": "Index",
+    "master": "Master: {{name}}",
+    "slave": "Slave: {{name}}",
+    "noData": "None",
+    "empty": "No transactions yet",
+    "hidden": "Trace hidden for faster simulation"
+  },
+  "editor": {
+    "open": "Transaction…",
+    "openTitle": "Send a read or write over this bus by hand, e.g. to test a memory without a processor",
+    "clear": "Clear trace",
+    "clearTitle": "Forget the traced transactions"
+  },
+  "dialog": {
+    "title": "Bus transaction: {{name}}",
+    "master": "Manual",
+    "address": "Address (hex)",
+    "data": "Write data (hex)",
+    "width": "Width",
+    "widths": {
+      "byte": "Byte",
+      "half": "Half word",
+      "word": "Word"
+    },
+    "type": "Type",
+    "read": "Read",
+    "write": "Write",
+    "atomic": "Atomic",
+    "atomicTitle": "A read and a write in one transaction must be atomic",
+    "run": "Run",
+    "runTitle": "Send the transaction (Enter)",
+    "close": "Close",
+    "badAddress": "Enter the address as a hexadecimal number of at most 8 digits.",
+    "badData": "Enter the write data as a hexadecimal number that fits the width.",
+    "noType": "Choose read, write or both.",
+    "ok": "Done; answered by {{name}}.",
+    "okRead": "Done; read {{value}} from {{name}}.",
+    "failed": "Failed: {{message}}",
+    "history": "Sent from this dialog",
+    "slaves": "Attached slaves",
+    "noSlaves": "No slaves are attached to this bus yet. Choose this bus in a memory's Bus attribute.",
+    "range": "{{start}} – {{end}}"
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the bus got a new id, so the parts that name the old one are not connected to it",
+    "badTraceSize": "\"{{value}}\" is not a number of shown transactions: {{used}} are shown",
+    "traceSizeClamped": "The file shows {{value}} transactions; at most {{max}} can be shown here, so {{max}} are shown"
+  }
+}

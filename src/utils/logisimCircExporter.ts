@@ -112,6 +112,8 @@ const EXTRA_LIB = 9;
 const HDL_LIB = 10;
 /** Library number of evolution's #TCL (its TCL Generic, Aşama 6d) in the exported file */
 const TCL_LIB = 11;
+/** Library number of evolution's #Soc (its SoC bus and memory, Aşama 6e) in the exported file */
+const SOC_LIB = 12;
 /** Library number of each Logisim library a component-registry part (src/parts) can be written to */
 const CIRC_LIB_NUMBER: Record<CircLibrary, number> = {
   '#Wiring': 0,
@@ -126,6 +128,7 @@ const CIRC_LIB_NUMBER: Record<CircLibrary, number> = {
   '#Input/Output-Extra': EXTRA_LIB,
   '#HDL-IP': HDL_LIB,
   '#TCL': TCL_LIB,
+  '#Soc': SOC_LIB,
 };
 
 /*
@@ -277,6 +280,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesExtra = false;
   let usesHdl = false;
   let usesTcl = false;
+  let usesSoc = false;
   let usesImage = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
@@ -1463,6 +1467,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             if (lib === EXTRA_LIB) usesExtra = true;
             if (lib === HDL_LIB) usesHdl = true;
             if (lib === TCL_LIB) usesTcl = true;
+            if (lib === SOC_LIB) usesSoc = true;
             const attrs = Object.entries(circ.exportAttrs?.(c) ?? {})
               .map(([name, val]) => `<a name="${xmlEsc(name)}" val="${xmlEsc(val)}"/>`)
               .join('');
@@ -1476,7 +1481,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
               const off = points.outputs[i];
               if (off) ports.push({ off, net: isConn(p.id) ? out(i) : OPEN, width: p.width ?? 1, sink: false });
             });
-            P.push({ kind: 'ram', part: c.type, attrs, ports, lib, name: circ.name });
+            const box = circ.box?.(c);
+            P.push({ kind: 'ram', part: c.type, attrs, ports, lib, name: circ.name, ...(box ? { box } : {}) });
             warnings.push(...(circ.exportWarnings?.(c) ?? []).map((text) => `${label}: ${text}`));
             break;
           }
@@ -1977,7 +1983,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}${usesHdl ? `\n  <lib desc="#HDL-IP" name="${HDL_LIB}"/>` : ''}${usesTcl ? `\n  <lib desc="#TCL" name="${TCL_LIB}"/>` : ''}
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}${usesHdl ? `\n  <lib desc="#HDL-IP" name="${HDL_LIB}"/>` : ''}${usesTcl ? `\n  <lib desc="#TCL" name="${TCL_LIB}"/>` : ''}${usesSoc ? `\n  <lib desc="#Soc" name="${SOC_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}

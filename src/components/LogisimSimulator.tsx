@@ -150,7 +150,7 @@ import {
   imageShownSize,
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
-import { PART_TOOLBOX_GROUPS, getPart, onSimulationRequest, partName, partSize, partToolboxName, partsInGroup, toolboxGroupTitle, type ToolboxGroup } from '../parts';
+import { PART_TOOLBOX_GROUPS, copyParts, getPart, onSimulationRequest, partName, partSize, partToolboxName, partsInGroup, toolboxGroupTitle, type ToolboxGroup } from '../parts';
 import { AppearanceShapesSvg } from './AppearanceShapes';
 import { resolveDynamicLive, resolveDynamicTemplate } from '../utils/dynamicElements';
 import AppearanceEditor from './AppearanceEditor';
@@ -3283,7 +3283,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const stamp = Date.now();
     const pinIdMap = new Map<string, string>();
     const compIdMap = new Map<string, string>();
-    const clonedComps = source.components.map((c, idx) => {
+    const rawClonedComps = source.components.map((c, idx) => {
       const newCompId = `${c.type}_${stamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       compIdMap.set(c.id, newCompId);
       const clonePin = (pin: CircuitPin) => {
@@ -3291,8 +3291,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         pinIdMap.set(pin.id, newPinId);
         return { ...pin, id: newPinId };
       };
-      return { ...c, id: newCompId, inputs: c.inputs.map(clonePin), outputs: c.outputs.map(clonePin) };
+      return { ...c, id: newCompId, state: { ...c.state }, inputs: c.inputs.map(clonePin), outputs: c.outputs.map(clonePin) };
     });
+    // the copied sheet is another circuit next to the original: part-owned ids (SoC bus ids) are renewed and
+    // the copies that name them follow
+    const clonedComps = copyParts(rawClonedComps, source.components);
     const mapPinRef = (pinId: string) => pinIdMap.get(pinId) || pinId;
     const clonedWires = source.wires.map((w, idx) => ({
       ...w,
@@ -3931,7 +3934,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
     const stamp = Date.now();
     const pinIdMap = new Map<string, string>();
-    const newComps: CircuitComponentInstance[] = selComps.map((c, idx) => {
+    const rawNewComps: CircuitComponentInstance[] = selComps.map((c, idx) => {
       const newId = `comp_${c.type}_${stamp}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
       const clonePin = (pin: CircuitPin) => {
         const newPinId = pin.id.startsWith(`${c.id}_`) ? `${newId}${pin.id.slice(c.id.length)}` : `${newId}_${pin.id}`;
@@ -3949,6 +3952,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         outputs: c.outputs.map(clonePin),
       });
     });
+    // a registry part may need new unique ids of its own (a SoC bus id); ids still free on the canvas (after a cut)
+    // are kept, and pasted parts naming a renewed id follow it
+    const newComps = copyParts(rawNewComps, components);
     const newWires: CircuitWire[] = internalWires.map((w, idx) => {
       const a = { x: w.startPoint!.x + offset.dx, y: w.startPoint!.y + offset.dy };
       const b = { x: w.endPoint!.x + offset.dx, y: w.endPoint!.y + offset.dy };
