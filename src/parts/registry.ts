@@ -7,7 +7,7 @@
 // Dependency rule: part modules must not import circuitEngine, LogisimSimulator or the other old modules.
 // Everything a hook needs from them is handed in through its context object. Only `import type` of the
 // shared types is allowed. This keeps the old code depending on the registry and never the other way.
-import type { ReactNode } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import i18n, { registerNamespace } from '../i18n';
 import type { CircuitComponentInstance, CircuitWire, ComponentCategory, ComponentMetadata, PinDefinition } from '../types/circuit';
 import type { SignalValue } from '../types/logic';
@@ -62,7 +62,8 @@ export type PartAttrKind =
   | 'text' // free text field, see maxLength
   | 'multiline' // free text box, line breaks kept
   | 'info' // read-only value (a number is shown as a bit width)
-  | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
+  | 'flags' // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
+  | 'editor'; // the part's own React editor (PartAttribute.editor), for what the kinds above cannot show
 
 export interface PartAttrOption {
   value: PartAttrValue;
@@ -86,6 +87,16 @@ export interface PartAttrEdit {
   stateOnly?: boolean;
 }
 
+/** What a part's own attribute editor gets (kind 'editor'; only offered for a single selected part) */
+export interface PartEditorProps {
+  /** The selected part as it is now */
+  comp: CircuitComponentInstance;
+  /** Applies a value through the attribute's set(), to the newest state of the part (safe after an await) */
+  apply(value: PartAttrValue): void;
+  /** The canvas colour scheme */
+  dark: boolean;
+}
+
 /**
  * One row of the part's attribute panel. The row's label comes from the i18n key
  * "attributes.<key>.label" of the part's namespace, its tooltip from "attributes.<key>.title" when present.
@@ -105,6 +116,8 @@ export interface PartAttribute {
   visible?(comp: CircuitComponentInstance): boolean;
   /** 'text' fields: the longest text */
   maxLength?: number;
+  /** 'editor' rows: the component drawn as the row's value; set to singleOnly as well */
+  editor?: ComponentType<PartEditorProps>;
 }
 
 /** Logisim libraries a part can be written to (the exporter gives each its library number) */

@@ -11960,6 +11960,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                     </div>
                   );
                 }
+                case 'editor': {
+                  // A registry part's own editor; it applies through the ref so a value set after an await
+                  // (a tool run) reaches the newest state
+                  const Editor = def.editor;
+                  return Editor && single ? (
+                    <Editor key={first.id} comp={first} dark={dark} apply={(v) => applyAttrRef.current(def, v, ids)} />
+                  ) : null;
+                }
                 case 'info':
                   return (
                     <span className={`text-[11px] font-mono ${dark ? 'text-slate-300' : 'text-slate-700'}`} title={def.title}>

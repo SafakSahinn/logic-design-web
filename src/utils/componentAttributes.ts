@@ -172,7 +172,8 @@ export type AttrKind =
   | 'info' // read-only value (a number is shown as a bit width)
   | 'image' // picture chooser (data URL value)
   | 'bitMap' // splitter: one drop-down per incoming bit
-  | 'flags'; // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
+  | 'flags' // row of on/off buttons; value = selected option values joined by ',', set takes '+v' / '-v'
+  | 'editor'; // a registry part's own React editor, see AttrDef.editor
 
 export interface AttrDef {
   key: string;
@@ -193,6 +194,8 @@ export interface AttrDef {
   unit?: EngUnit;
   /** 'text' fields: the longest text */
   maxLength?: number;
+  /** 'editor' rows: the registry part's editor component */
+  editor?: PartAttribute['editor'];
 }
 
 /**
@@ -227,6 +230,7 @@ function partAttrDef(id: PartId, a: PartAttribute): AttrDef {
     singleOnly: a.singleOnly,
     visible: a.visible && ((comp) => a.visible!(comp)),
     maxLength: a.maxLength,
+    editor: a.editor,
   };
 }
 

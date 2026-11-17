@@ -5,6 +5,7 @@
 // ./registry directly, so the parts are always registered before the catalog is built.
 
 import './blifCircuit';
+import './vhdlEntity';
 
 export {
   allParts,
@@ -35,6 +36,7 @@ export type {
   PartAttrOption,
   PartAttrValue,
   PartDefinition,
+  PartEditorProps,
   SimContext,
   ToolboxGroup,
 } from './registry';

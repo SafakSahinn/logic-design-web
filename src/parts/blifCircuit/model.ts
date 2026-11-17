@@ -1,15 +1,9 @@
 // BLIF Circuit part: its state, the compiled-netlist cache, pin layout and the run state codec.
-import {
-  NetlistError,
-  compileNetlist,
-  newNetlistState,
-  parseBlif,
-  type CompiledNetlist,
-  type Netlist,
-  type NetlistPort,
-  type NetlistState,
-} from '../../netlist';
+import { NetlistError, compileNetlist, parseBlif, type CompiledNetlist, type Netlist, type NetlistPort } from '../../netlist';
 import type { CircuitComponentInstance, CircuitPin, PinDefinition } from '../../types/circuit';
+import { BODY_WIDTH, PIN_GAP, PIN_TOP, pinsFor as pinsForPorts } from '../shared/netlistPart';
+
+export { BODY_WIDTH, PIN_GAP, PIN_TOP, bodyHeight, bodySize, decodeRun, encodeRun, pinPoints, pinsMatch } from '../shared/netlistPart';
 
 /** What the part keeps in comp.state.part */
 export interface BlifPartState {
@@ -31,11 +25,6 @@ export const DEFAULT_BLIF = `# yosys -p "synth -flatten -top half_adder; write_b
 11 1
 .end
 `;
-
-/** Body geometry in app pixels (evo's layout at the app's pin spacing): pins down the sides from TOP */
-export const BODY_WIDTH = 140;
-export const PIN_TOP = 30;
-export const PIN_GAP = 20;
 
 export type BlifEntry = { ok: true; netlist: Netlist; compiled: CompiledNetlist } | { ok: false; error: NetlistError };
 
@@ -87,66 +76,11 @@ export function defaultPins(): { inputs: PinDefinition[]; outputs: PinDefinition
   };
 }
 
-/** Body height for the larger of the input and output counts */
-export const bodyHeight = (pins: number): number => PIN_TOP + PIN_GAP * (Math.max(1, pins) - 1) + 20;
-
-export function bodySize(comp: CircuitComponentInstance): { width: number; height: number } {
-  return { width: BODY_WIDTH, height: bodyHeight(Math.max(comp.inputs.length, comp.outputs.length)) };
-}
-
-export function pinPoints(comp: CircuitComponentInstance): { inputs: { x: number; y: number }[]; outputs: { x: number; y: number }[] } {
-  return {
-    inputs: comp.inputs.map((_, i) => ({ x: 0, y: PIN_TOP + PIN_GAP * i })),
-    outputs: comp.outputs.map((_, i) => ({ x: BODY_WIDTH, y: PIN_TOP + PIN_GAP * i })),
-  };
-}
-
 /**
  * Pins for the netlist's ports. A pin whose name and direction survive keeps its id (its wires follow it);
  * the others get new ids. Positions are placed again by the caller.
  */
 export function pinsFor(comp: CircuitComponentInstance, netlist: Netlist): { inputs: CircuitPin[]; outputs: CircuitPin[] } {
-  const used = new Set<string>();
-  const old = new Map<string, string>();
-  for (const p of [...comp.inputs, ...comp.outputs]) old.set(`${p.type}:${p.name}`, p.id);
-  const make = (port: NetlistPort, type: 'input' | 'output'): CircuitPin => {
-    let id = old.get(`${type}:${port.name}`);
-    if (id === undefined || used.has(id)) {
-      const base = `${comp.id}_${type === 'input' ? 'in' : 'out'}`;
-      let k = 0;
-      while (used.has(`${base}${k}`) || [...old.values()].includes(`${base}${k}`)) k++;
-      id = `${base}${k}`;
-    }
-    used.add(id);
-    const width = port.bits.length;
-    return { id, name: port.name, type, value: 0, ...(width > 1 ? { width } : {}), x: comp.x, y: comp.y };
-  };
-  return { inputs: netlist.inputs.map((p) => make(p, 'input')), outputs: netlist.outputs.map((p) => make(p, 'output')) };
-}
-
-/** The pins match the compiled ports (count and widths), so the netlist can drive them */
-export function pinsMatch(comp: CircuitComponentInstance, c: CompiledNetlist): boolean {
-  const same = (pins: CircuitPin[], ports: { width: number }[]) =>
-    pins.length === ports.length && pins.every((p, i) => (p.width ?? 1) === ports[i].width);
-  return same(comp.inputs, c.inputs) && same(comp.outputs, c.outputs);
-}
-
-// Run state as text, so it survives the app's JSON copies (undo, save): levels, '|', clock levels; one digit each
-export function encodeRun(s: NetlistState): string {
-  let out = '';
-  for (const l of s.levels) out += String.fromCharCode(48 + l);
-  out += '|';
-  for (const l of s.prevClock) out += String.fromCharCode(48 + l);
-  return out;
-}
-
-export function decodeRun(c: CompiledNetlist, run: string | undefined): NetlistState {
-  const s = newNetlistState(c);
-  if (!run) return s;
-  const bar = run.indexOf('|');
-  if (bar !== c.netCount || run.length - bar - 1 !== c.seqs.length) return s;
-  for (let i = 0; i < bar; i++) s.levels[i] = Math.min(4, Math.max(0, run.charCodeAt(i) - 48));
-  for (let i = 0; i < c.seqs.length; i++) s.prevClock[i] = Math.min(4, Math.max(0, run.charCodeAt(bar + 1 + i) - 48));
-  s.fresh = false;
-  return s;
+  const shape = (p: NetlistPort) => ({ name: p.name, width: p.bits.length });
+  return pinsForPorts(comp, netlist.inputs.map(shape), netlist.outputs.map(shape));
 }

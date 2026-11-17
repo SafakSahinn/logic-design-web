@@ -1,0 +1,102 @@
+{
+  "meta": {
+    "badge": "VHDL",
+    "name": "VHDL Entity",
+    "description": "A VHDL design synthesized to a gate netlist with GHDL and Yosys (desktop app); its pins come from the top entity's ports"
+  },
+  "attributes": {
+    "vhdl": {
+      "label": "VHDL",
+      "title": "The VHDL text and its synthesis"
+    },
+    "generics": {
+      "label": "Generics",
+      "title": "Values for the entity's generics, e.g. W=8, N=2 (integers, true/false or enumeration names); empty = the defaults in the text"
+    },
+    "status": {
+      "label": "Netlist",
+      "title": "What simulates: the netlist of the last synthesis"
+    }
+  },
+  "status": {
+    "ok": "{{top}}: {{inputs}} inputs, {{outputs}} outputs, {{cells}} cells",
+    "stale": "The text changed since the last synthesis; the previous circuit still runs. Synthesize to update it.",
+    "staleMismatch": "The ports changed since the last synthesis; outputs are X until it is synthesized again.",
+    "failed": "The last synthesis failed ({{count}} errors); see the messages.",
+    "failedRunning": "The last synthesis failed ({{count}} errors); the previous circuit still runs.",
+    "none": "Not synthesized yet; outputs are X.",
+    "broken": "The stored netlist cannot be used: {{message}}"
+  },
+  "editor": {
+    "edit": "Edit…",
+    "editTitle": "Open the VHDL editor",
+    "synthesize": "Synthesize",
+    "synthesizeTitle": "Synthesize the text with GHDL and Yosys (Ctrl+Enter in the editor)",
+    "synthesizing": "Synthesizing…",
+    "cancel": "Cancel",
+    "dialogTitle": "VHDL: {{name}}",
+    "load": "Load file…",
+    "loadTitle": "Replace the text with a .vhd / .vhdl file",
+    "loadFailed": "The file could not be read.",
+    "close": "Close",
+    "discard": "Discard changes",
+    "apply": "Apply",
+    "applyTitle": "Keep the text without synthesizing (Ctrl+S)",
+    "applySynthesize": "Apply and synthesize",
+    "unsaved": "unsaved changes",
+    "lineCol": "Line {{line}}, column {{column}}",
+    "messages": "Messages",
+    "noMessages": "No messages.",
+    "messagesOf": "Messages of the last synthesis",
+    "messagesOld": "Messages of an earlier version of the text",
+    "done": "Synthesized: {{inputs}} inputs, {{outputs}} outputs.",
+    "toolError": "{{message}}",
+    "webNotice": "VHDL synthesis uses GHDL in the desktop app. Here the stored netlist of the part simulates; it changes only when the part is synthesized on the desktop.",
+    "genericsInvalid": "Generics: {{message}}",
+    "preview": "Ports read from the text: {{inputs}} inputs, {{outputs}} outputs",
+    "previewError": "Ports cannot be read from the text yet: {{message}}"
+  },
+  "severity": {
+    "error": "error",
+    "warning": "warning",
+    "note": "note"
+  },
+  "errorAt": "line {{line}}: {{message}}",
+  "hdlErrors": {
+    "vhdlNoEntity": "the text has no entity",
+    "vhdlEnd": "the entity is not finished",
+    "vhdlExpected": "\"{{expected}}\" expected, found \"{{found}}\"",
+    "vhdlName": "a name expected, found \"{{found}}\"",
+    "vhdlMode": "{{mode}} ports are not supported",
+    "vhdlPortType": "port type {{type}} is not supported (std_logic, std_ulogic, bit, boolean, their vectors, unsigned, signed)",
+    "vhdlRange": "the range of {{port}} cannot be worked out from the text (GHDL may still synthesize it)",
+    "vhdlNullRange": "{{port}} has an empty range",
+    "vhdlEndName": "\"end {{found}}\" does not match entity {{entity}}",
+    "portTooWide": "port {{port}} is {{width}} bits wide (at most {{max}})",
+    "genericSyntax": "\"{{entry}}\" is not name=value",
+    "genericTwice": "generic {{name}} is set twice",
+    "portMissing": "the netlist has no port {{port}}",
+    "portWidth": "port {{port}} is {{width}} bits in the netlist, {{declared}} declared",
+    "verilogHeader": "cannot read the port {{port}} written by GHDL"
+  },
+  "evo": {
+    "unreadable": "Logisim-evolution cannot read this entity ({{reason}}); it stops at an error dialog while opening the file",
+    "reason": {
+      "duplicated": "the text has more than one entity",
+      "noEntity": "it needs \"entity <name> is … end <name>;\" with the same name, in the same case, and without the word entity after end",
+      "portDecl": "a port declaration cannot be read",
+      "portType": "port {{port}}: it reads only std_logic and std_logic_vector(<number> downto <number>)",
+      "portMode": "port {{port}}: its mode must be in, out or inout"
+    },
+    "ports": "Logisim-evolution reads other pins from the text than this part has; the wires are placed by position, so they will not match",
+    "generics": "Logisim-evolution has no generics ({{names}}): it shows the entity with its default values",
+    "genericsSet": "the Generics setting \"{{generics}}\" is kept for this app only; Logisim-evolution does not use it",
+    "notSynthesized": "the part has no netlist; it opens here not synthesized",
+    "simulation": "Logisim-evolution simulates VHDL only through QuestaSim/ModelSim, and drops the stored netlist and generics when it saves the file",
+    "importNoNetlist": "the file has no netlist for this VHDL entity (e.g. saved by Logisim-evolution); synthesize it in the desktop app to simulate",
+    "importNetlistBroken": "the stored netlist of this VHDL entity cannot be read; synthesize it again",
+    "importNetlistUnusable": "the stored netlist of this VHDL entity cannot be used ({{message}}); synthesize it again",
+    "importStale": "the stored netlist of this VHDL entity is from an earlier version of its text; it runs until the part is synthesized again",
+    "importNoPorts": "the ports of this VHDL entity cannot be read from its text; it has no pins until the text is fixed"
+  }
+}

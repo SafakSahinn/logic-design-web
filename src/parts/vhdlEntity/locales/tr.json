@@ -1,0 +1,102 @@
+{
+  "meta": {
+    "badge": "VHDL",
+    "name": "VHDL Entity",
+    "description": "GHDL ve Yosys ile kapı düzeyinde netlist'e sentezlenen bir VHDL tasarımı (masaüstü uygulaması); pinleri en üst entity'nin portlarından gelir"
+  },
+  "attributes": {
+    "vhdl": {
+      "label": "VHDL",
+      "title": "VHDL metni ve sentezi"
+    },
+    "generics": {
+      "label": "Generic'ler",
+      "title": "Entity'nin generic değerleri, örneğin W=8, N=2 (tam sayı, true/false ya da sıralama adı); boş = metindeki varsayılanlar"
+    },
+    "status": {
+      "label": "Netlist",
+      "title": "Benzetimi yapılan devre: son sentezin netlist'i"
+    }
+  },
+  "status": {
+    "ok": "{{top}}: {{inputs}} giriş, {{outputs}} çıkış, {{cells}} hücre",
+    "stale": "Metin son sentezden beri değişti; önceki devre çalışmaya devam ediyor. Güncellemek için sentezleyin.",
+    "staleMismatch": "Portlar son sentezden beri değişti; yeniden sentezlenene kadar çıkışlar X.",
+    "failed": "Son sentez başarısız oldu ({{count}} hata); mesajlara bakın.",
+    "failedRunning": "Son sentez başarısız oldu ({{count}} hata); önceki devre çalışmaya devam ediyor.",
+    "none": "Henüz sentezlenmedi; çıkışlar X.",
+    "broken": "Saklı netlist kullanılamıyor: {{message}}"
+  },
+  "editor": {
+    "edit": "Düzenle…",
+    "editTitle": "VHDL düzenleyicisini aç",
+    "synthesize": "Sentezle",
+    "synthesizeTitle": "Metni GHDL ve Yosys ile sentezle (düzenleyicide Ctrl+Enter)",
+    "synthesizing": "Sentezleniyor…",
+    "cancel": "İptal",
+    "dialogTitle": "VHDL: {{name}}",
+    "load": "Dosyadan yükle…",
+    "loadTitle": "Metni bir .vhd / .vhdl dosyasıyla değiştir",
+    "loadFailed": "Dosya okunamadı.",
+    "close": "Kapat",
+    "discard": "Değişiklikleri at",
+    "apply": "Uygula",
+    "applyTitle": "Metni sentezlemeden kaydet (Ctrl+S)",
+    "applySynthesize": "Uygula ve sentezle",
+    "unsaved": "kaydedilmemiş değişiklik",
+    "lineCol": "Satır {{line}}, sütun {{column}}",
+    "messages": "Mesajlar",
+    "noMessages": "Mesaj yok.",
+    "messagesOf": "Son sentezin mesajları",
+    "messagesOld": "Metnin önceki bir sürümünün mesajları",
+    "done": "Sentezlendi: {{inputs}} giriş, {{outputs}} çıkış.",
+    "toolError": "{{message}}",
+    "webNotice": "VHDL sentezi masaüstü uygulamasında GHDL ile yapılır. Burada parçanın saklı netlist'i çalışır; yalnızca parça masaüstünde sentezlenince değişir.",
+    "genericsInvalid": "Generic'ler: {{message}}",
+    "preview": "Metinden okunan portlar: {{inputs}} giriş, {{outputs}} çıkış",
+    "previewError": "Portlar henüz metinden okunamıyor: {{message}}"
+  },
+  "severity": {
+    "error": "hata",
+    "warning": "uyarı",
+    "note": "not"
+  },
+  "errorAt": "satır {{line}}: {{message}}",
+  "hdlErrors": {
+    "vhdlNoEntity": "metinde entity yok",
+    "vhdlEnd": "entity tamamlanmamış",
+    "vhdlExpected": "\"{{expected}}\" bekleniyordu, \"{{found}}\" bulundu",
+    "vhdlName": "bir ad bekleniyordu, \"{{found}}\" bulundu",
+    "vhdlMode": "{{mode}} portları desteklenmiyor",
+    "vhdlPortType": "{{type}} port tipi desteklenmiyor (std_logic, std_ulogic, bit, boolean, bunların vektörleri, unsigned, signed)",
+    "vhdlRange": "{{port}} aralığı metinden çıkarılamıyor (GHDL yine de sentezleyebilir)",
+    "vhdlNullRange": "{{port}} aralığı boş",
+    "vhdlEndName": "\"end {{found}}\", {{entity}} entity'siyle uyuşmuyor",
+    "portTooWide": "{{port}} portu {{width}} bit genişliğinde (en çok {{max}})",
+    "genericSyntax": "\"{{entry}}\" ad=değer biçiminde değil",
+    "genericTwice": "{{name}} generic'i iki kez verilmiş",
+    "portMissing": "netlist'te {{port}} portu yok",
+    "portWidth": "{{port}} portu netlist'te {{width}} bit, bildirimde {{declared}}",
+    "verilogHeader": "GHDL'in yazdığı {{port}} portu okunamıyor"
+  },
+  "evo": {
+    "unreadable": "Logisim-evolution bu entity'yi okuyamaz ({{reason}}); dosyayı açarken bir hata penceresinde durur",
+    "reason": {
+      "duplicated": "metinde birden çok entity var",
+      "noEntity": "aynı adla, aynı büyük/küçük harfle ve end'den sonra entity sözcüğü olmadan \"entity <ad> is … end <ad>;\" ister",
+      "portDecl": "bir port bildirimi okunamıyor",
+      "portType": "{{port}} portu: yalnızca std_logic ve std_logic_vector(<sayı> downto <sayı>) okur",
+      "portMode": "{{port}} portu: yönü in, out ya da inout olmalı"
+    },
+    "ports": "Logisim-evolution metinden bu parçadakinden farklı pinler okur; teller konuma göre yerleştiği için uyuşmaz",
+    "generics": "Logisim-evolution'da generic yok ({{names}}): entity'yi varsayılan değerleriyle gösterir",
+    "genericsSet": "\"{{generics}}\" Generics ayarı yalnızca bu uygulama için saklanır; Logisim-evolution onu kullanmaz",
+    "notSynthesized": "parçanın netlist'i yok; burada sentezlenmemiş olarak açılır",
+    "simulation": "Logisim-evolution VHDL'i yalnızca QuestaSim/ModelSim ile simüle eder ve dosyayı kaydederken saklanan netlist'i ve generic'leri siler",
+    "importNoNetlist": "dosyada bu VHDL entity'sinin netlist'i yok (örneğin Logisim-evolution kaydetmiş); simüle etmek için masaüstü uygulamada sentezleyin",
+    "importNetlistBroken": "bu VHDL entity'sinin saklanan netlist'i okunamıyor; yeniden sentezleyin",
+    "importNetlistUnusable": "bu VHDL entity'sinin saklanan netlist'i kullanılamıyor ({{message}}); yeniden sentezleyin",
+    "importStale": "bu VHDL entity'sinin saklanan netlist'i metnin daha eski bir sürümünden; parça yeniden sentezlenene kadar o çalışır",
+    "importNoPorts": "bu VHDL entity'sinin portları metninden okunamıyor; metin düzeltilene kadar pini yok"
+  }
+}

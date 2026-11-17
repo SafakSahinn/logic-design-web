@@ -13,7 +13,7 @@ import { libraryCell } from './cells';
 import { NET_FALSE, NET_TRUE, NET_UNDEF, NetlistError, type Netlist, type NetlistCell, type NetlistPort } from './ir';
 
 /** Widest port, as the app's MAX_BIT_WIDTH */
-const MAX_PORT_WIDTH = 32;
+export const MAX_PORT_WIDTH = 32;
 /** Cells after flattening; guards against a hierarchy that multiplies out of reach */
 const MAX_CELLS = 500_000;
 
