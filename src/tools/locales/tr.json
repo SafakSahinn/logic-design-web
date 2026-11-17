@@ -1,0 +1,32 @@
+{
+  "status": {
+    "available": "{{tool}} hazır ({{backend}}).",
+    "notInstalled": "{{tool}} bulunamadı. Kurun ya da yolunu ayarlardan belirtin.",
+    "webUnsupported": "{{tool}} yalnızca masaüstü uygulamasında çalışır.",
+    "downloadRequired": "{{tool}} için bir kereye mahsus yaklaşık {{size}} MB indirme gerekiyor.",
+    "noBackend": "{{tool}} bu sürümde çalıştırılamıyor."
+  },
+  "backend": {
+    "native": "kurulu program",
+    "wasm": "tarayıcı içi sürüm"
+  },
+  "download": {
+    "title": "{{tool}} indirilsin mi?",
+    "body": "{{tool}}, uygulamanın içinde WebAssembly sürümü olarak çalışır. İlk kullanımda yaklaşık {{size}} MB indirilir; sonraki kullanımlar önbellekten gelir.",
+    "confirm": "İndir",
+    "cancel": "Şimdi değil",
+    "progress": "{{tool}} indiriliyor: %{{percent}}"
+  },
+  "run": {
+    "running": "{{tool}} çalışıyor...",
+    "cancel": "İptal",
+    "cancelled": "{{tool}} iptal edildi.",
+    "timeout": "{{tool}} {{seconds}} saniyeden uzun sürdü ve durduruldu.",
+    "failed": "{{tool}} {{code}} çıkış koduyla bitti.",
+    "outputLimit": "{{tool}} çok fazla çıktı üretti ve durduruldu.",
+    "internal": "{{tool}} başlatılamadı: {{message}}"
+  },
+  "notice": {
+    "vhdlSimulatedOnWeb": "VHDL sentezi masaüstü uygulamasında GHDL ile yapılır. Burada sonuç yerleşik simülatörden geliyor."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "status": {
+    "available": "{{tool}} is ready ({{backend}}).",
+    "notInstalled": "{{tool}} was not found. Install it or set its path in the settings.",
+    "webUnsupported": "{{tool}} runs only in the desktop app.",
+    "downloadRequired": "{{tool}} needs a one-time download of about {{size}} MB.",
+    "noBackend": "{{tool}} cannot run in this build."
+  },
+  "backend": {
+    "native": "installed program",
+    "wasm": "in-browser build"
+  },
+  "download": {
+    "title": "Download {{tool}}?",
+    "body": "{{tool}} runs inside the app as a WebAssembly build. The first use downloads about {{size}} MB; later uses come from the cache.",
+    "confirm": "Download",
+    "cancel": "Not now",
+    "progress": "Downloading {{tool}}: {{percent}}%"
+  },
+  "run": {
+    "running": "Running {{tool}}...",
+    "cancel": "Cancel",
+    "cancelled": "{{tool}} was cancelled.",
+    "timeout": "{{tool}} took longer than {{seconds}} s and was stopped.",
+    "failed": "{{tool}} finished with exit code {{code}}.",
+    "outputLimit": "{{tool}} printed too much output and was stopped.",
+    "internal": "{{tool}} could not be started: {{message}}"
+  },
+  "notice": {
+    "vhdlSimulatedOnWeb": "VHDL synthesis uses GHDL in the desktop app. Here the result comes from the built-in simulator."
+  }
+}
