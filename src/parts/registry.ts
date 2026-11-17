@@ -150,6 +150,11 @@ export interface PartCirc {
   name: string;
   /** The part's label is written as Logisim's "label" attribute (and read back) */
   labelled?: boolean;
+  /**
+   * For parts sharing one Logisim component name: on import the part takes a component only when this
+   * returns true for its attributes. Parts without it take the components no such part claimed.
+   */
+  claims?(attrs: Record<string, string>): boolean;
   /** Logisim attributes to write, without facing and label */
   exportAttrs?(comp: CircuitComponentInstance): Record<string, string>;
   /** Texts for the export report (already translated, e.g. with partText) */
@@ -269,10 +274,10 @@ export function allParts(): PartDefinition[] {
   return [...parts.values()];
 }
 
-/** The registered part a Logisim component (library description + component name) stands for */
-export function partOfCirc(lib: string, name: string): PartDefinition | undefined {
-  for (const def of parts.values()) if (def.circ && def.circ.lib === lib && def.circ.name === name.trim()) return def;
-  return undefined;
+/** The registered part a Logisim component (library description + component name + attributes) stands for */
+export function partOfCirc(lib: string, name: string, attrs: Record<string, string> = {}): PartDefinition | undefined {
+  const named = [...parts.values()].filter((def) => def.circ && def.circ.lib === lib && def.circ.name === name.trim());
+  return named.find((def) => def.circ!.claims?.(attrs) === true) ?? named.find((def) => !def.circ!.claims);
 }
 
 /** Body size of a registered part, unrotated */

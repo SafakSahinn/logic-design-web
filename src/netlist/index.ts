@@ -7,3 +7,4 @@ export { MAX_PORT_WIDTH, parseBlif } from './blif';
 export { compileNetlist, type CompiledNetlist, type CompiledPort } from './compile';
 export { cloneNetlistState, newNetlistState, readNetlistOutputs, stepNetlist, type NetlistState } from './sim';
 export { levelOf, signalOf } from './levels';
+export { evoBitNames, evoBlifPorts, writeEvoBlif, type EvoBlifPort, type EvoBlifResult } from './evoBlif';

@@ -1,0 +1,114 @@
+{
+  "meta": {
+    "badge": "V",
+    "name": "Verilog Entity",
+    "description": "A Verilog / SystemVerilog design synthesized to a gate netlist with Yosys; its pins come from the top module's ports"
+  },
+  "attributes": {
+    "verilog": {
+      "label": "Verilog",
+      "title": "The Verilog text and its synthesis"
+    },
+    "parameters": {
+      "label": "Parameters",
+      "title": "Values for the top module's parameters, e.g. W=8, N=2 (decimal integers, names are case-sensitive); empty = the defaults in the text"
+    },
+    "status": {
+      "label": "Netlist",
+      "title": "What simulates: the netlist of the last synthesis"
+    }
+  },
+  "status": {
+    "ok": "{{top}}: {{inputs}} inputs, {{outputs}} outputs, {{cells}} cells",
+    "stale": "The text changed since the last synthesis; the previous circuit still runs. Synthesize to update it.",
+    "staleMismatch": "The ports changed since the last synthesis; outputs are X until it is synthesized again.",
+    "failed": "The last synthesis failed ({{count}} errors); see the messages.",
+    "failedRunning": "The last synthesis failed ({{count}} errors); the previous circuit still runs.",
+    "none": "Not synthesized yet; outputs are X.",
+    "broken": "The stored netlist cannot be used: {{message}}"
+  },
+  "editor": {
+    "edit": "Edit…",
+    "editTitle": "Open the Verilog editor",
+    "synthesize": "Synthesize",
+    "synthesizeTitle": "Synthesize the text with Yosys (Ctrl+Enter in the editor)",
+    "synthesizing": "Synthesizing…",
+    "cancel": "Cancel",
+    "dialogTitle": "Verilog: {{name}}",
+    "load": "Load file…",
+    "loadTitle": "Replace the text with a .v / .sv file",
+    "loadFailed": "The file could not be read.",
+    "close": "Close",
+    "discard": "Discard changes",
+    "apply": "Apply",
+    "applyTitle": "Keep the text without synthesizing (Ctrl+S)",
+    "applySynthesize": "Apply and synthesize",
+    "unsaved": "unsaved changes",
+    "lineCol": "Line {{line}}, column {{column}}",
+    "messages": "Messages",
+    "noMessages": "No messages.",
+    "messagesOf": "Messages of the last synthesis",
+    "messagesOld": "Messages of an earlier version of the text",
+    "done": "Synthesized: {{inputs}} inputs, {{outputs}} outputs.",
+    "toolError": "{{message}}",
+    "downloadDeclined": "Synthesis needs Yosys (a one-time download of about {{size}} MB). Until then the stored netlist of the part simulates.",
+    "paramsInvalid": "Parameters: {{message}}",
+    "preview": "Ports read from the text: {{inputs}} inputs, {{outputs}} outputs",
+    "previewError": "Ports cannot be read from the text yet: {{message}}"
+  },
+  "severity": {
+    "error": "error",
+    "warning": "warning",
+    "note": "note"
+  },
+  "errorAt": "line {{line}}: {{message}}",
+  "hdlErrors": {
+    "verilogEnd": "the text ends too early",
+    "verilogEnd_expected": "\"{{expected}}\" is missing",
+    "verilogEnd_module": "module {{module}} has no \"endmodule\"",
+    "verilogMacro": "the macro `{{macro}} cannot be read here (macros with arguments and `include are not supported in port and parameter declarations)",
+    "verilogExpected": "\"{{expected}}\" expected, found \"{{found}}\"",
+    "verilogName": "a name expected, found \"{{found}}\"",
+    "verilogExpression": "\"{{found}}\" cannot start an expression",
+    "verilogUnknownName": "{{name}} is not a parameter",
+    "verilogRange": "the range of {{name}} must be [msb:lsb]",
+    "verilogRangeValue": "the range of {{name}} cannot be computed from the text (Yosys may still synthesize it)",
+    "verilogPortType": "ref ports are not supported",
+    "verilogPortType_port": "port {{port}} has a range on an integer type",
+    "verilogPortType_port_type": "the type \"{{type}}\" of port {{port}} is not supported",
+    "verilogTypeParam": "type parameters are not supported",
+    "verilogParamTwice": "parameter {{name}} is declared twice",
+    "verilogPortDirection": "the first port of module {{module}} has no direction",
+    "verilogUnpacked": "port {{port}} is an array (unpacked dimension); only packed ranges such as [7:0] are supported",
+    "verilogPortExpression": "module {{module}} uses a port expression (.name(...) or {...} in the port list)",
+    "verilogEndName": "\"endmodule : {{found}}\" does not match module {{module}}",
+    "verilogMixedPorts": "module {{module}} declares its ports in the header and again in its body",
+    "verilogNotInList": "{{port}} is not in the port list of module {{module}}",
+    "verilogPortTwice": "port {{port}} is declared twice",
+    "verilogNoDirection": "port {{port}} of module {{module}} has no input/output declaration",
+    "verilogNoModule": "the text has no module",
+    "verilogTopName": "the module name {{module}} cannot be passed to Yosys (use a plain name)",
+    "portTooWide": "port {{port}} is {{width}} bits wide (at most {{max}})",
+    "paramSyntax": "\"{{entry}}\" is not name=integer",
+    "paramTwice": "parameter {{name}} is set twice",
+    "paramUnknown": "module {{module}} has no parameter {{name}}",
+    "paramLocal": "{{name}} is a localparam of module {{module}} and cannot be set",
+    "portMissing": "the netlist has no port {{port}}",
+    "portWidth": "port {{port}} is {{width}} bits in the netlist, {{declared}} declared",
+    "verilogHeader": "cannot read the port {{port}} written by Yosys"
+  },
+  "evo": {
+    "notSynthesized": "the part has no netlist: Logisim-evolution gets its pins with undefined outputs, and it opens here not synthesized",
+    "unusable": "the stored netlist cannot be used ({{message}}): Logisim-evolution gets the pins with undefined outputs",
+    "staleMismatch": "the pins changed since the last synthesis: Logisim-evolution gets the pins with undefined outputs; synthesize before exporting",
+    "stale": "the text changed since the last synthesis: Logisim-evolution gets the netlist of the earlier text; synthesize before exporting",
+    "initOne": "{{count}} storage cell(s) power up at 1 here; Logisim-evolution starts them at 0",
+    "pinsLost": "Logisim-evolution reads these pins under another name or width, so they are not wired there: {{names}}",
+    "blifOnly": "Logisim-evolution has no Verilog component: it opens this part as a BLIF Circuit of the synthesized gates, and drops the Verilog text, parameters and stored netlist when it saves the file",
+    "importNoNetlist": "the file has no netlist for this Verilog entity; synthesize it to simulate",
+    "importNetlistBroken": "the stored netlist of this Verilog entity cannot be read; synthesize it again",
+    "importNetlistUnusable": "the stored netlist of this Verilog entity cannot be used ({{message}}); synthesize it again",
+    "importStale": "the stored netlist of this Verilog entity is from an earlier version of its text or parameters; it runs until the part is synthesized again",
+    "importNoPorts": "the ports of this Verilog entity cannot be read; it has no pins until the text is fixed"
+  }
+}

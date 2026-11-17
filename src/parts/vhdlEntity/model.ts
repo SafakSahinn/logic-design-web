@@ -18,7 +18,7 @@ import {
 import { NetlistError, compileNetlist, type CompiledNetlist, type Netlist } from '../../netlist';
 import type { CircuitComponentInstance, PinDefinition } from '../../types/circuit';
 import type { PartAttrEdit } from '../registry';
-import { BODY_WIDTH, PIN_GAP, PIN_TOP, pinRemap, pinsFor, pinsSame, type PortShape } from '../shared/netlistPart';
+import { BODY_WIDTH, PIN_GAP, PIN_TOP, fingerprint, pinRemap, pinsFor, pinsSame, type PortShape } from '../shared/netlistPart';
 import { DEFAULT_NETLIST } from './defaultNetlist';
 import { DEFAULT_VHDL } from './defaultVhdl';
 
@@ -53,22 +53,8 @@ export function partState(comp: CircuitComponentInstance): VhdlPartState {
   return { ...s, generics: typeof s.generics === 'string' ? s.generics : '', netlist: isStoredNetlist(s.netlist) ? s.netlist : undefined };
 }
 
-/** cyrb53: a short fingerprint of the text and generics a synthesis ran on (kept instead of a copy) */
-function hash(text: string): string {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-}
-
 /** Generics are compared without spaces, so "W = 8" and "W=8" are the same setting */
-export const synthKey = (vhdl: string, generics: string): string => hash(`${generics.replace(/\s+/g, '')}\u0000${vhdl}`);
+export const synthKey = (vhdl: string, generics: string): string => fingerprint(`${generics.replace(/\s+/g, '')}\u0000${vhdl}`);
 export const currentKey = (s: VhdlPartState): string => synthKey(s.vhdl, s.generics);
 
 export type SynthStatus = 'ok' | 'stale' | 'failed' | 'none';

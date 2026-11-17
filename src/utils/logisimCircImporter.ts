@@ -2021,7 +2021,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // A part named after another circuit of the file (no library) is a subcircuit instance
       const isSub = !compNode.getAttribute('lib') && circuitByName.has(compName);
       const ttlType = ttlLibs.has(compNode.getAttribute('lib') ?? '') && isTtlType(`ttl${compName.trim()}`) ? (`ttl${compName.trim()}` as ComponentType) : null;
-      const registryPart = isSub || ttlType ? undefined : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName);
+      const registryPart = isSub || ttlType ? undefined : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName, attr);
       let nativeType = isSub ? 'subcircuit' : ttlType ?? registryPart?.id ?? mapCircCompType(compName, isOutput, constVal);
       let sub: SubcircuitInfo | undefined;
       if (isSub) {

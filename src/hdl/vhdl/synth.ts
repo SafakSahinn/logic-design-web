@@ -50,7 +50,7 @@ export async function synthesizeVhdl(run: HdlToolRun, source: string, options: V
   // ghdl writes the modules a design instantiates before the design itself
   const header = (topNote && headers.find((h) => h.name.toLowerCase() === topNote.toLowerCase())) || headers[headers.length - 1];
 
-  const yosys = await verilogToBlif(run, ghdl.verilog, header.name, options.signal);
+  const yosys = await verilogToBlif(run, ghdl.verilog, header.name, { signal: options.signal });
   diagnostics.push(...yosys.diagnostics);
   if (!yosys.ok) return { ok: false, stage: 'yosys', diagnostics };
 

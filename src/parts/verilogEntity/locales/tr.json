@@ -1,0 +1,114 @@
+{
+  "meta": {
+    "badge": "V",
+    "name": "Verilog Entity",
+    "description": "Yosys ile kapı düzeyinde netlist'e sentezlenen bir Verilog / SystemVerilog tasarımı; pinleri en üst modülün portlarından gelir"
+  },
+  "attributes": {
+    "verilog": {
+      "label": "Verilog",
+      "title": "Verilog metni ve sentezi"
+    },
+    "parameters": {
+      "label": "Parametreler",
+      "title": "En üst modülün parametre değerleri, örneğin W=8, N=2 (onlu tam sayılar, adlarda büyük-küçük harf ayrımı var); boş = metindeki varsayılanlar"
+    },
+    "status": {
+      "label": "Netlist",
+      "title": "Benzetimi yapılan devre: son sentezin netlist'i"
+    }
+  },
+  "status": {
+    "ok": "{{top}}: {{inputs}} giriş, {{outputs}} çıkış, {{cells}} hücre",
+    "stale": "Metin son sentezden beri değişti; önceki devre çalışmaya devam ediyor. Güncellemek için sentezleyin.",
+    "staleMismatch": "Portlar son sentezden beri değişti; yeniden sentezlenene kadar çıkışlar X.",
+    "failed": "Son sentez başarısız oldu ({{count}} hata); mesajlara bakın.",
+    "failedRunning": "Son sentez başarısız oldu ({{count}} hata); önceki devre çalışmaya devam ediyor.",
+    "none": "Henüz sentezlenmedi; çıkışlar X.",
+    "broken": "Saklı netlist kullanılamıyor: {{message}}"
+  },
+  "editor": {
+    "edit": "Düzenle…",
+    "editTitle": "Verilog düzenleyicisini aç",
+    "synthesize": "Sentezle",
+    "synthesizeTitle": "Metni Yosys ile sentezle (düzenleyicide Ctrl+Enter)",
+    "synthesizing": "Sentezleniyor…",
+    "cancel": "İptal",
+    "dialogTitle": "Verilog: {{name}}",
+    "load": "Dosyadan yükle…",
+    "loadTitle": "Metni bir .v / .sv dosyasıyla değiştir",
+    "loadFailed": "Dosya okunamadı.",
+    "close": "Kapat",
+    "discard": "Değişiklikleri at",
+    "apply": "Uygula",
+    "applyTitle": "Metni sentezlemeden kaydet (Ctrl+S)",
+    "applySynthesize": "Uygula ve sentezle",
+    "unsaved": "kaydedilmemiş değişiklik",
+    "lineCol": "Satır {{line}}, sütun {{column}}",
+    "messages": "Mesajlar",
+    "noMessages": "Mesaj yok.",
+    "messagesOf": "Son sentezin mesajları",
+    "messagesOld": "Metnin önceki bir sürümünün mesajları",
+    "done": "Sentezlendi: {{inputs}} giriş, {{outputs}} çıkış.",
+    "toolError": "{{message}}",
+    "downloadDeclined": "Sentez için Yosys gerekiyor (bir kerelik yaklaşık {{size}} MB indirme). O zamana kadar parçanın saklı netlist'i çalışır.",
+    "paramsInvalid": "Parametreler: {{message}}",
+    "preview": "Metinden okunan portlar: {{inputs}} giriş, {{outputs}} çıkış",
+    "previewError": "Portlar henüz metinden okunamıyor: {{message}}"
+  },
+  "severity": {
+    "error": "hata",
+    "warning": "uyarı",
+    "note": "not"
+  },
+  "errorAt": "satır {{line}}: {{message}}",
+  "hdlErrors": {
+    "verilogEnd": "metin erken bitiyor",
+    "verilogEnd_expected": "\"{{expected}}\" eksik",
+    "verilogEnd_module": "{{module}} modülünde \"endmodule\" yok",
+    "verilogMacro": "`{{macro}} makrosu burada okunamıyor (port ve parametre bildirimlerinde argümanlı makrolar ve `include desteklenmiyor)",
+    "verilogExpected": "\"{{expected}}\" bekleniyordu, \"{{found}}\" bulundu",
+    "verilogName": "bir ad bekleniyordu, \"{{found}}\" bulundu",
+    "verilogExpression": "\"{{found}}\" ile bir ifade başlayamaz",
+    "verilogUnknownName": "{{name}} bir parametre değil",
+    "verilogRange": "{{name}} aralığı [msb:lsb] biçiminde olmalı",
+    "verilogRangeValue": "{{name}} aralığı metinden hesaplanamıyor (Yosys yine de sentezleyebilir)",
+    "verilogPortType": "ref portları desteklenmiyor",
+    "verilogPortType_port": "{{port}} portunda tam sayı türüne aralık verilmiş",
+    "verilogPortType_port_type": "{{port}} portunun \"{{type}}\" türü desteklenmiyor",
+    "verilogTypeParam": "tür parametreleri desteklenmiyor",
+    "verilogParamTwice": "{{name}} parametresi iki kez bildirilmiş",
+    "verilogPortDirection": "{{module}} modülünün ilk portunun yönü yok",
+    "verilogUnpacked": "{{port}} portu bir dizi (paketlenmemiş boyut); yalnızca [7:0] gibi paketli aralıklar destekleniyor",
+    "verilogPortExpression": "{{module}} modülü port ifadesi kullanıyor (port listesinde .ad(...) ya da {...})",
+    "verilogEndName": "\"endmodule : {{found}}\", {{module}} modülüyle eşleşmiyor",
+    "verilogMixedPorts": "{{module}} modülü portlarını hem başlıkta hem gövdede bildiriyor",
+    "verilogNotInList": "{{port}}, {{module}} modülünün port listesinde yok",
+    "verilogPortTwice": "{{port}} portu iki kez bildirilmiş",
+    "verilogNoDirection": "{{module}} modülünün {{port}} portunun input/output bildirimi yok",
+    "verilogNoModule": "metinde modül yok",
+    "verilogTopName": "{{module}} modül adı Yosys'e verilemiyor (sade bir ad kullanın)",
+    "portTooWide": "{{port}} portu {{width}} bit genişliğinde (en çok {{max}})",
+    "paramSyntax": "\"{{entry}}\" ad=tam sayı biçiminde değil",
+    "paramTwice": "{{name}} parametresi iki kez ayarlanmış",
+    "paramUnknown": "{{module}} modülünde {{name}} parametresi yok",
+    "paramLocal": "{{name}}, {{module}} modülünün bir localparam'ı; ayarlanamaz",
+    "portMissing": "netlist'te {{port}} portu yok",
+    "portWidth": "{{port}} portu netlist'te {{width}} bit, bildirimde {{declared}}",
+    "verilogHeader": "Yosys'in yazdığı {{port}} portu okunamıyor"
+  },
+  "evo": {
+    "notSynthesized": "parçanın netlist'i yok: Logisim-evolution'a pinler tanımsız çıkışlarla gider; burada sentezlenmemiş olarak açılır",
+    "unusable": "saklanan netlist kullanılamıyor ({{message}}): Logisim-evolution'a pinler tanımsız çıkışlarla gider",
+    "staleMismatch": "pinler son sentezden beri değişti: Logisim-evolution'a pinler tanımsız çıkışlarla gider; dışa aktarmadan önce sentezleyin",
+    "stale": "metin son sentezden beri değişti: Logisim-evolution'a önceki metnin netlist'i gider; dışa aktarmadan önce sentezleyin",
+    "initOne": "{{count}} bellek hücresi burada 1 ile başlar; Logisim-evolution onları 0 ile başlatır",
+    "pinsLost": "Logisim-evolution bu pinleri başka bir ad ya da genişlikle okur, bu yüzden orada bağlanmazlar: {{names}}",
+    "blifOnly": "Logisim-evolution'da Verilog bileşeni yok: bu parçayı sentezlenmiş kapılardan oluşan bir BLIF Circuit olarak açar ve dosyayı kaydederken Verilog metnini, parametreleri ve saklanan netlist'i siler",
+    "importNoNetlist": "dosyada bu Verilog entity'sinin netlist'i yok; simüle etmek için sentezleyin",
+    "importNetlistBroken": "bu Verilog entity'sinin saklanan netlist'i okunamıyor; yeniden sentezleyin",
+    "importNetlistUnusable": "bu Verilog entity'sinin saklanan netlist'i kullanılamıyor ({{message}}); yeniden sentezleyin",
+    "importStale": "bu Verilog entity'sinin saklanan netlist'i metnin ya da parametrelerin daha eski bir sürümünden; parça yeniden sentezlenene kadar o çalışır",
+    "importNoPorts": "bu Verilog entity'sinin portları okunamıyor; metin düzeltilene kadar pini yok"
+  }
+}

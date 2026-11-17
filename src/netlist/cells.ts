@@ -180,6 +180,9 @@ export function libraryCell(type: string, pins: CellPins): { cells: NetlistCell[
     cells = [{ kind: 'lut', inputs: spec.inputs.map((p) => r.net(p)), output: r.net(spec.output), rows: spec.rows, onSet: spec.onSet }];
   } else if (type === '$_TBUF_') {
     cells = [{ kind: 'tbuf', a: r.net('A'), en: r.ctl('E', 'P'), output: r.net('Y') }];
+  } else if (type === 'TRIS' || type === 'TRISI') {
+    // evo's tri-state gates: Y = A while B is high (TRIS) / not high (TRISI)
+    cells = [{ kind: 'tbuf', a: r.net('A'), en: r.ctl('B', type === 'TRIS' ? 'P' : 'N'), output: r.net('Y') }];
   } else if (type === 'PULLUP' || type === 'PULLDOWN') {
     cells = [{ kind: 'pull', net: r.net('Y'), high: type === 'PULLUP' }];
   } else {

@@ -6,6 +6,7 @@
 
 import './blifCircuit';
 import './vhdlEntity';
+import './verilogEntity';
 
 export {
   allParts,
