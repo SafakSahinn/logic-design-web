@@ -35,6 +35,16 @@ export interface SimContext {
   setBitsOut(index: number, bits: SignalValue[]): void;
   /** The pin is wired to something (a wire or another pin) */
   isConnected(pinId: string): boolean;
+  /**
+   * The simulation's tick count (the clocks' tick; 0 without clocks or after a reset). Logisim parts that act
+   * "on a new tick" compare it with the tick they last acted on.
+   */
+  tick: number;
+  /**
+   * Number of the current simulation run: the same for every step of one run (or for the manual single steps of
+   * one tick), new for the next run. A part can tell "inputs still settling after a tick" from a later change.
+   */
+  run: number;
 }
 
 /** What a part's draw() gets from the canvas renderer (the same colours the built-in parts use) */
@@ -132,7 +142,8 @@ export type CircLibrary =
   | '#BFH-Praktika'
   | '#Base'
   | '#Input/Output-Extra'
-  | '#HDL-IP';
+  | '#HDL-IP'
+  | '#TCL';
 
 /** A point relative to the Logisim part's loc, the part facing east */
 export interface CircPoint {
@@ -255,6 +266,22 @@ export interface PartDefinition {
 }
 
 const parts = new Map<string, PartDefinition>();
+
+// Parts whose outputs change outside an edit (e.g. a runtime finished loading) ask the canvas to simulate again.
+const simulationListeners = new Set<() => void>();
+
+/** The canvas listens here and runs the simulation again on each request; returns the unsubscribe function */
+export function onSimulationRequest(listener: () => void): () => void {
+  simulationListeners.add(listener);
+  return () => {
+    simulationListeners.delete(listener);
+  };
+}
+
+/** Asks the canvas to simulate the circuit again */
+export function requestSimulation(): void {
+  for (const listener of simulationListeners) listener();
+}
 
 /** i18n namespace of a part: its dictionaries are registered under "part.<id>" */
 export function partNamespace(id: PartId): string {

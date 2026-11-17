@@ -150,7 +150,7 @@ import {
   imageShownSize,
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
-import { PART_TOOLBOX_GROUPS, getPart, partName, partSize, partToolboxName, partsInGroup, toolboxGroupTitle, type ToolboxGroup } from '../parts';
+import { PART_TOOLBOX_GROUPS, getPart, onSimulationRequest, partName, partSize, partToolboxName, partsInGroup, toolboxGroupTitle, type ToolboxGroup } from '../parts';
 import { AppearanceShapesSvg } from './AppearanceShapes';
 import { resolveDynamicLive, resolveDynamicTemplate } from '../utils/dynamicElements';
 import AppearanceEditor from './AppearanceEditor';
@@ -1204,6 +1204,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     }, Math.max(0, Math.ceil(soonest - ttlNow())));
     return () => clearTimeout(timer);
   }, [isRunning, components, wires]);
+
+  // Registry parts ask for a new run when their outputs change outside an edit (a Tcl runtime finished loading)
+  useEffect(
+    () =>
+      onSimulationRequest(() => {
+        setComponents((prev) => {
+          const sim = simulateCircuit(prev, wires);
+          setWires(sim.wires);
+          return sim.components;
+        });
+      }),
+    [wires]
+  );
 
   // Real-time clocks (subcircuits included) read the wall clock on each run: run again while one exists. Evolution
   // wakes every 10 ms; here milliseconds tick every 100 ms and seconds on each new second.

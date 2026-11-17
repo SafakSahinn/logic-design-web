@@ -110,6 +110,8 @@ const BASE_LIB = 8;
 const EXTRA_LIB = 9;
 /** Library number of evolution's #HDL-IP (its BLIF circuit, Aşama 6a) in the exported file */
 const HDL_LIB = 10;
+/** Library number of evolution's #TCL (its TCL Generic, Aşama 6d) in the exported file */
+const TCL_LIB = 11;
 /** Library number of each Logisim library a component-registry part (src/parts) can be written to */
 const CIRC_LIB_NUMBER: Record<CircLibrary, number> = {
   '#Wiring': 0,
@@ -123,6 +125,7 @@ const CIRC_LIB_NUMBER: Record<CircLibrary, number> = {
   '#Base': BASE_LIB,
   '#Input/Output-Extra': EXTRA_LIB,
   '#HDL-IP': HDL_LIB,
+  '#TCL': TCL_LIB,
 };
 
 /*
@@ -273,6 +276,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesBase = false;
   let usesExtra = false;
   let usesHdl = false;
+  let usesTcl = false;
   let usesImage = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
@@ -1458,6 +1462,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             if (lib === BASE_LIB) usesBase = true;
             if (lib === EXTRA_LIB) usesExtra = true;
             if (lib === HDL_LIB) usesHdl = true;
+            if (lib === TCL_LIB) usesTcl = true;
             const attrs = Object.entries(circ.exportAttrs?.(c) ?? {})
               .map(([name, val]) => `<a name="${xmlEsc(name)}" val="${xmlEsc(val)}"/>`)
               .join('');
@@ -1972,7 +1977,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#Plexers" name="2"/>
   <lib desc="#Arithmetic" name="3"/>
   <lib desc="#Memory" name="4"/>
-  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}${usesHdl ? `\n  <lib desc="#HDL-IP" name="${HDL_LIB}"/>` : ''}
+  <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}${usesHdl ? `\n  <lib desc="#HDL-IP" name="${HDL_LIB}"/>` : ''}${usesTcl ? `\n  <lib desc="#TCL" name="${TCL_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
 ${top}

@@ -4,7 +4,7 @@
 // One worker per npm package (nextpnr-ecp5 and ecppack share one), kept alive so the compiled WebAssembly is
 // reused. Runs on the same package are queued. Cancelling or a timeout terminates that worker; the next run
 // starts a fresh one (the downloaded files then come from the browser cache).
-import { getToolDefinition, wasmModuleUrl } from './registry';
+import { getToolDefinition, inProcessBaseUrl, wasmModuleUrl } from './registry';
 import type { WorkerRequest, WorkerResponse } from './wasmProtocol';
 import { DEFAULT_TIMEOUT_MS, ToolError, type ToolBackend, type ToolId, type ToolRunRequest, type ToolRunResult } from './types';
 
@@ -128,12 +128,16 @@ export function createWasmBackend(): ToolBackend {
     async probe(tool: ToolId) {
       const wasm = getToolDefinition(tool).wasm;
       // Probing must not download anything: a pinned version is known to exist on the CDN.
-      if (!wasm || !wasmModuleUrl(wasm)) return { available: false, reason: 'no-backend' };
+      // An in-process build (Tcl) is available here too, so toolStatus / prepareTool handle its download consent.
+      if (!wasm || (!wasmModuleUrl(wasm) && !inProcessBaseUrl(wasm))) return { available: false, reason: 'no-backend' };
       return { available: true, version: `${wasm.pkg}@${wasm.version}` };
     },
 
     async run(request: ToolRunRequest): Promise<ToolRunResult> {
       const wasm = getToolDefinition(request.tool).wasm;
+      if (wasm?.inProcess) {
+        throw new ToolError('bad-request', 'This tool runs in-process (src/tools/tcl), not through runTool', request.tool);
+      }
       const url = wasm ? wasmModuleUrl(wasm) : null;
       if (!wasm || !url) throw new ToolError('unavailable', 'No WASM build for this tool', request.tool, 'no-backend');
       const slot = slotFor(wasm.pkg);

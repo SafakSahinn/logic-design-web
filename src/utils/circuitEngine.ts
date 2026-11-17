@@ -881,6 +881,16 @@ export function portIoPins(comp: CircuitComponentInstance): SignalValue[] {
 let rtcClock: () => number = () => Date.now();
 // One simulateCircuit run reads the clock once, so a clock that ticks mid-run cannot keep the circuit from settling
 let rtcFrozen: number | null = null;
+// The simulation tick registry parts see (SimContext.tick / run): one value for a whole simulateCircuit run, as the
+// real-time clock above. The tick is the clocks' tick count (Logisim has one for the whole simulation); the run is
+// a number that is new for every top-level run (an IC's inner run keeps its caller's).
+let tickFrozen: { tick: number; run: number } | null = null;
+let runCounter = 0;
+function clockTickOf(components: CircuitComponentInstance[]): number {
+  let tick = 0;
+  for (const c of components) if (c.type === 'clock') tick = Math.max(tick, c.state.clockTick ?? 0);
+  return tick;
+}
 export function setRtcClock(fn?: () => number): void {
   rtcClock = fn ?? (() => Date.now());
 }
@@ -6445,6 +6455,9 @@ export function simulateCircuitStep(
     return false;
   };
 
+  // A step outside simulateCircuit (the manual single step) has the same run number for every step of one tick
+  const simTick = tickFrozen ?? { tick: clockTickOf(components), run: -1 - clockTickOf(components) };
+
   // Step 3: Compute gate/block outputs based on their current inputs
   newComps.forEach((comp) => {
     const inVals = comp.inputs.map((p) => (p.value === 1 ? 1 : 0));
@@ -7066,7 +7079,7 @@ export function simulateCircuitStep(
       }
       default:
         // Parts of the component registry (Aşama 6+); built-in parts never get here
-        getPart(comp.type)?.simulate?.(comp, { raw, setOut, setBitsOut, isConnected: isPinConnected });
+        getPart(comp.type)?.simulate?.(comp, { raw, setOut, setBitsOut, isConnected: isPinConnected, tick: simTick.tick, run: simTick.run });
     }
   });
 
@@ -7094,10 +7107,13 @@ export function simulateCircuit(
   // Real-time clocks read one time for the whole run (an IC's inner run keeps its caller's)
   const ownsRtc = rtcFrozen === null;
   if (ownsRtc) rtcFrozen = rtcClock();
+  const ownsTick = tickFrozen === null;
+  if (ownsTick) tickFrozen = { tick: clockTickOf(components), run: ++runCounter };
   try {
     return simulateCircuitRun(components, wires, maxIterations);
   } finally {
     if (ownsRtc) rtcFrozen = null;
+    if (ownsTick) tickFrozen = null;
   }
 }
 

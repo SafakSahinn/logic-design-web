@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "badge": "TCL",
+    "name": "TCL Generic",
+    "description": "A part driven by a Tcl script (Logisim-evolution's TCL Generic protocol); its pins come from the ports of a VHDL entity"
+  },
+  "attributes": {
+    "tcl": {
+      "label": "Tcl",
+      "title": "The Tcl script, the VHDL interface that gives the pins, and the Tcl runtime"
+    },
+    "status": {
+      "label": "Status",
+      "title": "What the part does now"
+    }
+  },
+  "status": {
+    "running": "The script runs: {{inputs}} inputs, {{outputs}} outputs.",
+    "noRuntime": "The Tcl runtime is not loaded; outputs are X. Use \"Load Tcl\".",
+    "heldNoRuntime": "The Tcl runtime is not loaded; outputs keep their last values. Use \"Load Tcl\".",
+    "interface": "The interface cannot be read: {{message}}"
+  },
+  "runtime": {
+    "load": "Load Tcl",
+    "loadTitle": "Download the Tcl runtime (wacl, about 5 MB, once) and run the scripts in it",
+    "loading": "Loading the Tcl runtime… {{percent}}%",
+    "needed": "Scripts run in an in-app Tcl that is downloaded once.",
+    "declined": "The Tcl runtime was not downloaded; the script does not run.",
+    "failed": "The Tcl runtime could not be loaded: {{message}}"
+  },
+  "editor": {
+    "scriptButton": "Script…",
+    "scriptButtonTitle": "Open the Tcl script",
+    "vhdlButton": "Interface…",
+    "vhdlButtonTitle": "Open the VHDL entity that gives the pins",
+    "restart": "Restart",
+    "restartTitle": "Run the script again from the start (its variables are lost)",
+    "scriptTitle": "Tcl script",
+    "vhdlTitle": "Interface (VHDL entity): {{name}}",
+    "load": "Load file…",
+    "loadScriptTitle": "Replace the script with a .tcl file",
+    "loadVhdlTitle": "Replace the interface with a .vhd / .vhdl file",
+    "loadFailed": "The file could not be read.",
+    "close": "Close",
+    "discard": "Discard changes",
+    "apply": "Apply",
+    "applyRestart": "Apply and restart",
+    "applyTitle": "Keep the text (Ctrl+S)",
+    "unsaved": "unsaved changes",
+    "lineCol": "Line {{line}}, column {{column}}",
+    "console": "Console (echo / puts)",
+    "noOutput": "No output yet.",
+    "scriptHint": "logisimForce runs on every tick; examine / force read and set the pins.",
+    "vhdlHint": "Only the entity's ports are used: in ports become inputs, the others outputs.",
+    "ports": "Inputs: {{inputs}}  Outputs: {{outputs}}",
+    "interfaceError": "Interface: {{message}}",
+    "save": "Save file…",
+    "saveScriptTitle": "Save the script as {{file}} (Logisim-evolution runs the script from this file)",
+    "saveVhdlTitle": "Save the interface as a .vhd file"
+  },
+  "scriptErrors": {
+    "load": "the script failed while loading: {{message}}",
+    "force": "logisimForce failed: {{message}}",
+    "examine": "logisimExamine failed: {{message}}"
+  },
+  "limits": {
+    "commands": "the script ran too many commands (an endless loop?) and was stopped",
+    "time": "the script ran too long (an endless loop?) and was stopped"
+  },
+  "errorAt": "line {{line}}: {{message}}",
+  "evo": {
+    "unreadable": "Logisim-evolution cannot read this entity ({{reason}}); it stops at an error dialog while opening the file",
+    "reason": {
+      "duplicated": "the text has more than one entity",
+      "noEntity": "it needs \"entity <name> is … end <name>;\" with the same name, in the same case, and without the word entity after end",
+      "portDecl": "a port declaration cannot be read",
+      "portType": "port {{port}}: it reads only std_logic and std_logic_vector(<number> downto <number>)",
+      "portMode": "port {{port}}: its mode must be in, out or inout"
+    },
+    "ports": "Logisim-evolution reads other pins from the text than this part has; the wires are placed by position, so they will not match",
+    "scriptFile": "Logisim-evolution runs the script from the file “{{path}}” (its TCL file attribute) in an installed tclsh; the script is stored in the file for this app only and Logisim-evolution drops it when it saves. Save the script as {{file}} (Script… → Save file…) and choose it in Logisim-evolution (a relative path is resolved from the folder Logisim-evolution was started in)",
+    "importNoScript": "the file has no script for this TCL Generic (e.g. saved by Logisim-evolution, whose script is in “{{path}}”); it starts with the default script, load the .tcl file with Script… → Load file…",
+    "importNoPorts": "the ports of this TCL Generic cannot be read from its interface; it has no pins until the interface is fixed"
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "badge": "TCL",
+    "name": "TCL Generic",
+    "description": "Bir Tcl betiğiyle çalışan parça (Logisim-evolution'ın TCL Generic protokolü); uçları bir VHDL varlığının portlarından gelir"
+  },
+  "attributes": {
+    "tcl": {
+      "label": "Tcl",
+      "title": "Tcl betiği, uçları veren VHDL arayüzü ve Tcl çalışma ortamı"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Parçanın şu an ne yaptığı"
+    }
+  },
+  "status": {
+    "running": "Betik çalışıyor: {{inputs}} giriş, {{outputs}} çıkış.",
+    "noRuntime": "Tcl çalışma ortamı yüklenmedi; çıkışlar X. \"Tcl'yi yükle\" düğmesini kullanın.",
+    "heldNoRuntime": "Tcl çalışma ortamı yüklenmedi; çıkışlar son değerlerinde kalıyor. \"Tcl'yi yükle\" düğmesini kullanın.",
+    "interface": "Arayüz okunamıyor: {{message}}"
+  },
+  "runtime": {
+    "load": "Tcl'yi yükle",
+    "loadTitle": "Tcl çalışma ortamını (wacl, yaklaşık 5 MB, bir kez) indir ve betikleri onda çalıştır",
+    "loading": "Tcl çalışma ortamı yükleniyor… %{{percent}}",
+    "needed": "Betikler, bir kez indirilen uygulama içi bir Tcl'de çalışır.",
+    "declined": "Tcl çalışma ortamı indirilmedi; betik çalışmıyor.",
+    "failed": "Tcl çalışma ortamı yüklenemedi: {{message}}"
+  },
+  "editor": {
+    "scriptButton": "Betik…",
+    "scriptButtonTitle": "Tcl betiğini aç",
+    "vhdlButton": "Arayüz…",
+    "vhdlButtonTitle": "Uçları veren VHDL varlığını aç",
+    "restart": "Yeniden başlat",
+    "restartTitle": "Betiği baştan çalıştır (değişkenleri silinir)",
+    "scriptTitle": "Tcl betiği",
+    "vhdlTitle": "Arayüz (VHDL varlığı): {{name}}",
+    "load": "Dosya yükle…",
+    "loadScriptTitle": "Betiği bir .tcl dosyasıyla değiştir",
+    "loadVhdlTitle": "Arayüzü bir .vhd / .vhdl dosyasıyla değiştir",
+    "loadFailed": "Dosya okunamadı.",
+    "close": "Kapat",
+    "discard": "Değişiklikleri at",
+    "apply": "Uygula",
+    "applyRestart": "Uygula ve yeniden başlat",
+    "applyTitle": "Metni kaydet (Ctrl+S)",
+    "unsaved": "kaydedilmemiş değişiklikler",
+    "lineCol": "Satır {{line}}, sütun {{column}}",
+    "console": "Konsol (echo / puts)",
+    "noOutput": "Henüz çıktı yok.",
+    "scriptHint": "logisimForce her tikte çalışır; examine / force uçları okur ve ayarlar.",
+    "vhdlHint": "Varlığın yalnızca portları kullanılır: in portları giriş, diğerleri çıkış olur.",
+    "ports": "Girişler: {{inputs}}  Çıkışlar: {{outputs}}",
+    "interfaceError": "Arayüz: {{message}}",
+    "save": "Dosyaya kaydet…",
+    "saveScriptTitle": "Betiği {{file}} olarak kaydet (Logisim-evolution betiği bu dosyadan çalıştırır)",
+    "saveVhdlTitle": "Arayüzü .vhd dosyası olarak kaydet"
+  },
+  "scriptErrors": {
+    "load": "betik yüklenirken hata verdi: {{message}}",
+    "force": "logisimForce hata verdi: {{message}}",
+    "examine": "logisimExamine hata verdi: {{message}}"
+  },
+  "limits": {
+    "commands": "betik çok fazla komut çalıştırdı (sonsuz döngü mü?) ve durduruldu",
+    "time": "betik çok uzun sürdü (sonsuz döngü mü?) ve durduruldu"
+  },
+  "errorAt": "satır {{line}}: {{message}}",
+  "evo": {
+    "unreadable": "Logisim-evolution bu entity'yi okuyamaz ({{reason}}); dosyayı açarken bir hata penceresinde durur",
+    "reason": {
+      "duplicated": "metinde birden çok entity var",
+      "noEntity": "aynı adla, aynı büyük/küçük harfle ve end'den sonra entity sözcüğü olmadan \"entity <ad> is … end <ad>;\" ister",
+      "portDecl": "bir port bildirimi okunamıyor",
+      "portType": "{{port}} portu: yalnızca std_logic ve std_logic_vector(<sayı> downto <sayı>) okur",
+      "portMode": "{{port}} portu: yönü in, out ya da inout olmalı"
+    },
+    "ports": "Logisim-evolution metinden bu parçadakinden farklı pinler okur; teller konuma göre yerleştiği için uyuşmaz",
+    "scriptFile": "Logisim-evolution betiği “{{path}}” dosyasından (TCL dosyası özelliği) kurulu bir tclsh ile çalıştırır; betik dosyada yalnız bu uygulama için saklanır ve Logisim-evolution kaydederken onu siler. Betiği {{file}} olarak kaydedin (Betik… → Dosyaya kaydet…) ve Logisim-evolution’da seçin (göreli yol, Logisim-evolution’ın başlatıldığı klasöre göre çözülür)",
+    "importNoScript": "dosyada bu TCL Generic’in betiği yok (ör. Logisim-evolution ile kaydedilmiş; betiği “{{path}}” dosyasında); varsayılan betikle başlar, .tcl dosyasını Betik… → Dosya yükle… ile yükleyin",
+    "importNoPorts": "bu TCL Generic’in portları arayüzünden okunamıyor; arayüz düzeltilene kadar bacaksız kalır"
+  }
+}

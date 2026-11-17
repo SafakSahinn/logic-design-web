@@ -7,11 +7,13 @@
 import './blifCircuit';
 import './vhdlEntity';
 import './verilogEntity';
+import './tclGeneric';
 
 export {
   allParts,
   getPart,
   mergePartCatalog,
+  onSimulationRequest,
   partName,
   partNamespace,
   partOfCirc,
@@ -21,6 +23,7 @@ export {
   partToolboxName,
   partsInGroup,
   registerPart,
+  requestSimulation,
   toolboxGroupTitle,
   PART_TOOLBOX_GROUPS,
 } from './registry';

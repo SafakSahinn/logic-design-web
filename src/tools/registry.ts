@@ -25,6 +25,11 @@ export interface WasmToolInfo {
   entry: string;
   /** Approximate first download size; the user is asked before downloading */
   downloadMB: number;
+  /**
+   * The build runs in the page itself instead of the worker backend (Tcl: the simulation needs synchronous
+   * answers, see src/tools/tcl). runTool() refuses such a tool; its own module loads it from `path`.
+   */
+  inProcess?: { path: string };
 }
 
 export interface ToolDefinition {
@@ -70,9 +75,16 @@ export const TOOL_DEFINITIONS: Record<ToolId, ToolDefinition> = {
   tcl: {
     id: 'tcl',
     displayName: 'Tcl',
-    // Runs the same WASM interpreter (wacl) everywhere so scripts behave identically.
-    // The package, version and entry are settled in step 6d.
-    wasm: { pkg: 'wacl', version: '', entry: 'run', downloadMB: 2 },
+    // Runs the same WASM interpreter (wacl, Tcl 8.6.6) everywhere so scripts behave identically; no native
+    // tclsh on purpose (Tcl can exec). wacl has no npm package of its own: LiveCodes ships it in
+    // @live-codes/browser-compilers (wacl.js 0.2 MB + wacl.wasm 1.9 MB + Tcl library 2.3 MB).
+    wasm: {
+      pkg: '@live-codes/browser-compilers',
+      version: '0.22.10',
+      entry: 'wacl',
+      downloadMB: 5,
+      inProcess: { path: 'dist/wacl/' },
+    },
     usedBy: ['6d'],
   },
 };
@@ -87,9 +99,16 @@ export function getToolDefinition(id: ToolId): ToolDefinition {
   return TOOL_DEFINITIONS[id];
 }
 
-/** CDN address of a WASM build's ES module, or null when the build is not wired up yet */
+/** CDN address of a WASM build's ES module, or null when the build is not wired up yet or runs in-process */
 export function wasmModuleUrl(wasm: WasmToolInfo): string | null {
-  return wasm.version ? `https://cdn.jsdelivr.net/npm/${wasm.pkg}@${wasm.version}/gen/bundle.js` : null;
+  if (!wasm.version || wasm.inProcess) return null;
+  return `https://cdn.jsdelivr.net/npm/${wasm.pkg}@${wasm.version}/gen/bundle.js`;
+}
+
+/** CDN folder of an in-process build (ends with "/"), or null */
+export function inProcessBaseUrl(wasm: WasmToolInfo): string | null {
+  if (!wasm.version || !wasm.inProcess) return null;
+  return `https://cdn.jsdelivr.net/npm/${wasm.pkg}@${wasm.version}/${wasm.inProcess.path}`;
 }
 
 /**
