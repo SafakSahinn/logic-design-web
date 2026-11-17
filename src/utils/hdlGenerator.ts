@@ -49,6 +49,7 @@ import {
 import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { formatEng, formatMonoWidth, monoWidthNanos, ttlChipOf, ttlPinOfKey, ttlRcOf } from './ttlChips';
 import { hasTtlHdl, renderTtlModule, ttlHdlPorts } from './ttlHdl';
+import { getPart, partName, type PartId } from '../parts';
 
 /*
  * Verilog / VHDL export.
@@ -269,6 +270,12 @@ const WIDTH_FOLLOWERS = ['tunnel', 'probe', 'pullResistor'];
 // One bit of a reader's value: a constant, bit i of a vector signal, or a 1-bit expression
 type Bit = { k: 'lit'; v: 0 | 1 } | { k: 'idx'; sig: string; i: number } | { k: 'sig'; e: string };
 
+// A helper module a registered part asked for (see HdlContext.module)
+interface PartModule {
+  name: string;
+  render: (lang: Lang, name: string) => string;
+}
+
 interface BuiltModule {
   name: string;
   ports: PortDecl[];
@@ -284,7 +291,9 @@ function buildModule(
   subModules: Map<string, { def: CustomSubcircuit; moduleName: string }>,
   moduleNames: NameTable,
   // TTL chip id -> its module name (filled as chips are met)
-  ttlModules: Map<string, string> = new Map()
+  ttlModules: Map<string, string> = new Map(),
+  // Helper modules of registered parts ("<type>:<key>" -> module name and its renderer), written once per file
+  partModules: Map<string, PartModule> = new Map()
 ): BuiltModule {
   const L = lang === 'verilog' ? VERILOG : VHDL;
   const names = new NameTable();
@@ -2468,6 +2477,46 @@ function buildModule(
           else body.push(`  ${inst} : entity work.${mod}`, `    port map (`, maps.map(([pn, sig]) => `      ${pn} => ${sig}`).join(',\n'), `    );`);
           break;
         }
+        const part = getPart(c.type);
+        if (part?.hdl) {
+          // Registered part (Aşama 6): it writes its own lines through the context, never importing this module
+          part.hdl(c, {
+            lang,
+            zero: L.zero,
+            one: L.one,
+            input: (i) => ((c.inputs[i]?.width ?? 1) > 1 ? compose(wideBits(i)) : inp(i)),
+            output: (i) => out[i] ?? '',
+            assign: (i, expr) => {
+              if (out[i]) emit(out[i], expr);
+            },
+            signal: (hint, width = 1) => {
+              const n = names.make(`${nm}_${hint}`, 's');
+              declare(n, width);
+              return n;
+            },
+            lines: (...text) => {
+              body.push(...text);
+            },
+            comment: (text) => {
+              body.push(L.comment(text));
+            },
+            module: (key, hint, render) => {
+              const k = `${c.type}:${key}`;
+              if (!partModules.has(k)) partModules.set(k, { name: moduleNames.make(hint, 'part'), render });
+              return partModules.get(k)!.name;
+            },
+            instance: (mod, hint, maps) => {
+              const inst = names.make(`u_${nm}_${hint}`, 'u_part');
+              const bound = maps.map(([pn, e]): [string, string] => [pn, e || (lang === 'verilog' ? '' : 'open')]);
+              if (lang === 'verilog') body.push(`  ${mod} ${inst} (`, bound.map(([pn, e]) => `    .${pn}(${e})`).join(',\n'), `  );`);
+              else body.push(`  ${inst} : entity work.${mod}`, `    port map (`, bound.map(([pn, e]) => `      ${pn} => ${e}`).join(',\n'), `    );`);
+            },
+            warn: (text) => {
+              warnings.push(`${c.label || partName(c.type as PartId)}: ${text}`);
+            },
+          });
+          break;
+        }
         warnings.push(`${c.label || c.type}: '${c.type}' bileşeni HDL'e çevrilemiyor, çıkışları 0 bırakıldı.`);
         out.forEach((o) => o && emit(o, L.zero));
         break;
@@ -3040,7 +3089,8 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
   const topName = moduleNames.make(circuitName || 'digital_circuit', 'digital_circuit');
   const subModules = new Map<string, { def: CustomSubcircuit; moduleName: string }>();
   const ttlModules = new Map<string, string>();
-  const top = buildModule({ name: topName, components, wires }, lang, subModules, moduleNames, ttlModules);
+  const partModules = new Map<string, PartModule>();
+  const top = buildModule({ name: topName, components, wires }, lang, subModules, moduleNames, ttlModules, partModules);
 
   // Sub-modules (custom ICs may themselves contain ICs: keep going until no new ones appear)
   const rendered: BuiltModule[] = [];
@@ -3057,7 +3107,8 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
           lang,
           subModules,
           moduleNames,
-          ttlModules
+          ttlModules,
+          partModules
         )
       );
     }
@@ -3071,6 +3122,8 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
   for (const [id, name] of [...ttlModules].sort((a, b) => a[0].localeCompare(b[0], 'en', { numeric: true }))) {
     parts.push(renderTtlModule(lang, ttlChipOf(`ttl${id}`)!, name), '');
   }
+  // Then the registered parts' helper modules, in the order they were first asked for
+  for (const m of partModules.values()) parts.push(m.render(lang, m.name), '');
   for (const m of rendered.reverse()) parts.push(render(m), '');
   parts.push(render(top), '');
   return parts.join('\n');

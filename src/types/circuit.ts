@@ -1,4 +1,5 @@
 import type { Radix, SignalValue } from './logic';
+import type { PartId } from '../parts/ids';
 
 export type ComponentCategory = 'inputs' | 'gates' | 'outputs' | 'combinational' | 'arithmetic' | 'sequential' | 'ttl' | 'custom';
 
@@ -141,7 +142,9 @@ export type ComponentType =
   | 'dualRam'
   // Modular Subcircuits (Özel Alt Devre & IC Paketleme)
   | 'subcircuit'
-  | TtlType;
+  | TtlType
+  // Parts of the component registry (src/parts, Aşama 6+)
+  | PartId;
 
 export interface PinDefinition {
   id: string;
@@ -530,6 +533,8 @@ export interface CircuitComponentInstance {
     strobe?: boolean;
     buzzerNote?: number;
     labelPos?: 'top' | 'bottom' | 'center' | 'hidden';
+    /** State of a registry part (src/parts); each part reads it with its own type */
+    part?: unknown;
   };
 }
 

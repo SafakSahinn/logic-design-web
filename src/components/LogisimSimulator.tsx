@@ -150,6 +150,7 @@ import {
   imageShownSize,
   subcircuitLayoutOf,
 } from '../utils/circuitEngine';
+import { getPart, partName, partSize } from '../parts';
 import { AppearanceShapesSvg } from './AppearanceShapes';
 import { resolveDynamicLive, resolveDynamicTemplate } from '../utils/dynamicElements';
 import AppearanceEditor from './AppearanceEditor';
@@ -272,6 +273,7 @@ import {
 } from '../utils/chronogram';
 import { ChronogramPanel } from './ChronogramPanel';
 import { useChronoLogFile } from './useChronoLogFile';
+import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from '../i18n/LanguageSwitcher';
 import MemoryHexEditor from './MemoryHexEditor';
 import PlaTableEditor from './PlaTableEditor';
@@ -514,6 +516,8 @@ export interface LogicCircuitSimulatorProps {
 }
 
 export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ desktopMode = false }) => {
+  // Re-render on a UI language change: registry parts read their texts (palette, attribute rows) while rendering
+  useTranslation();
   // Step 5: CAD Engineering Theme ('light' vs 'dark' / Neon CAD mode)
   const [cadTheme, setCadTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -7602,6 +7606,22 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               className="text-[8px] font-mono font-extrabold fill-emerald-400 select-none"
             >
               0x{busVal.toString(16).toUpperCase()}
+            </text>
+          </g>
+        );
+      }
+      default: {
+        // Parts of the component registry (Aşama 6+); built-in parts never get here
+        const part = getPart(comp.type);
+        if (!part) return null;
+        if (part.draw) return part.draw(comp, { cadTheme, isSelected, strokeColor, strokeWidth, fillColor, gateTextClass });
+        // No draw() yet: a plain box with the part's name
+        const { width, height } = partSize(part, comp);
+        return (
+          <g filter="url(#gateShadow)">
+            <rect x={0} y={0} width={width} height={height} rx={4} fill={fillColor} stroke={strokeColor} strokeWidth={strokeWidth} />
+            <text x={width / 2} y={height / 2 + 4} textAnchor="middle" className={`text-[10px] font-mono font-bold select-none ${gateTextClass}`}>
+              {partName(part.id)}
             </text>
           </g>
         );

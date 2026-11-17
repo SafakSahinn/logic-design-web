@@ -132,6 +132,7 @@ import {
 } from './circuitEngine';
 import { snapPt10 } from './wiringEngine';
 import { ENG_PRESETS, formatEng, isTtlType, ttlRcOf, type EngUnit } from './ttlChips';
+import { getPart, partText, partTextOptional, type PartAttribute, type PartId } from '../parts';
 
 export type AttrValue = string | number;
 
@@ -192,6 +193,41 @@ export interface AttrDef {
   unit?: EngUnit;
   /** 'text' fields: the longest text */
   maxLength?: number;
+}
+
+/**
+ * Attribute row of a component-registry part (src/parts) as a built-in row: the texts come from the part's
+ * i18n keys in the current UI language, and an edit that changed the pins gets them placed again.
+ */
+function partAttrDef(id: PartId, a: PartAttribute): AttrDef {
+  const text = `attributes.${a.key}`;
+  const options = a.options;
+  return {
+    key: a.key,
+    label: partText(id, `${text}.label`),
+    title: partTextOptional(id, `${text}.title`),
+    kind: a.kind,
+    options:
+      options &&
+      ((comp: CircuitComponentInstance) =>
+        (typeof options === 'function' ? options(comp) : options).map((o) => ({
+          value: o.value,
+          label: o.labelKey ? partText(id, o.labelKey) : o.label ?? String(o.value),
+          title: o.titleKey ? partText(id, o.titleKey) : undefined,
+          swatch: o.swatch,
+        }))),
+    get: (comp) => a.get(comp),
+    set: a.set
+      ? (comp, value, wires) => {
+          const edit = a.set!(comp, value, wires);
+          return edit && !edit.stateOnly ? { ...edit, comp: updatePinPositions(edit.comp) } : edit;
+        }
+      : undefined,
+    canonicalWires: a.canonicalWires,
+    singleOnly: a.singleOnly,
+    visible: a.visible && ((comp) => a.visible!(comp)),
+    maxLength: a.maxLength,
+  };
 }
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
@@ -1500,6 +1536,11 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       // evolution's order; the image has no label
       list.push(imageSrcAttr, imageWidthAttr, imageHeightAttr, imageScaleAttr, imageDataSizeAttr, imageLicenseAttr, imageAttributionAttr);
       break;
+    default: {
+      // Parts of the component registry (Aşama 6+); built-in parts never get here
+      const part = getPart(type);
+      if (part?.attributes) list.push(...part.attributes.map((a) => partAttrDef(part.id, a)));
+    }
   }
   if (isTtlType(type)) list.push(ttlVccGndAttr, ttlInternalAttr);
   if (type === 'ttl74123') list.push(...MONO_RC_ATTRS);

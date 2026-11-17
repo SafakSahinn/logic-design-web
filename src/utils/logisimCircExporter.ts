@@ -97,6 +97,7 @@ import {
 } from './logisimCircImporter';
 import type { LogicValue } from '../types/logic';
 import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
+import { getPart, type CircLibrary } from '../parts';
 import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, pgStateCount, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
@@ -107,6 +108,19 @@ const BFH_LIB = 7;
 const BASE_LIB = 8;
 /** Library number of evolution's #Input/Output-Extra (Aşama 5h) in the exported file */
 const EXTRA_LIB = 9;
+/** Library number of each Logisim library a component-registry part (src/parts) can be written to */
+const CIRC_LIB_NUMBER: Record<CircLibrary, number> = {
+  '#Wiring': 0,
+  '#Gates': 1,
+  '#Plexers': 2,
+  '#Arithmetic': 3,
+  '#Memory': 4,
+  '#I/O': 5,
+  '#TTL': TTL_LIB,
+  '#BFH-Praktika': BFH_LIB,
+  '#Base': BASE_LIB,
+  '#Input/Output-Extra': EXTRA_LIB,
+};
 
 /*
  * Logisim 2.7 (.circ) export.
@@ -243,7 +257,8 @@ const LABELLED_PARTS = new Set<ComponentType>([
   'led', 'probe',
   'subcircuit',
 ]);
-const hasLogisimLabel = (type: ComponentType) => LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type);
+const hasLogisimLabel = (type: ComponentType) =>
+  LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type) || !!getPart(type)?.circ?.labelled;
 
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
   const warnings: string[] = [];
@@ -1429,6 +1444,32 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
+          if (getPart(c.type)?.circ) {
+            // Parts of the component registry (Aşama 6+): one Logisim component facing east, a tunnel on each
+            // wired pin's point
+            const circ = getPart(c.type)!.circ!;
+            const lib = CIRC_LIB_NUMBER[circ.lib];
+            if (lib === TTL_LIB) usesTtl = true;
+            if (lib === BFH_LIB) usesBfh = true;
+            if (lib === BASE_LIB) usesBase = true;
+            if (lib === EXTRA_LIB) usesExtra = true;
+            const attrs = Object.entries(circ.exportAttrs?.(c) ?? {})
+              .map(([name, val]) => `<a name="${xmlEsc(name)}" val="${xmlEsc(val)}"/>`)
+              .join('');
+            const points = circ.ports(c);
+            const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
+            c.inputs.forEach((p, i) => {
+              const off = points.inputs[i];
+              if (off) ports.push({ off, net: pinNet(p.id), width: p.width ?? 1, sink: true });
+            });
+            c.outputs.forEach((p, i) => {
+              const off = points.outputs[i];
+              if (off) ports.push({ off, net: isConn(p.id) ? out(i) : OPEN, width: p.width ?? 1, sink: false });
+            });
+            P.push({ kind: 'ram', part: c.type, attrs, ports, lib, name: circ.name });
+            warnings.push(...(circ.exportWarnings?.(c) ?? []).map((text) => `${label}: ${text}`));
+            break;
+          }
           if (isTtlType(c.type)) {
             // Evolution's TTL library (2.7.1 has none): written facing east with its settings, a tunnel on
             // each wired pin's evolution point (7476: evolution's pin of the same name). The flip-flop / counter

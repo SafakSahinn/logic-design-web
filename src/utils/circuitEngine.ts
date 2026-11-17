@@ -15,6 +15,7 @@ import { subcircuitLayout, type SubcircuitLayout } from './subcircuitAppearance'
 import { repairWires, setComponentBodySizeResolver } from './wiringEngine';
 import { TTL_CHIPS, evalTtl, isTtlType, ttlChipOf, ttlInKey, ttlPinOfKey, ttlPinPoint, ttlPorts, ttlRcOf, ttlNow, ttlSeqCopy, ttlSeqInit, ttlSize, type TtlChip } from './ttlChips';
 import type { TtlType } from '../types/circuit';
+import { getPart, mergePartCatalog, partSize, type PartId } from '../parts';
 
 // ---- Arithmetic geometry (Logisim std/arith). Function declarations: the catalog below uses them -------------
 
@@ -2493,7 +2494,7 @@ function ttlCatalog(): Record<TtlType, ComponentMetadata> {
   return Object.fromEntries(Object.values(TTL_CHIPS).map((c) => [`ttl${c.id}`, ttlMeta(c)])) as Record<TtlType, ComponentMetadata>;
 }
 
-export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
+const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata> = {
   switch: {
     type: 'switch',
     name: 'Giriş Anahtarı',
@@ -3282,6 +3283,9 @@ export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = {
   ...ttlCatalog(),
 };
 
+/** Every part type: the built-in ones and the parts of the component registry (src/parts) */
+export const COMPONENT_CATALOG: Record<ComponentType, ComponentMetadata> = mergePartCatalog(BUILT_IN_CATALOG);
+
 let componentCounter = 1;
 
 const COMPONENT_TYPE_ALIASES: Record<string, ComponentType> = {
@@ -3404,6 +3408,9 @@ export function getComponentSize(comp: CircuitComponentInstance): { width: numbe
     const maxPins = Math.max(comp.inputs.length, comp.outputs.length);
     return { width: 120, height: Math.max(60, (maxPins + 1) * 20) };
   }
+  // Parts of the component registry size themselves; the bit-width rules below are for built-in parts
+  const part = getPart(comp.type);
+  if (part) return partSize(part, comp);
   const meta = COMPONENT_CATALOG[comp.type];
   const w = getBitWidth(comp);
   if (MULTI_INPUT_GATE_TYPES.includes(comp.type)) return { width: meta.width, height: multiInputGateHeight(comp.inputs.length) };
@@ -5707,6 +5714,20 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
   };
 
+  // Parts of the component registry whose pins depend on their attributes place them themselves
+  const partPins = getPart(comp.type)?.pinPoints?.(comp);
+  if (partPins) {
+    const place = (pin: CircuitPin, at: { x: number; y: number } | undefined) => {
+      const p = rotatePoint(at?.x ?? 0, at?.y ?? 0);
+      return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+    };
+    return {
+      ...comp,
+      inputs: comp.inputs.map((pin, i) => place(pin, partPins.inputs[i])),
+      outputs: comp.outputs.map((pin, i) => place(pin, partPins.outputs[i])),
+    };
+  }
+
   // Splitter (Logisim SplitterParameters, facing east): the combined end on the left, the ends 20px to
   // the right and 10px apart, above it (left-handed), below it (right-handed) or around it (centered)
   if (comp.type === 'splitter') {
@@ -7043,6 +7064,9 @@ export function simulateCircuitStep(
         // Output displays & wireless tunnels reflect network resolution
         break;
       }
+      default:
+        // Parts of the component registry (Aşama 6+); built-in parts never get here
+        getPart(comp.type)?.simulate?.(comp, { raw, setOut, setBitsOut, isConnected: isPinConnected });
     }
   });
 

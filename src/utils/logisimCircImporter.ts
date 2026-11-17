@@ -125,6 +125,7 @@ import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, t
 import { DYNAMIC_ELEMENT_OF, DYNAMIC_ELEMENT_TYPE, DYNAMIC_FACTORY, dynamicElementOfTag, dynamicShapeFromSvg, parseDynamicPath, type DynamicPathStep } from './dynamicElements';
 import { repairWires } from './wiringEngine';
 import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
+import { getPart, partOfCirc } from '../parts';
 
 /**
  * Evolution TTL chip connection points relative to loc (east-facing), by our pin key; an in/out pin's input
@@ -1608,6 +1609,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       .filter((l) => l.getAttribute('desc') === '#TTL')
       .map((l) => l.getAttribute('name') ?? '')
   );
+  // Library number -> description ("#Gates"), to find the component-registry part a component stands for
+  const libDesc = new Map(Array.from(xmlDoc.getElementsByTagName('lib')).map((l) => [l.getAttribute('name') ?? '', l.getAttribute('desc') ?? '']));
   // Logisim parts that carry no logic
   const DECORATIVE = new Set(['probe text']);
 
@@ -1970,6 +1973,21 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       const st = logisimRamSettings(type, attr, evolutionFile);
       return { ...st, ports: logisimRamPorts(type, st.cfg, st.look) };
     };
+    // A component-registry part (Aşama 6+) with the file's attributes, and its pins' connection points relative
+    // to loc (turned like the part)
+    const partImport = (type: ComponentType, attr: Record<string, string>, rot: number, warn: (text: string) => void) => {
+      const circ = getPart(type)!.circ!;
+      const fresh = createComponentInstance(type, 0, 0);
+      const made = circ.importAttrs ? circ.importAttrs(fresh, attr, warn) : fresh;
+      const inst = updatePinPositions({ ...made, rotation: rot ? (rot as 90 | 180 | 270) : undefined });
+      const pts = circ.ports(inst);
+      const pointOf = (off: Pt | null | undefined) => (off ? rotateOffset(off, rot) : null);
+      const points: Array<[string, Pt | null]> = [
+        ...inst.inputs.map((p, i): [string, Pt | null] => [p.id, pointOf(pts.inputs[i])]),
+        ...inst.outputs.map((p, i): [string, Pt | null] => [p.id, pointOf(pts.outputs[i])]),
+      ];
+      return { inst, points };
+    };
     for (let i = 0; i < rawComps.length; i++) {
       const compNode = rawComps[i];
       const compName = compNode.getAttribute('name') || '';
@@ -2003,7 +2021,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // A part named after another circuit of the file (no library) is a subcircuit instance
       const isSub = !compNode.getAttribute('lib') && circuitByName.has(compName);
       const ttlType = ttlLibs.has(compNode.getAttribute('lib') ?? '') && isTtlType(`ttl${compName.trim()}`) ? (`ttl${compName.trim()}` as ComponentType) : null;
-      let nativeType = isSub ? 'subcircuit' : ttlType ?? mapCircCompType(compName, isOutput, constVal);
+      const registryPart = isSub || ttlType ? undefined : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName);
+      let nativeType = isSub ? 'subcircuit' : ttlType ?? registryPart?.id ?? mapCircCompType(compName, isOutput, constVal);
       let sub: SubcircuitInfo | undefined;
       if (isSub) {
         sub = subcircuitOf(compName) ?? undefined;
@@ -2027,7 +2046,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
       const where = `${compName}${label ? ` "${label}"` : ''} (${loc.x},${loc.y})`;
       // (the RGB Video's width is its screen width in pixels, the Image's its frame width, not a bit width)
-      if (width > 1 && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image' && nativeType !== 'textLabel')
+      if (width > 1 && !getPart(nativeType) && !WIDE_IMPORT.has(nativeType) && !ARITH_TYPES.has(nativeType) && !MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && nativeType !== 'rgbVideo' && nativeType !== 'image' && nativeType !== 'textLabel')
         warnings.push(`${where}: ${width} bitlik, tek bit olarak alındı.`);
       const rot =
         nativeType === 'twoWaySwitch' ? TWO_WAY_ROTATION[facing] ?? 0
@@ -2037,7 +2056,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       parts.push({ compName, loc, nativeType, attr, isOutput, label, facing, rot, size, width, inputsAttr, xorMode: attr.xor, negated, leftHanded, pull: attr.pull, outMode, sub, where });
 
       // Almost every Logisim part has a connection at loc (gate output, pin ...); memory parts list their own
-      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel' && nativeType !== 'twoWaySwitch' && nativeType !== 'twoPinLed') occupied.add(key(loc));
+      if (!MEM_TYPES.has(nativeType) && !RAM_TYPES.has(nativeType) && !IO_IMPORT.has(nativeType) && !BFH_TYPES.has(nativeType) && !IO5C_TYPES.has(nativeType) && !isTtlType(nativeType) && !getPart(nativeType) && nativeType !== 'image' && nativeType !== 'textLabel' && nativeType !== 'twoWaySwitch' && nativeType !== 'twoPinLed') occupied.add(key(loc));
       if (nativeType === 'triState' || nativeType === 'controlledInverter') {
         for (const off of controlledOffsets(nativeType, size, leftHanded)) occupied.add(key(local(loc, off, rot)));
       }
@@ -2082,6 +2101,8 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
                 ? logisimIoSettings(nativeType, attr, evolutionFile).ports.map((p) => p.off)
+                : getPart(nativeType)?.circ
+                ? partImport(nativeType, attr, rot, () => {}).points.flatMap(([, off]) => (off ? [off] : []))
                 : isTtlType(nativeType)
                 ? ttlImportPorts(nativeType, attr.VccGndPorts === 'true').map((p) => rotateOffset(p.off, rot))
                 : sub
@@ -2518,6 +2539,16 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             warnings.push(`${where}: Logisim 2.7.1'de LD = 1 iken CT de 0 değilse sayaç geri sayar; burada evolution gibi yükleme önceliklidir.`);
           if (nativeType === 'counter' && !evolutionFile && wired('ud'))
             warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
+          continue;
+        }
+        if (getPart(nativeType)?.circ) {
+          // Component-registry part (Aşama 6+): turned like its facing, every pin joined at its connection point
+          const circ = getPart(nativeType)!.circ!;
+          const { inst, points } = partImport(nativeType, attr, rot, (text) => warnings.push(`${where}: ${text}`));
+          const abs = points.map(([id, off]): [string, Pt | null] => [id, off && at(loc, off)]);
+          const anchor = abs.find(([, pt]) => pt);
+          if (anchor) place(inst, anchor[0], anchor[1]!, circ.labelled ? label : undefined, abs);
+          else components.push(updatePinPositions({ ...inst, ...scaled(loc), label: circ.labelled && label ? label : inst.label }));
           continue;
         }
         if (isTtlType(nativeType)) {
