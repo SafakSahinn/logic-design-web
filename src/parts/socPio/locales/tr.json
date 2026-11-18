@@ -1,0 +1,130 @@
+{
+  "meta": {
+    "badge": "PIO",
+    "name": "SoC PIO",
+    "description": "Bir SoC'nin paralel giriş/çıkış kapısı (Logisim-evolution'ın SoC PIO'su): bir programın SoC veri yolu üzerinden okuyup yazdığı en çok 32 giriş, çıkış ya da çift yönlü bit; isteğe bağlı kenar yakalama ve kesme çıkışı"
+  },
+  "options": {
+    "on": "Açık",
+    "off": "Kapalı"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "PIO'nun işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "startAddress": {
+      "label": "Başlangıç adresi (hex)",
+      "title": "İlk yazmacın adresi; PIO buradan başlayan 24 baytı yanıtlar (yalnızca sözcük erişimi)"
+    },
+    "width": {
+      "label": "Bit sayısı",
+      "title": "Giriş/çıkış bitlerinin sayısı (1 ile 32 arası); her bitin kendi pini vardır"
+    },
+    "direction": {
+      "label": "Yön",
+      "title": "Kapının hangi pinleri olduğu: girişler (alt), çıkışlar (üst), ikisi birden ya da yönünü yön yazmacının seçtiği çift yönlü pinler",
+      "options": {
+        "bidir": "Çift yönlü (üç durumlu) pinler",
+        "inputonly": "Yalnızca giriş pinleri",
+        "outputonly": "Yalnızca çıkış pinleri",
+        "inout": "Hem giriş hem çıkış pinleri"
+      }
+    },
+    "outputResetValue": {
+      "label": "Çıkışın sıfırlama değeri (hex)",
+      "title": "Sıfırlamadan sonra çıkış yazmacının değeri"
+    },
+    "outputBitOps": {
+      "label": "Çıkış biti kurma/silme",
+      "title": "1 yazılan çıkış bitlerini 1 yapan outset (0x10) ve 0 yapan outclear (0x14) yazmaçlarını ekler"
+    },
+    "syncCapture": {
+      "label": "Eş zamanlı yakalama",
+      "title": "Değişen giriş bitlerini aklında tutan kenar yakalama yazmacını (0x0C) ekler"
+    },
+    "captureEdge": {
+      "label": "Yakalama türü",
+      "title": "Kenar yakalama yazmacının hangi giriş değişimlerini kaydettiği",
+      "options": {
+        "rising": "Yükselen kenar",
+        "falling": "Düşen kenar",
+        "any": "Her iki kenar"
+      }
+    },
+    "captureBitClear": {
+      "label": "Yakalama bitini silme",
+      "title": "Açık: kenar yakalama yazmacına yazmak yalnızca 1 yazılan bitleri siler; kapalı: her yazma tümünü siler"
+    },
+    "genIrq": {
+      "label": "Kesme çıkışı",
+      "title": "IRQ pinini ve kesme maskesi yazmacını (0x08) ekler"
+    },
+    "irqType": {
+      "label": "Kesme türü",
+      "title": "Seviye: maskelenmemiş ve 1 olan bir giriş kesme üretir; kenar: kenar yakalama yazmacının maskelenmemiş bir biti üretir",
+      "options": {
+        "level": "Seviye",
+        "edge": "Kenar"
+      }
+    },
+    "cExport": {
+      "label": "C başlığı",
+      "title": "Bu yapılandırma için bir C sürücüsü yazar: her yazmaç için bir yazıcı/okuyucu işlev içeren <AD>.h ve <AD>.c (Logisim-evolution'da Export C)"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "PIO'nun yanıtladığı adres aralığı ve yazmaç değerleri"
+    }
+  },
+  "status": {
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden birini seçin",
+    "notRun": "henüz benzetilmedi",
+    "range": "{{start}} – {{end}}",
+    "output": "çıkış = {{value}}",
+    "input": "giriş = {{value}}",
+    "direction": "yön = {{value}}",
+    "irqMask": "kesme maskesi = {{value}}",
+    "capture": "yakalanan = {{value}}"
+  },
+  "body": {
+    "title": "Paralel giriş/çıkış genişletici",
+    "inputs": "Giriş pinleri",
+    "outputs": "Çıkış pinleri",
+    "bidirs": "Çift yönlü pinler",
+    "notConnected": "Veri yoluna bağlı değil",
+    "missing": "Veri yolu bulunamadı"
+  },
+  "cExport": {
+    "button": "C dışa aktar…",
+    "done": "{{header}} ve {{source}} indirildi",
+    "generated": "Logic Design Studio'nun bir PIO bileşeni için kendiliğinden ürettiği dosya",
+    "outputData": "Aşağıdaki işlevle PIO'nun çıkış değerleri ayarlanır.\nİşlev yeni çıkış değerini \"value\" parametresi olarak alır.\nNot: \"value\" parametresinin yalnızca alt {{bits}} biti kullanılır.",
+    "inputData": "Aşağıdaki işlevle PIO'nun giriş değerleri okunur.\nİşlev ilgili değeri döndürür.\nNot: yalnızca alt {{bits}} bit geçerlidir.",
+    "direction": "Aşağıdaki işlevlerle yön yazmacı ayarlanır ya da okunur:\n1 ilgili biti çıkış, 0 giriş yapar.\nNot: yalnızca alt {{bits}} bit kullanılır.",
+    "irqMask": "Aşağıdaki işlevlerle kesme maskesi yazmacı ayarlanır ya da okunur.\nBir konumdaki 1, {{source}} 1 olduğunda kesme üretileceği anlamına gelir.\nNot: yalnızca alt {{bits}} bit kullanılır.",
+    "irqLevel": "ilgili giriş",
+    "irqEdge": "kenar yakalama yazmacının ilgili biti",
+    "edgeCapture": "Aşağıdaki işlevlerle kenar yakalama yazmacı silinir ya da okunur.\nBir konumdaki 1, ilgili girişte {{edge}} olduğu anlamına gelir;\naksi halde giriş değişmemiştir.\n\nBu yazmaca yazmak {{clear}}.\nNot: yalnızca alt {{bits}} bit kullanılır.",
+    "capture": {
+      "rising": "en az bir kez 0'dan 1'e geçiş",
+      "falling": "en az bir kez 1'den 0'a geçiş",
+      "any": "en az bir kez 0'dan 1'e ya da 1'den 0'a geçiş"
+    },
+    "clearBits": "yakalama yazmacının \"value\" parametresinde 1 olan bitlerini siler",
+    "clearAll": "\"value\" parametresi ne olursa olsun yakalama yazmacının tüm bitlerini siler",
+    "outSet": "Aşağıdaki işlevle \"value\" parametresinde biti 1 olan çıkışlar 1 yapılır.\nNot: yalnızca alt {{bits}} bit kullanılır.",
+    "outClear": "Aşağıdaki işlevle \"value\" parametresinde biti 1 olan çıkışlar 0 yapılır.\nNot: yalnızca alt {{bits}} bit kullanılır."
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: PIO bir veri yoluna bağlı değil",
+    "badStartAddress": "\"{{value}}\" 32 bitlik bir başlangıç adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badWidth": "\"{{value}}\" bir bit sayısı olarak okunamadı ({{min}} ile {{max}} arası): {{used}} kullanılıyor",
+    "badDirection": "\"{{value}}\" bir yön olarak okunamadı (bidir, inputonly, outputonly ya da inout): {{used}} kullanılıyor",
+    "badOutputResetValue": "\"{{value}}\" 32 bitlik bir çıkış reset değeri olarak okunamadı: 0x0 kullanılıyor",
+    "badCaptureEdge": "\"{{value}}\" bir yakalama türü olarak okunamadı (rising, falling ya da any): {{used}} kullanılıyor",
+    "badIrqType": "\"{{value}}\" bir IRQ türü olarak okunamadı (level ya da edge): {{used}} kullanılıyor"
+  }
+}

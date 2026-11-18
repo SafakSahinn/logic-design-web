@@ -1,0 +1,130 @@
+{
+  "meta": {
+    "badge": "PIO",
+    "name": "SoC PIO",
+    "description": "A parallel input/output port of a SoC (Logisim-evolution's SoC PIO): up to 32 input, output or bidirectional bits a program reads and writes over its SoC bus, with optional edge capture and an interrupt output"
+  },
+  "options": {
+    "on": "On",
+    "off": "Off"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Bus",
+      "title": "The SoC bus the PIO answers on (Logisim-evolution's Connected bus)",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "startAddress": {
+      "label": "Start address (hex)",
+      "title": "Address of the first register; the PIO answers 24 bytes from there (word access only)"
+    },
+    "width": {
+      "label": "Number of bits",
+      "title": "Number of I/O bits (1 to 32); each bit has its own pin"
+    },
+    "direction": {
+      "label": "Direction",
+      "title": "Which pins the port has: inputs (bottom), outputs (top), both, or bidirectional pins whose direction register chooses",
+      "options": {
+        "bidir": "Bidirectional (tristate) pins",
+        "inputonly": "Input pins only",
+        "outputonly": "Output pins only",
+        "inout": "Both input and output pins"
+      }
+    },
+    "outputResetValue": {
+      "label": "Output reset value (hex)",
+      "title": "Value of the output register after a reset"
+    },
+    "outputBitOps": {
+      "label": "Output bit set/clear",
+      "title": "Adds the outset (offset 0x10) and outclear (offset 0x14) registers, which set or clear the output bits written as 1"
+    },
+    "syncCapture": {
+      "label": "Synchronous capture",
+      "title": "Adds the edge capture register (offset 0x0C), which remembers the input bits that changed"
+    },
+    "captureEdge": {
+      "label": "Capture type",
+      "title": "Which input changes the edge capture register records",
+      "options": {
+        "rising": "Rising edge",
+        "falling": "Falling edge",
+        "any": "Any edge"
+      }
+    },
+    "captureBitClear": {
+      "label": "Capture bit clearing",
+      "title": "On: writing the edge capture register clears only the bits written as 1; off: any write clears it all"
+    },
+    "genIrq": {
+      "label": "IRQ output",
+      "title": "Adds the IRQ pin and the interrupt mask register (offset 0x08)"
+    },
+    "irqType": {
+      "label": "IRQ type",
+      "title": "Level: an unmasked input that is 1 raises the IRQ; edge: an unmasked bit of the edge capture register does",
+      "options": {
+        "level": "Level",
+        "edge": "Edge"
+      }
+    },
+    "cExport": {
+      "label": "C header",
+      "title": "Writes a C driver for this configuration: <NAME>.h and <NAME>.c with a setter / getter per register (Logisim-evolution's Export C)"
+    },
+    "status": {
+      "label": "Status",
+      "title": "The address range the PIO answers and its register values"
+    }
+  },
+  "status": {
+    "notConnected": "Not connected to a bus: choose one in the Bus attribute",
+    "notRun": "not simulated yet",
+    "range": "{{start}} – {{end}}",
+    "output": "out = {{value}}",
+    "input": "in = {{value}}",
+    "direction": "dir = {{value}}",
+    "irqMask": "irq mask = {{value}}",
+    "capture": "captured = {{value}}"
+  },
+  "body": {
+    "title": "Parallel input/output expander",
+    "inputs": "Input pins",
+    "outputs": "Output pins",
+    "bidirs": "Bi-directional pins",
+    "notConnected": "Not connected to a bus",
+    "missing": "Bus not found"
+  },
+  "cExport": {
+    "button": "Export C…",
+    "done": "Downloaded {{header}} and {{source}}",
+    "generated": "Logic Design Studio automatically generated file for a PIO component",
+    "outputData": "With the following function the output values of the PIO can be set.\nThis function takes the new output value as parameter \"value\".\nNote: only the lower {{bits}} bits of the parameter \"value\" are used.",
+    "inputData": "With the following function the input values of the PIO can be read out.\nThis function returns the respective value.\nNote: only the lower {{bits}} bits are valid.",
+    "direction": "With the following functions the direction register can be set or read out:\na 1 makes the respective bit an output, a 0 makes it an input.\nNote: only the lower {{bits}} bits are used.",
+    "irqMask": "With the following functions the interrupt mask register can be set or read out.\nA 1 on a position means an interrupt is generated when the {{source}} is 1.\nNote: only the lower {{bits}} bits are used.",
+    "irqLevel": "corresponding input",
+    "irqEdge": "corresponding bit of the edge capture register",
+    "edgeCapture": "With the following functions the edge capture register can be cleared or read out.\nA 1 on a position means the respective input has had {{edge}},\notherwise it has not changed.\n\nWriting to this register will {{clear}}.\nNote: only the lower {{bits}} bits are used.",
+    "capture": {
+      "rising": "at least one change from 0 to 1",
+      "falling": "at least one change from 1 to 0",
+      "any": "at least one change from 0 to 1 or from 1 to 0"
+    },
+    "clearBits": "clear the bits of the capture register that are 1 in the parameter \"value\"",
+    "clearAll": "clear all bits of the capture register whatever the parameter \"value\" is",
+    "outSet": "With the following function the outputs whose bits are 1 in the parameter \"value\" are set to 1.\nNote: only the lower {{bits}} bits are used.",
+    "outClear": "With the following function the outputs whose bits are 1 in the parameter \"value\" are cleared to 0.\nNote: only the lower {{bits}} bits are used."
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the PIO is not connected to a bus",
+    "badStartAddress": "\"{{value}}\" is not a 32-bit start address: 0x0 is used",
+    "badWidth": "\"{{value}}\" is not a number of bits ({{min}} to {{max}}): {{used}} is used",
+    "badDirection": "\"{{value}}\" is not a direction (bidir, inputonly, outputonly or inout): {{used}} is used",
+    "badOutputResetValue": "\"{{value}}\" is not a 32-bit output reset value: 0x0 is used",
+    "badCaptureEdge": "\"{{value}}\" is not a capture type (rising, falling or any): {{used}} is used",
+    "badIrqType": "\"{{value}}\" is not an IRQ type (level or edge): {{used}} is used"
+  }
+}

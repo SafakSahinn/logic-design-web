@@ -1,5 +1,5 @@
-import type { AppearanceDynamicShape, AppearanceShape, CircuitComponentInstance, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
-import { getLogicalConnections } from './wiringEngine';
+import type { AppearanceDynamicShape, AppearanceShape, CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
+import { getLogicalConnections, snapTo10 } from './wiringEngine';
 import {
   ALU_OP_BITS,
   ARITH_PINS,
@@ -508,6 +508,22 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       pinId && connected.has(pinId) ? netOfPin.get(pinId)! : floating === undefined ? openNet() : constNet(floating);
     const isConn = (pinId?: string) => !!pinId && connected.has(pinId);
     const pinNet = (pinId?: string) => (isConn(pinId) ? netOfPin.get(pinId!)! : OPEN);
+    // A bidirectional pin pair (an output and an input of one part on one point: the PIO's io pins, a TTL in/out
+    // pin) joins itself, so it looks connected. With nothing else on its net the pin has no wire.
+    let netMembers: Map<string, string[]> | undefined;
+    const selfOnly = (c: CircuitComponentInstance, p: CircuitPin) => {
+      if (alias.has(p.id)) return false;
+      if (!netMembers) {
+        netMembers = new Map();
+        for (const [id, net] of netOfPin) netMembers.set(net, [...(netMembers.get(net) ?? []), id]);
+      }
+      const members = netMembers.get(netOfPin.get(p.id) ?? '') ?? [];
+      const x = snapTo10(p.x), y = snapTo10(p.y);
+      return members.every((id) => {
+        const q = c.inputs.find((i) => i.id === id) ?? c.outputs.find((o) => o.id === id);
+        return !!q && snapTo10(q.x) === x && snapTo10(q.y) === y;
+      });
+    };
 
     for (const c of comps) {
       const P: Prim[] = [];
@@ -1479,7 +1495,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             });
             c.outputs.forEach((p, i) => {
               const off = points.outputs[i];
-              if (off) ports.push({ off, net: isConn(p.id) ? out(i) : OPEN, width: p.width ?? 1, sink: false });
+              if (off) ports.push({ off, net: isConn(p.id) && !selfOnly(c, p) ? out(i) : OPEN, width: p.width ?? 1, sink: false });
             });
             const box = circ.box?.(c);
             P.push({ kind: 'ram', part: c.type, attrs, ports, lib, name: circ.name, ...(box ? { box } : {}) });
@@ -1506,8 +1522,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
               const o = byKey.get(tp.key);
               const inp = tp.dir === 'inout' ? byKey.get(ttlInKey(tp.pin)) : tp.dir === 'input' ? o : undefined;
               const outp = tp.dir === 'input' ? undefined : o;
-              // An in/out pin's two halves share the point and the net
-              const net = outp && isConn(outp.id) ? out(c.outputs.indexOf(outp)) : inp ? pinNet(inp.id) : OPEN;
+              // An in/out pin's two halves share the point and the net (alone on it: no wire)
+              const net =
+                outp && isConn(outp.id) ? (selfOnly(c, outp) ? OPEN : out(c.outputs.indexOf(outp))) : inp ? pinNet(inp.id) : OPEN;
               ports.push({ off: ttlEvoOffset(chip, tp.pin), net, width: 1, sink: tp.dir === 'input' });
             }
             P.push({ kind: 'ram', part: c.type, attrs, ports, lib: TTL_LIB, name: chip.id });

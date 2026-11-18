@@ -12,6 +12,7 @@ import './socBus';
 import './socMemory';
 import './rv32im';
 import './nios2';
+import './socPio';
 
 export {
   allParts,
