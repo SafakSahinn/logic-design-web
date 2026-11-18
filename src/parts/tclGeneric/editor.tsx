@@ -9,6 +9,7 @@ import { Download, FileDown, FileUp, RotateCcw, X } from 'lucide-react';
 import { describeToolStatus, prepareTool, useToolDownloadConsent } from '../../tools';
 import { currentTclRuntime, loadTclRuntime, onTclRuntimeLoaded } from '../../tools/tcl';
 import type { PartEditorProps } from '../registry';
+import { saveTextFile } from '../shared/cExport';
 import { partState, readInterface, scriptFileName, type EditorCommand, type TclPartState } from './model';
 import { NS, interfaceErrorText, scriptErrorText } from './text';
 
@@ -56,16 +57,6 @@ function useTclRuntime(dark: boolean) {
 }
 
 type DialogMode = 'script' | 'vhdl';
-
-/** Hands the text to the browser as a file download */
-function saveText(text: string, name: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 interface DialogProps {
   mode: DialogMode;
@@ -162,7 +153,7 @@ function EditorDialog(props: DialogProps): ReactNode {
           <button type="button" className={btn} onClick={() => fileRef.current?.click()} title={mode === 'script' ? t('editor.loadScriptTitle') : t('editor.loadVhdlTitle')}>
             <FileUp size={14} /> {t('editor.load')}
           </button>
-          <button type="button" className={btn} onClick={() => saveText(text, mode === 'script' ? props.fileName : `${iface?.ok ? iface.entity.name : 'interface'}.vhd`)} title={mode === 'script' ? t('editor.saveScriptTitle', { file: props.fileName }) : t('editor.saveVhdlTitle')}>
+          <button type="button" className={btn} onClick={() => saveTextFile(text, mode === 'script' ? props.fileName : `${iface?.ok ? iface.entity.name : 'interface'}.vhd`)} title={mode === 'script' ? t('editor.saveScriptTitle', { file: props.fileName }) : t('editor.saveVhdlTitle')}>
             <FileDown size={14} /> {t('editor.save')}
           </button>
           <input

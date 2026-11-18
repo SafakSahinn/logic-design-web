@@ -97,6 +97,7 @@ export class SocBus {
   readonly trace = new SocBusTrace();
   private slaves: SocSlave[] = [];
   private sniffers: SocSniffer[] = [];
+  private gen = 0;
 
   constructor(id: string, name = '') {
     this.id = id;
@@ -107,12 +108,22 @@ export class SocBus {
     return this.slaves;
   }
 
+  /**
+   * Grows whenever what the bus answers may have changed behind its sniffers: a slave came or went, or a hidden
+   * write (a program / ELF load, a memory edit) landed. A part that mirrors memory (the VGA) rebuilds when it moves.
+   */
+  get generation(): number {
+    return this.gen;
+  }
+
   addSlave(s: SocSlave): void {
     this.slaves = this.slaves.filter((x) => x.key !== s.key);
     this.slaves.push(s);
+    this.gen++;
   }
   removeSlave(key: string): void {
     this.slaves = this.slaves.filter((x) => x.key !== key);
+    this.gen++;
   }
   addSniffer(s: SocSniffer): void {
     this.sniffers = this.sniffers.filter((x) => x.key !== s.key);
@@ -125,6 +136,7 @@ export class SocBus {
   setMembers(slaves: readonly SocSlave[], sniffers: readonly SocSniffer[]): void {
     this.slaves = [...slaves];
     this.sniffers = [...sniffers];
+    this.gen++;
   }
 
   /** Routes a transaction to the one slave that handles its address (evo's rules and error order) */
@@ -144,7 +156,10 @@ export class SocBus {
       else if (count > 1) t.error = SocBusError.multipleSlaves;
       else responder!.handle(t);
     }
-    if (t.hidden) return;
+    if (t.hidden) {
+      if (t.isWrite && !t.hasError) this.gen++;
+      return;
+    }
     if (!t.hasError) for (const s of this.sniffers) s.sniff(t);
     this.trace.add(t);
   }

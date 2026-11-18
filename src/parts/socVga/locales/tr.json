@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "badge": "VGA",
+    "name": "VGA ekranı",
+    "description": "Bir SoC'nin ekranı (Logisim-evolution'ın SoC VGA ekranı): program, ekranın SoC veri yolunda izlediği bellekteki bir çerçeve tamponuna piksel başına bir 0xRRGGBB sözcüğü yazarak çizer; bir kip yazmacı 160x120'den 1024x768'e kadar çözünürlüğü seçer ve parça kiple birlikte büyür"
+  },
+  "options": {
+    "on": "Açık",
+    "off": "Kapalı"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "Ekranın işlemlerini yanıtladığı ve izlediği SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "startAddress": {
+      "label": "Taban adresi (hex)",
+      "title": "4 baytlık kip yazmacının adresi (yalnızca sözcük erişimi): okuma yazılımın seçebileceği kipleri döndürür, bunlardan birinin maskesini yazmak o kipi seçer"
+    },
+    "displayMode": {
+      "label": "Başlangıç kipi",
+      "title": "Program kip yazmacına yazana kadar ekranın kullandığı çözünürlük"
+    },
+    "bufferAddress": {
+      "label": "Piksel tamponu adresi (hex)",
+      "title": "Sol üst pikselin adresi: resim, aynı veri yolundaki bir bellekte satır satır piksel başına bir 0xRRGGBB sözcüğüdür"
+    },
+    "soft160x120": {
+      "label": "Yazılımla 160x120",
+      "title": "Programın, maskesini kip yazmacına yazarak 160x120 kipini seçip seçemeyeceği"
+    },
+    "soft320x240": {
+      "label": "Yazılımla 320x240",
+      "title": "Programın, maskesini kip yazmacına yazarak 320x240 kipini seçip seçemeyeceği"
+    },
+    "soft640x480": {
+      "label": "Yazılımla 640x480",
+      "title": "Programın, maskesini kip yazmacına yazarak 640x480 kipini seçip seçemeyeceği"
+    },
+    "soft800x600": {
+      "label": "Yazılımla 800x600",
+      "title": "Programın, maskesini kip yazmacına yazarak 800x600 kipini seçip seçemeyeceği"
+    },
+    "soft1024x768": {
+      "label": "Yazılımla 1024x768",
+      "title": "Programın, maskesini kip yazmacına yazarak 1024x768 kipini seçip seçemeyeceği"
+    },
+    "cExport": {
+      "label": "C başlığı",
+      "title": "Bu ekran için bir C sürücüsü yazar: kip maskeleri, kip boyutları, adresler ve kip yazmacının yazıcı/okuyucu işlevlerini içeren <AD>.h ve <AD>.c (Logisim-evolution'da Export C)"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Ekranın yanıtladığı ve izlediği adresler ve kullanılan kip"
+    }
+  },
+  "status": {
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden birini seçin",
+    "notRun": "henüz benzetilmedi",
+    "register": "kip yazmacı {{start}} – {{end}}",
+    "buffer": "tampon {{start}} – {{end}}",
+    "initialMode": "{{mode}} (başlangıç kipi)",
+    "softMode": "{{mode}} (yazılım seçti)"
+  },
+  "body": {
+    "title": "VGA ekranı",
+    "notConnected": "Veri yoluna bağlı değil",
+    "missing": "Veri yolu bulunamadı"
+  },
+  "cExport": {
+    "button": "C dışa aktar…",
+    "done": "{{header}} ve {{source}} indirildi",
+    "generated": "Logic Design Studio'nun bir VGA bileşeni için kendiliğinden ürettiği dosya",
+    "sizes": "Her görüntü kipinin piksel olarak genişliği ve yüksekliği.",
+    "addresses": "Bu ekranın adresleri. Resim satır satır piksel başına bir 0xRRGGBB sözcüğüdür:\n(x, y) pikseli, kullanılan kipte BUFFER[y * genişlik + x] konumundadır.\nBaşlangıç kipi: {{initial}}; yazılımın seçebileceği kipler: {{allowed}}.",
+    "noneAllowed": "yok",
+    "modeFunctions": "Aşağıdaki işlevlerle VGA kipi değiştirilir.\nVGA kipini okumak desteklenen kipleri döndürür (yukarıdaki kip maskelerine bakın).\nDesteklenen bir kip maskesi yazmak VGA ekranının görüntü kipini değiştirir."
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: VGA ekranı bir veri yoluna bağlı değil",
+    "badStartAddress": "\"{{value}}\" 32 bitlik bir taban adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badBufferAddress": "\"{{value}}\" 32 bitlik bir piksel arabelleği adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badDisplayMode": "\"{{value}}\" bir görüntü kipi olarak okunamadı (160x120, 320x240, 640x480, 800x600, 1024x768): {{used}} kullanılıyor"
+  }
+}

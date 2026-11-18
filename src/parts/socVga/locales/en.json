@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "badge": "VGA",
+    "name": "VGA screen",
+    "description": "A display of a SoC (Logisim-evolution's SoC VGA screen): a program draws by writing one 0xRRGGBB word per pixel into a frame buffer in memory, which the screen watches on its SoC bus; a mode register selects 160x120 up to 1024x768, and the part grows with the mode"
+  },
+  "options": {
+    "on": "On",
+    "off": "Off"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Bus",
+      "title": "The SoC bus the screen answers on and watches (Logisim-evolution's Connected bus)",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "startAddress": {
+      "label": "Base address (hex)",
+      "title": "Address of the 4-byte mode register (word access only): a read returns the modes software may select, writing one of their masks selects that mode"
+    },
+    "displayMode": {
+      "label": "Initial mode",
+      "title": "Resolution the screen starts with, until the program writes the mode register"
+    },
+    "bufferAddress": {
+      "label": "Pixel buffer address (hex)",
+      "title": "Address of the top-left pixel: the picture is one 0xRRGGBB word per pixel, row by row, in a memory on the same bus"
+    },
+    "soft160x120": {
+      "label": "Software 160x120",
+      "title": "Whether the program may select 160x120 by writing its mask to the mode register"
+    },
+    "soft320x240": {
+      "label": "Software 320x240",
+      "title": "Whether the program may select 320x240 by writing its mask to the mode register"
+    },
+    "soft640x480": {
+      "label": "Software 640x480",
+      "title": "Whether the program may select 640x480 by writing its mask to the mode register"
+    },
+    "soft800x600": {
+      "label": "Software 800x600",
+      "title": "Whether the program may select 800x600 by writing its mask to the mode register"
+    },
+    "soft1024x768": {
+      "label": "Software 1024x768",
+      "title": "Whether the program may select 1024x768 by writing its mask to the mode register"
+    },
+    "cExport": {
+      "label": "C header",
+      "title": "Writes a C driver for this screen: <NAME>.h and <NAME>.c with the mode masks, the mode sizes, the addresses and the mode register's setter / getter (Logisim-evolution's Export C)"
+    },
+    "status": {
+      "label": "Status",
+      "title": "The addresses the screen answers and watches and the mode in use"
+    }
+  },
+  "status": {
+    "notConnected": "Not connected to a bus: choose one in the Bus attribute",
+    "notRun": "not simulated yet",
+    "register": "mode register {{start}} – {{end}}",
+    "buffer": "buffer {{start}} – {{end}}",
+    "initialMode": "{{mode}} (initial mode)",
+    "softMode": "{{mode}} (set by software)"
+  },
+  "body": {
+    "title": "VGA screen",
+    "notConnected": "Not connected to a bus",
+    "missing": "Bus not found"
+  },
+  "cExport": {
+    "button": "Export C…",
+    "done": "Downloaded {{header}} and {{source}}",
+    "generated": "Logic Design Studio automatically generated file for a VGA component",
+    "sizes": "Width and height in pixels of every display mode.",
+    "addresses": "Addresses of this screen. The picture is one 0xRRGGBB word per pixel, row by row:\nthe pixel (x, y) is BUFFER[y * width + x] in the mode in use.\nInitial mode: {{initial}}; modes software may select: {{allowed}}.",
+    "noneAllowed": "none",
+    "modeFunctions": "With the following functions the VGA mode can be manipulated.\nReading the VGA mode returns the supported modes (see the mode masks above).\nWriting a supported mode mask changes the display mode of the VGA screen."
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the VGA screen is not connected to a bus",
+    "badStartAddress": "\"{{value}}\" is not a 32-bit base address: 0x0 is used",
+    "badBufferAddress": "\"{{value}}\" is not a 32-bit pixel buffer address: 0x0 is used",
+    "badDisplayMode": "\"{{value}}\" is not a display mode (160x120, 320x240, 640x480, 800x600, 1024x768): {{used}} is used"
+  }
+}

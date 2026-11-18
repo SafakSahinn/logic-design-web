@@ -14,6 +14,7 @@ import './rv32im';
 import './nios2';
 import './socPio';
 import './socJtagUart';
+import './socVga';
 
 export {
   allParts,

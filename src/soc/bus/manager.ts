@@ -83,6 +83,11 @@ export class SocManager {
     this.attach(slave.key, { busId, slave });
   }
 
+  /** Attaches (or moves) a part that is both a slave and a sniffer of the same bus (e.g. the VGA display) */
+  attachSlaveAndSniffer(busId: string, part: SocSlave & SocSniffer): void {
+    this.attach(part.key, { busId, slave: part, sniffer: part });
+  }
+
   attachSniffer(busId: string, sniffer: SocSniffer): void {
     this.attach(sniffer.key, { busId, sniffer });
   }

@@ -100,6 +100,11 @@ export interface SocSlaveSpec<T extends SocSlave, C> {
   configure(obj: T, config: C): void;
   /** Simulation reset (a new epoch) */
   reset(obj: T): void;
+  /**
+   * Attaches the object to the bus `busId` ('' = none); defaults to socManager.attachSlave. A part that also sniffs
+   * the bus (the VGA display) attaches with socManager.attachSlaveAndSniffer instead.
+   */
+  attach?(busId: string, obj: T): void;
 }
 
 interface SlaveRuntime<T, C> {
@@ -163,7 +168,9 @@ export class SocSlaveCache<T extends SocSlave, C extends object> {
     const keep = new Set<string>();
     for (const e of entries) {
       keep.add(e.key);
-      socManager.attachSlave(e.busId, this.object(e));
+      const obj = this.object(e);
+      if (this.spec.attach) this.spec.attach(e.busId, obj);
+      else socManager.attachSlave(e.busId, obj);
       if (e.busId) this.attached.add(e.key);
       else this.attached.delete(e.key);
     }

@@ -64,6 +64,10 @@ export function buildExportSvg(
   const height = Math.ceil(y1 + M - y0);
 
   const clone = svg.cloneNode(true) as SVGSVGElement;
+  // live pictures (the VGA screen) are <canvas> elements in a <foreignObject>; a cloned canvas is blank, so their
+  // pairs are taken now, while both trees still match
+  const liveCanvases = Array.from(svg.querySelectorAll('foreignObject canvas')) as HTMLCanvasElement[];
+  const clonedCanvases = Array.from(clone.querySelectorAll('foreignObject canvas'));
   inlineStyles(svg, clone);
 
   // Drop the grid, UI-only parts and interaction overlays
@@ -73,6 +77,29 @@ export function buildExportSvg(
   ) as SVGGElement;
   Array.from(cloneGroup.children).forEach((el) => isGrid(el) && el.remove());
   cloneGroup.removeAttribute('transform');
+
+  // Live pictures: <foreignObject><canvas> -> <image> with the canvas's pixels
+  clonedCanvases.forEach((cv, i) => {
+    const fo = cv.closest('foreignObject');
+    const live = liveCanvases[i];
+    // (skipped when its part was dropped from the export above)
+    if (!fo || !clone.contains(fo) || !live) return;
+    const img = document.createElementNS(SVG_NS, 'image');
+    for (const a of ['x', 'y', 'width', 'height']) img.setAttribute(a, fo.getAttribute(a) || '0');
+    img.setAttribute('preserveAspectRatio', 'none');
+    img.setAttribute('style', 'image-rendering: pixelated');
+    try {
+      const url = live.toDataURL('image/png');
+      img.setAttribute('href', url);
+      // SVG 1.1 readers (older Inkscape, converters) only know xlink:href
+      img.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
+    } catch {
+      // a tainted canvas cannot be read: the black rectangle under it stays
+      fo.remove();
+      return;
+    }
+    fo.replaceWith(img);
+  });
 
   // Notes: <foreignObject> -> wrapped <text>
   clone.querySelectorAll('foreignObject').forEach((fo) => {
