@@ -9,7 +9,7 @@
 // built) only changes the manager's membership until the canvas runs again, and no trace or memory contents are
 // lost on the way. Known gap: a test-vector run resets its copy of the circuit (resetState bumps the epoch), and as
 // the objects are shared by id, that clears the canvas's trace and memory contents too.
-import { SocBus, SocManager, SocMemory, type SocMemoryConfig } from '../../soc';
+import { SocBus, SocManager, SocMemory, type SocMemoryConfig, type SocSlave } from '../../soc';
 import type { PartAttrOption } from '../registry';
 
 /** The manager of the circuit on the canvas */
@@ -25,9 +25,6 @@ interface Cached<T> {
 }
 
 const buses = new Map<string, Cached<SocBus>>();
-const memories = new Map<string, Cached<SocMemory> & { name: string }>();
-/** Keys of the memories this module attached to the manager (other slaves, e.g. 6h peripherals, keep their own) */
-const attachedMemories = new Set<string>();
 
 /** Drops the oldest entries not in use until the cache holds at most `limit` (the SoC parts' run-time caches) */
 export function trim<T>(cache: Map<string, T>, inUse: (key: string) => boolean, limit = CACHE_LIMIT): void {
@@ -78,56 +75,128 @@ export function syncSocBuses(entries: readonly SocBusEntry[]): void {
   for (const b of socManager.listBuses()) if (!keep.has(b.id)) socManager.removeBus(b.id, b.owner);
 }
 
-export interface SocMemoryEntry {
-  /** Component id of the memory part */
+/** What a slave part's syncRun() hands to its cache (one entry per component) */
+export interface SocSlaveEntry<C> {
+  /** Component id */
   key: string;
   /** The bus it is attached to ('' = none) */
   busId: string;
-  config: SocMemoryConfig;
   name: string;
+  config: C;
   epoch: number;
 }
 
+/** How a slave cache makes and updates its objects */
+export interface SocSlaveSpec<T extends SocSlave, C> {
+  /** A new object; `name` reads the part's current name (it changes with the label) */
+  create(key: string, config: C, name: () => string): T;
+  /** New attributes (only called when the config differs from the last one, field by field) */
+  configure(obj: T, config: C): void;
+  /** Simulation reset (a new epoch) */
+  reset(obj: T): void;
+}
+
+interface SlaveRuntime<T, C> {
+  obj: T;
+  name: string;
+  epoch: number;
+  config: C;
+}
+
+/** Field-by-field comparison of two flat configs */
+function sameConfig<C extends object>(a: C, b: C): boolean {
+  const ka = Object.keys(a) as (keyof C)[];
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+
+/**
+ * The run-time objects of one kind of SoC slave part (memory, PIO, ...), keyed by component id and kept outside the
+ * circuit: created on first use, reconfigured when the attributes change, reset on a new epoch, and attached to /
+ * detached from the manager's buses by sync(). The oldest objects not attached are dropped beyond CACHE_LIMIT.
+ */
+export class SocSlaveCache<T extends SocSlave, C extends object> {
+  private readonly objects = new Map<string, SlaveRuntime<T, C>>();
+  /** Keys this cache attached to the manager (other kinds of slaves keep their own) */
+  private readonly attached = new Set<string>();
+  private readonly spec: SocSlaveSpec<T, C>;
+
+  constructor(spec: SocSlaveSpec<T, C>) {
+    this.spec = spec;
+  }
+
+  /** The object of a part, created on first use; new attributes keep its state, a new epoch resets it */
+  object(e: Omit<SocSlaveEntry<C>, 'busId'>): T {
+    let rt = this.objects.get(e.key);
+    if (!rt) {
+      const holder = { name: e.name, epoch: e.epoch, config: { ...e.config } } as SlaveRuntime<T, C>;
+      holder.obj = this.spec.create(e.key, e.config, () => holder.name);
+      rt = holder;
+      this.objects.set(e.key, rt);
+      trim(this.objects, (k) => k === e.key || this.attached.has(k));
+      return rt.obj;
+    }
+    rt.name = e.name;
+    if (!sameConfig(rt.config, e.config)) {
+      rt.config = { ...e.config };
+      this.spec.configure(rt.obj, e.config);
+    }
+    if (rt.epoch !== e.epoch) {
+      rt.epoch = e.epoch;
+      this.spec.reset(rt.obj);
+    }
+    return rt.obj;
+  }
+
+  /** The object of a part when one exists (drawing, status; never creates one) */
+  peek(key: string): T | undefined {
+    return this.objects.get(key)?.obj;
+  }
+
+  /** Attaches exactly these parts' objects to their buses; parts no longer in the circuit are detached */
+  sync(entries: readonly SocSlaveEntry<C>[]): void {
+    const keep = new Set<string>();
+    for (const e of entries) {
+      keep.add(e.key);
+      socManager.attachSlave(e.busId, this.object(e));
+      if (e.busId) this.attached.add(e.key);
+      else this.attached.delete(e.key);
+    }
+    for (const key of [...this.attached]) {
+      if (keep.has(key)) continue;
+      socManager.detach(key);
+      this.attached.delete(key);
+    }
+  }
+
+  /** Test hook: detach and forget everything */
+  clear(): void {
+    for (const key of this.attached) socManager.detach(key);
+    this.attached.clear();
+    this.objects.clear();
+  }
+}
+
+export type SocMemoryEntry = SocSlaveEntry<SocMemoryConfig>;
+
+const memories = new SocSlaveCache<SocMemory, SocMemoryConfig>({
+  create: (key, config, name) => new SocMemory(key, config, name),
+  configure: (mem, config) => mem.configure(config),
+  reset: (mem) => mem.clear(),
+});
+
 /** The memory object of a part, created on first use; a new epoch forgets its contents (simulation reset) */
 export function socMemoryObject(key: string, config: SocMemoryConfig, name: string, epoch = 0): SocMemory {
-  let hit = memories.get(key);
-  if (!hit) {
-    const entry = { name, epoch } as Cached<SocMemory> & { name: string };
-    entry.obj = new SocMemory(key, config, () => entry.name);
-    hit = entry;
-    memories.set(key, hit);
-    trim(memories, (k) => attachedMemories.has(k) || k === key);
-  } else {
-    if (hit.epoch !== epoch) {
-      hit.obj.clear();
-      hit.epoch = epoch;
-    }
-    hit.obj.configure(config);
-    hit.name = name;
-  }
-  return hit.obj;
+  return memories.object({ key, config, name, epoch });
 }
 
 /** The memory object of a part when one exists */
 export function peekSocMemory(key: string): SocMemory | undefined {
-  return memories.get(key)?.obj;
+  return memories.peek(key);
 }
 
 /** Attaches exactly these memory parts to their buses; memory parts no longer in the circuit are detached */
 export function syncSocMemories(entries: readonly SocMemoryEntry[]): void {
-  const keep = new Set<string>();
-  for (const e of entries) {
-    keep.add(e.key);
-    const mem = socMemoryObject(e.key, e.config, e.name, e.epoch);
-    socManager.attachSlave(e.busId, mem);
-    if (e.busId) attachedMemories.add(e.key);
-    else attachedMemories.delete(e.key);
-  }
-  for (const key of [...attachedMemories]) {
-    if (keep.has(key)) continue;
-    socManager.detach(key);
-    attachedMemories.delete(key);
-  }
+  memories.sync(entries);
 }
 
 /** Name of a SoC part as evo shows it: its label, or "<part name>@x,y" */
@@ -154,8 +223,6 @@ export function socBusOptions(currentId: string, noneKey: string, missingKey: st
 /** Test hook: forget every bus, memory and attachment */
 export function resetSocRuntimeForTests(): void {
   for (const b of socManager.listBuses()) socManager.removeBus(b.id, b.owner);
-  for (const key of attachedMemories) socManager.detach(key);
-  attachedMemories.clear();
-  buses.clear();
   memories.clear();
+  buses.clear();
 }
