@@ -29,6 +29,16 @@ export interface AsmInstruction {
   operands: AsmOperand[];
   /** Address of the instruction (for pc-relative branches) */
   address: number;
+  /** Bytes the layout gave the instruction (what instructionSize returned) */
+  size: number;
+}
+
+/** State an assembly run hands to the ISA's expression functions */
+export interface AsmFunctionContext {
+  /** Address of the instruction or data the expression belongs to */
+  here: bigint;
+  /** Per-run storage, e.g. RISC-V's %pcrel_hi targets by address for %pcrel_lo */
+  memo: Map<string, bigint>;
 }
 
 /** A failed encoding: i18n key in the ISA's namespace (or "soc" for the generic keys), and which operand */
@@ -50,8 +60,20 @@ export interface IsaAssembler {
   /** "round": 4(sp) as in RISC-V and Nios II; "square": 4[sp] */
   readonly brackets: 'round' | 'square';
   readonly littleEndian: boolean;
-  /** Size in bytes of an opcode's encoding (fixed per opcode; pseudo-instructions may take several words) */
-  instructionSize(opcode: string): number;
+  /** Encoding of a no-op; .align in a code section pads with it instead of zeros (as GNU as does) */
+  readonly nop?: readonly number[];
+  /**
+   * Size in bytes of an instruction. `constant(k)` is operand k's value when it is a constant that does not depend on
+   * any address (numbers and .equ names of numbers), else undefined; e.g. RISC-V "li" takes 1 word for small values.
+   */
+  instructionSize(opcode: string, constant?: (operand: number) => bigint | undefined): number;
+  /** Relocation functions "%name(expr)" (lower-case names without "%"); null = argument not allowed */
+  functions?: Readonly<Record<string, (arg: bigint, ctx: AsmFunctionContext) => bigint | null>>;
+  /**
+   * Value of a bare name operand that only means something to this opcode at that operand position (CSR names,
+   * fence sets), if any; `index` is the 0-based operand number. Other positions resolve names as symbols.
+   */
+  namedOperand?(opcode: string, name: string, index: number): number | undefined;
   /** Encodes one instruction to exactly instructionSize(opcode) bytes */
   encode(instr: AsmInstruction): { bytes: number[] } | { error: AsmEncodeError };
   /** Decodes the instruction at `address` for the listing; null when it is not a valid instruction */

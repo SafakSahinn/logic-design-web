@@ -1,0 +1,25 @@
+{
+  "asm": {
+    "operands": "Expected operands: {{format}}",
+    "range": "The value must be between {{min}} and {{max}}",
+    "targetRange": "The target is too far away (offset must be between {{min}} and {{max}})",
+    "targetOdd": "The target must be at an even offset",
+    "unknown": "Unknown instruction \"{{name}}\"",
+    "liGrew": "The value {{value}} needs two instructions, but \"li\" was laid out as one: its symbol changed after this line (a later .set); use the final value or another symbol"
+  },
+  "halt": {
+    "breakpoint": "Breakpoint reached at {{pc}}",
+    "ebreak": "ebreak at {{pc}} (no trap handler: mtvec was not set)",
+    "ecall": "The program called ecall at {{pc}} (a7 = {{a7}}; no trap handler: mtvec was not set)",
+    "interrupt": "An interrupt arrived but there is no trap handler (mtvec was not set)",
+    "fetchError": "Instruction fetch at {{pc}} failed",
+    "loadError": "Load from {{address}} at {{pc}} failed",
+    "storeError": "Store to {{address}} at {{pc}} failed",
+    "illegal": "Invalid instruction {{word}} at {{pc}}",
+    "illegalCsr": "CSR {{csr}} at {{pc}} does not exist or is read-only",
+    "misalignedFetch": "The program counter {{pc}} is not a multiple of 4",
+    "misalignedJump": "Jump at {{pc}} to {{target}}, which is not a multiple of 4",
+    "misalignedLoad": "Misaligned load from {{address}} at {{pc}}",
+    "misalignedStore": "Misaligned store to {{address}} at {{pc}}"
+  }
+}

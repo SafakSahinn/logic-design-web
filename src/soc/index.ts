@@ -1,5 +1,5 @@
 // Public entry of the SoC core (Aşama 6e): bus, memory, simulation manager, program images, ELF reader and the
-// generic assembler. Processors (6f RV32IM, 6g Nios II) and peripherals (6h) build on it. Import from 'src/soc'.
+// generic assembler, plus the RV32IM processor (6f). Nios II (6g) and peripherals (6h) build on it. Import from 'src/soc'.
 import { registerNamespace } from '../i18n';
 import en from './locales/en.json';
 import tr from './locales/tr.json';
@@ -26,6 +26,7 @@ export { programFromElf, programSize, loadProgram } from './program';
 export type { ProgramImage, ProgramChunk, ProgramSection, ProgramSymbol, LoadResult } from './program';
 export { assemble, MAX_ASM_BYTES } from './asm/assembler';
 export type { AsmDiagnostic, AsmResult } from './asm/assembler';
-export type { IsaAssembler, AsmInstruction, AsmOperand, AsmEncodeError } from './asm/isa';
+export type { IsaAssembler, AsmInstruction, AsmOperand, AsmEncodeError, AsmFunctionContext } from './asm/isa';
 export { buildListing } from './asm/listing';
 export type { ListingLine } from './asm/listing';
+export * from './rv32im';

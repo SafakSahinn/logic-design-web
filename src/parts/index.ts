@@ -10,6 +10,7 @@ import './verilogEntity';
 import './tclGeneric';
 import './socBus';
 import './socMemory';
+import './rv32im';
 
 export {
   allParts,

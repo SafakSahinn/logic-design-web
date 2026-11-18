@@ -92,7 +92,9 @@
       "valueOutOfRange": "Değer {{bits}} bite sığmıyor",
       "expectedOperand": "Bir işlenen bekleniyor",
       "registerInExpression": "Bir ifadede yazmaç kullanılamaz",
-      "encodingSizeMismatch": "İç hata: \"{{name}}\" {{expected}} yerine {{got}} bayta kodlandı"
+      "encodingSizeMismatch": "İç hata: \"{{name}}\" {{expected}} yerine {{got}} bayta kodlandı",
+      "unknownFunction": "Bilinmeyen fonksiyon: {{name}}",
+      "badFunctionArgument": "{{name}} bu değerle kullanılamaz"
     },
     "noEntryPoint": "Programda hiç komut yok, bu yüzden başlangıç noktası yok.",
     "assumedEntryPoint": "_start etiketi yok; program ilk komutundan başlıyor."

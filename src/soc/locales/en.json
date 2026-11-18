@@ -92,7 +92,9 @@
       "valueOutOfRange": "The value does not fit in {{bits}} bits",
       "expectedOperand": "An operand is expected",
       "registerInExpression": "A register cannot be used in an expression",
-      "encodingSizeMismatch": "Internal error: \"{{name}}\" was encoded to {{got}} bytes instead of {{expected}}"
+      "encodingSizeMismatch": "Internal error: \"{{name}}\" was encoded to {{got}} bytes instead of {{expected}}",
+      "unknownFunction": "Unknown function {{name}}",
+      "badFunctionArgument": "{{name}} cannot be used with this value"
     },
     "noEntryPoint": "The program has no instructions, so it has no entry point.",
     "assumedEntryPoint": "There is no _start label; the program starts at its first instruction."

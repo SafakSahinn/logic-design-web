@@ -29,10 +29,11 @@ const memories = new Map<string, Cached<SocMemory> & { name: string }>();
 /** Keys of the memories this module attached to the manager (other slaves, e.g. 6h peripherals, keep their own) */
 const attachedMemories = new Set<string>();
 
-function trim<T>(cache: Map<string, T>, inUse: (key: string) => boolean): void {
-  if (cache.size <= CACHE_LIMIT) return;
+/** Drops the oldest entries not in use until the cache holds at most `limit` (the SoC parts' run-time caches) */
+export function trim<T>(cache: Map<string, T>, inUse: (key: string) => boolean, limit = CACHE_LIMIT): void {
+  if (cache.size <= limit) return;
   for (const key of cache.keys()) {
-    if (cache.size <= CACHE_LIMIT) return;
+    if (cache.size <= limit) return;
     if (!inUse(key)) cache.delete(key);
   }
 }

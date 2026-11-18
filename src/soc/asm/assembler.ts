@@ -140,6 +140,12 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
   const registers = new Set(isa.registers.map((r) => r.toLowerCase()));
   const isRegister = (t: Token) => t.kind === 'ident' && registers.has(t.text.toLowerCase());
   const pcIsHere = !registers.has('pc');
+  /** Storage of the ISA's expression functions for this run */
+  const memo = new Map<string, bigint>();
+  const call = (here: bigint) => (name: string, arg: bigint) => {
+    const fn = isa.functions && Object.prototype.hasOwnProperty.call(isa.functions, name) ? isa.functions[name] : undefined;
+    return fn ? fn(arg, { here, memo }) : undefined;
+  };
 
   // 1. lex into statements
   const raw: Statement[] = [];
@@ -256,6 +262,8 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
   const runLayout = (planned: ReadonlyMap<string, number>) => {
     const symbols = new Map<string, bigint>();
     const labelNames = new Set<string>();
+    /** .equ names whose value depends on a label or the location counter (may change between layout rounds) */
+    const addressDependent = new Set<string>();
     /** Section of each label (a .org on an empty section moves the labels at its start) */
     const labelSection = new Map<string, Section>();
     const sections = new Map<string, Section>();
@@ -291,11 +299,34 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
       s.empty = false;
       return true;
     };
+    let usedAddress = false;
     const constScope = (here: number): ExprScope => ({
-      symbol: (n) => symbols.get(n),
+      symbol: (n) => {
+        if (labelNames.has(n) || addressDependent.has(n)) usedAddress = true;
+        return symbols.get(n);
+      },
       here: BigInt(here),
-      isHere: (n) => n === '.' || (pcIsHere && n.toLowerCase() === 'pc'),
+      isHere: (n) => {
+        const yes = n === '.' || (pcIsHere && n.toLowerCase() === 'pc');
+        if (yes) usedAddress = true;
+        return yes;
+      },
+      call: call(BigInt(here)),
     });
+    /** Value of an operand that depends on no address, for instructionSize */
+    const addressFree = (tokens: Token[] | undefined): bigint | undefined => {
+      if (!tokens || tokens.length === 0 || tokens.some(isRegister)) return undefined;
+      try {
+        return evaluate(tokens, {
+          symbol: (n) => (labelNames.has(n) || addressDependent.has(n) ? undefined : symbols.get(n)),
+          here: 0n,
+          isHere: () => false,
+        });
+      } catch (e) {
+        if (e instanceof ExprError) return undefined;
+        throw e;
+      }
+    };
     const constant = (tokens: Token[], st: Statement, here: number): bigint | null => {
       try {
         return evaluate(tokens, constScope(here));
@@ -325,7 +356,8 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
 
       if (opcodes.has(name)) {
         const s = section(st);
-        const size = isa.instructionSize(name);
+        const operandTokens = splitOperands(st.args);
+        const size = isa.instructionSize(name, (k) => addressFree(operandTokens[k]));
         const address = s.end;
         if (!advance(s, size, st, st.head)) {
           tooLarge = true;
@@ -369,8 +401,11 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
           continue;
         }
         // (no implicit .text: a leading .equ must not open a section at 0)
+        usedAddress = false;
         const v = constant(valueOp, st, (current as Section | null)?.end ?? 0);
         if (v !== null) symbols.set(n.text, v);
+        if (usedAddress) addressDependent.add(n.text);
+        else addressDependent.delete(n.text);
         continue;
       }
       if (name === '.org') {
@@ -448,8 +483,13 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
         const pad = (boundary - (s.end % boundary)) % boundary;
         if (pad === 0) continue;
         const address = s.end;
+        const nop = isa.nop;
         if (!advance(s, pad, st, st.head)) tooLarge = true;
-        else if ((f & 0xffn) !== 0n) items.push({ kind: 'bytes', section: s, address, bytes: new Array(pad).fill(Number(f & 0xffn)) });
+        else if (!fill && s.executable && nop && nop.length > 0 && (address + pad) % nop.length === 0 && pad >= nop.length) {
+          // as GNU as: zero bytes up to the next instruction boundary, nops from there on
+          const lead = (nop.length - (address % nop.length)) % nop.length;
+          items.push({ kind: 'bytes', section: s, address: address + lead, bytes: Array.from({ length: pad - lead }, (_, k) => nop[k % nop.length]) });
+        } else if ((f & 0xffn) !== 0n) items.push({ kind: 'bytes', section: s, address, bytes: new Array(pad).fill(Number(f & 0xffn)) });
         continue;
       }
       if (STRING_DIRECTIVES.has(name)) {
@@ -536,6 +576,7 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
     symbol: (n) => symbols.get(n),
     here: BigInt(here),
     isHere: (n) => n === '.' || (pcIsHere && n.toLowerCase() === 'pc'),
+    call: call(BigInt(here)),
   });
   const valueOf = (tokens: Token[], st: Statement, here: number): bigint | null => {
     try {
@@ -548,6 +589,24 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
   };
   const openBracket = isa.brackets === 'round' ? '(' : '[';
   const closeBracket = isa.brackets === 'round' ? ')' : ']';
+
+  // Functions that pair up (RISC-V %pcrel_lo naming the %pcrel_hi at a label) must see the final addresses only,
+  // whatever the order of the lines: values from the layout rounds are dropped, then every instruction operand
+  // is evaluated once without reporting errors so the pairing data exists before the real pass.
+  memo.clear();
+  for (const item of items) {
+    if (item.kind !== 'instr' || !item.st.args.some((t) => t.kind === 'ident')) continue;
+    for (const op of splitOperands(item.st.args)) {
+      const n = op.length;
+      const expr = n >= 3 && op[n - 3].text === openBracket && isRegister(op[n - 2]) && op[n - 1].text === closeBracket ? op.slice(0, n - 3) : op;
+      if (!expr.length || expr.some(isRegister)) continue;
+      try {
+        evaluate(expr, fullScope(item.address));
+      } catch (e) {
+        if (!(e instanceof ExprError)) throw e;
+      }
+    }
+  }
 
   for (const item of items) {
     if (item.kind === 'bytes') {
@@ -568,10 +627,11 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
       continue;
     }
     const { st, address, size } = item;
+    const opcode = lower(st.head);
     const operandTokens = st.args.length ? splitOperands(st.args) : [];
     const operands: AsmOperand[] = [];
     let bad = false;
-    for (const op of operandTokens) {
+    for (const [index, op] of operandTokens.entries()) {
       if (op.length === 0) {
         diag.add(st, st.head, 'expectedOperand');
         bad = true;
@@ -579,6 +639,11 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
       }
       if (op.length === 1 && isRegister(op[0])) {
         operands.push({ kind: 'reg', name: op[0].text.toLowerCase() });
+        continue;
+      }
+      const named = op.length === 1 && op[0].kind === 'ident' ? isa.namedOperand?.(opcode, op[0].text.toLowerCase(), index) : undefined;
+      if (named !== undefined) {
+        operands.push({ kind: 'imm', value: named });
         continue;
       }
       const n = op.length;
@@ -605,7 +670,7 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
       operands.push({ kind: 'imm', value: Number(v) });
     }
     if (bad) continue;
-    const encoded = isa.encode({ opcode: lower(st.head), operands, address });
+    const encoded = isa.encode({ opcode, operands, address, size });
     if ('error' in encoded) {
       const e = encoded.error;
       const tok = e.operand !== undefined ? operandTokens[e.operand]?.[0] : st.head;

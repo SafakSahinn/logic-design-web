@@ -1,9 +1,17 @@
 // Expressions of the SoC assembler (Aşama 6e), with GNU as precedence (evo evaluates strictly left to right):
 //   unary - ~ +   >   * / % << >>   >   | & ^   >   + -
 // Values are 64-bit (BigInt) while computing; symbols are labels, .equ names and "." / "pc" (the location counter).
+// An ISA may add relocation functions written "%name(expr)", e.g. RISC-V's %hi / %lo.
 import type { Token } from './lexer';
 
-export type ExprErrorKey = 'expectedValue' | 'divisionByZero' | 'unknownSymbol' | 'unbalancedBrackets' | 'badShift';
+export type ExprErrorKey =
+  | 'expectedValue'
+  | 'divisionByZero'
+  | 'unknownSymbol'
+  | 'unbalancedBrackets'
+  | 'badShift'
+  | 'unknownFunction'
+  | 'badFunctionArgument';
 
 export class ExprError extends Error {
   readonly key: ExprErrorKey;
@@ -24,6 +32,8 @@ export interface ExprScope {
   here: bigint;
   /** Names that mean the location counter ("." always; "pc" unless the ISA has a register "pc") */
   isHere(name: string): boolean;
+  /** Value of "%name(arg)"; undefined = no such function, null = the argument is not allowed */
+  call?(name: string, arg: bigint): bigint | null | undefined;
 }
 
 const LEVELS: string[][] = [['+', '-'], ['|', '&', '^'], ['*', '/', '%', '<<', '>>']];
@@ -54,6 +64,18 @@ export function evaluate(tokens: Token[], scope: ExprScope): bigint {
       pos++;
       const v = unary();
       return BigInt.asIntN(64, t.text === '-' ? -v : t.text === '~' ? ~v : v);
+    }
+    if (t.kind === 'punct' && t.text === '%' && tokens[pos + 1]?.kind === 'ident' && tokens[pos + 2]?.text === '(') {
+      const name = tokens[pos + 1];
+      pos += 3;
+      const arg = binary(0);
+      const close = peek();
+      if (!close || close.text !== ')') throw new ExprError('unbalancedBrackets', tokens[pos - 1]);
+      pos++;
+      const v = scope.call?.(name.text.toLowerCase(), arg);
+      if (v === undefined) throw new ExprError('unknownFunction', name, { name: '%' + name.text });
+      if (v === null) throw new ExprError('badFunctionArgument', name, { name: '%' + name.text });
+      return v;
     }
     if (t.kind === 'punct' && OPEN.has(t.text)) {
       pos++;

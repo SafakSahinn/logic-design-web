@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "badge": "CPU",
+    "name": "RV32IM",
+    "description": "Bir RISC-V RV32IM işlemcisi (Logisim-evolution'ın RISC-V IM simulator'ü): her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri aynı veri yolundaki bir PLIC üzerinden ulaşır"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu; PLIC'i de bu yolda yanıt verir (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "resetVector": {
+      "label": "Sıfırlama vektörü (hex)",
+      "title": "Program yüklenmemişken sıfırlamadan sonraki ilk komutun adresi (yüklü bir program kendi giriş noktasından başlar)"
+    },
+    "irqWidth": {
+      "label": "IRQ girişleri",
+      "title": "Kesme girişi sayısı (0-32); IRQi, PLIC'in i+1 numaralı kaynağıdır"
+    },
+    "plicBase": {
+      "label": "PLIC taban adresi (hex)",
+      "title": "Kesme denetleyicisinin yazmaçlarının veri yolunda yanıt verdiği yer (4 MB, yalnız sözcük erişimi); sözcük sınırına aşağı yuvarlanır"
+    },
+    "stateVisible": {
+      "label": "Durumu göster",
+      "title": "Kapalıyken gövdede yalnız gri bir kutu çizilir; işlemci çalışırken daha hızlıdır",
+      "options": {
+        "on": "Gösteriliyor",
+        "off": "Gizli"
+      }
+    },
+    "program": {
+      "label": "Program",
+      "title": "Çalıştırma denetimleri, program yükleme (ELF dosyası veya assembler) ve durak noktalarıyla yüklü program"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Çalışma durumu, program sayacı ve işlemcinin neden durduğu"
+    }
+  },
+  "status": {
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden seçin",
+    "notRun": "Henüz benzetim yapılmadı",
+    "summary": "{{state}}, pc = {{pc}}, PLIC {{plic}} adresinde"
+  },
+  "run": {
+    "running": "Çalışıyor",
+    "stopped": "Durdu",
+    "breakpoint": "Durak noktası",
+    "error": "Hata"
+  },
+  "body": {
+    "title": "RISC-V IM benzetimcisi",
+    "hidden": "Benzetim hızlansın diye içerik gizlendi",
+    "registers": "Yazmaç dosyası:",
+    "pc": "pc:",
+    "trace": "Yürütme izi (son yürütülen en üstte):",
+    "opcode": "İşlem kodu:",
+    "asm": "Assembly:",
+    "emptyTrace": "Henüz yürütme izi yok",
+    "trap": "tuzak {{cause}}",
+    "csrs": "Makine CSR'leri:",
+    "busMissing": "Veri yolu bulunamadı",
+    "notConnected": "Bir veri yoluna bağlı değil",
+    "simState": "Durum:",
+    "start": "Başlat",
+    "pause": "Duraklat"
+  },
+  "pins": {
+    "reset": "Reset"
+  },
+  "dialog": {
+    "close": "Kapat"
+  },
+  "editor": {
+    "start": "Başlat",
+    "startTitle": "İşlemci her saat kenarında bir komut yürütsün",
+    "pause": "Duraklat",
+    "pauseTitle": "Yürütmeyi durdur (saat çalışmaya devam eder)",
+    "step": "Adım",
+    "stepTitle": "Saat kenarı beklemeden şimdi bir komut yürüt",
+    "reset": "Sıfırla",
+    "resetTitle": "İşlemciyi sıfırla: pc programın giriş noktasına (veya sıfırlama vektörüne), yazmaçlar bilinmiyor, durmuş",
+    "elf": "ELF yükle…",
+    "elfTitle": "Bir RV32 ELF çalıştırılabilir dosyasını veri yolunun belleklerine yükle ve giriş noktasına sıfırla",
+    "asm": "Assembler…",
+    "asmTitle": "Bir RV32IM programı yaz, derle ve yükle",
+    "listing": "Program…",
+    "listingTitle": "Güncel pc ile yüklü program; durak noktası koymak için bir satıra tıklayın"
+  },
+  "load": {
+    "done": "{{bytes}} bayt yüklendi, giriş noktası {{entry}}; çalıştırmak için Başlat'a basın"
+  },
+  "asm": {
+    "title": "Assembler: {{name}}",
+    "template": "# RV32IM programı. Derlenip işlemcinin veri yolu üzerinden yazılır;\n# bu adresleri bir SoC Bellek yanıtlamalıdır.\n        .text\n        .org 0x0\n_start:\n        li   a0, 0          # toplam\n        li   a1, 1          # i\n        li   a2, 10\nloop:\n        add  a0, a0, a1\n        addi a1, a1, 1\n        ble  a1, a2, loop\n        ebreak              # burada durur: a0 = 55\n",
+    "run": "Derle ve yükle",
+    "runTitle": "Programı derle ve veri yolu üzerinden yaz (Ctrl+Enter)",
+    "openFile": "Dosya aç…",
+    "fileError": "Dosya okunamadı (en çok {{max}} baytlık metin)",
+    "failed": "{{count}} hata: hiçbir şey yüklenmedi",
+    "noCode": "Programda hiç komut yok: hiçbir şey yüklenmedi",
+    "diagnostic": "Satır {{line}}: {{message}}"
+  },
+  "listing": {
+    "title": "Program: {{name}}",
+    "empty": "Yüklü program yok: ELF yükle… veya assembler'ı kullanın.",
+    "hint": "Durak noktası koymak ya da kaldırmak için bir komuta tıklayın.",
+    "toggleTitle": "Burada durak noktası koy veya kaldır",
+    "follow": "pc'yi izle",
+    "state": "pc = {{pc}} ({{state}})"
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: işlemci bir veri yoluna bağlı değil",
+    "badResetVector": "\"{{value}}\" 32 bitlik bir reset vektörü olarak okunamadı: 0x0 kullanılıyor",
+    "badPlicBase": "\"{{value}}\" 32 bitlik bir PLIC taban adresi olarak okunamadı: {{used}} kullanılıyor",
+    "badIrqWidth": "\"{{value}}\" bir IRQ girişi sayısı olarak okunamadı (0 ile {{max}} arası): 0 kullanılıyor",
+    "program": "Yüklü program ve işlemci durumu Logisim-evolution'daki gibi dosyaya kaydedilmez: dosyayı açtıktan sonra programı yeniden yükleyin",
+    "asmSource": "Assembler kaynağı Logisim-evolution'daki gibi .circ dosyasına kaydedilmez (bu programın kendi devre dosyasında saklanır)"
+  }
+}
