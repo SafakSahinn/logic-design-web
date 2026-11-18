@@ -60,6 +60,8 @@ export interface IsaAssembler {
   /** "round": 4(sp) as in RISC-V and Nios II; "square": 4[sp] */
   readonly brackets: 'round' | 'square';
   readonly littleEndian: boolean;
+  /** Options of ".set <option>" (lower case) that are accepted and ignored, e.g. Nios II's "noat" */
+  readonly setOptions?: readonly string[];
   /** Encoding of a no-op; .align in a code section pads with it instead of zeros (as GNU as does) */
   readonly nop?: readonly number[];
   /**

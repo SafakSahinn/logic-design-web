@@ -11,6 +11,7 @@ import './tclGeneric';
 import './socBus';
 import './socMemory';
 import './rv32im';
+import './nios2';
 
 export {
   allParts,

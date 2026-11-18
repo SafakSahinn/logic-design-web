@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "badge": "CPU",
+    "name": "Nios II",
+    "description": "A Nios II/s processor (Logisim-evolution's Nios2s simulator): one instruction per rising clock edge, its fetches and data accesses go over its SoC bus; the IRQ pins feed ipending directly and custom instructions use the pins on the top edge"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Bus",
+      "title": "The SoC bus the processor uses for its instructions and data (Logisim-evolution's Connected bus)",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "resetVector": {
+      "label": "Reset vector (hex)",
+      "title": "Address of the first instruction after a reset when no program has been loaded (a loaded program starts at its entry point)"
+    },
+    "exceptionVector": {
+      "label": "Exception vector (hex)",
+      "title": "Where hardware interrupts and trap go (Logisim-evolution: 0x14 by default)"
+    },
+    "breakVector": {
+      "label": "Break vector (hex)",
+      "title": "Where the break instruction goes (Logisim-evolution: 0x30 by default)"
+    },
+    "irqWidth": {
+      "label": "IRQ inputs",
+      "title": "Number of interrupt inputs (0 to 32); IRQi is bit i of ipending (enabled by ienable)"
+    },
+    "stateVisible": {
+      "label": "Show state",
+      "title": "Off draws only a grey box on the body, which is faster while the processor runs",
+      "options": {
+        "on": "Shown",
+        "off": "Hidden"
+      }
+    },
+    "program": {
+      "label": "Program",
+      "title": "Run controls, loading a program (ELF file or assembler) and the loaded program with breakpoints"
+    },
+    "status": {
+      "label": "Status",
+      "title": "Run state, program counter and why the processor stopped"
+    }
+  },
+  "status": {
+    "notConnected": "Not connected to a bus: choose one in the Bus attribute",
+    "notRun": "Not simulated yet",
+    "summary": "{{state}}, pc = {{pc}}"
+  },
+  "run": {
+    "running": "Running",
+    "stopped": "Halted",
+    "breakpoint": "Breakpoint",
+    "error": "Error"
+  },
+  "body": {
+    "title": "Nios2s simulator",
+    "hidden": "Contents hidden for faster simulation",
+    "registers": "Register file:",
+    "pc": "pc:",
+    "trace": "Execution trace (last executed on top):",
+    "opcode": "Opcode:",
+    "asm": "Assembly:",
+    "emptyTrace": "No execution traces available",
+    "busMissing": "Bus not found",
+    "notConnected": "Not connected to a bus",
+    "simState": "Sim state:",
+    "start": "Start",
+    "pause": "Pause",
+    "trap": "exception {{cause}}",
+    "control": "Control registers:",
+    "irqs": "IRQs:",
+    "mask": "Mask:",
+    "customWait": "Custom instruction: waiting for done"
+  },
+  "pins": {
+    "reset": "Reset"
+  },
+  "dialog": {
+    "close": "Close"
+  },
+  "editor": {
+    "start": "Start",
+    "startTitle": "Let the processor execute one instruction per clock edge",
+    "pause": "Pause",
+    "pauseTitle": "Stop executing (the clock keeps running)",
+    "step": "Step",
+    "stepTitle": "Execute one instruction now, without a clock edge",
+    "reset": "Reset",
+    "resetTitle": "Reset the processor: pc to the program's entry point (or the reset vector), registers unknown, halted",
+    "elf": "Load ELF…",
+    "elfTitle": "Load a Nios II ELF executable into the bus's memories and reset to its entry point",
+    "asm": "Assembler…",
+    "asmTitle": "Write a Nios II program, assemble it and load it",
+    "listing": "Program…",
+    "listingTitle": "The loaded program with the current pc; click a line to set a breakpoint"
+  },
+  "load": {
+    "done": "Loaded {{bytes}} byte(s), entry point {{entry}}; press Start to run"
+  },
+  "asm": {
+    "title": "Assembler: {{name}}",
+    "template": "# Nios II program. It is assembled and written over the CPU's bus,\n# so a SoC Memory must answer at these addresses.\n        .text\n        .org 0x0\n_start:\n        movi r2, 0          # sum\n        movi r3, 1          # i\n        movi r4, 10\nloop:\n        add  r2, r2, r3\n        addi r3, r3, 1\n        ble  r3, r4, loop\nend:\n        br   end            # stays here: r2 = 55\n",
+    "run": "Assemble and load",
+    "runTitle": "Assemble the program and write it over the bus (Ctrl+Enter)",
+    "openFile": "Open file…",
+    "fileError": "The file cannot be read (at most {{max}} bytes of text)",
+    "failed": "{{count}} error(s): nothing was loaded",
+    "noCode": "The program has no instructions: nothing was loaded",
+    "diagnostic": "Line {{line}}: {{message}}"
+  },
+  "listing": {
+    "title": "Program: {{name}}",
+    "empty": "No program loaded: use Load ELF… or the assembler.",
+    "hint": "Click an instruction to set or clear a breakpoint.",
+    "toggleTitle": "Set or clear a breakpoint here",
+    "follow": "Follow pc",
+    "state": "pc = {{pc}} ({{state}})"
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the processor is not connected to a bus",
+    "badResetVector": "\"{{value}}\" is not a 32-bit reset vector: {{used}} is used",
+    "badExceptionVector": "\"{{value}}\" is not a 32-bit exception vector: {{used}} is used",
+    "badBreakVector": "\"{{value}}\" is not a 32-bit break vector: {{used}} is used",
+    "badIrqWidth": "\"{{value}}\" is not a number of IRQ inputs (0 to {{max}}): 0 is used",
+    "program": "The loaded program and the processor state are not saved in the file, as in Logisim-evolution: load the program again after opening it",
+    "asmSource": "The assembler source is not saved in the .circ file, as in Logisim-evolution (it is kept in this program's own circuit file)"
+  }
+}

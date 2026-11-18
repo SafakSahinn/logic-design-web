@@ -3,15 +3,7 @@
 // slave on the same bus. syncRun() keeps the PLIC attachments in line with the circuit; a new epoch (simulation
 // reset) starts the core and the PLIC again. The loaded program (its image, for the listing) and the breakpoints
 // stay with the core.
-import {
-  BYTE_ACCESS,
-  READ_TRANSACTION,
-  Rv32imCore,
-  Rv32imPlic,
-  SocBusError,
-  SocTransaction,
-  type ProgramImage,
-} from '../../soc';
+import { Rv32imCore, Rv32imPlic, type ProgramImage } from '../../soc';
 import { socManager, trim } from '../shared/socRuntime';
 
 /** Cores kept; the oldest not in the circuit are dropped beyond this */
@@ -50,25 +42,29 @@ const plicKey = (key: string) => `${key}:plic`;
 /** The run-time object of a part, created on first use; a new epoch resets the core and the PLIC */
 export function cpuRuntime(e: CpuEntry): CpuRuntime {
   let rt = cpus.get(e.key);
+  let restart = false;
   if (!rt) {
     const holder = {} as CpuRuntime;
     const core = new Rv32imCore({ transact: (t) => socManager.transact(holder.busId, t), master: () => holder.name });
-    // evo: a new processor state is running; a reset stops it
-    core.runState = 'running';
     Object.assign(holder, { core, plic: new Rv32imPlic(plicKey(e.key), () => holder.name), busId: e.busId, name: e.name, epoch: e.epoch, program: null, version: 0 });
     rt = holder;
     cpus.set(e.key, rt);
     trim(cpus, (k) => k === e.key || attached.has(k), CACHE_LIMIT);
+    restart = true;
   } else if (rt.epoch !== e.epoch) {
     rt.epoch = e.epoch;
-    rt.core.reset();
-    rt.core.runState = 'running';
     rt.plic.reset();
+    restart = true;
   }
   rt.busId = e.busId;
   rt.name = e.name;
   rt.core.resetVector = e.resetVector >>> 0;
   rt.plic.configure(e.plicBase, e.irqWidth);
+  if (restart) {
+    // after the reset vector is set, so pc starts there; evo: a new processor state is running
+    rt.core.reset();
+    rt.core.runState = 'running';
+  }
   return rt;
 }
 
@@ -94,13 +90,7 @@ export function syncCpus(entries: readonly CpuEntry[]): void {
   }
 }
 
-/** A byte of the CPU's bus as the core would read it, without a trace row (listing); undefined on a bus error */
-export function peekBusByte(busId: string, address: number): number | undefined {
-  const t = new SocTransaction(READ_TRANSACTION, address >>> 0, 0, BYTE_ACCESS, 'listing');
-  t.hidden = true;
-  socManager.transact(busId, t);
-  return t.error === SocBusError.none ? t.readData & 0xff : undefined;
-}
+export { peekBusByte } from '../shared/cpu/program';
 
 /** Test hook */
 export function resetCpuRuntimeForTests(): void {

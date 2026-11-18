@@ -138,6 +138,7 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
   const diag = new Diagnostics();
   const opcodes = new Set(isa.opcodes.map((o) => o.toLowerCase()));
   const registers = new Set(isa.registers.map((r) => r.toLowerCase()));
+  const setOptions = new Set((isa.setOptions ?? []).map((o) => o.toLowerCase()));
   const isRegister = (t: Token) => t.kind === 'ident' && registers.has(t.text.toLowerCase());
   const pcIsHere = !registers.has('pc');
   /** Storage of the ISA's expression functions for this run */
@@ -385,6 +386,8 @@ export function assemble(source: string, isa: IsaAssembler): AsmResult {
       }
       if (name === '.equ' || name === '.set') {
         let [nameOp, valueOp, ...rest] = ops();
+        // the ISA's one-word options (Nios II ".set noat", ".set nobreak", ...): only change GNU as warnings
+        if (name === '.set' && !valueOp && nameOp?.length === 1 && setOptions.has(lower(nameOp[0]))) continue;
         // evo writes ".equ NAME value" without the comma
         if (!valueOp && nameOp && nameOp.length > 1 && nameOp[0].kind === 'ident') [nameOp, valueOp] = [[nameOp[0]], nameOp.slice(1)];
         const n = nameOp?.[0];

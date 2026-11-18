@@ -1,6 +1,6 @@
-// Building blocks of the RV32IM body (evo's CpuDrawSupport boxes): a titled yellow panel and a hex value box.
+// Building blocks of a processor body (evo's CpuDrawSupport boxes): a titled yellow panel and a hex value box.
 import type { ReactNode } from 'react';
-import { Txt } from '../socBus/traceRow';
+import { Txt } from '../../socBus/traceRow';
 
 /** Width of a hex value box (evo's block width) */
 export const BLOCK = 80;

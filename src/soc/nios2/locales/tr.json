@@ -1,0 +1,29 @@
+{
+  "asm": {
+    "operands": "Beklenen işlenenler: {{format}}",
+    "range": "Değer {{min}} ile {{max}} arasında olmalı",
+    "targetRange": "Hedef çok uzakta (uzaklık {{min}} ile {{max}} arasında olmalı)",
+    "targetAlign": "Hedef 4'ün katı olmalı",
+    "jumpRegion": "call ve jmpi yalnızca komutla aynı 256 MB bölgedeki hedeflere ulaşır; callr ya da jmp kullanın",
+    "controlNotAllowed": "\"{{name}}\" burada genel amaçlı bir yazmaç değil",
+    "customNotAllowed": "\"{{name}}\" bir özel yazmaç; onu yalnızca custom komutu alır",
+    "expectedControl": "Bir denetim yazmacı bekleniyor (status, ienable, ctl5, ...)",
+    "unknown": "Bilinmeyen komut \"{{name}}\"",
+    "jmpRa": "r31 jmp ile kullanılamaz; bunun yerine ret kullanın"
+  },
+  "halt": {
+    "breakpoint": "{{pc}} adresindeki durak noktasına gelindi",
+    "fetchError": "{{pc}} adresinden komut okunamadı",
+    "loadError": "{{pc}} adresindeki komut {{address}} adresinden okuyamadı",
+    "storeError": "{{pc}} adresindeki komut {{address}} adresine yazamadı",
+    "illegal": "{{pc}} adresinde geçersiz komut {{word}}",
+    "misalignedFetch": "Program sayacı {{pc}} 4'ün katı değil",
+    "misalignedJump": "{{pc}} adresindeki atlama, 4'ün katı olmayan {{target}} adresine",
+    "misalignedLoad": "{{pc}} adresinde {{address}} adresinden hizasız okuma",
+    "misalignedStore": "{{pc}} adresinde {{address}} adresine hizasız yazma",
+    "divZero": "{{pc}} adresinde sıfıra bölme",
+    "shadow": "{{pc}} adresinde rdprs / wrprs: bu çekirdekte gölge yazmaç kümesi yok",
+    "customDone": "{{pc}} adresindeki özel komut done girişini bekliyor ama done 0 ya da 1 değil",
+    "customResult": "{{pc}} adresindeki özel komut {{reg}} yazmacına yazıyor ama result girişi 32 bitlik bir değer değil (açık ya da tanımsız bit var)"
+  }
+}

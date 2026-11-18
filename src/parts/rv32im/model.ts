@@ -5,6 +5,7 @@ import { MAX_IRQS, PLIC_DEFAULT_BASE } from '../../soc';
 import type { CircuitComponentInstance, CircuitPin } from '../../types/circuit';
 import type { SignalValue } from '../../types/logic';
 import { partName, type PartAttrEdit } from '../registry';
+import { MAX_ASM_SOURCE } from '../shared/cpu/types';
 import { socPartName } from '../shared/socRuntime';
 import { PART_ID } from './id';
 
@@ -16,8 +17,7 @@ export const RESET_Y = 610;
 export const CLOCK_Y = 630;
 export const IRQ_TOP = 10;
 export const IRQ_GAP = 10;
-/** Longest assembler source kept with the part (it is saved with the circuit) */
-export const MAX_ASM_SOURCE = 1024 * 1024;
+export { MAX_ASM_SOURCE };
 
 /** What the part keeps in comp.state.part (JSON-safe) */
 export interface Rv32imPartState {

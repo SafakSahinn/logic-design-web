@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "badge": "CPU",
+    "name": "Nios II",
+    "description": "Bir Nios II/s işlemcisi (Logisim-evolution'ın Nios2s simulator'ü): her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri doğrudan ipending'e gider, özel komutlar üst kenardaki pinleri kullanır"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "resetVector": {
+      "label": "Sıfırlama vektörü (hex)",
+      "title": "Program yüklenmemişken sıfırlamadan sonraki ilk komutun adresi (yüklü bir program kendi giriş noktasından başlar)"
+    },
+    "exceptionVector": {
+      "label": "İstisna vektörü (hex)",
+      "title": "Donanım kesmelerinin ve trap komutunun gittiği adres (Logisim-evolution'da varsayılan 0x14)"
+    },
+    "breakVector": {
+      "label": "Break vektörü (hex)",
+      "title": "break komutunun gittiği adres (Logisim-evolution'da varsayılan 0x30)"
+    },
+    "irqWidth": {
+      "label": "IRQ girişleri",
+      "title": "Kesme girişi sayısı (0-32); IRQi, ipending'in i. bitidir (ienable ile etkinleşir)"
+    },
+    "stateVisible": {
+      "label": "Durumu göster",
+      "title": "Kapalıyken gövdede yalnız gri bir kutu çizilir; işlemci çalışırken daha hızlıdır",
+      "options": {
+        "on": "Gösteriliyor",
+        "off": "Gizli"
+      }
+    },
+    "program": {
+      "label": "Program",
+      "title": "Çalıştırma denetimleri, program yükleme (ELF dosyası veya assembler) ve durak noktalarıyla yüklü program"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "Çalışma durumu, program sayacı ve işlemcinin neden durduğu"
+    }
+  },
+  "status": {
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden seçin",
+    "notRun": "Henüz benzetim yapılmadı",
+    "summary": "{{state}}, pc = {{pc}}"
+  },
+  "run": {
+    "running": "Çalışıyor",
+    "stopped": "Durdu",
+    "breakpoint": "Durak noktası",
+    "error": "Hata"
+  },
+  "body": {
+    "title": "Nios2s benzetimcisi",
+    "hidden": "Benzetim hızlansın diye içerik gizlendi",
+    "registers": "Yazmaç dosyası:",
+    "pc": "pc:",
+    "trace": "Yürütme izi (son yürütülen en üstte):",
+    "opcode": "İşlem kodu:",
+    "asm": "Assembly:",
+    "emptyTrace": "Henüz yürütme izi yok",
+    "busMissing": "Veri yolu bulunamadı",
+    "notConnected": "Bir veri yoluna bağlı değil",
+    "simState": "Durum:",
+    "start": "Başlat",
+    "pause": "Duraklat",
+    "trap": "istisna {{cause}}",
+    "control": "Denetim yazmaçları:",
+    "irqs": "IRQ:",
+    "mask": "Maske:",
+    "customWait": "Özel komut: done bekleniyor"
+  },
+  "pins": {
+    "reset": "Reset"
+  },
+  "dialog": {
+    "close": "Kapat"
+  },
+  "editor": {
+    "start": "Başlat",
+    "startTitle": "İşlemci her saat kenarında bir komut yürütsün",
+    "pause": "Duraklat",
+    "pauseTitle": "Yürütmeyi durdur (saat çalışmaya devam eder)",
+    "step": "Adım",
+    "stepTitle": "Saat kenarı beklemeden şimdi bir komut yürüt",
+    "reset": "Sıfırla",
+    "resetTitle": "İşlemciyi sıfırla: pc programın giriş noktasına (veya sıfırlama vektörüne), yazmaçlar bilinmiyor, durmuş",
+    "elf": "ELF yükle…",
+    "elfTitle": "Bir Nios II ELF çalıştırılabilir dosyasını veri yolunun belleklerine yükle ve giriş noktasına sıfırla",
+    "asm": "Assembler…",
+    "asmTitle": "Bir Nios II programı yaz, derle ve yükle",
+    "listing": "Program…",
+    "listingTitle": "Güncel pc ile yüklü program; durak noktası koymak için bir satıra tıklayın"
+  },
+  "load": {
+    "done": "{{bytes}} bayt yüklendi, giriş noktası {{entry}}; çalıştırmak için Başlat'a basın"
+  },
+  "asm": {
+    "title": "Assembler: {{name}}",
+    "template": "# Nios II programı. Derlenip işlemcinin veri yolu üzerinden yazılır;\n# bu adresleri bir SoC Bellek yanıtlamalıdır.\n        .text\n        .org 0x0\n_start:\n        movi r2, 0          # toplam\n        movi r3, 1          # i\n        movi r4, 10\nloop:\n        add  r2, r2, r3\n        addi r3, r3, 1\n        ble  r3, r4, loop\nend:\n        br   end            # burada kalır: r2 = 55\n",
+    "run": "Derle ve yükle",
+    "runTitle": "Programı derle ve veri yolu üzerinden yaz (Ctrl+Enter)",
+    "openFile": "Dosya aç…",
+    "fileError": "Dosya okunamadı (en çok {{max}} baytlık metin)",
+    "failed": "{{count}} hata: hiçbir şey yüklenmedi",
+    "noCode": "Programda hiç komut yok: hiçbir şey yüklenmedi",
+    "diagnostic": "Satır {{line}}: {{message}}"
+  },
+  "listing": {
+    "title": "Program: {{name}}",
+    "empty": "Yüklü program yok: ELF yükle… veya assembler'ı kullanın.",
+    "hint": "Durak noktası koymak ya da kaldırmak için bir komuta tıklayın.",
+    "toggleTitle": "Burada durak noktası koy veya kaldır",
+    "follow": "pc'yi izle",
+    "state": "pc = {{pc}} ({{state}})"
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: işlemci bir veri yoluna bağlı değil",
+    "badResetVector": "\"{{value}}\" 32 bitlik bir reset vektörü olarak okunamadı: {{used}} kullanılıyor",
+    "badExceptionVector": "\"{{value}}\" 32 bitlik bir istisna vektörü olarak okunamadı: {{used}} kullanılıyor",
+    "badBreakVector": "\"{{value}}\" 32 bitlik bir break vektörü olarak okunamadı: {{used}} kullanılıyor",
+    "badIrqWidth": "\"{{value}}\" bir IRQ girişi sayısı olarak okunamadı (0 ile {{max}} arası): 0 kullanılıyor",
+    "program": "Yüklü program ve işlemci durumu Logisim-evolution'daki gibi dosyaya kaydedilmez: dosyayı açtıktan sonra programı yeniden yükleyin",
+    "asmSource": "Assembler kaynağı Logisim-evolution'daki gibi .circ dosyasına kaydedilmez (bu programın kendi devre dosyasında saklanır)"
+  }
+}

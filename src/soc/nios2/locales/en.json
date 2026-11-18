@@ -1,0 +1,29 @@
+{
+  "asm": {
+    "operands": "Expected operands: {{format}}",
+    "range": "The value must be between {{min}} and {{max}}",
+    "targetRange": "The target is too far away (offset must be between {{min}} and {{max}})",
+    "targetAlign": "The target must be a multiple of 4",
+    "jumpRegion": "call and jmpi reach only targets in the same 256 MB region as the instruction; use callr or jmp",
+    "controlNotAllowed": "\"{{name}}\" is not a general-purpose register here",
+    "customNotAllowed": "\"{{name}}\" is a custom register; only the custom instruction takes it",
+    "expectedControl": "Expected a control register (status, ienable, ctl5, ...)",
+    "unknown": "Unknown instruction \"{{name}}\"",
+    "jmpRa": "r31 cannot be used with jmp; use ret instead"
+  },
+  "halt": {
+    "breakpoint": "Breakpoint reached at {{pc}}",
+    "fetchError": "Instruction fetch at {{pc}} failed",
+    "loadError": "Load from {{address}} at {{pc}} failed",
+    "storeError": "Store to {{address}} at {{pc}} failed",
+    "illegal": "Invalid instruction {{word}} at {{pc}}",
+    "misalignedFetch": "The program counter {{pc}} is not a multiple of 4",
+    "misalignedJump": "Jump at {{pc}} to {{target}}, which is not a multiple of 4",
+    "misalignedLoad": "Misaligned load from {{address}} at {{pc}}",
+    "misalignedStore": "Misaligned store to {{address}} at {{pc}}",
+    "divZero": "Division by zero at {{pc}}",
+    "shadow": "rdprs / wrprs at {{pc}}: this core has no shadow register sets",
+    "customDone": "The custom instruction at {{pc}} waits for done, but the done input is not 0 or 1",
+    "customResult": "The custom instruction at {{pc}} writes {{reg}}, but the result input is not a 32-bit value (an open or undefined bit)"
+  }
+}
