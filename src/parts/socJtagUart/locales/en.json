@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "badge": "JTAG",
+    "name": "JTAG UART",
+    "description": "A character link of a SoC (Logisim-evolution's SoC JTAG UART): a program writes characters over its SoC bus to a TTY and reads the characters of a keyboard through two FIFOs, with interrupt thresholds and an IRQ output; its terminal window can stand in for the keyboard and the TTY"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Bus",
+      "title": "The SoC bus the JTAG UART answers on (Logisim-evolution's Connected bus)",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "startAddress": {
+      "label": "Start address (hex)",
+      "title": "Address of the data register; the control register follows at +4 (8 bytes, word access only)"
+    },
+    "writeFifoSize": {
+      "label": "Write FIFO size",
+      "title": "Characters the write FIFO (program to TTY) holds; a write to a full FIFO is lost"
+    },
+    "writeThreshold": {
+      "label": "Write IRQ threshold",
+      "title": "With the write interrupt enabled (control bit 1), WI is pending while the write FIFO holds at most this many characters"
+    },
+    "readFifoSize": {
+      "label": "Read FIFO size",
+      "title": "Characters the read FIFO (keyboard to program) holds; a character arriving at a full FIFO is lost"
+    },
+    "readThreshold": {
+      "label": "Read IRQ threshold",
+      "title": "With the read interrupt enabled (control bit 0), RI is pending while the read FIFO has at most this many free places"
+    },
+    "terminal": {
+      "label": "Terminal",
+      "title": "Opens a window that shows the characters sent to the TTY pins and sends what you type to the read FIFO"
+    },
+    "status": {
+      "label": "Status",
+      "title": "The address range the JTAG UART answers, its FIFO levels and its control register"
+    }
+  },
+  "status": {
+    "notConnected": "Not connected to a bus: choose one in the Bus attribute",
+    "notRun": "not simulated yet",
+    "range": "{{start}} – {{end}}",
+    "read": "read FIFO {{used}}/{{size}}",
+    "write": "write FIFO {{used}}/{{size}}",
+    "control": "control = {{value}}"
+  },
+  "body": {
+    "title": "JTAG UART",
+    "keyboard": "Keyboard",
+    "tty": "TTY",
+    "notConnected": "Not connected to a bus",
+    "missing": "Bus not found"
+  },
+  "terminal": {
+    "open": "Open terminal…",
+    "title": "{{name}}: terminal",
+    "clear": "Clear the screen",
+    "close": "Close",
+    "screenTitle": "Characters the JTAG UART put on its TTY pins",
+    "placeholder": "Type here: each key goes to the read FIFO (Enter = 10, Backspace = 8)",
+    "readFifo": "read FIFO {{used}}/{{size}}",
+    "readFifoTitle": "Characters typed or taken from the keyboard pins that the program has not read yet",
+    "writeFifo": "write FIFO {{used}}/{{size}}",
+    "writeFifoTitle": "Characters the program wrote that have not reached the TTY pins yet (one per rising clock edge)",
+    "dropped": "{{count}} lost (read FIFO full)",
+    "hint": "The screen fills only while the clock runs: one character a rising edge. A reset empties both FIFOs and this screen."
+  },
+  "circ": {
+    "idTooLong": "The bus id in the file is longer than {{max}} characters: the JTAG UART is not connected to a bus",
+    "badStartAddress": "\"{{value}}\" is not a 32-bit start address: 0x0 is used",
+    "badFifoSize": "\"{{value}}\" is not a FIFO size (8, 16, 32 … 32768): {{used}} is used",
+    "badThreshold": "\"{{value}}\" is not a whole number (a 32-bit IRQ threshold): {{used}} is used"
+  }
+}

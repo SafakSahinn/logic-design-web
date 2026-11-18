@@ -9,7 +9,7 @@ import { NIOS2_MAX_IRQS } from '../../soc';
 import { bitsToNumber, numberToBits, type SignalValue } from '../../types/logic';
 import { partNamespace, registerPart } from '../registry';
 import type { CpuEditorCommand } from '../shared/cpu/types';
-import { socBusOptions, socManager } from '../shared/socRuntime';
+import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
 import { nios2Circ } from './circ';
 import { drawNios2 } from './draw';
 import { Nios2EditorRow } from './editor';
@@ -40,12 +40,6 @@ import { haltText, hex, runStateText, t } from './text';
 registerNamespace(partNamespace(PART_ID), { en, tr });
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
-
-/** A 32-bit unsigned value from an attribute edit, or null */
-const u32 = (value: string | number): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 && n < 2 ** 32 ? Math.trunc(n) >>> 0 : null;
-};
 
 type VectorKey = 'resetVector' | 'exceptionVector' | 'breakVector';
 

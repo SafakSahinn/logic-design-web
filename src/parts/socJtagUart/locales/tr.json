@@ -1,0 +1,78 @@
+{
+  "meta": {
+    "badge": "JTAG",
+    "name": "JTAG UART",
+    "description": "Bir SoC'nin karakter bağlantısı (Logisim-evolution'ın SoC JTAG UART'ı): bir program SoC veri yolu üzerinden iki FIFO aracılığıyla bir TTY'ye karakter yazar ve bir klavyenin karakterlerini okur; kesme eşikleri ve kesme çıkışı vardır, terminal penceresi klavye ve TTY'nin yerini tutabilir"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Veri yolu",
+      "title": "JTAG UART'ın işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "startAddress": {
+      "label": "Başlangıç adresi (hex)",
+      "title": "Veri yazmacının adresi; kontrol yazmacı +4'te (8 bayt, yalnız kelime erişimi)"
+    },
+    "writeFifoSize": {
+      "label": "Yazma FIFO boyutu",
+      "title": "Yazma FIFO'sunun (programdan TTY'ye) tuttuğu karakter sayısı; dolu FIFO'ya yazılan karakter kaybolur"
+    },
+    "writeThreshold": {
+      "label": "Yazma kesme eşiği",
+      "title": "Yazma kesmesi açıkken (kontrol biti 1), yazma FIFO'sunda en çok bu kadar karakter varsa WI bekler"
+    },
+    "readFifoSize": {
+      "label": "Okuma FIFO boyutu",
+      "title": "Okuma FIFO'sunun (klavyeden programa) tuttuğu karakter sayısı; dolu FIFO'ya gelen karakter kaybolur"
+    },
+    "readThreshold": {
+      "label": "Okuma kesme eşiği",
+      "title": "Okuma kesmesi açıkken (kontrol biti 0), okuma FIFO'sunda en çok bu kadar boş yer kaldıysa RI bekler"
+    },
+    "terminal": {
+      "label": "Terminal",
+      "title": "TTY pinlerine gönderilen karakterleri gösteren ve yazdıklarınızı okuma FIFO'suna gönderen bir pencere açar"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "JTAG UART'ın yanıtladığı adres aralığı, FIFO doluluğu ve kontrol yazmacı"
+    }
+  },
+  "status": {
+    "notConnected": "Bir veri yoluna bağlı değil: Veri yolu özniteliğinden birini seçin",
+    "notRun": "henüz benzetilmedi",
+    "range": "{{start}} – {{end}}",
+    "read": "okuma FIFO {{used}}/{{size}}",
+    "write": "yazma FIFO {{used}}/{{size}}",
+    "control": "kontrol = {{value}}"
+  },
+  "body": {
+    "title": "JTAG UART",
+    "keyboard": "Klavye",
+    "tty": "TTY",
+    "notConnected": "Veri yoluna bağlı değil",
+    "missing": "Veri yolu bulunamadı"
+  },
+  "terminal": {
+    "open": "Terminali aç…",
+    "title": "{{name}}: terminal",
+    "clear": "Ekranı temizle",
+    "close": "Kapat",
+    "screenTitle": "JTAG UART'ın TTY pinlerine gönderdiği karakterler",
+    "placeholder": "Buraya yazın: her tuş okuma FIFO'suna gider (Enter = 10, Backspace = 8)",
+    "readFifo": "okuma FIFO {{used}}/{{size}}",
+    "readFifoTitle": "Yazılan ya da klavye pinlerinden alınan, programın henüz okumadığı karakterler",
+    "writeFifo": "yazma FIFO {{used}}/{{size}}",
+    "writeFifoTitle": "Programın yazdığı, henüz TTY pinlerine ulaşmamış karakterler (her yükselen saat kenarında bir tane)",
+    "dropped": "{{count}} kayıp (okuma FIFO'su dolu)",
+    "hint": "Ekran yalnız saat çalışırken dolar: her yükselen kenarda bir karakter. Sıfırlama iki FIFO'yu ve bu ekranı boşaltır."
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki veri yolu kimliği {{max}} karakterden uzun: JTAG UART bir veri yoluna bağlı değil",
+    "badStartAddress": "\"{{value}}\" 32 bitlik bir başlangıç adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badFifoSize": "\"{{value}}\" bir FIFO boyutu olarak okunamadı (8, 16, 32 … 32768): {{used}} kullanılıyor",
+    "badThreshold": "\"{{value}}\" bir tam sayı (32 bitlik IRQ eşiği) olarak okunamadı: {{used}} kullanılıyor"
+  }
+}

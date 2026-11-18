@@ -15,6 +15,12 @@ import type { PartAttrOption } from '../registry';
 /** The manager of the circuit on the canvas */
 export const socManager = new SocManager();
 
+/** A 32-bit unsigned value from an attribute edit (a start address, a reset vector), or null */
+export const parseU32 = (value: string | number): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n < 2 ** 32 ? Math.trunc(n) >>> 0 : null;
+};
+
 /** Objects kept per cache; the oldest that the manager does not use are dropped beyond this */
 const CACHE_LIMIT = 256;
 

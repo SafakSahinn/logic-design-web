@@ -13,6 +13,7 @@ import './socMemory';
 import './rv32im';
 import './nios2';
 import './socPio';
+import './socJtagUart';
 
 export {
   allParts,

@@ -6,7 +6,7 @@ import { registerNamespace } from '../../i18n';
 import { PIO_CAPTURE_EDGES, PIO_DIRECTIONS, PIO_IRQ_TYPES, PIO_MAX_WIDTH, PIO_MIN_WIDTH, PIO_SIZE, pioHasInputs, pioHasOutputs, type SocPio } from '../../soc';
 import type { CircuitComponentInstance } from '../../types/circuit';
 import { partNamespace, registerPart, type PartAttribute } from '../registry';
-import { socBusOptions, socManager } from '../shared/socRuntime';
+import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
 import { socPioCirc } from './circ';
 import { drawSocPio } from './draw';
 import { SocPioExportRow } from './editor';
@@ -20,12 +20,6 @@ import { hex, t } from './text';
 registerNamespace(partNamespace(PART_ID), { en, tr });
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
-
-/** A 32-bit unsigned value from an attribute edit, or null */
-const u32 = (value: string | number): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 && n < 2 ** 32 ? Math.trunc(n) >>> 0 : null;
-};
 
 const entryOf = (comp: CircuitComponentInstance): PioEntry => {
   const s = pioState(comp);

@@ -32,3 +32,4 @@ export type { ListingLine } from './asm/listing';
 export * from './rv32im';
 export * from './nios2';
 export * from './pio';
+export * from './jtaguart';

@@ -5,7 +5,7 @@
 import { registerNamespace } from '../../i18n';
 import { MAX_IRQS } from '../../soc';
 import { partNamespace, registerPart } from '../registry';
-import { socBusOptions, socManager } from '../shared/socRuntime';
+import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
 import { rv32imCirc } from './circ';
 import { drawRv32im } from './draw';
 import type { CpuEditorCommand as EditorCommand } from '../shared/cpu/types';
@@ -20,12 +20,6 @@ import { haltText, hex, runStateText, t } from './text';
 registerNamespace(partNamespace(PART_ID), { en, tr });
 
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
-
-/** A 32-bit unsigned value from an attribute edit, or null */
-const u32 = (value: string | number): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 && n < 2 ** 32 ? Math.trunc(n) >>> 0 : null;
-};
 
 const entryOf = (comp: Parameters<typeof cpuState>[0]) => {
   const s = cpuState(comp);
