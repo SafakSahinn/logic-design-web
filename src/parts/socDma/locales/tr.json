@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "badge": "DMA",
+    "name": "DMA motoru",
+    "description": "Bir SoC'nin bellek kopyalama motoru (Logisim-evolution'ın SoC DMA motoru): program yazmaçlarına bir kaynak, bir hedef ve bir uzunluk yazıp onu başlatır; motor her yükselen saat kenarında kaynak ve hedef veri yolları arasında en çok \"aktarım boyu\" kadar sözcük taşır, IRQ pini de aktarımın bittiğini bildirebilir"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Denetim veri yolu",
+      "title": "DMA yazmaçlarının işlemleri yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus); kaynak ya da hedef veri yolu seçilmezse aktarımlar da bunu kullanır",
+      "none": "Bağlı değil",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "startAddress": {
+      "label": "Taban adresi (hex)",
+      "title": "İlk yazmacın adresi (sözcük hizalı: alt iki bit silinir); DMA buradan başlayan 24 baytı yanıtlar (yalnızca sözcük erişimi)"
+    },
+    "burstSize": {
+      "label": "Aktarım boyu (sözcük/tık)",
+      "title": "Bir yükselen saat kenarında taşınan en çok sözcük sayısı"
+    },
+    "srcBus": {
+      "label": "Kaynak veri yolu",
+      "title": "Sözcüklerin okunduğu SoC veri yolu (gizli okumalar, veri yolu izinde görünmez); seçilmezse denetim veri yolu",
+      "none": "Denetim veri yoluyla aynı",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "dstBus": {
+      "label": "Hedef veri yolu",
+      "title": "Sözcüklerin yazıldığı SoC veri yolu (görünür yazmalar: o veri yolundaki bir VGA ekranı onları görür); seçilmezse denetim veri yolu",
+      "none": "Denetim veri yoluyla aynı",
+      "missing": "(veri yolu bu devrede yok)"
+    },
+    "cExport": {
+      "label": "C başlığı",
+      "title": "Bu DMA için bir C sürücüsü yazar: yazmaç adreslerini, CONTROL / STATUS bitlerini, her yazmaç için bir yazıcı/okuyucu işlevi ve aktarımı başlatan, bekleyen ve DONE'ı silen yardımcı işlevleri içeren <AD>.h ve <AD>.c"
+    },
+    "status": {
+      "label": "Durum",
+      "title": "DMA'nın yanıtladığı adres aralığı, veri taşıdığı veri yolları ve yazmaç değerleri"
+    }
+  },
+  "status": {
+    "notConnected": "Bir denetim veri yoluna bağlı değil: Denetim veri yolu özniteliğinden birini seçin",
+    "notRun": "henüz benzetilmedi",
+    "range": "{{start}} – {{end}}",
+    "buses": "{{src}} → {{dst}}",
+    "noBus": "veri yolu yok",
+    "missingBus": "veri yolu bulunamadı",
+    "registers": "kaynak = {{src}}, hedef = {{dst}}, uzunluk = {{length}}",
+    "irq": "IRQ yüksek"
+  },
+  "body": {
+    "title": "SoC DMA motoru",
+    "base": "Taban: {{address}}",
+    "burst": "Aktarım: {{count}} sözcük/tık",
+    "idle": "Boşta",
+    "done": "Bitti",
+    "busy": "Aktarılıyor %{{percent}} ({{done}}/{{length}} bayt)",
+    "sameAsCtrl": "CTRL ile aynı",
+    "notConnected": "Bağlı değil",
+    "missing": "Veri yolu bulunamadı"
+  },
+  "cExport": {
+    "button": "C dışa aktar…",
+    "done": "{{header}} ve {{source}} indirildi",
+    "generated": "Logic Design Studio'nun bir DMA bileşeni için kendiliğinden ürettiği dosya",
+    "addresses": "Bu DMA motorunun adresleri. Motor her yükselen saat kenarında en çok {{burst}} sözcük taşır.\nTüm yazmaçlar yalnızca sözcük erişimi kabul eder.",
+    "bits": "CONTROL yazmacının bitleri (START 0 okunur; IRQ_EN aktarım bitince IRQ pinini yükseltir;\nDST_FIXED / SRC_FIXED o adresi artırmadan sabit tutar)\nve STATUS yazmacının bitleri (BUSY yalnızca okunur; DONE'a 1 yazmak onu ve kesmeyi siler).",
+    "registerFunctions": "Aşağıdaki işlevlerle yazmaçlar ayarlanır ya da okunur.\nAdresler ve uzunluk bayt cinsindendir, alt iki bit yok sayılır;\nbir aktarım sürerken SRC_ADDR, DST_ADDR ve LENGTH'e yazmak yok sayılır.\nBYTES_DONE yalnızca okunabilir.",
+    "start": "Aşağıdaki işlevle \"src\" adresinden \"dst\" adresine \"length\" baytlık bir aktarım başlatılır.\n\"flags\" CONTROL bitleridir (IRQ_EN, DST_FIXED, SRC_FIXED); START eklenir.\nBir aktarım sürerken ya da \"length\" 4'ten küçük veya 2^31 ya da daha büyükken hiçbir şey başlamaz.",
+    "busy": "Aşağıdaki işlev bir aktarım sürerken 1, aksi halde 0 döndürür.",
+    "clearDone": "Aşağıdaki işlevle DONE biti ve kesme silinir.",
+    "wraps": "{{start}} taban adresindeki DMA yazmaçları 0xFFFFFFFF'i aşıyor: 0xFFFFFFE8 veya daha düşük bir taban adresi seçin"
+  },
+  "circ": {
+    "idTooLong": "Dosyadaki denetim veri yolu kimliği {{max}} karakterden uzun: DMA bir denetim veri yoluna bağlı değil",
+    "srcIdTooLong": "Dosyadaki kaynak veri yolu kimliği {{max}} karakterden uzun: DMA denetim veri yolundan okuyor",
+    "dstIdTooLong": "Dosyadaki hedef veri yolu kimliği {{max}} karakterden uzun: DMA denetim veri yoluna yazıyor",
+    "badStartAddress": "\"{{value}}\" 32 bitlik bir taban adresi olarak okunamadı: 0x0 kullanılıyor",
+    "badBurstSize": "\"{{value}}\" bir aktarım boyu olarak okunamadı: {{used}} sözcük/tık kullanılıyor",
+    "burstSizeRounded": "\"{{value}}\" aktarım boyu 1, 2, 4 … 256 değerlerinden biri değil: Logisim-evolution'daki gibi {{used}} sözcük/tık kullanılıyor"
+  }
+}

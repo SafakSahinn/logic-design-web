@@ -15,6 +15,7 @@ import './nios2';
 import './socPio';
 import './socJtagUart';
 import './socVga';
+import './socDma';
 
 export {
   allParts,

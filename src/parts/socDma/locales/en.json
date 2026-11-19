@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "badge": "DMA",
+    "name": "DMA engine",
+    "description": "A memory-copy engine of a SoC (Logisim-evolution's SoC DMA engine): a program sets a source, a destination and a length in its registers and starts it; on every rising clock edge it moves up to \"burst size\" words between its source and destination buses, and its IRQ pin can signal the end"
+  },
+  "attributes": {
+    "bus": {
+      "label": "Control bus",
+      "title": "The SoC bus the DMA's registers answer on (Logisim-evolution's Connected bus); the transfers use it too unless a source or destination bus is chosen",
+      "none": "Not connected",
+      "missing": "(bus not in this circuit)"
+    },
+    "startAddress": {
+      "label": "Base address (hex)",
+      "title": "Address of the first register (word-aligned: the low two bits are cleared); the DMA answers 24 bytes from there (word access only)"
+    },
+    "burstSize": {
+      "label": "Burst size (words/tick)",
+      "title": "Most words moved on one rising clock edge"
+    },
+    "srcBus": {
+      "label": "Source bus",
+      "title": "The SoC bus the words are read from (hidden reads, not in the bus trace); unset: the control bus",
+      "none": "Same as the control bus",
+      "missing": "(bus not in this circuit)"
+    },
+    "dstBus": {
+      "label": "Destination bus",
+      "title": "The SoC bus the words are written to (visible writes: a VGA screen on that bus sees them); unset: the control bus",
+      "none": "Same as the control bus",
+      "missing": "(bus not in this circuit)"
+    },
+    "cExport": {
+      "label": "C header",
+      "title": "Writes a C driver for this DMA: <NAME>.h and <NAME>.c with the register addresses, the CONTROL / STATUS bits, a setter / getter per register and helpers to start a transfer, wait for it and clear DONE"
+    },
+    "status": {
+      "label": "Status",
+      "title": "The address range the DMA answers, the buses it moves data on and its register values"
+    }
+  },
+  "status": {
+    "notConnected": "Not connected to a control bus: choose one in the Control bus attribute",
+    "notRun": "not simulated yet",
+    "range": "{{start}} – {{end}}",
+    "buses": "{{src}} → {{dst}}",
+    "noBus": "no bus",
+    "missingBus": "bus not found",
+    "registers": "src = {{src}}, dst = {{dst}}, length = {{length}}",
+    "irq": "IRQ high"
+  },
+  "body": {
+    "title": "SOC DMA Engine",
+    "base": "Base: {{address}}",
+    "burst": "Burst: {{count}} words/tick",
+    "idle": "Idle",
+    "done": "Done",
+    "busy": "Transferring {{percent}}% ({{done}}/{{length}} bytes)",
+    "sameAsCtrl": "same as CTRL",
+    "notConnected": "Not connected",
+    "missing": "Bus not found"
+  },
+  "cExport": {
+    "button": "Export C…",
+    "done": "Downloaded {{header}} and {{source}}",
+    "generated": "Logic Design Studio automatically generated file for a DMA component",
+    "addresses": "Addresses of this DMA engine. It moves up to {{burst}} words on every rising clock edge.\nAll registers take word accesses only.",
+    "bits": "Bits of the CONTROL register (START reads as 0; IRQ_EN raises the IRQ pin at the end;\nDST_FIXED / SRC_FIXED keep that address instead of counting up)\nand of the STATUS register (BUSY is read-only; writing DONE clears it and the IRQ).",
+    "registerFunctions": "With the following functions the registers can be set or read out.\nThe addresses and the length are in bytes, the low two bits are ignored;\nwrites to SRC_ADDR, DST_ADDR and LENGTH are ignored while a transfer runs.\nBYTES_DONE can only be read.",
+    "start": "With the following function a transfer of \"length\" bytes from \"src\" to \"dst\" is started.\n\"flags\" are CONTROL bits (IRQ_EN, DST_FIXED, SRC_FIXED); START is added.\nNothing starts while a transfer runs, or when \"length\" is below 4 or 2^31 or more.",
+    "busy": "The following function returns 1 while a transfer runs, else 0.",
+    "clearDone": "With the following function the DONE bit and the interrupt are cleared.",
+    "wraps": "The DMA registers at base address {{start}} go past 0xFFFFFFFF: choose a base address of 0xFFFFFFE8 or lower"
+  },
+  "circ": {
+    "idTooLong": "The control bus id in the file is longer than {{max}} characters: the DMA is not connected to a control bus",
+    "srcIdTooLong": "The source bus id in the file is longer than {{max}} characters: the DMA reads from its control bus",
+    "dstIdTooLong": "The destination bus id in the file is longer than {{max}} characters: the DMA writes to its control bus",
+    "badStartAddress": "\"{{value}}\" is not a 32-bit base address: 0x0 is used",
+    "badBurstSize": "\"{{value}}\" is not a burst size: {{used}} words/tick is used",
+    "burstSizeRounded": "The burst size \"{{value}}\" is not one of 1, 2, 4 … 256: {{used}} words/tick is used, as Logisim-evolution does"
+  }
+}

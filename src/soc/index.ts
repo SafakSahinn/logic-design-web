@@ -34,3 +34,4 @@ export * from './nios2';
 export * from './pio';
 export * from './jtaguart';
 export * from './vga';
+export * from './dma';
