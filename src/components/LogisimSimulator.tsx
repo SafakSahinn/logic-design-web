@@ -293,6 +293,8 @@ const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam']);
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
+import { FpgaDialog } from '../fpga/ui/FpgaDialog';
+import type { BoardMapping } from '../fpga';
 import {
   runCircuitTestbench,
   generateExhaustiveTestVector,
@@ -867,6 +869,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [selectedFpgaBoard, setSelectedFpgaBoard] = useState<string>('basys3');
   const [hdlCopied, setHdlCopied] = useState<boolean>(false);
   const [fpgaCopied, setFpgaCopied] = useState<boolean>(false);
+  // FPGA board map dialog; the mapping of each sheet (in memory; saved with the project in Aşama 6i-5)
+  const [showFpgaDialog, setShowFpgaDialog] = useState<boolean>(false);
+  const [fpgaMappings, setFpgaMappings] = useState<Record<string, BoardMapping>>({});
+  const { t: tFpga } = useTranslation('fpga');
 
   // Hex Memory Editor Modal state (RAM & ROM Matrix)
   // Hex editor of a parametric RAM / ROM (paged contents)
@@ -2783,6 +2789,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     a.download = generatedFpgaData.filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // From the FPGA dialog: select a part and bring it to the middle of the canvas (the dialog closes)
+  const goToFpgaPart = (compId: string) => {
+    const comp = components.find((c) => c.id === compId);
+    setShowFpgaDialog(false);
+    setShowHdlModal(false);
+    if (!comp) return;
+    setSelectedCompIds([compId]);
+    setSelectedWireIds([]);
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const { width, height } = getComponentSize(comp);
+    setPanOffset({
+      x: Math.round(rect.width / 2 - (comp.x + width / 2) * zoom),
+      y: Math.round(rect.height / 2 - (comp.y + height / 2) * zoom),
+    });
   };
 
   // VCD Export Handler
@@ -8245,6 +8268,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 >
                   <FileCode className="w-3.5 h-3.5 text-emerald-500" />
                   <span>Donanım Tanımlama Dili (HDL) & FPGA</span>
+                </button>
+                <button
+                  data-fpga-open-menu
+                  onClick={() => {
+                    setShowFpgaDialog(true);
+                    setActiveDesktopMenu(null);
+                  }}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2.5 cursor-pointer transition-colors ${
+                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  <Cpu className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>{tFpga('ui.openMenu')}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -14192,6 +14228,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                   </select>
 
                   <button
+                    data-fpga-open
+                    onClick={() => setShowFpgaDialog(true)}
+                    className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl border border-indigo-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                  >
+                    <Cpu className="w-3.5 h-3.5" />
+                    <span>{tFpga('ui.openButton')}</span>
+                  </button>
+
+                  <button
                     onClick={handleCopyFpgaConstraints}
                     className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
                   >
@@ -14286,6 +14331,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         </div>
       )}
 
+
+      {showFpgaDialog && (
+        <FpgaDialog
+          circuitName={currentCircuitName}
+          components={components}
+          wires={wires}
+          mapping={fpgaMappings[activeSheetId] ?? null}
+          onMappingChange={(m) => setFpgaMappings((all) => ({ ...all, [activeSheetId]: m }))}
+          onGoToPart={goToFpgaPart}
+          onClose={() => setShowFpgaDialog(false)}
+          dark={cadTheme === 'dark'}
+        />
+      )}
 
       {/* Hex editor of a parametric RAM / ROM */}
       {memEditorCompId &&
