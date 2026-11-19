@@ -1,0 +1,38 @@
+{
+  "vendor": {
+    "altera": "Intel / Altera (Quartus)",
+    "xilinx": "Xilinx ISE",
+    "vivado": "Xilinx Vivado",
+    "openFpga": "Open tool chain (Yosys / nextpnr)"
+  },
+  "ioKind": {
+    "led": "LED",
+    "button": "Button",
+    "pin": "Pin",
+    "sevenSegment": "7-segment display",
+    "sevenSegmentNoDp": "7-segment display (no dot)",
+    "sevenSegmentScanning": "Multiplexed 7-segment display",
+    "dipSwitch": "DIP switch",
+    "rgbLed": "RGB LED",
+    "ledArray": "LED array",
+    "portIo": "Connector pins",
+    "localBus": "Local bus"
+  },
+  "boardXml": {
+    "error": {
+      "notXml": "The file is not a valid XML document.",
+      "missingBoardInformation": "The file has no BoardInformation section, so it is not a board file.",
+      "missingFpgaParameters": "The board file does not give the FPGA and its clock completely (frequency, clock pin, vendor, part, family, package and speed grade are needed).",
+      "badFpgaParameter": "The board file has an invalid value for {{detail}}.",
+      "unknownVendor": "Unknown FPGA vendor \"{{detail}}\" (Altera, Xilinx, Vivado or openFPGA expected).",
+      "badPicture": "The board picture in the file is damaged.",
+      "badBoardName": "\"{{detail}}\" cannot be a board name: use letters, digits, '_', '-' and '.', starting with a letter or '_'.",
+      "pictureNotJpeg": "The board picture must be converted to JPEG before the board can be saved."
+    },
+    "warning": {
+      "unknownComponent": "Skipped an unknown board resource <{{element}}>.",
+      "badComponent": "Skipped a <{{element}}> resource with an invalid rectangle or pin list.",
+      "noPicture": "The board file has no picture; Logisim-evolution cannot open it until one is added."
+    }
+  }
+}

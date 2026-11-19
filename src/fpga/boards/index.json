@@ -1,0 +1,299 @@
+[
+  {
+    "file": "ALCHITRY_AU_IO",
+    "name": "ALCHITRY_AU_IO",
+    "vendor": "vivado",
+    "family": "Artix-7",
+    "part": "xc7a35t",
+    "clockHz": 100000000,
+    "origin": "evo"
+  },
+  {
+    "file": "ARROW_SOCKIT",
+    "name": "ARROW_SOCKIT",
+    "vendor": "altera",
+    "family": "Cyclone V",
+    "part": "5CSXFC6D6F31C6",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "BASYS2",
+    "name": "BASYS2",
+    "vendor": "xilinx",
+    "family": "Spartan3E",
+    "part": "XC3S100E",
+    "clockHz": 2,
+    "origin": "evo"
+  },
+  {
+    "file": "BASYS3",
+    "name": "BASYS3",
+    "vendor": "vivado",
+    "family": "Artix-7",
+    "part": "xc7a35t",
+    "clockHz": 100000000,
+    "origin": "evo"
+  },
+  {
+    "file": "BEMICRO_SDK",
+    "name": "BEMICRO_SDK",
+    "vendor": "altera",
+    "family": "Cyclone IV",
+    "part": "EP4CE22F17C7",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "CYCLOARDUINO",
+    "name": "CYCLOARDUINO",
+    "vendor": "altera",
+    "family": "Cyclone",
+    "part": "EP1C12Q240C8",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "CYCLONE_V_GX_STARTER",
+    "name": "CYCLONE_V_GX_STARTER",
+    "vendor": "altera",
+    "family": "Cyclone V",
+    "part": "5CGXFC5C6F27C7",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "DE0_CV",
+    "name": "DE0-CV",
+    "vendor": "altera",
+    "family": "Cyclone V",
+    "part": "5CEBA4F23C7",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "DIGILENT_CMOD_A7_15T",
+    "name": "DIGILENT_CMOD_A7_15T",
+    "vendor": "vivado",
+    "family": "Artix-7",
+    "part": "xc7a15t",
+    "clockHz": 12000000,
+    "origin": "evo"
+  },
+  {
+    "file": "DIGILENT_NEXYS_A7_100T",
+    "name": "DIGILENT_NEXYS_A7_100T",
+    "vendor": "vivado",
+    "family": "Artix-7",
+    "part": "xc7a100t",
+    "clockHz": 100000000,
+    "origin": "lds"
+  },
+  {
+    "file": "DIGILENT_SPARTAN_3E_STARTER",
+    "name": "DIGILENT_SPARTAN_3E_STARTER",
+    "vendor": "xilinx",
+    "family": "Spartan",
+    "part": "XC3S500E",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "EPM2525_CONSOLE",
+    "name": "EPM2525_CONSOLE",
+    "vendor": "altera",
+    "family": "MAX 7000",
+    "part": "EPM7128SLC84-7",
+    "clockHz": 1000000,
+    "origin": "evo"
+  },
+  {
+    "file": "EPM2525_FULL",
+    "name": "EPM2525_FULL",
+    "vendor": "altera",
+    "family": "MAX 7000",
+    "part": "EPM7128SLC84-7",
+    "clockHz": 1000000,
+    "origin": "evo"
+  },
+  {
+    "file": "FPGA4U",
+    "name": "FPGA4U",
+    "vendor": "altera",
+    "family": "Cyclone II",
+    "part": "EP2C20F484C8",
+    "clockHz": 24000000,
+    "origin": "evo"
+  },
+  {
+    "file": "GECKO4LED",
+    "name": "GECKO4LED",
+    "vendor": "xilinx",
+    "family": "Spartan3",
+    "part": "XC3S5000",
+    "clockHz": 25000000,
+    "origin": "evo"
+  },
+  {
+    "file": "GECKO4_EDUCATION",
+    "name": "GECKO4_EDUCATION",
+    "vendor": "altera",
+    "family": "Cyclone IV E",
+    "part": "EP4CE15F23C8",
+    "clockHz": 12000000,
+    "origin": "evo"
+  },
+  {
+    "file": "GECKO4_EDUCATION_EPFL_EDITION",
+    "name": "GECKO4_EDUCATION_EPFL_EDITION",
+    "vendor": "altera",
+    "family": "Cyclone IV E",
+    "part": "EP4CE30F23C8",
+    "clockHz": 12000000,
+    "origin": "evo"
+  },
+  {
+    "file": "GECKO5_EDUCATION",
+    "name": "GECKO5_EDUCATION",
+    "vendor": "openFpga",
+    "family": "epc5",
+    "part": "85k",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "LEGUAN",
+    "name": "LEGUAN",
+    "vendor": "altera",
+    "family": "Cyclone 10 LP",
+    "part": "10CL016YF484C8G",
+    "clockHz": 25000000,
+    "origin": "evo"
+  },
+  {
+    "file": "MAX1000-8k-BOARD",
+    "name": "MAX1000-8k-BOARD",
+    "vendor": "altera",
+    "family": "MAX10",
+    "part": "10M08SAU169C8G",
+    "clockHz": 12000000,
+    "origin": "evo"
+  },
+  {
+    "file": "MAX_V_80P_25P",
+    "name": "MAX_V_80P_25P",
+    "vendor": "altera",
+    "family": "MAX V",
+    "part": "5M570ZF256C5",
+    "clockHz": 1000000,
+    "origin": "evo"
+  },
+  {
+    "file": "MAX_V_CONSOLE",
+    "name": "MAX_V_CONSOLE",
+    "vendor": "altera",
+    "family": "MAX V",
+    "part": "5M570ZF256C5",
+    "clockHz": 1000000,
+    "origin": "evo"
+  },
+  {
+    "file": "MICROLABTLE",
+    "name": "MICROLABTLE",
+    "vendor": "xilinx",
+    "family": "Coolrunner",
+    "part": "XC2C64",
+    "clockHz": 12000000,
+    "origin": "evo"
+  },
+  {
+    "file": "REPTAR_SPARTAN_6",
+    "name": "REPTAR_SPARTAN_6",
+    "vendor": "xilinx",
+    "family": "Spartan6",
+    "part": "xc6slx150t",
+    "clockHz": 100000000,
+    "origin": "evo"
+  },
+  {
+    "file": "ROBOTCYCLONEFPGA",
+    "name": "ROBOTCYCLONEFPGA",
+    "vendor": "altera",
+    "family": "Cyclone",
+    "part": "EP1C12Q240C8",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "SLO_MAX7000S",
+    "name": "SLO_MAX7000S",
+    "vendor": "altera",
+    "family": "MAX7000S",
+    "part": "EPM7256SQC208-7",
+    "clockHz": 5000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TERASIC_DE0",
+    "name": "TERASIC_DE0",
+    "vendor": "altera",
+    "family": "Cyclone III",
+    "part": "EP3C16F484C6",
+    "clockHz": 25000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TERASIC_DE0_NANO",
+    "name": "TERASIC_DE0_NANO",
+    "vendor": "altera",
+    "family": "Cyclone IV",
+    "part": "EP4CE22F17C6",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TERASIC_DE10_LITE",
+    "name": "DE10-LITE",
+    "vendor": "altera",
+    "family": "MAX 10",
+    "part": "10M50DAF484C7G",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TERASIC_DE10_NANO",
+    "name": "TERASIC_DE10_NANO",
+    "vendor": "altera",
+    "family": "Cyclone V",
+    "part": "5CSEBA6U23I7",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TERASIC_DE1_SOC",
+    "name": "TERASIC_DE1_SOC",
+    "vendor": "altera",
+    "family": "Cyclone V",
+    "part": "5CSEMA5F31C6",
+    "clockHz": 50000000,
+    "origin": "evo"
+  },
+  {
+    "file": "TUL_PYNQ_Z2",
+    "name": "TUL_PYNQ_Z2",
+    "vendor": "vivado",
+    "family": "zynq",
+    "part": "xc7z020",
+    "clockHz": 125000000,
+    "origin": "lds"
+  },
+  {
+    "file": "ZYBO",
+    "name": "ZYBO",
+    "vendor": "vivado",
+    "family": "zynq",
+    "part": "xc7z010",
+    "clockHz": 125000000,
+    "origin": "evo"
+  }
+]

@@ -1,0 +1,38 @@
+{
+  "vendor": {
+    "altera": "Intel / Altera (Quartus)",
+    "xilinx": "Xilinx ISE",
+    "vivado": "Xilinx Vivado",
+    "openFpga": "Açık araç zinciri (Yosys / nextpnr)"
+  },
+  "ioKind": {
+    "led": "LED",
+    "button": "Buton",
+    "pin": "Pin",
+    "sevenSegment": "7-segment ekran",
+    "sevenSegmentNoDp": "7-segment ekran (noktasız)",
+    "sevenSegmentScanning": "Taramalı 7-segment ekran",
+    "dipSwitch": "DIP anahtar",
+    "rgbLed": "RGB LED",
+    "ledArray": "LED dizisi",
+    "portIo": "Konnektör pinleri",
+    "localBus": "Yerel veri yolu"
+  },
+  "boardXml": {
+    "error": {
+      "notXml": "Dosya geçerli bir XML belgesi değil.",
+      "missingBoardInformation": "Dosyada BoardInformation bölümü yok, bu bir kart dosyası değil.",
+      "missingFpgaParameters": "Kart dosyası FPGA'yı ve saatini eksiksiz vermiyor (frekans, saat pini, üretici, parça, aile, kılıf ve hız sınıfı gerekli).",
+      "badFpgaParameter": "Kart dosyasında {{detail}} için geçersiz bir değer var.",
+      "unknownVendor": "Bilinmeyen FPGA üreticisi \"{{detail}}\" (Altera, Xilinx, Vivado ya da openFPGA bekleniyor).",
+      "badPicture": "Dosyadaki kart resmi bozuk.",
+      "badBoardName": "\"{{detail}}\" kart adı olamaz: harf, rakam, '_', '-' ve '.' kullanın; ad bir harf ya da '_' ile başlamalı.",
+      "pictureNotJpeg": "Kartın kaydedilebilmesi için kart resmi önce JPEG'e çevrilmeli."
+    },
+    "warning": {
+      "unknownComponent": "Bilinmeyen bir kart kaynağı <{{element}}> atlandı.",
+      "badComponent": "Dikdörtgeni ya da pin listesi geçersiz bir <{{element}}> kaynağı atlandı.",
+      "noPicture": "Kart dosyasında resim yok; resim eklenene kadar Logisim-evolution bu dosyayı açamaz."
+    }
+  }
+}
