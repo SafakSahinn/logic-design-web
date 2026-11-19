@@ -34,5 +34,84 @@
       "badComponent": "Dikdörtgeni ya da pin listesi geçersiz bir <{{element}}> kaynağı atlandı.",
       "noPicture": "Kart dosyasında resim yok; resim eklenene kadar Logisim-evolution bu dosyayı açamaz."
     }
+  },
+  "map": {
+    "pin": {
+      "single": "Pin",
+      "numbered": "Pin {{n}}",
+      "switch": "Anahtar {{n}}",
+      "segment": "Segment {{segment}}",
+      "scanning": "Hane {{digit}}, segment {{segment}}",
+      "ledArray": "LED satır {{row}}, sütun {{column}}",
+      "rgb": {
+        "red": "Kırmızı",
+        "green": "Yeşil",
+        "blue": "Mavi"
+      }
+    }
+  },
+  "note": {
+    "clockOnOscillator": "Saat portu {{port}} kartın {{mhz}} MHz osilatörünü alır ({{pin}} pini); eşlenmez.",
+    "outOfResources": "\"{{name}}\": kartta {{count}} pini için boş kaynak kalmadı; bunları elle eşleyin ya da boşta / sabit bırakın.",
+    "rgbOnLeds": "RGB LED \"{{name}}\": kartta boş RGB LED yok, kırmızı, yeşil ve mavi tek renkli LED'lere atandı.",
+    "hexDigitOnLeds": "Onaltılık hane \"{{name}}\": 4 bitlik değeri ve noktası LED'lere atandı; haneyi 7-segment ekranda görmek için devrede çözün (onaltılıktan 7-segmente kod çözücü) ve segmentleri eşleyin.",
+    "powerOnResetOnButton": "Açılış sıfırlaması \"{{name}}\" bir butona atandı: gerçek bir açılış darbesi için kartın sıfırlama devresini ya da kart saatiyle sayan bir sayacı kullanın.",
+    "portIoConnector": "Port I/O \"{{name}}\" iki yönlü (üç durumlu) pinlere sahip: konnektör pinlerine (Pmod / GPIO) atandı; bağlayacağınız konnektörün bu olduğunu kontrol edin.",
+    "partActiveLow": "\"{{name}}\" \"0'da yanar\" ayarlı: portu devredeki değeri taşır, kartın kendi aktif seviyesi sizin için ayarlanır; bu yüzden kartta tersine yanar. Aynı görüntü için parçayı \"1'de yanar\" yapın.",
+    "noResource": {
+      "programmableGenerator": "Programlanabilir üreteç \"{{name}}\": kartta böyle bir dalga kaynağı yok; kart saatiyle sayan bir sayaç / durum makinesiyle üretin ya da portu elle bir dış sinyale eşleyin.",
+      "matrixKeypad": "Tuş takımı \"{{name}}\": satır / sütun portları Pmod KYPD gibi harici bir tuş takımına gider; bunları elle konnektör pinlerine eşleyin (sütunlara pull-up gerekir).",
+      "joystick": "Joystick \"{{name}}\": kartta joystick yok; X / Y'yi elle harici bir joystick / ADC'nin sayısal çıkışına ya da anahtarlara eşleyin.",
+      "realTimeClock": "Gerçek zaman saati \"{{name}}\": FPGA'da duvar saati yok; değeri harici bir RTC'den ya da kart saatiyle sayan bir sayaçtan verin.",
+      "evoBuzzer": "Ses üreteci \"{{name}}\": portları (frekans, EN, ses, doluluk oranı) pinlerde doğrudan ses vermez; bunları kart saatiyle sayan bir ton (PWM) üretecine ya da ses kodeğine bağlayın, çıkışını kartın ses / buzzer pinine eşleyin.",
+      "buzzer": "Buzzer \"{{name}}\": EN ve nota portlarını kart saatiyle sayan bir ton (PWM) üretecine bağlayın, çıkışını kartın ses / buzzer pinine eşleyin.",
+      "digitalOscilloscope": "Dijital osiloskop \"{{name}}\": portları (CLK, girişler, EN, CLR) kartta bir gösterge değil; FPGA'nın gömülü mantık analizörüyle (Xilinx ILA, Intel SignalTap) izleyin ya da harici bir mantık analizörüne giden pinlere elle eşleyin.",
+      "keyboard": "Klavye \"{{name}}\": kartta yok; OUT / AV'yi bir UART ya da PS/2 alıcısının çıkışına, RE / CK / CLR'yi ona bağlayın (ya da elle konnektör pinlerine eşleyin).",
+      "asciiKeyboard": "ASCII klavye \"{{name}}\": kartta yok; veri ve strobe portlarını bir UART ya da PS/2 alıcısından verin (ya da elle konnektör pinlerine eşleyin).",
+      "tty": "Metin terminali \"{{name}}\": kartta yok; IN / WE / CK / CLR'yi bir UART verici ya da VGA metin denetleyicisine bağlayın (ya da elle konnektör pinlerine eşleyin).",
+      "telnet": "Telnet \"{{name}}\": ağ bağlantısını bir UART köprüsü ya da Ethernet çekirdeği vermeli; OUT / AV / IN / WR / RD / CK'yi ona bağlayın.",
+      "rgbVideo": "RGB video \"{{name}}\": RST / CK / WE / X / Y / DATA'yı bir çerçeve tamponuna yazan VGA / HDMI denetleyicisine bağlayın (kartın VGA pinleri doğrudan sürülemez) ya da elle konnektör pinlerine eşleyin.",
+      "dotMatrix": "Nokta matris \"{{name}}\": satır / sütun portlarını siz eşleyin, bir LED dizisine ya da konnektör pinlerine."
+    }
+  },
+  "drc": {
+    "otherBoard": "Eşleme {{board}} için değil, {{mapped}} kartı için yapılmış.",
+    "staleParts": "Eşlemede artık devrede olmayan {{count}} parça var; bunlar yok sayılır.",
+    "widthChanged": "\"{{name}}\" eşlendikten sonra {{was}} pinden {{now}} pine değişti; yeniden eşleyin.",
+    "unmapped": "\"{{name}}\": {{total}} pininden {{count}} tanesi eşlenmemiş (eşleyin ya da çıkışları boşta, girişleri sabit bırakın).",
+    "openInput": "{{pin}} bir giriş: boşta bırakılamaz, yerine sabit 0 ya da 1 verin.",
+    "constOnOutput": "{{pin}} bir çıkış: sabit alamaz, yerine boşta bırakın.",
+    "unknownResource": "{{pin}}, kartta olmayan {{resource}} konumundaki bir kaynağa eşlenmiş.",
+    "mappedOnZeroPinResource": "{{pin}}, bu kartta hiç FPGA pini olmayan \"{{resource}}\" kaynağına eşlenmiş.",
+    "pinOutOfRange": "{{pin}}, \"{{resource}}\" kaynağının {{index}} numaralı pinine eşlenmiş; kaynağın yalnız {{count}} pini var.",
+    "direction": {
+      "in": {
+        "out": "{{pin}} devrenin bir girişi, ama \"{{resource}}\" kartın bir çıkışı (LED, ekran ...)."
+      },
+      "out": {
+        "in": "{{pin}} devrenin bir çıkışı, ama \"{{resource}}\" kartın bir girişi (buton, anahtar ...)."
+      },
+      "inout": {
+        "in": "{{pin}} iki yönlü, ama \"{{resource}}\" yalnız okunabilir; iki yönlü (konnektör) pinlere eşleyin.",
+        "out": "{{pin}} iki yönlü, ama \"{{resource}}\" yalnız sürülebilir; iki yönlü (konnektör) pinlere eşleyin."
+      }
+    },
+    "clockPinUsed": "{{pin}}, kartın saat pini olan {{fpgaPin}} FPGA pinine eşlenmiş.",
+    "pinUsedTwice": "\"{{resource}}\" kaynağının bir pini iki kez eşlenmiş: {{pins}}.",
+    "fpgaPinShared": "{{fpgaPin}} FPGA pinini birden fazla kart kaynağı kullanıyor: {{resources}}.",
+    "zeroPinResource": "\"{{resource}}\" kart kaynağının FPGA pini yok, kullanılamaz.",
+    "topLevelNoIo": "Devrenin hiç girişi ya da çıkışı yok, karta konacak bir şey yok.",
+    "noLabel": "{{port}} portunun arkasındaki parçanın kendi etiketi yok; kart eşlemesi Logisim-evolution için kaydedilirken (orada gerekli) ona bir etiket verilir. Adı kendiniz seçmek için parçaya etiket verin.",
+    "labelChar": "\"{{label}}\" etiketinde HDL adında olamayacak '{{char}}' karakteri var; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez.",
+    "label": {
+      "vhdlKeyword": "\"{{label}}\" etiketi bir VHDL anahtar sözcüğü; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez.",
+      "verilogKeyword": "\"{{label}}\" etiketi bir Verilog anahtar sözcüğü; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez."
+    },
+    "duplicateLabel": "\"{{label}}\" etiketi birden fazla G/Ç parçasında kullanılıyor (\"{{other}}\" ile de; etiketler büyük / küçük harf ayrımı olmadan karşılaştırılır); kart eşlemesi bunları ayırt edemez.",
+    "gatedClock": "\"{{part}}\" parçasının saati mantık kapılarından geçiyor (kapılı saat): FPGA'da bu sıçramalara ve zamanlama sorunlarına yol açar; yerine bir etkinleştirme (enable) girişi kullanın.",
+    "clockFromLogic": "\"{{part}}\" parçasının saati bir saat parçasından gelmiyor (bir buton, anahtar ya da flip-flop çıkışı sürüyor): FPGA'da bu sinyali kart saatiyle örnekleyip etkinleştirme (enable) olarak kullanın.",
+    "clockUnused": "\"{{name}}\" saati hiçbir yere bağlı değil.",
+    "multipleClocks": "Devrede {{count}} saat var; her biri kart osilatöründen üretilir.",
+    "hdlWarning": "HDL dışa aktarımı ({{module}}): {{text}}"
   }
 }

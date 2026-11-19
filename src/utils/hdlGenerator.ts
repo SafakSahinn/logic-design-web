@@ -3085,6 +3085,33 @@ function renderVHDL(m: BuiltModule): string {
 }
 
 function generate(lang: Lang, circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): string {
+  const { topName, top, rendered, ttlModules, partModules } = buildDesign(lang, circuitName, components, wires);
+  const render = lang === 'verilog' ? renderVerilog : renderVHDL;
+  const std = lang === 'verilog' ? 'IEEE 1364-2001 (Verilog HDL)' : 'IEEE 1076-2008 (VHDL)';
+  const parts = [header(lang, topName, std), ''];
+  if (lang === 'verilog') parts.push('`timescale 1ns / 1ps', '');
+  // TTL chip modules first (any module may instance them), in chip number order
+  for (const [id, name] of [...ttlModules].sort((a, b) => a[0].localeCompare(b[0], 'en', { numeric: true }))) {
+    parts.push(renderTtlModule(lang, ttlChipOf(`ttl${id}`)!, name), '');
+  }
+  // Then the registered parts' helper modules, in the order they were first asked for
+  for (const m of partModules.values()) parts.push(m.render(lang, m.name), '');
+  for (const m of [...rendered].reverse()) parts.push(render(m), '');
+  parts.push(render(top), '');
+  return parts.join('\n');
+}
+
+/**
+ * Warnings the HDL export writes into its modules (top level first, then the custom IC modules), for the FPGA
+ * design rule check. They are the same texts generateVerilog puts in its "UYARI" comments.
+ */
+export function getHdlWarnings(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): { module: string; text: string }[] {
+  const { top, rendered } = buildDesign('verilog', circuitName, components, wires);
+  return [top, ...rendered].flatMap((m) => m.warnings.map((text) => ({ module: m.name, text })));
+}
+
+// The top-level module and every module it needs, as generate renders them
+function buildDesign(lang: Lang, circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]) {
   const moduleNames = new NameTable();
   const topName = moduleNames.make(circuitName || 'digital_circuit', 'digital_circuit');
   const subModules = new Map<string, { def: CustomSubcircuit; moduleName: string }>();
@@ -3113,20 +3140,7 @@ function generate(lang: Lang, circuitName: string, components: CircuitComponentI
       );
     }
   }
-
-  const render = lang === 'verilog' ? renderVerilog : renderVHDL;
-  const std = lang === 'verilog' ? 'IEEE 1364-2001 (Verilog HDL)' : 'IEEE 1076-2008 (VHDL)';
-  const parts = [header(lang, topName, std), ''];
-  if (lang === 'verilog') parts.push('`timescale 1ns / 1ps', '');
-  // TTL chip modules first (any module may instance them), in chip number order
-  for (const [id, name] of [...ttlModules].sort((a, b) => a[0].localeCompare(b[0], 'en', { numeric: true }))) {
-    parts.push(renderTtlModule(lang, ttlChipOf(`ttl${id}`)!, name), '');
-  }
-  // Then the registered parts' helper modules, in the order they were first asked for
-  for (const m of partModules.values()) parts.push(m.render(lang, m.name), '');
-  for (const m of rendered.reverse()) parts.push(render(m), '');
-  parts.push(render(top), '');
-  return parts.join('\n');
+  return { topName, top, rendered, ttlModules, partModules };
 }
 
 // Name of the top-level module / entity exactly as generateVerilog / generateVHDL give it

@@ -34,5 +34,84 @@
       "badComponent": "Skipped a <{{element}}> resource with an invalid rectangle or pin list.",
       "noPicture": "The board file has no picture; Logisim-evolution cannot open it until one is added."
     }
+  },
+  "map": {
+    "pin": {
+      "single": "Pin",
+      "numbered": "Pin {{n}}",
+      "switch": "Switch {{n}}",
+      "segment": "Segment {{segment}}",
+      "scanning": "Digit {{digit}}, segment {{segment}}",
+      "ledArray": "LED row {{row}}, column {{column}}",
+      "rgb": {
+        "red": "Red",
+        "green": "Green",
+        "blue": "Blue"
+      }
+    }
+  },
+  "note": {
+    "clockOnOscillator": "Clock port {{port}} takes the board's {{mhz}} MHz oscillator (pin {{pin}}); it is not mapped.",
+    "outOfResources": "\"{{name}}\": the board has no free resource left for {{count}} of its pins; map them by hand or leave them open / constant.",
+    "rgbOnLeds": "RGB LED \"{{name}}\": the board has no free RGB LED, so red, green and blue went to single LEDs.",
+    "hexDigitOnLeds": "Hex digit \"{{name}}\": its 4-bit value and dot went to LEDs; to see the digit on a 7-segment display, decode it in the circuit (a hex to 7-segment decoder) and map the segments.",
+    "powerOnResetOnButton": "Power-on reset \"{{name}}\" went to a button: for a real power-on pulse use the board's reset circuit, or a counter on the board clock.",
+    "portIoConnector": "Port I/O \"{{name}}\" has bidirectional (three-state) pins: they went to connector pins (Pmod / GPIO); check that the connector is the one you wire.",
+    "partActiveLow": "\"{{name}}\" is set to light on 0: its port carries the circuit's value and the board's own active level is handled for you, so on the board it lights the other way round. Set the part to light on 1 for the same picture.",
+    "noResource": {
+      "programmableGenerator": "Programmable generator \"{{name}}\": a board has no such waveform source; build it with a counter / state machine on the board clock, or map the port to an outside signal by hand.",
+      "matrixKeypad": "Keypad \"{{name}}\": its row and column ports go to an outside keypad such as a Pmod KYPD; map them to connector pins by hand (the columns need pull-ups).",
+      "joystick": "Joystick \"{{name}}\": the board has no joystick; map X / Y to the digital output of an outside joystick / ADC, or to switches, by hand.",
+      "realTimeClock": "Real-time clock \"{{name}}\": an FPGA has no wall clock; give the value from an outside RTC or from a counter on the board clock.",
+      "evoBuzzer": "Buzzer \"{{name}}\": its ports (frequency, enable, volume, duty cycle) make no sound on the pins themselves; connect them to a tone (PWM) generator on the board clock or an audio codec and map its output to the board's audio / buzzer pin.",
+      "buzzer": "Buzzer \"{{name}}\": connect its enable and note ports to a tone (PWM) generator on the board clock and map its output to the board's audio / buzzer pin.",
+      "digitalOscilloscope": "Digital oscilloscope \"{{name}}\": its ports (CLK, inputs, EN, CLR) are not a display on the board; watch them with the FPGA's built-in logic analyzer (Xilinx ILA, Intel SignalTap) or map them by hand to pins going to an outside logic analyzer.",
+      "keyboard": "Keyboard \"{{name}}\": the board has none; connect OUT / AV to the output of a UART or PS/2 receiver and RE / CK / CLR to it (or map them to connector pins by hand).",
+      "asciiKeyboard": "ASCII keyboard \"{{name}}\": the board has none; give the data and strobe ports from a UART or PS/2 receiver (or map them to connector pins by hand).",
+      "tty": "Text terminal \"{{name}}\": the board has none; connect IN / WE / CK / CLR to a UART transmitter or a VGA text controller (or map them to connector pins by hand).",
+      "telnet": "Telnet \"{{name}}\": the network link needs a UART bridge or an Ethernet core; connect OUT / AV / IN / WR / RD / CK to it.",
+      "rgbVideo": "RGB video \"{{name}}\": connect RST / CK / WE / X / Y / DATA to a VGA / HDMI controller that writes a frame buffer (the board's VGA pins cannot be driven directly), or map them to connector pins by hand.",
+      "dotMatrix": "Dot matrix \"{{name}}\": its row / column ports are left for you to map, on an LED array or on connector pins."
+    }
+  },
+  "drc": {
+    "otherBoard": "The mapping was made for board {{mapped}}, not for {{board}}.",
+    "staleParts": "The mapping still has {{count}} part(s) that are no longer in the circuit; they are ignored.",
+    "widthChanged": "\"{{name}}\" changed from {{was}} to {{now}} pins since it was mapped; map it again.",
+    "unmapped": "\"{{name}}\": {{count}} of its {{total}} pins are not mapped (map them, or leave outputs open and inputs at a constant).",
+    "openInput": "{{pin}} is an input: it cannot be left open, give it a constant 0 or 1 instead.",
+    "constOnOutput": "{{pin}} is an output: it cannot take a constant, leave it open instead.",
+    "unknownResource": "{{pin}} is mapped on a resource at {{resource}} that the board does not have.",
+    "mappedOnZeroPinResource": "{{pin}} is mapped on \"{{resource}}\", which has no FPGA pin on this board.",
+    "pinOutOfRange": "{{pin}} is mapped on pin {{index}} of \"{{resource}}\", which has only {{count}}.",
+    "direction": {
+      "in": {
+        "out": "{{pin}} is an input of the circuit but \"{{resource}}\" is an output of the board (an LED, a display ...)."
+      },
+      "out": {
+        "in": "{{pin}} is an output of the circuit but \"{{resource}}\" is an input of the board (a button, a switch ...)."
+      },
+      "inout": {
+        "in": "{{pin}} is bidirectional but \"{{resource}}\" can only be read; map it on bidirectional (connector) pins.",
+        "out": "{{pin}} is bidirectional but \"{{resource}}\" can only be driven; map it on bidirectional (connector) pins."
+      }
+    },
+    "clockPinUsed": "{{pin}} is mapped on FPGA pin {{fpgaPin}}, the board's clock pin.",
+    "pinUsedTwice": "One pin of \"{{resource}}\" is mapped twice: {{pins}}.",
+    "fpgaPinShared": "FPGA pin {{fpgaPin}} is used by more than one board resource: {{resources}}.",
+    "zeroPinResource": "The board resource \"{{resource}}\" has no FPGA pin and cannot be used.",
+    "topLevelNoIo": "The circuit has no inputs or outputs, so there is nothing to put on the board.",
+    "noLabel": "The part behind port {{port}} has no label of its own; it gets one when the board map is saved for Logisim-evolution (which needs it). Give it a label to choose the name yourself.",
+    "labelChar": "Label \"{{label}}\" has the character '{{char}}', which an HDL name cannot have; the port is called {{port}}, and Logisim-evolution will not accept the label.",
+    "label": {
+      "vhdlKeyword": "Label \"{{label}}\" is a VHDL keyword; the port is called {{port}}, and Logisim-evolution will not accept the label.",
+      "verilogKeyword": "Label \"{{label}}\" is a Verilog keyword; the port is called {{port}}, and Logisim-evolution will not accept the label."
+    },
+    "duplicateLabel": "Label \"{{label}}\" is used by more than one I/O part (also \"{{other}}\"; labels are compared without case); the board map cannot tell them apart.",
+    "gatedClock": "The clock of \"{{part}}\" goes through logic gates (a gated clock): on an FPGA this gives glitches and timing problems; use an enable input instead.",
+    "clockFromLogic": "The clock of \"{{part}}\" does not come from a clock part (a button, a switch or a flip-flop output drives it): on an FPGA, sample it with the board clock and use an enable instead.",
+    "clockUnused": "Clock \"{{name}}\" is not connected to anything.",
+    "multipleClocks": "The circuit has {{count}} clocks; each is made from the board oscillator.",
+    "hdlWarning": "HDL export ({{module}}): {{text}}"
   }
 }
