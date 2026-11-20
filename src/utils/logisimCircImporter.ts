@@ -9,6 +9,7 @@ import type {
   SubcircuitAppearanceStyle,
   SubcircuitPortDefinition,
 } from '../types/circuit';
+import { readBoardmaps, type CircBoardmap } from '../fpga/circ/boardmap';
 import type { Radix } from '../types/logic';
 import {
   ARITH_PINS,
@@ -146,6 +147,8 @@ export interface ImportedCircuitSheet {
   wires: CircuitWire[];
   // What could not be imported exactly (skipped parts, wide gates, negated inputs ...)
   warnings: string[];
+  /** The circuit's FPGA board maps (Logisim-evolution <boardmap>), as read; the caller maps them on its board */
+  boardmaps?: CircBoardmap[];
 }
 
 export type ImportedLogisimCircuit = ImportedCircuitSheet;
@@ -207,6 +210,8 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   }
   if (n === 'probe') return 'probe';
   if (n === 'led') return 'led';
+  // evolution's Button (I/O): a push button, written back as an input Pin
+  if (n === 'button') return 'pushbutton';
   if (n === 'splitter') return 'splitter';
   if (n === 'bit extender') return 'bitExtender';
   if (n === 'bitselector') return 'bitSelector';
@@ -2932,7 +2937,9 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
   const sheets: ImportedCircuitSheet[] = [];
   for (const [name] of circuitByName) {
     const r = importNamed(name);
-    if (r) sheets.push(r.sheet);
+    if (!r) continue;
+    const boardmaps = readBoardmaps(circuitByName.get(name)!);
+    sheets.push(boardmaps.length ? { ...r.sheet, boardmaps } : r.sheet);
   }
   return { sheets, subcircuits, main: xmlDoc.getElementsByTagName('main')[0]?.getAttribute('name') || undefined };
 }

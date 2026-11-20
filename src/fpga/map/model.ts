@@ -30,6 +30,8 @@ export interface MapPartPin {
   /** Width of the port */
   width: number;
   dir: PinDir;
+  /** The canvas pin behind the bit and the bit of that pin (a wide pin, or one 1-bit pin per port bit) */
+  source?: { pinId: string; bit: number };
 }
 
 /** A canvas part whose top-level ports go to the board */
@@ -86,7 +88,12 @@ export function collectMappableParts(ports: PortDecl[], components: { id: string
       part = { compId: src.compId, type: src.type, label, evoKey: label ? `/${label}` : null, pins: [] };
       parts.set(src.compId, part);
     }
-    for (let bit = 0; bit < p.width; bit++) part.pins.push({ port: p.name, bit, width: p.width, dir: p.dir });
+    const ids = src.pins ?? [];
+    for (let bit = 0; bit < p.width; bit++) {
+      // one wide pin carries every bit, otherwise pin i is bit i (PortDecl.source)
+      const pinId = ids.length === 1 ? ids[0] : ids[bit];
+      part.pins.push({ port: p.name, bit, width: p.width, dir: p.dir, ...(pinId ? { source: { pinId, bit: ids.length === 1 ? bit : 0 } } : {}) });
+    }
   }
   for (const part of parts.values()) {
     // Stable: ports keep their order inside a direction

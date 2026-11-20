@@ -51,6 +51,9 @@ import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManage
 import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
 import { DYNAMIC_ELEMENT_OF, DYNAMIC_FACTORY, dynamicPathString, dynamicShapeToSvg, type DynamicPathStep } from './dynamicElements';
 import { solveKMap } from './kmapSolver';
+import { evoMapLabel, evoPartPins, writeBoardmap, type CircMapNote, type EvoMapUnit } from '../fpga/circ/boardmap';
+import type { BoardDefinition } from '../fpga/board/model';
+import type { BoardMapping } from '../fpga/map/model';
 import { memToRawText } from './memImage';
 import {
   ARITH_MODE_PARTS,
@@ -215,7 +218,17 @@ export interface CircExportResult {
   // For tests / UI: which Logisim pin stands for which canvas pin
   inputs: { label: string; compId: string; pinIndex: number }[];
   outputs: { label: string; compId: string; pinId: string }[];
+  /** The board map written into the main circuit (Logisim-evolution <boardmap>), and what it could not carry */
+  boardmap?: { written: boolean; notes: CircMapNote[] };
 }
+
+export interface CircExportOptions {
+  /** The canvas's FPGA board mapping and its board: written as the main circuit's <boardmap> */
+  fpga?: { mapping: BoardMapping; board: BoardDefinition };
+}
+
+// evo's annotation names (Circuit.getAnnotationName) for a mapped part written without a usable label
+const EVO_ANNOTATION_NAME: Partial<Record<ComponentType, string>> = { dipSwitch: 'DipSwitch', sevenSegment: 'SevenSegment', rgbLed: 'RGBLED', portIo: 'PortIO' };
 
 // Logisim 2.7.1 memory pins (classic look); the counter's up/down pin is evolution's, written too so evolution
 // connects it (Logisim 2.7.1 has no pin there and leaves the tunnel alone)
@@ -269,8 +282,9 @@ const LABELLED_PARTS = new Set<ComponentType>([
 const hasLogisimLabel = (type: ComponentType) =>
   LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type) || !!getPart(type)?.circ?.labelled;
 
-export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[]): CircExportResult {
+export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[], options: CircExportOptions = {}): CircExportResult {
   const warnings: string[] = [];
+  let boardmap: CircExportResult['boardmap'];
   // Evolution's TTL library is declared only when a chip uses it (Logisim 2.7.1 cannot load it)
   let usesTtl = false;
   // Likewise evolution's BFH library (binary to BCD converter, BCD to 7-segment decoder)
@@ -425,6 +439,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     const partOf = new Map<Prim, string>();
     // The label a written part carries (the part's own, see hasLogisimLabel)
     const labelOf = new Map<Prim, string>();
+    // The main circuit's written parts that can carry a board map (evo mappable parts), with the part they are
+    const mapUnits: { prim: Prim; compId: string; pins: EvoMapUnit['pins']; fallback: string; own: boolean }[] = [];
     const blocks: { prims: Prim[] }[] = [];
     const fixed: Array<{ x: number; y: number; prim: Prim }> = [];
 
@@ -1667,6 +1683,23 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       const main = P[P.length - 1];
       if (own && own !== COMPONENT_CATALOG[c.type]?.name && main && main.kind !== 'inpin' && main.kind !== 'outpin' && main.kind !== 'clock' && hasLogisimLabel(c.type))
         labelOf.set(main, own);
+      // The evo parts a board map can name: each input Pin is the next canvas output, each output Pin the next
+      // canvas input; an evo I/O part (DIP switch, 7-segment display, RGB LED, port I/O) has its own pin order
+      if (!inScope && options.fpga) {
+        // a part still named after its catalog entry has no label of its own: evo's annotation name instead
+        const ownName = !!own && own !== COMPONENT_CATALOG[c.type]?.name;
+        let nIn = 0;
+        let nOut = 0;
+        for (const q of P) {
+          if (q.kind === 'inpin' || q.kind === 'outpin') {
+            const pinOf = q.kind === 'inpin' ? c.outputs[nIn++] : c.inputs[nOut++];
+            const wide = (q.width ?? pinOf?.width ?? 1) > 1;
+            if (pinOf) mapUnits.push({ prim: q, compId: c.id, pins: [{ pinId: pinOf.id }], fallback: q.kind === 'inpin' ? (wide ? 'Input_bus' : 'Input') : wide ? 'Output_bus' : 'Output', own: ownName });
+          }
+        }
+        const evoPins = EVO_ANNOTATION_NAME[c.type] && main?.kind === 'ram' ? evoPartPins(c) : null;
+        if (evoPins) mapUnits.push({ prim: main!, compId: c.id, pins: evoPins, fallback: EVO_ANNOTATION_NAME[c.type]!, own: ownName });
+      }
       // The part a dynamic appearance element can name (by the written factory name and location)
       const shown = c.type === 'subcircuit' || DYNAMIC_ELEMENT_OF[c.type] ? P.find((q) => q.kind === 'ram' || q.kind === 'mem' || q.kind === 'sub') : undefined;
       if (shown) partOf.set(shown, c.id);
@@ -1677,6 +1710,38 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     if (usesC0) constPrims.push({ kind: 'const', value: 0, out: C0 });
     if (usesC1) constPrims.push({ kind: 'const', value: 1, out: C1 });
     if (constPrims.length) blocks.unshift({ prims: constPrims });
+
+    // The board map names its parts by label: a mapped part gets one evo keeps and the key can carry (evo itself
+    // labels such parts before it maps them: Circuit.annotate)
+    const mapNotes: CircMapNote[] = [];
+    const units: EvoMapUnit[] = [];
+    if (mapUnits.length && options.fpga) {
+      const mapped = (id: string) => options.fpga!.mapping.parts[id]?.some((t) => !!t) ?? false;
+      const unitOf = new Map(mapUnits.map((u) => [u.prim, u]));
+      const labelOfPrim = (p: Prim) => (p.kind === 'inpin' || p.kind === 'outpin' || p.kind === 'clock' ? p.label : labelOf.get(p));
+      // every other label of the circuit, the circuit's name and the part names (evo clears such labels)
+      const taken = new Set<string>([circuitName.toUpperCase(), 'PIN', 'CLOCK', 'TUNNEL', 'SPLITTER', 'CONSTANT']);
+      for (const p of [...fixed.map((f) => f.prim), ...blocks.flatMap((b) => b.prims)]) {
+        if ('name' in p && typeof p.name === 'string') taken.add(p.name.toUpperCase());
+        const l = labelOfPrim(p);
+        const u = unitOf.get(p);
+        if (l && !(u && mapped(u.compId))) taken.add(l.toUpperCase());
+      }
+      for (const u of mapUnits) {
+        if (!mapped(u.compId)) continue;
+        const was = labelOfPrim(u.prim) ?? '';
+        const label = evoMapLabel(u.own ? was.trim() : '', u.fallback, taken);
+        if (label !== was) {
+          if (u.prim.kind === 'inpin' || u.prim.kind === 'outpin') {
+            u.prim.label = label;
+            // (the Pin records follow it)
+            for (const r of u.prim.kind === 'inpin' ? inputs : outputs) if (r.compId === u.compId && r.label === was) r.label = label;
+          } else labelOf.set(u.prim, label);
+          mapNotes.push({ code: 'renamed', values: { from: was, to: label } });
+        }
+        units.push({ compId: u.compId, label, pins: u.pins });
+      }
+    }
 
     // --- readable tunnel names: pins keep their label, the rest are numbered ------------------
     const netName = new Map<string, string>();
@@ -1975,6 +2040,11 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           `"${circuitName}" devresi: Logisim-evolution bir devrede aynı etiketi (büyük / küçük harf ayırmadan) yalnız bir parçada tutar, devrenin ya da kullanılan bir parça türünün adıyla aynı etiketi de siler; şu etiket(ler) orada bir parçadan silinir: ${lost.join(', ')}. Logisim 2.7.1 hepsini tutar.`
         );
     }
+    if (def === null && options.fpga) {
+      const { lines, notes } = writeBoardmap({ circuitName, components: comps, wires: levelWires, mapping: options.fpga.mapping, board: options.fpga.board, units });
+      xml.push(...lines);
+      boardmap = { written: lines.length > 0, notes: [...mapNotes, ...notes] };
+    }
     return xml.join('\n');
   };
 
@@ -2008,5 +2078,5 @@ ${top}
 ${circuitXml.join('\n')}
 </project>
 `;
-  return { xml: doc, warnings, inputs, outputs };
+  return { xml: doc, warnings, inputs, outputs, ...(boardmap ? { boardmap } : {}) };
 }
