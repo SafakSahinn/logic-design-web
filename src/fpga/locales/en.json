@@ -112,7 +112,8 @@
     "clockFromLogic": "The clock of \"{{part}}\" does not come from a clock part (a button, a switch or a flip-flop output drives it): on an FPGA, sample it with the board clock and use an enable instead.",
     "clockUnused": "Clock \"{{name}}\" is not connected to anything.",
     "multipleClocks": "The circuit has {{count}} clocks; each is made from the board oscillator.",
-    "hdlWarning": "HDL export ({{module}}): {{text}}"
+    "hdlWarning": "HDL export ({{module}}): {{text}}",
+    "resourcePins": "{{resource}} has {{actual}} FPGA pin(s), but its drive needs {{expected}}: fix the board file."
   },
   "ui": {
     "title": "FPGA board map",
@@ -272,5 +273,27 @@
       "clockPin": "Clock pin",
       "clockHz": "Frequency (Hz)"
     }
+  },
+  "hdl": {
+    "tab": "FPGA project",
+    "noMapping": "The circuit is not mapped on a board yet. Map its input and output parts on a board first; the top level and the pin constraints are made from that mapping.",
+    "failed": "The FPGA files could not be made for this circuit.",
+    "blocked": "The design check found {{count}} error(s). Fix them before the FPGA files can be made.",
+    "boardLine": "{{board}} · {{tool}} · clock {{clock}}",
+    "file": {
+      "topLevel": "Top level",
+      "constraints": "Pin constraints",
+      "design": "Design"
+    },
+    "fullSpeed": "Clocks at full speed",
+    "fullSpeedTitle": "Feed every clock of the circuit the board clock directly instead of dividing it down to the clock's rate",
+    "copy": "Copy",
+    "copied": "Copied!",
+    "download": "Download {{count}} files",
+    "downloaded": "Downloaded: {{files}}",
+    "warnings": "{{count}} warning(s) of the design check, written in the file headers",
+    "clockDivided": "{{port}}: {{actual}} (asked {{requested}})",
+    "clockDirect": "{{port}}: board clock, {{actual}}",
+    "footer": "Design, top level and pin constraints for the board the circuit is mapped on."
   }
 }

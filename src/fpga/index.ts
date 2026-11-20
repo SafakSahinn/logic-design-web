@@ -28,6 +28,15 @@ export type { DrcIssue, DrcSeverity } from './drc/issue';
 export { checkBoard, checkMapping } from './drc/mapping';
 export { checkDesign, labelProblem } from './drc/design';
 
+export { buildFpgaProject } from './hdl/project';
+export type { FpgaProject, FpgaProjectFile, FpgaProjectInput } from './hdl/project';
+export { FPGA_CLOCK, FPGA_TOP_LEVEL_NAME, planTopLevel } from './hdl/plan';
+export type { ClockOptions, ClockPlan, PlacedPin, TopLevelPlan } from './hdl/plan';
+export { writeTopLevel, formatHz } from './hdl/wrapper';
+export { CONSTRAINT_EXTENSION, clockFrequencyText, writeConstraints } from './hdl/constraints';
+export type { ConstraintFile } from './hdl/constraints';
+export type { HdlLang } from './hdl/drivers';
+
 /** Message of a design rule check finding in the current language */
 export function describeDrcIssue(issue: DrcIssue): string {
   return i18n.t(`${FPGA_NAMESPACE}:drc.${issue.code}`, issue.values);

@@ -292,8 +292,8 @@ const isKnownPart = (c: CircuitComponentInstance | null | undefined): c is Circu
 const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam']);
 import { buildExportSvg } from '../utils/canvasExport';
 import { exportLogisimCirc } from '../utils/logisimCircExporter';
-import { FPGA_BOARDS, generateFpgaConstraints } from '../utils/fpgaConstraints';
 import { FpgaDialog } from '../fpga/ui/FpgaDialog';
+import { HdlFpgaTab } from '../fpga/ui/HdlFpgaTab';
 import type { BoardMapping } from '../fpga';
 import {
   runCircuitTestbench,
@@ -866,9 +866,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [showHdlModal, setShowHdlModal] = useState<boolean>(false);
   const [hdlLang, setHdlLang] = useState<'verilog' | 'vhdl'>('verilog');
   const [hdlActiveTab, setHdlActiveTab] = useState<'verilog' | 'vhdl' | 'fpga'>('verilog');
-  const [selectedFpgaBoard, setSelectedFpgaBoard] = useState<string>('basys3');
   const [hdlCopied, setHdlCopied] = useState<boolean>(false);
-  const [fpgaCopied, setFpgaCopied] = useState<boolean>(false);
   // FPGA board map dialog; the mapping of each sheet (in memory; saved with the project in Aşama 6i-5)
   const [showFpgaDialog, setShowFpgaDialog] = useState<boolean>(false);
   const [fpgaMappings, setFpgaMappings] = useState<Record<string, BoardMapping>>({});
@@ -2771,24 +2769,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     );
   };
 
-  const generatedFpgaData = useMemo(() => {
-    return generateFpgaConstraints(selectedFpgaBoard, components, wires, currentCircuitName);
-  }, [selectedFpgaBoard, components, wires, currentCircuitName]);
-
-  const handleCopyFpgaConstraints = () => {
-    navigator.clipboard.writeText(generatedFpgaData.content);
-    setFpgaCopied(true);
-    setTimeout(() => setFpgaCopied(false), 2000);
-  };
-
-  const handleDownloadFpgaFile = () => {
-    const blob = new Blob([generatedFpgaData.content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = generatedFpgaData.filename;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Saves one text file of the FPGA tab (design, top level or constraints)
+  const downloadTextFile = (fileName: string, text: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    downloadUrl(url, fileName);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // From the FPGA dialog: select a part and bring it to the middle of the canvas (the dialog closes)
@@ -14209,59 +14194,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                   }`}
                 >
-                  FPGA Kısıt (.xdc/.qsf)
+                  {tFpga('hdl.tab')}
                 </button>
               </div>
 
-              {hdlActiveTab === 'fpga' ? (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <select
-                    value={selectedFpgaBoard}
-                    onChange={(e) => setSelectedFpgaBoard(e.target.value)}
-                    className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    {FPGA_BOARDS.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name} ({b.format.toUpperCase()})
-                      </option>
-                    ))}
-                  </select>
-
-                  <button
-                    data-fpga-open
-                    onClick={() => setShowFpgaDialog(true)}
-                    className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl border border-indigo-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
-                  >
-                    <Cpu className="w-3.5 h-3.5" />
-                    <span>{tFpga('ui.openButton')}</span>
-                  </button>
-
-                  <button
-                    onClick={handleCopyFpgaConstraints}
-                    className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
-                  >
-                    {fpgaCopied ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span className="text-emerald-700 font-bold">Kopyalandı!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Kısıtı Kopyala</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    onClick={handleDownloadFpgaFile}
-                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Kısıtı İndir (.{generatedFpgaData.filename.split('.').pop()})</span>
-                  </button>
-                </div>
-              ) : (
+              {hdlActiveTab === 'fpga' ? null : (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleCopyHdlCode}
@@ -14301,23 +14238,31 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             </div>
 
             {/* Code Display Area */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-950">
-              <pre className="font-mono text-xs text-emerald-300 leading-relaxed whitespace-pre selection:bg-emerald-700 selection:text-white">
-                <code>
-                  {hdlActiveTab === 'fpga'
-                    ? generatedFpgaData.content
-                    : hdlLang === 'verilog'
-                    ? generatedVerilogCode
-                    : generatedVhdlCode}
-                </code>
-              </pre>
-            </div>
+            {hdlActiveTab === 'fpga' ? (
+              <HdlFpgaTab
+                circuitName={currentCircuitName}
+                components={components}
+                wires={wires}
+                mapping={fpgaMappings[activeSheetId] ?? null}
+                defaultClockHz={clockHz}
+                onOpenMap={() => setShowFpgaDialog(true)}
+                onGoToPart={goToFpgaPart}
+                onDownload={downloadTextFile}
+                onToast={showToast}
+              />
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-950">
+                <pre className="font-mono text-xs text-emerald-300 leading-relaxed whitespace-pre selection:bg-emerald-700 selection:text-white">
+                  <code>{hdlLang === 'verilog' ? generatedVerilogCode : generatedVhdlCode}</code>
+                </pre>
+              </div>
+            )}
 
             {/* Footer */}
             <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
               <span className="text-xs text-slate-500 font-medium">
                 {hdlActiveTab === 'fpga'
-                  ? `${generatedFpgaData.boardName} için Vivado / Quartus pin atama ve zamanlama kısıtları.`
+                  ? tFpga('hdl.footer')
                   : 'Xilinx Vivado, Intel Quartus Prime ve ModelSim ile tam uyumlu sentezlenebilir RTL kodu.'}
               </span>
               <button

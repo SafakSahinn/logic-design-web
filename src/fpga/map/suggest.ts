@@ -1,4 +1,4 @@
-// Suggested mapping of a design on a board (replaces the sequential pin hand-out of src/utils/fpgaConstraints.ts).
+// Suggested mapping of a design on a board (replaced the old sequential pin hand-out).
 //
 // Each part type has the resource kinds it goes on, best first (a switch on a DIP switch, then on a button ...).
 // A part takes, in this order: a whole free resource it fits (evo complete map), a run of free consecutive pins

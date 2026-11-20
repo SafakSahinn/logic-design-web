@@ -112,7 +112,8 @@
     "clockFromLogic": "\"{{part}}\" parçasının saati bir saat parçasından gelmiyor (bir buton, anahtar ya da flip-flop çıkışı sürüyor): FPGA'da bu sinyali kart saatiyle örnekleyip etkinleştirme (enable) olarak kullanın.",
     "clockUnused": "\"{{name}}\" saati hiçbir yere bağlı değil.",
     "multipleClocks": "Devrede {{count}} saat var; her biri kart osilatöründen üretilir.",
-    "hdlWarning": "HDL dışa aktarımı ({{module}}): {{text}}"
+    "hdlWarning": "HDL dışa aktarımı ({{module}}): {{text}}",
+    "resourcePins": "{{resource}} kaynağının {{actual}} FPGA pini var, ama sürüş biçimi {{expected}} pin istiyor: kart dosyasını düzeltin."
   },
   "ui": {
     "title": "FPGA kart eşleme",
@@ -272,5 +273,27 @@
       "clockPin": "Saat pini",
       "clockHz": "Frekans (Hz)"
     }
+  },
+  "hdl": {
+    "tab": "FPGA projesi",
+    "noMapping": "Devre henüz bir karta eşlenmedi. Önce giriş ve çıkış parçalarını bir karta eşleyin; üst modül ve pin kısıtları bu eşlemeden üretilir.",
+    "failed": "Bu devre için FPGA dosyaları üretilemedi.",
+    "blocked": "Tasarım denetimi {{count}} hata buldu. FPGA dosyalarının üretilmesi için önce bunları düzeltin.",
+    "boardLine": "{{board}} · {{tool}} · saat {{clock}}",
+    "file": {
+      "topLevel": "Üst modül",
+      "constraints": "Pin kısıtları",
+      "design": "Tasarım"
+    },
+    "fullSpeed": "Saatler tam hızda",
+    "fullSpeedTitle": "Devredeki her saati, saatin hızına bölmek yerine doğrudan kartın saatiyle sür",
+    "copy": "Kopyala",
+    "copied": "Kopyalandı!",
+    "download": "{{count}} dosyayı indir",
+    "downloaded": "İndirildi: {{files}}",
+    "warnings": "Tasarım denetiminden {{count}} uyarı, dosya başlıklarına yazıldı",
+    "clockDivided": "{{port}}: {{actual}} (istenen {{requested}})",
+    "clockDirect": "{{port}}: kart saati, {{actual}}",
+    "footer": "Devrenin eşlendiği kart için tasarım, üst modül ve pin kısıtları."
   }
 }
