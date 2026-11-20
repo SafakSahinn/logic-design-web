@@ -296,7 +296,7 @@ import { FpgaDialog } from '../fpga/ui/FpgaDialog';
 import { HdlFpgaTab } from '../fpga/ui/HdlFpgaTab';
 import type { BoardMapping } from '../fpga';
 import { readSheetMappings } from '../fpga/map/persist';
-import { applyBoardmap, type CircBoardmap, type CircMapNote } from '../fpga/circ/boardmap';
+import { applyBoardmap, mappedPartIds, type CircBoardmap, type CircMapNote } from '../fpga/circ/boardmap';
 import { loadBoardByName } from '../fpga/ui/boardSource';
 import {
   runCircuitTestbench,
@@ -872,6 +872,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   const [hdlCopied, setHdlCopied] = useState<boolean>(false);
   // FPGA board map dialog; the mapping of each sheet (in memory; saved with the project in Aşama 6i-5)
   const [showFpgaDialog, setShowFpgaDialog] = useState<boolean>(false);
+  const canvasCoveredRef = useRef(false);
+  canvasCoveredRef.current = showFpgaDialog || showHdlModal;
   const [fpgaMappings, setFpgaMappings] = useState<Record<string, BoardMapping>>({});
   const { t: tFpga } = useTranslation('fpga');
 
@@ -3007,14 +3009,23 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
   // A board map note of the .circ export / import as text
   const circNoteText = (n: CircMapNote) => tFpga(`circ.note.${n.code}`, n.values);
-  // Board maps of an imported .circ on its new sheets: the first map whose board loads, per sheet
-  const applyCircBoardmaps = async (newSheets: CircuitSheet[], imported: { name: string; boardmaps?: CircBoardmap[] }[]) => {
+  // Board maps of an imported .circ on its new sheets: the first map whose board loads, per sheet. Boards load
+  // asynchronously: a later import drops this result, and a sheet the user has mapped meanwhile keeps the user's map.
+  // The board map lines are added to the import message (`importToast`), which they would otherwise replace.
+  const circImportTokenRef = useRef(0);
+  const applyCircBoardmaps = async (
+    newSheets: CircuitSheet[],
+    imported: { name: string; boardmaps?: CircBoardmap[] }[],
+    importToast: { text: string; ms: number },
+  ) => {
+    const token = ++circImportTokenRef.current;
     const result: Record<string, BoardMapping> = {};
     const notes: string[] = [];
     for (let i = 0; i < newSheets.length; i++) {
       const bms = imported[i]?.boardmaps ?? [];
       const sh = newSheets[i];
-      for (const bm of bms) {
+      for (let b = 0; b < bms.length; b++) {
+        const bm = bms[b];
         const board = await loadBoardByName(bm.board).catch(() => undefined);
         if (!board) {
           notes.push(circNoteText({ code: 'boardMissing', values: { sheet: sh.name, board: bm.board } }));
@@ -3023,16 +3034,32 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const { mapping, notes: n } = applyBoardmap(bm, { circuitName: sh.name, components: sh.components, wires: sh.wires, board });
         result[sh.id] = mapping;
         notes.push(...n.map(circNoteText));
-        const others = bms.filter((b) => b !== bm).map((b) => b.board);
+        // the maps before this one are already reported as missing
+        const others = bms.slice(b + 1).map((x) => x.board);
         if (others.length) notes.push(circNoteText({ code: 'otherBoards', values: { sheet: sh.name, board: bm.board, others: others.join(', ') } }));
         break;
+      }
+    }
+    if (token !== circImportTokenRef.current) return;
+    const current = autosaveSnapshotRef.current.fpgaMappings;
+    for (const sh of newSheets) {
+      if (result[sh.id] && current[sh.id]) {
+        delete result[sh.id];
+        notes.push(circNoteText({ code: 'userMapKept', values: { sheet: sh.name } }));
       }
     }
     const count = Object.keys(result).length;
     if (count === 0 && notes.length === 0) return;
     // (a sheet removed meanwhile keeps no map: autosave and project files keep only existing sheets)
-    setFpgaMappings((all) => ({ ...all, ...result }));
-    showToast([count ? tFpga('circ.imported', { sheets: count }) : '', notes.length ? tFpga('circ.importNotes', { count: notes.length, first: notes.slice(0, 2).join(' ') }) : ''].filter(Boolean).join(' '), notes.length ? 8000 : 4000);
+    setFpgaMappings((all) => {
+      const next = { ...all };
+      for (const [id, m] of Object.entries(result)) if (!next[id]) next[id] = m;
+      return next;
+    });
+    const mapText = [count ? tFpga('circ.imported', { sheets: count }) : '', notes.length ? tFpga('circ.importNotes', { count: notes.length, first: notes.slice(0, 2).join(' ') }) : '']
+      .filter(Boolean)
+      .join(' ');
+    showToast(`${importToast.text} ${mapText}`, Math.max(importToast.ms, notes.length ? 8000 : 4000));
   };
 
   // Import Circuit from JSON or Standard CAD (.circ) XML File
@@ -3088,9 +3115,16 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             // Imported connections are pin-to-pin: route every sheet once so they are stored as real wires
             for (const sh of newSheets) sh.wires = repairWires(sh.wires, sh.components);
             setSheets(newSheets);
+            const importToast =
+              warningCount > 0
+                ? { text: `${file.name} içe aktarıldı, ${warningCount} uyarı var (sayfalardaki kırmızı notlara bakın).`, ms: 6000 }
+                : {
+                    text: `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!${addedCircIcs > 0 ? ` ${addedCircIcs} alt devre entegre olarak kütüphaneye eklendi.` : ''}`,
+                    ms: 3000,
+                  };
             // The file's board maps (Logisim-evolution <boardmap>): each on its sheet, once its board is loaded
             setFpgaMappings({});
-            void applyCircBoardmaps(newSheets, importedCircuits);
+            void applyCircBoardmaps(newSheets, importedCircuits, importToast);
             // Open Logisim's main circuit
             const first = newSheets[Math.max(0, importedCircuits.findIndex((c) => c.name === imported.main))];
             setActiveSheetId(first.id);
@@ -3101,12 +3135,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             setSelectedCompId(null);
             setSelectedWireId(null);
             handleResetView();
-            showToast(
-              warningCount > 0
-                ? `${file.name} içe aktarıldı, ${warningCount} uyarı var (sayfalardaki kırmızı notlara bakın).`
-                : `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!${addedCircIcs > 0 ? ` ${addedCircIcs} alt devre entegre olarak kütüphaneye eklendi.` : ''}`,
-              warningCount > 0 ? 6000 : 3000
-            );
+            showToast(importToast.text, importToast.ms);
             return;
           }
         } catch (err: unknown) {
@@ -3149,6 +3178,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             wires: s.wires || [],
           }));
           setSheets(loadedSheets);
+          // a .circ import still loading its boards must not add its maps to this project
+          circImportTokenRef.current++;
           setFpgaMappings(readSheetMappings(json.fpgaMappings, loadedSheets.map((s) => s.id)));
           const firstSheet = loadedSheets.find((s) => s.id === json.activeSheetId) || loadedSheets[0];
           setActiveSheetId(firstSheet.id);
@@ -3257,7 +3288,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // The sheet's FPGA board mapping goes along as the circuit's Logisim-evolution <boardmap> (its board is loaded first)
   const handleExportCirc = async () => {
     const mapping = fpgaMappings[activeSheetId];
-    const mapped = !!mapping && Object.values(mapping.parts).some((t) => t.some((x) => !!x));
+    const mapped = !!mapping && mappedPartIds({ circuitName: currentCircuitName, components, wires, mapping }).size > 0;
     const board = mapped ? await loadBoardByName(mapping.board).catch(() => undefined) : undefined;
     const { xml, warnings, boardmap } = exportLogisimCirc(currentCircuitName, components, wires, mapping && board ? { fpga: { mapping, board } } : {});
     const blob = new Blob([xml], { type: 'application/xml;charset=utf-8;' });
@@ -4408,6 +4439,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   // Global Keyboard shortcuts: Delete, Backspace, Ctrl+Z, Ctrl+Y, Escape, Ctrl+D, R
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // The FPGA map and the HDL window cover the canvas: its shortcuts must not change parts behind them
+      if (canvasCoveredRef.current) return;
       const activeEl = document.activeElement;
       if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {
         return;

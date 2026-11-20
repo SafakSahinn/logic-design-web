@@ -99,6 +99,7 @@
     "clockPinUsed": "{{pin}} is mapped on FPGA pin {{fpgaPin}}, the board's clock pin.",
     "pinUsedTwice": "One pin of \"{{resource}}\" is mapped twice: {{pins}}.",
     "fpgaPinShared": "FPGA pin {{fpgaPin}} is used by more than one board resource: {{resources}}.",
+    "unsafeBoardText": "The board file has an FPGA pin or device name the pin constraint files cannot take safely: {{text}}. Use only letters, digits and '_' in pin names (and also spaces, '.' and '-' in the part, family and package).",
     "zeroPinResource": "The board resource \"{{resource}}\" has no FPGA pin and cannot be used.",
     "topLevelNoIo": "The circuit has no inputs or outputs, so there is nothing to put on the board.",
     "noLabel": "The part behind port {{port}} has no label of its own; it gets one when the board map is saved for Logisim-evolution (which needs it). Give it a label to choose the name yourself.",
@@ -314,6 +315,7 @@
       "nestedKey": "{{key}}: parts inside a subcircuit are not mapped here.",
       "legacyKey": "{{key}}: old pin-by-pin key, not read.",
       "sizeMismatch": "{{key}}: {{pins}} pins in the file, the part has {{expected}}.",
+      "userMapKept": "Sheet \"{{sheet}}\": you mapped it while the boards were loading, so your map was kept and the file's map was not applied.",
       "badTarget": "{{key}}: a board resource or pin of the map is not on the board."
     }
   }

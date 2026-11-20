@@ -11,7 +11,8 @@ import { collectMappableParts, type BoardMapping } from '../map/model';
 import { resolveMapping } from '../map/resolve';
 import { writeConstraints, type ConstraintFile } from './constraints';
 import type { HdlLang } from './drivers';
-import { planTopLevel, type ClockOptions, type TopLevelPlan } from './plan';
+import { getClockConfig } from '../../utils/circuitEngine';
+import { planTopLevel, type ClockOptions, type ClockShape, type TopLevelPlan } from './plan';
 import { writeTopLevel } from './wrapper';
 
 export interface FpgaProjectInput {
@@ -52,13 +53,19 @@ export function buildFpgaProject(input: FpgaProjectInput): FpgaProject {
   if (hasErrors(issues)) return { ok: false, issues };
 
   const clockRates: Record<string, number | undefined> = {};
-  for (const c of components) if (c.type === 'clock') clockRates[c.id] = c.state?.clockRateHz;
+  const clockShapes: Record<string, ClockShape> = {};
+  for (const c of components) {
+    if (c.type !== 'clock') continue;
+    clockRates[c.id] = c.state?.clockRateHz;
+    clockShapes[c.id] = getClockConfig(c);
+  }
   const plan = planTopLevel({
     designName: getTopModuleName(circuitName),
     designPorts: ports,
     resolved: resolveMapping(board, parts, mapping),
     board,
     clockRates,
+    clockShapes,
     clock: input.clock,
   });
   const planIssues: DrcIssue[] = plan.problems.map((p) => ({
@@ -70,7 +77,11 @@ export function buildFpgaProject(input: FpgaProjectInput): FpgaProject {
 
   const ext = lang === 'verilog' ? 'v' : 'vhd';
   const describe = input.describe ?? ((i: DrcIssue) => i.code);
-  const notes = issues.filter((i) => i.severity === 'warning').map((i) => `Warning: ${describe(i)}`);
+  // A note carries user text (labels from the canvas or a .circ file); a line break in it would end the comment
+  // and turn the rest into code, in a constraint file even into Tcl the vendor tool runs
+  const notes = issues
+    .filter((i) => i.severity === 'warning')
+    .map((i) => `Warning: ${describe(i)}`.replace(/[\r\n\u2028\u2029]+/g, ' '));
   const header = [`Board: ${board.name}`, ...notes];
   const design: FpgaProjectFile = {
     fileName: `${plan.designName}.${ext}`,

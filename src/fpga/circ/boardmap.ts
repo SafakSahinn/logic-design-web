@@ -26,6 +26,7 @@ import {
   wholeResourceOf,
   type BoardMapping,
   type MappablePart,
+  type PinDir,
   type PinTarget,
 } from '../map/model';
 
@@ -108,7 +109,7 @@ export function evoAttrKey(attrs: readonly (readonly [string, string])[]): strin
 
 /** What the .circ could not carry, as an i18n code of the fpga namespace ('circ.note.<code>') and its values */
 export interface CircMapNote {
-  code: 'notWritten' | 'renamed' | 'otherBoards' | 'boardMissing' | 'unknownKey' | 'notMappable' | 'nestedKey' | 'legacyKey' | 'sizeMismatch' | 'badTarget' | 'ambiguousKey';
+  code: 'notWritten' | 'renamed' | 'otherBoards' | 'boardMissing' | 'unknownKey' | 'notMappable' | 'nestedKey' | 'legacyKey' | 'sizeMismatch' | 'badTarget' | 'ambiguousKey' | 'userMapKept';
   values: Record<string, string | number>;
 }
 
@@ -143,6 +144,20 @@ function unitPinIndices(part: MappablePart, refs: EvoPinRef[]): number[] {
 }
 
 const partText = (part: MappablePart) => part.label ?? part.pins[0]?.port ?? part.compId;
+
+/**
+ * Canvas ids of the parts whose map writeBoardmap would write: the stored targets still fit the part (one per pin;
+ * a part whose width changed is left out) and at least one pin is mapped.
+ */
+export function mappedPartIds(input: { circuitName: string; components: CircuitComponentInstance[]; wires: CircuitWire[]; mapping: BoardMapping }): Set<string> {
+  const parts = collectMappableParts(getTopLevelPorts(input.circuitName, input.components, input.wires), input.components);
+  const ids = new Set<string>();
+  for (const part of parts) {
+    const t = input.mapping.parts[part.compId];
+    if (t && t.length === part.pins.length && t.some((x) => !!x)) ids.add(part.compId);
+  }
+  return ids;
+}
 
 /**
  * The <boardmap> lines of a circuit (4 spaces in, its <mc> 6, as evo writes them), or none when nothing is
@@ -372,9 +387,17 @@ export function applyBoardmap(bm: CircBoardmap, input: BoardmapApplyInput): { ma
     const unitPart: MappablePart = { ...part, pins: idx.map((i) => part.pins[i]) };
     const n = idx.length;
     let targets: (PinTarget | null)[] | null = null;
-    if (info.kind === 'open') targets = Array.from({ length: n }, () => ({ kind: 'open' as const }));
-    else if (info.kind === 'const') targets = Array.from({ length: n }, (_, i) => ({ kind: 'const' as const, value: ((BigInt.asUintN(64, info.value) >> BigInt(i)) & 1n ? 1 : 0) as 0 | 1 }));
-    else if (info.kind === 'whole') {
+    // evo tryOpenMap / tryConstantMap: only outputs (or bidirectional pins) are left open, only inputs take a constant
+    const canOpen = (dir: PinDir) => dir !== 'in';
+    const canConst = (dir: PinDir) => dir === 'in';
+    if (info.kind === 'open') {
+      if (unitPart.pins.every((p) => canOpen(p.dir))) targets = Array.from({ length: n }, () => ({ kind: 'open' as const }));
+      else notes.push({ code: 'badTarget', values: { key } });
+    } else if (info.kind === 'const') {
+      if (unitPart.pins.every((p) => canConst(p.dir))) {
+        targets = Array.from({ length: n }, (_, i) => ({ kind: 'const' as const, value: ((BigInt.asUintN(64, info.value) >> BigInt(i)) & 1n ? 1 : 0) as 0 | 1 }));
+      } else notes.push({ code: 'badTarget', values: { key } });
+    } else if (info.kind === 'whole') {
       const io = findBoardIo(board, `${info.x}_${info.y}`);
       targets = io ? mapWhole(unitPart, io) : null;
       if (!targets) notes.push({ code: 'badTarget', values: { key } });
@@ -384,6 +407,11 @@ export function applyBoardmap(bm: CircBoardmap, input: BoardmapApplyInput): { ma
       let bad = false;
       targets = info.pins.map((p, i): PinTarget | null => {
         if (!p) return null;
+        const pinDir = unitPart.pins[i].dir;
+        if ((p.kind === 'open' && !canOpen(pinDir)) || (p.kind === 'const' && !canConst(pinDir))) {
+          bad = true;
+          return null;
+        }
         if (p.kind === 'open') return { kind: 'open' };
         if (p.kind === 'const') return { kind: 'const', value: p.value & 1n ? 1 : 0 };
         const io = findBoardIo(board, `${p.x}_${p.y}`);

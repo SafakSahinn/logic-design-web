@@ -99,6 +99,7 @@
     "clockPinUsed": "{{pin}}, kartın saat pini olan {{fpgaPin}} FPGA pinine eşlenmiş.",
     "pinUsedTwice": "\"{{resource}}\" kaynağının bir pini iki kez eşlenmiş: {{pins}}.",
     "fpgaPinShared": "{{fpgaPin}} FPGA pinini birden fazla kart kaynağı kullanıyor: {{resources}}.",
+    "unsafeBoardText": "Kart dosyasında pin kısıt dosyalarına güvenle yazılamayan bir FPGA pini ya da aygıt adı var: {{text}}. Pin adlarında yalnız harf, rakam ve '_' kullanın (part, aile ve kılıf adında boşluk, '.' ve '-' de olabilir).",
     "zeroPinResource": "\"{{resource}}\" kart kaynağının FPGA pini yok, kullanılamaz.",
     "topLevelNoIo": "Devrenin hiç girişi ya da çıkışı yok, karta konacak bir şey yok.",
     "noLabel": "{{port}} portunun arkasındaki parçanın kendi etiketi yok; kart eşlemesi Logisim-evolution için kaydedilirken (orada gerekli) ona bir etiket verilir. Adı kendiniz seçmek için parçaya etiket verin.",
@@ -314,6 +315,7 @@
       "nestedKey": "{{key}}: alt devrenin içindeki parçalar burada eşlenmez.",
       "legacyKey": "{{key}}: eski bacak bacak anahtar, okunmadı.",
       "sizeMismatch": "{{key}}: dosyada {{pins}} bacak var, parçanın {{expected}} bacağı var.",
+      "userMapKept": "\"{{sheet}}\" sayfası: kartlar yüklenirken siz eşlediniz, sizin eşlemeniz korundu, dosyadaki eşleme uygulanmadı.",
       "badTarget": "{{key}}: eşlemedeki bir kart kaynağı ya da bacağı kartta yok."
     }
   }

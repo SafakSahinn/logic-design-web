@@ -70,13 +70,28 @@ export interface DesignPortPlan {
 export interface ClockPlan {
   /** Design port it drives */
   port: string;
-  /** Rate asked for by the clock part, Hz */
+  /** Frequency of the clock part's waveform in the simulator, Hz: 2 * rate / (high + low) */
   requestedHz: number;
-  /** Half period in oscillator cycles; 0 = the oscillator itself */
+  /**
+   * One simulator tick (half a period of the part's rate) in oscillator cycles; 0 = the oscillator itself (the
+   * tick would be shorter than one oscillator cycle, or full speed was asked)
+   */
   halfPeriod: number;
-  /** Rate the top level really makes, Hz */
+  /** Ticks low, then ticks high, and the phase shift in ticks (the clock part's settings; phase < high + low) */
+  shape: ClockShape;
+  /** Frequency the top level really makes, Hz */
   actualHz: number;
 }
+
+/** The clock part's waveform in simulator ticks (circuitEngine getClockConfig / clockLevelAt) */
+export interface ClockShape {
+  high: number;
+  low: number;
+  phase: number;
+}
+
+export const DEFAULT_CLOCK_SHAPE: ClockShape = { high: 1, low: 1, phase: 0 };
+export const isDefaultClockShape = (s: ClockShape) => s.high === 1 && s.low === 1 && s.phase === 0;
 
 /** A driver of an LED array or multiplexed 7-segment display */
 export type DriverPlan =
@@ -231,13 +246,19 @@ function scanningExternal(id: number, selectWidth: number): { ports: TopPort[]; 
   return { ports, order };
 }
 
-/** The clock of one design clock port */
-export function planClock(port: string, requestedHz: number, oscillatorHz: number, fullSpeed: boolean): ClockPlan {
-  if (fullSpeed || !(requestedHz > 0) || requestedHz * 2 > oscillatorHz) {
-    return { port, requestedHz, halfPeriod: 0, actualHz: oscillatorHz };
+/**
+ * The clock of one design clock port. `rateHz` is the clock part's rate: one tick is half its period, as in the
+ * simulator, and the part stays low for `shape.low` ticks, then high for `shape.high` ticks.
+ */
+export function planClock(port: string, rateHz: number, oscillatorHz: number, fullSpeed: boolean, shape: ClockShape = DEFAULT_CLOCK_SHAPE): ClockPlan {
+  const cycle = shape.high + shape.low;
+  const norm: ClockShape = { high: shape.high, low: shape.low, phase: shape.phase % cycle };
+  const requestedHz = rateHz > 0 ? (2 * rateHz) / cycle : rateHz;
+  if (fullSpeed || !(rateHz > 0) || rateHz * 2 > oscillatorHz) {
+    return { port, requestedHz, halfPeriod: 0, shape: norm, actualHz: oscillatorHz };
   }
-  const halfPeriod = Math.max(1, Math.round(oscillatorHz / (2 * requestedHz)));
-  return { port, requestedHz, halfPeriod, actualHz: oscillatorHz / (2 * halfPeriod) };
+  const halfPeriod = Math.max(1, Math.round(oscillatorHz / (2 * rateHz)));
+  return { port, requestedHz, halfPeriod, shape: norm, actualHz: oscillatorHz / (halfPeriod * cycle) };
 }
 
 export interface PlanInput {
@@ -249,6 +270,8 @@ export interface PlanInput {
   board: BoardDefinition;
   /** Clock part rate by canvas id (undefined = the default rate) */
   clockRates: Record<string, number | undefined>;
+  /** Clock part waveform by canvas id (missing = 1 tick high, 1 low, no phase) */
+  clockShapes?: Record<string, ClockShape | undefined>;
   clock: ClockOptions;
 }
 
@@ -345,7 +368,7 @@ export function planTopLevel(input: PlanInput): TopLevelPlan {
     if (port.source?.type === 'clock') {
       const rate = input.clockRates[port.source.compId] ?? input.clock.defaultHz;
       plan.clock = clocks.length;
-      clocks.push(planClock(port.name, rate, oscillatorHz, input.clock.fullSpeed));
+      clocks.push(planClock(port.name, rate, oscillatorHz, input.clock.fullSpeed, input.clockShapes?.[port.source.compId]));
       designPorts.push(plan);
       continue;
     }

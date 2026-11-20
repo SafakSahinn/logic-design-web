@@ -2,7 +2,26 @@
 // the signal adaptations (inversion of active-low pins, constants), the clock dividers, the design instance, and
 // the LED array / 7-segment drivers, followed by the helper modules the top level uses.
 import { driverModule, helperModuleText, scanningCounter, SEGMENT_PORTS, type HdlLang, type HelperModule } from './drivers';
-import { addressBitsFor, bitsFor, driverSignals, FPGA_CLOCK, type DesignPortPlan, type DriverPlan, type TopLevelPlan } from './plan';
+import { addressBitsFor, bitsFor, driverSignals, FPGA_CLOCK, isDefaultClockShape, type ClockPlan, type DesignPortPlan, type DriverPlan, type TopLevelPlan } from './plan';
+
+/** Generics of a clock divider; the waveform ones only when the clock part is not 1 tick high / 1 low / no phase */
+function dividerGenerics(k: ClockPlan): [string, number][] {
+  const g: [string, number][] = [
+    ['HALF_PERIOD', k.halfPeriod],
+    ['COUNTER_BITS', bitsFor(k.halfPeriod - 1)],
+  ];
+  if (!isDefaultClockShape(k.shape)) {
+    g.push(['HIGH_TICKS', k.shape.high], ['LOW_TICKS', k.shape.low], ['PHASE', k.shape.phase]);
+  }
+  return g;
+}
+
+/** Verilog also sizes the tick counter (VHDL gives it an integer range) */
+function verilogDividerParams(k: ClockPlan): string {
+  const g = dividerGenerics(k);
+  if (!isDefaultClockShape(k.shape)) g.push(['TICK_BITS', bitsFor(k.shape.high + k.shape.low - 1)]);
+  return g.map(([n, v]) => `.${n}(${v})`).join(', ');
+}
 
 export interface WrapperOptions {
   /** Comment lines for the file header (board, warnings ...); written as is after the comment marker */
@@ -185,8 +204,11 @@ function clockNet(plan: TopLevelPlan, p: DesignPortPlan): string {
 }
 
 function clockComment(k: TopLevelPlan['clocks'][number], oscillatorHz: number): string {
-  if (k.halfPeriod === 0) return `${k.port}: board clock ${formatHz(oscillatorHz)} directly`;
-  return `${k.port}: ${formatHz(oscillatorHz)} / ${2 * k.halfPeriod} = ${formatHz(k.actualHz)} (asked ${formatHz(k.requestedHz)})`;
+  const shaped = !isDefaultClockShape(k.shape);
+  const shape = `${k.shape.high} tick(s) high, ${k.shape.low} low${k.shape.phase ? `, phase ${k.shape.phase}` : ''}`;
+  if (k.halfPeriod === 0) return `${k.port}: board clock ${formatHz(oscillatorHz)} directly${shaped ? ` (its ${shape} is not applied)` : ''}`;
+  const cycle = k.halfPeriod * (k.shape.high + k.shape.low);
+  return `${k.port}: ${formatHz(oscillatorHz)} / ${cycle} = ${formatHz(k.actualHz)} (asked ${formatHz(k.requestedHz)}${shaped ? `, ${shape}` : ''})`;
 }
 
 export function formatHz(hz: number): string {
@@ -221,7 +243,7 @@ function topVerilog(plan: TopLevelPlan): string[] {
     out.push(`  // Clock ${clockComment(k, plan.oscillatorHz)}`);
     if (k.halfPeriod > 0) {
       out.push(
-        `  LogisimClockDivider #(.HALF_PERIOD(${k.halfPeriod}), .COUNTER_BITS(${bitsFor(k.halfPeriod - 1)})) clock${i} (`,
+        `  LogisimClockDivider #(${verilogDividerParams(k)}) clock${i} (`,
         `    .fpgaGlobalClock(${FPGA_CLOCK}),`,
         `    .clockOut(s_clock_${k.port})`,
         '  );'
@@ -271,7 +293,9 @@ function topVhdl(plan: TopLevelPlan): string[] {
     if (k.halfPeriod > 0) {
       out.push(
         `  clock${i} : entity work.LogisimClockDivider`,
-        `    generic map (HALF_PERIOD => ${k.halfPeriod}, COUNTER_BITS => ${bitsFor(k.halfPeriod - 1)})`,
+        `    generic map (${dividerGenerics(k)
+          .map(([n, v]) => `${n} => ${v}`)
+          .join(', ')})`,
         `    port map (fpgaGlobalClock => ${FPGA_CLOCK}, clockOut => s_clock_${k.port});`
       );
     }

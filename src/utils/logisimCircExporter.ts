@@ -51,7 +51,7 @@ import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManage
 import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
 import { DYNAMIC_ELEMENT_OF, DYNAMIC_FACTORY, dynamicPathString, dynamicShapeToSvg, type DynamicPathStep } from './dynamicElements';
 import { solveKMap } from './kmapSolver';
-import { evoMapLabel, evoPartPins, writeBoardmap, type CircMapNote, type EvoMapUnit } from '../fpga/circ/boardmap';
+import { evoMapLabel, evoPartPins, mappedPartIds, writeBoardmap, type CircMapNote, type EvoMapUnit } from '../fpga/circ/boardmap';
 import type { BoardDefinition } from '../fpga/board/model';
 import type { BoardMapping } from '../fpga/map/model';
 import { memToRawText } from './memImage';
@@ -1716,7 +1716,9 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
     const mapNotes: CircMapNote[] = [];
     const units: EvoMapUnit[] = [];
     if (mapUnits.length && options.fpga) {
-      const mapped = (id: string) => options.fpga!.mapping.parts[id]?.some((t) => !!t) ?? false;
+      // (the same test writeBoardmap uses: a part whose stored map no longer fits it is not written, so not renamed)
+      const mappedIds = mappedPartIds({ circuitName, components: comps, wires: levelWires, mapping: options.fpga.mapping });
+      const mapped = (id: string) => mappedIds.has(id);
       const unitOf = new Map(mapUnits.map((u) => [u.prim, u]));
       const labelOfPrim = (p: Prim) => (p.kind === 'inpin' || p.kind === 'outpin' || p.kind === 'clock' ? p.label : labelOf.get(p));
       // every other label of the circuit, the circuit's name and the part names (evo clears such labels)

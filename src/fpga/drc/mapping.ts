@@ -6,13 +6,31 @@ import { dirCompatible, findBoardIo, ioLogicalPinCount, ioLogicalPinDir, isRgbAr
 import { occupiedFpgaPins } from '../map/resolve';
 import type { DrcIssue } from './issue';
 
+const normalPin = (pin: string) => pin.trim().toUpperCase();
 const resourceName = (io: { label?: string; kind: string; rect: { x: number; y: number } }) => io.label || `${io.kind} @ ${io.rect.x},${io.rect.y}`;
 
-/** Findings about the board itself: resources with no FPGA pin (evo keeps such resources; they cannot be used) */
+/** An FPGA pin name as the constraint files can take it (E3, PIN_H6, AB12); spaces around it are trimmed */
+const SAFE_PIN = /^\s*[A-Za-z0-9_]+\s*$/;
+/** FPGA part, family and package text ("Cyclone IV E", "FBGA 256", "xc7a35tcpg236-1") */
+const SAFE_DEVICE_TEXT = /^[A-Za-z0-9 _.-]+$/;
+
+/**
+ * Findings about the board itself: resources with no FPGA pin (evo keeps such resources; they cannot be used), and
+ * board text that would be written into the constraint files unsafely. .xdc and .qsf files are Tcl the vendor tool
+ * runs, so a pin like "E3 [exec ...]" from a downloaded board file must not reach them.
+ */
 export function checkBoard(board: BoardDefinition): DrcIssue[] {
-  return board.components
+  const issues: DrcIssue[] = board.components
     .filter((io) => boardIoPinCount(io) === 0)
     .map((io) => ({ code: 'zeroPinResource', severity: 'info' as const, values: { resource: resourceName(io) } }));
+  const bad = new Set<string>();
+  if (!SAFE_PIN.test(board.fpga.clock.pin)) bad.add(board.fpga.clock.pin);
+  for (const io of board.components) {
+    for (const pin of [...io.inputPins, ...io.outputPins, ...io.ioPins]) if (!SAFE_PIN.test(pin)) bad.add(pin);
+  }
+  for (const text of [board.fpga.part, board.fpga.family, board.fpga.package]) if (!SAFE_DEVICE_TEXT.test(text)) bad.add(text);
+  for (const text of bad) issues.push({ code: 'unsafeBoardText', severity: 'error', values: { text: JSON.stringify(text) } });
+  return issues;
 }
 
 export function checkMapping(board: BoardDefinition, parts: MappablePart[], mapping: BoardMapping): DrcIssue[] {
@@ -73,10 +91,12 @@ export function checkMapping(board: BoardDefinition, parts: MappablePart[], mapp
       if (!logicalUse.has(key)) logicalUse.set(key, []);
       logicalUse.get(key)!.push({ compId: part.compId, pin: i });
       const ioKey = `${io.rect.x}_${io.rect.y}`;
-      for (const fp of occupiedFpgaPins(io, t.pin)) {
+      for (const raw of occupiedFpgaPins(io, t.pin)) {
+        // pins are compared as the constraint files write them: trimmed (the plan trims), and case-blind
+        const fp = normalPin(raw);
         if (!fpgaUse.has(fp)) fpgaUse.set(fp, new Set());
         fpgaUse.get(fp)!.add(ioKey);
-        if (fp === board.fpga.clock.pin) issues.push({ code: 'clockPinUsed', severity: 'error', compId: part.compId, pin: i, values: { pin: pinName, fpgaPin: fp } });
+        if (fp === normalPin(board.fpga.clock.pin)) issues.push({ code: 'clockPinUsed', severity: 'error', compId: part.compId, pin: i, values: { pin: pinName, fpgaPin: fp } });
       }
     });
     if (unmapped > 0) issues.push({ code: 'unmapped', severity: 'error', compId: part.compId, values: { name, count: unmapped, total: part.pins.length } });

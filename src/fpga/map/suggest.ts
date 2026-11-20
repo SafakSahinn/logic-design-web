@@ -176,10 +176,12 @@ export function suggestMapping(
   const keep = options.keep?.board === board.name ? options.keep : undefined;
 
   // The user's own targets first, so the suggestion works around them
+  const keptIds = new Set<string>();
   for (const part of parts) {
     const kept = keep?.parts[part.compId];
     if (kept && kept.length === part.pins.length && kept.some((t) => t)) {
       mapping.parts[part.compId] = [...kept];
+      keptIds.add(part.compId);
       take(a, kept);
     }
   }
@@ -213,6 +215,19 @@ export function suggestMapping(
     if (part.type === 'hexDigit' && missing === 0) notes.push({ code: 'hexDigitOnLeds', compId: part.compId, values: { name } });
     if (part.type === 'portIo' && part.pins.some((p) => p.dir === 'inout')) notes.push({ code: 'portIoConnector', compId: part.compId, values: { name } });
     if (options.activeLowParts?.has(part.compId)) notes.push({ code: 'partActiveLow', compId: part.compId, values: { name } });
+  }
+
+  // A part the user mapped only partly: its own targets stay, its open pins get free pins one by one (after the
+  // other parts, which still get whole resources first)
+  for (const part of parts) {
+    if (!keptIds.has(part.compId) || NO_RESOURCE_TYPES.has(part.type)) continue;
+    const current = mapping.parts[part.compId];
+    if (current.every((t) => t)) continue;
+    const openIdx = current.flatMap((t, i) => (t ? [] : [i]));
+    const filled = placeScattered(a, { ...part, pins: openIdx.map((i) => part.pins[i]) });
+    openIdx.forEach((pi, j) => (current[pi] = filled[j]));
+    const missing = current.filter((t) => !t).length;
+    if (missing > 0) notes.push({ code: 'outOfResources', compId: part.compId, values: { name: partName(part), count: missing } });
   }
   return { mapping, notes };
 }
