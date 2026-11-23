@@ -6,11 +6,16 @@
 // run by src/fpga/flow; the tools run through src/tools (native programs on the desktop, WASM builds elsewhere,
 // after the user agrees to their download). A flash write is confirmed by the desktop main process; when the user
 // says no there, the run ends as "cancelled" and is shown as a declined write, not as an error.
+//
+// A flash write is never broken off by the panel: Cancel is disabled while it runs, and leaving the panel (another
+// tab, closing the dialog) lets it finish instead of killing openFPGALoader halfway, which would leave the board's
+// flash half written. Any other run is cancelled when the panel goes away. The desktop runner (electron/toolRunner.cjs)
+// keeps the same rule for a page reload.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, CheckCircle2, Circle, Copy, Download, Hammer, Loader2, MinusCircle, Search, Square, Trash2, Upload, XCircle } from 'lucide-react';
 import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit';
-import { ToolError, describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, type ToolId } from '../../tools';
+import { describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, type ToolId } from '../../tools';
 import type { BoardDefinition } from '../board/model';
 import {
   flowErrorLines,
@@ -28,6 +33,7 @@ import {
 import type { HdlLang } from '../hdl/drivers';
 import type { BoardMapping } from '../map/model';
 import { describeDrcIssue } from '../index';
+import { bitstreamKey, runErrorMessage as runErrorText, type BuildMessage } from './buildMessages';
 
 export interface FpgaBuildPanelProps {
   circuitName: string;
@@ -52,16 +58,9 @@ interface Step {
   id: StepId;
   state: StepState;
 }
-interface Message {
-  kind: 'ok' | 'error' | 'info';
-  text: string;
-  details?: string[];
-}
+type Message = BuildMessage;
 /** Where programming can happen: openFPGALoader installed, desktop without it, or no native tools (web) */
 type Programmer = 'native' | 'missing' | 'web';
-
-/** How the desktop runner reports a flash write the user did not confirm (a ToolError of kind "cancelled") */
-const DECLINED_MESSAGE = 'Declined by the user';
 
 /** The log keeps the last lines only: a yosys run alone prints thousands */
 const MAX_LOG_LINES = 20_000;
@@ -100,7 +99,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     }
   }, [probe, circuitName, components, wires, board, mapping, lang, fullSpeed, defaultClockHz]);
   // A built bitstream belongs to exactly these project files
-  const planKey = useMemo(() => (planned?.ok ? JSON.stringify(planned.plan.files) : null), [planned]);
+  const planKey = useMemo(() => (planned?.ok ? bitstreamKey(planned.plan) : null), [planned]);
 
   // --- Run state ---
   const [busy, setBusy] = useState<null | 'build' | 'program' | 'detect'>(null);
@@ -109,7 +108,15 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
   const [target, setTarget] = useState<ProgramTarget>('sram');
   const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => abortRef.current?.abort(), []);
+  // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
+  const [flashWriting, setFlashWriting] = useState(false);
+  const flashWritingRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (!flashWritingRef.current) abortRef.current?.abort();
+    },
+    [],
+  );
 
   // The log is buffered and flushed a few times a second, so a chatty tool does not re-render per line
   const [log, setLog] = useState<string[]>([]);
@@ -155,34 +162,16 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const stageName = (id: StepId) => t(`build.stage.${id}`);
 
   /** The message for a run the tool runner refused or broke off */
-  const runErrorMessage = (error: unknown, step: StepId, aborted: boolean): Message => {
-    if (aborted) return { kind: 'info', text: t('build.result.cancelled') };
-    if (error instanceof ToolError) {
-      switch (error.kind) {
-        case 'cancelled':
-          // Not cancelled by us: the desktop's flash-write question was answered "no" (electron/toolRunner.cjs)
-          return { kind: 'info', text: t(error.message === DECLINED_MESSAGE ? 'build.result.declined' : 'build.result.cancelled') };
-        case 'timeout':
-          return { kind: 'error', text: t('build.error.timeout', { stage: stageName(step) }) };
-        case 'output-limit':
-          return { kind: 'error', text: t('build.error.outputLimit', { stage: stageName(step) }) };
-        case 'unavailable':
-          if ((step === 'program' || step === 'detect') && error.reason === 'not-installed') return { kind: 'error', text: t('build.error.noProgrammer') };
-          return { kind: 'error', text: t('build.error.toolUnavailable', { message: error.message }) };
-        default:
-          return { kind: 'error', text: t('build.error.internal', { stage: stageName(step), message: error.message }) };
-      }
-    }
-    return { kind: 'error', text: t('build.error.internal', { stage: stageName(step), message: error instanceof Error ? error.message : String(error) }) };
-  };
+  const runErrorMessage = (error: unknown, step: StepId, aborted: boolean): Message =>
+    runErrorText((key, vars) => t(key, vars ?? {}), error, stageName(step), step === 'program' || step === 'detect', aborted);
 
   const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean): Message => {
     if (r.kind === 'runError') return runErrorMessage(r.error, step, aborted);
     return { kind: 'error', text: t(`build.error.program.${r.problem}`, { code: r.exitCode }) };
   };
 
-  /** Writes a bitstream to the board; shared by "build and program" and "program board" */
-  const program = async (bitstream: Uint8Array, ctl: AbortController): Promise<void> => {
+  /** Writes a bitstream to the board; shared by "build and program" (afterBuild) and "program board" */
+  const program = async (bitstream: Uint8Array, ctl: AbortController, afterBuild: boolean): Promise<void> => {
     const p = planProgram({ board, bitstream, target });
     if (!p.ok) {
       failFrom('program');
@@ -190,8 +179,17 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
       return;
     }
     setStep('program', 'running');
-    addLines('', `== ${stageName('program')} ==`, `openFPGALoader ${p.request.args.join(' ')}`);
-    const r = await runProgram(p.request, (req) => runTool(req), { signal: ctl.signal, onLine: (line) => addLines(line) });
+    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `openFPGALoader ${p.request.args.join(' ')}`);
+    const flash = target === 'flash';
+    flashWritingRef.current = flash;
+    setFlashWriting(flash);
+    let r: ProgramResult;
+    try {
+      r = await runProgram(p.request, (req) => runTool(req), { signal: ctl.signal, onLine: (line) => addLines(line) });
+    } finally {
+      flashWritingRef.current = false;
+      setFlashWriting(false);
+    }
     if (r.ok) {
       setStep('program', 'done');
       setMessage({ kind: 'ok', text: t(target === 'flash' ? 'build.result.programmedFlash' : 'build.result.programmedSram') });
@@ -295,7 +293,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
       setMessage({ kind: 'ok', text: t(probe?.programmer === 'web' ? 'build.result.builtWeb' : 'build.result.built', vars) });
 
       // 3. Optionally straight onto the board
-      if (thenProgram) await program(result.bitstream, ctl);
+      if (thenProgram) await program(result.bitstream, ctl, true);
     } finally {
       finish(ctl);
     }
@@ -305,7 +303,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     if (!built) return;
     const ctl = start('program', ['program']);
     try {
-      await program(built.bitstream, ctl);
+      await program(built.bitstream, ctl, false);
     } finally {
       finish(ctl);
     }
@@ -445,7 +443,13 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
               </button>
             )}
             {busy && (
-              <button className={btn} onClick={() => abortRef.current?.abort()} data-fpga-build-cancel>
+              <button
+                className={btn}
+                onClick={() => abortRef.current?.abort()}
+                disabled={flashWriting}
+                title={flashWriting ? t('build.cancelFlashBlocked') : undefined}
+                data-fpga-build-cancel
+              >
                 <Square className="w-3.5 h-3.5 text-rose-500" />
                 {t('build.cancel')}
               </button>

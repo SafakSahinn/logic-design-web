@@ -49,6 +49,10 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
   const [boardVersion, setBoardVersion] = useState(0);
   const [buildLang, setBuildLang] = useState<HdlLang>('verilog');
   const [buildFullSpeed, setBuildFullSpeed] = useState(false);
+  // Once opened, the build panel stays mounted (hidden on the other tabs): a run, its log and the built
+  // bitstream survive a look at the map
+  const [buildSeen, setBuildSeen] = useState(false);
+  if (tab === 'build' && !buildSeen) setBuildSeen(true);
 
   useEffect(() => {
     let live = true;
@@ -195,9 +199,9 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
             />
           )}
           {tab === 'drc' && <DrcPanel issues={issues} onGoToPart={onGoToPart} dark={dark} />}
-          {tab === 'build' &&
+          {(tab === 'build' || buildSeen) &&
             (board && mapping ? (
-              <div className="h-full flex flex-col">
+              <div className={tab === 'build' ? 'h-full flex flex-col' : 'hidden'}>
                 <FpgaBuildPanel
                   circuitName={circuitName}
                   components={components}
@@ -213,7 +217,7 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
                 />
               </div>
             ) : (
-              !boardMissing && <p className={`p-6 text-center text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{t(board ? 'build.noMapping' : 'ui.loadingBoard')}</p>
+              tab === 'build' && !boardMissing && <p className={`p-6 text-center text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{t(board ? 'build.noMapping' : 'ui.loadingBoard')}</p>
             ))}
           {tab === 'editor' && (
             <BoardEditor

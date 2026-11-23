@@ -77,6 +77,7 @@ export type ToolErrorKind =
   | 'cancelled'
   | 'timeout'
   | 'bad-request' // unknown tool, absolute or ".." path, ...
+  | 'busy' // a tool that runs one at a time (openFPGALoader) is already running
   | 'output-limit' // the tool printed more than the backend accepts
   | 'internal';
 

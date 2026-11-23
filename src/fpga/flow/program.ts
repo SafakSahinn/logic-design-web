@@ -13,7 +13,7 @@ export type ProgramTarget = 'sram' | 'flash';
  * openFPGALoader cable or board options per board name. evo passes none and lets openFPGALoader use its default
  * (a direct FT2232 JTAG interface), which is what the GECKO5 board has; openFPGALoader has no "gecko5" board entry.
  * A board whose programmer needs an explicit choice gets one here, not in the board files (they stay evo's format);
- * a -b board name must also be added to LOADER_BOARDS in electron/toolPolicy.cjs.
+ * a -b board name must also be added to LOADER_BOARDS, a -c cable name to LOADER_CABLES in electron/toolPolicy.cjs.
  */
 const PROGRAMMER_ARGS: Record<string, string[]> = {
   GECKO5_EDUCATION: [],

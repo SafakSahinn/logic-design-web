@@ -40,6 +40,9 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
   const [view, setView] = useState<View>('topLevel');
   const [fullSpeed, setFullSpeed] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Once opened, the build panel stays mounted (hidden behind the file views), as in the map dialog
+  const [buildSeen, setBuildSeen] = useState(false);
+  if (view === 'build' && !buildSeen) setBuildSeen(true);
   const boardName = mapping?.board ?? null;
   const [loaded, setLoaded] = useState<{ name: string; board: BoardDefinition | null } | null>(null);
 
@@ -201,7 +204,7 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
           ))}
         </div>
       )}
-      {shown ? (
+      {shown && (
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-950">
           <p className="text-[11px] text-slate-400 font-mono mb-2" data-fpga-hdl-file>
             {shown.fileName}
@@ -210,8 +213,9 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
             <code>{shown.text}</code>
           </pre>
         </div>
-      ) : (
-        <div className="flex-1 min-h-0 flex flex-col p-4 bg-slate-50">
+      )}
+      {buildSeen && (
+        <div className={shown ? 'hidden' : 'flex-1 min-h-0 flex flex-col p-4 bg-slate-50'}>
           <FpgaBuildPanel
             circuitName={circuitName}
             components={components}
