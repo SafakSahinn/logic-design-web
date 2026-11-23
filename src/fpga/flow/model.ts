@@ -6,9 +6,9 @@
 import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 
 /** Families the open flow can build */
-export type OpenFlowFamily = 'ecp5';
+export type OpenFlowFamily = 'ecp5' | 'xc7';
 
-export type FlowStageId = 'vhdlToVerilog' | 'synth' | 'placeRoute' | 'pack';
+export type FlowStageId = 'vhdlToVerilog' | 'synth' | 'placeRoute' | 'frames' | 'pack';
 
 export interface FlowStage {
   id: FlowStageId;

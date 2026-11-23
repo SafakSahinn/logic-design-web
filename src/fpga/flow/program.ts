@@ -6,6 +6,7 @@
 import type { BoardDefinition } from '../board/model';
 import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 import { isEcp5Board } from './ecp5';
+import { isXc7Board } from './xc7';
 
 export type ProgramTarget = 'sram' | 'flash';
 
@@ -17,12 +18,29 @@ export type ProgramTarget = 'sram' | 'flash';
  */
 const PROGRAMMER_ARGS: Record<string, string[]> = {
   GECKO5_EDUCATION: [],
+  // Xilinx 7-series (6j-6): openFPGALoader's board entries pick the cable and the SPI flash
+  BASYS3: ['-b', 'basys3'],
+  BASYS3_7SEG: ['-b', 'basys3'],
+  DIGILENT_NEXYS_A7_100T: ['-b', 'nexys_a7_100'],
+  ALCHITRY_AU_IO: ['-b', 'alchitry_au'],
+  TUL_PYNQ_Z2: ['-b', 'pynq_z2'],
+  // The first Zybo has no board entry (only the Zybo Z7); its JTAG is Digilent's FT2232 cable
+  ZYBO: ['-c', 'digilent'],
 };
 
 /** The cable / board options for a board, or null when the open flow cannot program it */
 export function programmerArgs(board: BoardDefinition): string[] | null {
-  if (!isEcp5Board(board)) return null;
+  if (!isEcp5Board(board) && !isXc7Board(board)) return null;
   return Object.prototype.hasOwnProperty.call(PROGRAMMER_ARGS, board.name) ? [...PROGRAMMER_ARGS[board.name]] : [];
+}
+
+/**
+ * Whether openFPGALoader can write the board's configuration flash. On a Zynq the flash belongs to the processor
+ * side (it boots the PL through the PS), so only an SRAM load over JTAG is offered there.
+ */
+export function canWriteFlash(board: BoardDefinition): boolean {
+  if (programmerArgs(board) === null) return false;
+  return !/^xc7z/i.test(board.fpga.part.trim());
 }
 
 /** One openFPGALoader run, shaped like a src/tools runTool request */
@@ -41,9 +59,10 @@ export function planProgram(input: {
   board: BoardDefinition;
   bitstream: Uint8Array;
   target: ProgramTarget;
-}): { ok: true; request: ProgramRequest } | { ok: false; reason: 'notSupported' | 'emptyBitstream' } {
+}): { ok: true; request: ProgramRequest } | { ok: false; reason: 'notSupported' | 'noFlash' | 'emptyBitstream' } {
   const cable = programmerArgs(input.board);
   if (!cable) return { ok: false, reason: 'notSupported' };
+  if (input.target === 'flash' && !canWriteFlash(input.board)) return { ok: false, reason: 'noFlash' };
   if (input.bitstream.length === 0) return { ok: false, reason: 'emptyBitstream' };
   return {
     ok: true,

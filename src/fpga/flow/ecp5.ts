@@ -5,6 +5,7 @@
 // yosys reads ghdl's Verilog. Without ghdl (the web) the caller builds the project in Verilog instead.
 import type { BoardDefinition } from '../board/model';
 import type { FlowPlan, FlowStage } from './model';
+import { GHDL_VERILOG, vhdlToVerilogStage, yosysRead } from './stages';
 
 /** nextpnr-ecp5 device options; evo's board files name the part as "85k", "um5g-25k" ... */
 const ECP5_PARTS = new Set(['12k', '25k', '45k', '85k', 'um-25k', 'um-45k', 'um-85k', 'um5g-25k', 'um5g-45k', 'um5g-85k']);
@@ -38,7 +39,7 @@ export interface Ecp5FlowInput {
 
 const MINUTE = 60_000;
 export const ECP5_FILES = {
-  ghdlVerilog: 'ghdl_out.v',
+  ghdlVerilog: GHDL_VERILOG,
   json: 'toplevel.json',
   config: 'toplevel.config',
   routed: 'routed.json',
@@ -57,22 +58,14 @@ export function planEcp5Flow(input: Ecp5FlowInput): { ok: true; plan: FlowPlan }
 
   let verilogFiles = sourceNames;
   if (input.lang === 'vhdl') {
-    stages.push({
-      id: 'vhdlToVerilog',
-      tool: 'ghdl',
-      // Same options as the VHDL Entity part; "-e <top>" elaborates the top level and everything below it
-      args: ['--synth', '--std=08', '-fsynopsys', '--out=verilog', ...sourceNames, '-e', input.top],
-      needs: sourceNames,
-      outputs: [],
-      stdoutTo: ECP5_FILES.ghdlVerilog,
-      timeoutMs: 5 * MINUTE,
-    });
-    verilogFiles = [ECP5_FILES.ghdlVerilog];
+    const ghdl = vhdlToVerilogStage(sourceNames, input.top);
+    stages.push(ghdl.stage);
+    verilogFiles = ghdl.verilogFiles;
   }
   stages.push({
     id: 'synth',
     tool: 'yosys',
-    args: ['-p', `read_verilog -sv ${verilogFiles.join(' ')}; hierarchy -top ${input.top}; synth_ecp5 -top ${input.top} -json ${ECP5_FILES.json}`],
+    args: ['-p', `${yosysRead(verilogFiles, input.top)}; synth_ecp5 -top ${input.top} -json ${ECP5_FILES.json}`],
     needs: verilogFiles,
     outputs: [ECP5_FILES.json],
     timeoutMs: 15 * MINUTE,

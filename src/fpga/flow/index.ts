@@ -3,12 +3,15 @@ import type { BoardDefinition } from '../board/model';
 import type { DrcIssue } from '../drc/issue';
 import { buildFpgaProject, type FpgaProject, type FpgaProjectInput } from '../hdl/project';
 import { isEcp5Board, planEcp5Flow } from './ecp5';
+import { isXc7Board, planXc7Flow } from './xc7';
 import type { FlowPlan, OpenFlowFamily } from './model';
 
 export * from './model';
 export { ECP5_FILES, ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
+export { XC7_FILES, isXc7Board, planXc7Flow, xc7Device } from './xc7';
 export { flowErrorLines, runFlow } from './run';
 export {
+  canWriteFlash,
   classifyProgramOutput,
   planDetect,
   planProgram,
@@ -25,7 +28,9 @@ export {
 
 /** The open flow that can build for a board, or null (vendor flows: Aşama 6k) */
 export function openFlowFamily(board: BoardDefinition): OpenFlowFamily | null {
-  return isEcp5Board(board) ? 'ecp5' : null;
+  if (isEcp5Board(board)) return 'ecp5';
+  if (isXc7Board(board)) return 'xc7';
+  return null;
 }
 
 export type OpenFlowPlanResult =
@@ -45,18 +50,20 @@ export type OpenFlowPlanResult =
  * flow, which the HDL tests keep equivalent to the VHDL.
  */
 export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boolean; writeRouted?: boolean }): OpenFlowPlanResult {
-  if (!openFlowFamily(input.board)) return { ok: false, reason: 'notSupported' };
-  const synthLang = input.lang === 'vhdl' && options.canRunGhdl ? 'vhdl' : 'verilog';
+  const family = openFlowFamily(input.board);
+  if (!family) return { ok: false, reason: 'notSupported' };
+  const synthLang: 'verilog' | 'vhdl' = input.lang === 'vhdl' && options.canRunGhdl ? 'vhdl' : 'verilog';
   const project = buildFpgaProject({ ...input, lang: synthLang });
   if (!project.ok) return { ok: false, reason: 'drc', issues: project.issues };
-  const planned = planEcp5Flow({
+  const flowInput = {
     board: input.board,
     top: project.plan.name,
     sources: [project.design, project.topLevel],
     lang: synthLang,
     constraints: project.constraints,
     writeRouted: options.writeRouted,
-  });
-  if (!planned.ok) return { ok: false, reason: planned.reason === 'notEcp5' ? 'notSupported' : planned.reason };
+  };
+  const planned = family === 'ecp5' ? planEcp5Flow(flowInput) : planXc7Flow(flowInput);
+  if (!planned.ok) return { ok: false, reason: planned.reason === 'notEcp5' || planned.reason === 'notXc7' ? 'notSupported' : planned.reason };
   return { ok: true, plan: planned.plan, project, synthLang };
 }

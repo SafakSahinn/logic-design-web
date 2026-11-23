@@ -72,6 +72,30 @@ export const TOOL_DEFINITIONS: Record<ToolId, ToolDefinition> = {
     wasm: { pkg: '@yowasp/nextpnr-ecp5', version: '0.11.825', entry: 'runEcppack', downloadMB: 172 },
     usedBy: ['6j'],
   },
+  // Xilinx 7-series through openXC7 (Aşama 6j-6). Native only: there is no WASM build of nextpnr-xilinx, so the web
+  // offers the project files instead. The chip and Project X-Ray databases come with the openXC7 package (Apio's
+  // Windows/Linux/macOS build); the desktop main process finds them next to the executables.
+  'nextpnr-xilinx': {
+    id: 'nextpnr-xilinx',
+    displayName: 'nextpnr-xilinx',
+    native: { executable: 'nextpnr-xilinx', versionArgs: ['--version'] },
+    usedBy: ['6j'],
+  },
+  fasm2frames: {
+    id: 'fasm2frames',
+    displayName: 'fasm2frames',
+    // A Python program of Project X-Ray in the openXC7 package. The main process finds the package through its
+    // xc7frames2bit executable and runs the program with a Python 3 that can import the package's fasm and
+    // prjxray modules (electron/openxc7.cjs); the probe checks that Python instead of a version option.
+    native: { executable: 'xc7frames2bit', versionArgs: [] },
+    usedBy: ['6j'],
+  },
+  xc7frames2bit: {
+    id: 'xc7frames2bit',
+    displayName: 'xc7frames2bit',
+    native: { executable: 'xc7frames2bit', versionArgs: ['--version'] },
+    usedBy: ['6j'],
+  },
   openfpgaloader: {
     id: 'openfpgaloader',
     displayName: 'openFPGALoader',

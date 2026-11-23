@@ -1,5 +1,5 @@
-// "Build and program" (Aşama 6j-4): runs the open-source flow (yosys, nextpnr-ecp5, ecppack) for the circuit's
-// board mapping, streams the tools' output into a log, and then writes the bitstream to the board with
+// "Build and program" (Aşama 6j-4): runs the open-source flow (yosys + nextpnr-ecp5 + ecppack for Lattice ECP5,
+// yosys + nextpnr-xilinx + fasm2frames + xc7frames2bit for Xilinx 7-series, 6j-6) for the circuit's board mapping, streams the tools' output into a log, and then writes the bitstream to the board with
 // openFPGALoader (desktop) or saves it as a file (web, where no USB programmer can run).
 //
 // Shown in the FPGA map dialog and in the FPGA tab of the HDL window. The flow and the programmer are planned and
@@ -18,6 +18,7 @@ import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit'
 import { describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, type ToolId } from '../../tools';
 import type { BoardDefinition } from '../board/model';
 import {
+  canWriteFlash,
   flowErrorLines,
   planDetect,
   planOpenFlow,
@@ -61,6 +62,8 @@ interface Step {
 type Message = BuildMessage;
 /** Where programming can happen: openFPGALoader installed, desktop without it, or no native tools (web) */
 type Programmer = 'native' | 'missing' | 'web';
+/** Where the Xilinx 7-series tools run: openXC7 installed, desktop without it, or the web (no WASM build exists) */
+type Xc7Tools = 'native' | 'missing' | 'web';
 
 /** The log keeps the last lines only: a yosys run alone prints thousands */
 const MAX_LOG_LINES = 20_000;
@@ -71,15 +74,19 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const { confirmDownload, downloadDialog } = useToolDownloadConsent(dark);
 
   // --- What this machine can run ---
-  const [probe, setProbe] = useState<{ canRunGhdl: boolean; programmer: Programmer } | null>(null);
+  const [probe, setProbe] = useState<{ canRunGhdl: boolean; programmer: Programmer; xc7: Xc7Tools } | null>(null);
   useEffect(() => {
     let live = true;
     const safe = (tool: ToolId) => toolStatus(tool).catch(() => null);
-    Promise.all([safe('ghdl'), safe('openfpgaloader')]).then(([ghdl, loader]) => {
+    const xc7Tools: ToolId[] = ['nextpnr-xilinx', 'fasm2frames', 'xc7frames2bit'];
+    Promise.all([safe('ghdl'), safe('openfpgaloader'), ...xc7Tools.map(safe)]).then(([ghdl, loader, ...xc7]) => {
       if (!live) return;
-      const programmer: Programmer = loader?.available ? 'native' : loader?.reason === 'not-installed' ? 'missing' : 'web';
+      // "web" only when the build has no native backend at all; a failed check on the desktop counts as missing
+      const where = (s: Awaited<ReturnType<typeof safe>>) => (s?.available ? 'native' : s?.reason === 'web-unsupported' ? 'web' : 'missing');
+      // openXC7 is usable only when all three tools are (fasm2frames also needs its Python)
+      const xc7State: Xc7Tools = xc7.every((s) => s?.available) ? 'native' : xc7.some((s) => s?.reason === 'web-unsupported') ? 'web' : 'missing';
       // GHDL runs natively only (it has no WASM build)
-      setProbe({ canRunGhdl: !!ghdl?.available && ghdl.backend === 'native', programmer });
+      setProbe({ canRunGhdl: !!ghdl?.available && ghdl.backend === 'native', programmer: where(loader), xc7: xc7State });
     });
     return () => {
       live = false;
@@ -106,7 +113,10 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const [steps, setSteps] = useState<Step[]>([]);
   const [message, setMessage] = useState<Message | null>(null);
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
-  const [target, setTarget] = useState<ProgramTarget>('sram');
+  const [chosenTarget, setTarget] = useState<ProgramTarget>('sram');
+  // A Zynq's flash belongs to its processor side: only SRAM is offered there
+  const flashOk = canWriteFlash(board);
+  const target: ProgramTarget = flashOk ? chosenTarget : 'sram';
   const abortRef = useRef<AbortController | null>(null);
   // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
   const [flashWriting, setFlashWriting] = useState(false);
@@ -159,7 +169,11 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
       const at = all.findIndex((s) => s.id === id);
       return all.map((s, i) => (i === at ? { ...s, state: 'failed' } : i > at && s.state === 'pending' ? { ...s, state: 'skipped' } : s));
     });
-  const stageName = (id: StepId) => t(`build.stage.${id}`);
+  /** A step's name; flow stages name their tool (nextpnr-ecp5 / nextpnr-xilinx, ecppack / xc7frames2bit) */
+  const stageName = (id: StepId) => {
+    const stage = planned?.ok ? planned.plan.stages.find((s) => s.id === id) : undefined;
+    return t(`build.stage.${id}`, { tool: stage?.tool ?? '' });
+  };
 
   /** The message for a run the tool runner refused or broke off */
   const runErrorMessage = (error: unknown, step: StepId, aborted: boolean): Message =>
@@ -376,6 +390,9 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     else if (planned.reason === 'unknownPart') body = blocked(t('build.unknownPart', { part: board.fpga.part }));
     else if (planned.reason === 'badPackage') body = blocked(t('build.badPackage', { pkg: board.fpga.package }));
     else if (planned.reason === 'drc') body = blocked(t('build.drcBlocked', { count: planned.issues.filter((i) => i.severity === 'error').length }));
+  } else if (planned.plan.family === 'xc7' && probe.xc7 === 'web') {
+    // nextpnr-xilinx has no WASM build: the web offers the project files for the user's own toolchain
+    body = blocked(t('build.xc7Web', { board: board.name }));
   }
 
   const stale = !!built && built.key !== planKey;
@@ -463,7 +480,13 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
                     <button className={segBtn(target === 'sram')} onClick={() => setTarget('sram')} disabled={!!busy} title={t('build.target.sramTitle')} data-fpga-build-target="sram">
                       {t('build.target.sram')}
                     </button>
-                    <button className={segBtn(target === 'flash')} onClick={() => setTarget('flash')} disabled={!!busy} title={t('build.target.flashTitle')} data-fpga-build-target="flash">
+                    <button
+                      className={segBtn(target === 'flash')}
+                      onClick={() => setTarget('flash')}
+                      disabled={!!busy || !flashOk}
+                      title={t(flashOk ? 'build.target.flashTitle' : 'build.target.flashUnsupported')}
+                      data-fpga-build-target="flash"
+                    >
                       {t('build.target.flash')}
                     </button>
                   </div>
@@ -487,6 +510,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
           {planned?.ok && lang === 'vhdl' && planned.synthLang === 'verilog' && (
             <p className={`text-[11px] ${c.sub}`} data-fpga-build-vhdl-note>
               {t('build.vhdlAsVerilog')}
+            </p>
+          )}
+          {planned?.ok && planned.plan.family === 'xc7' && probe?.xc7 === 'missing' && (
+            <p className="text-[11px] text-amber-600 font-semibold flex items-center gap-1" data-fpga-build-no-openxc7>
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {t('build.error.noOpenXc7')}
             </p>
           )}
           {probe?.programmer === 'missing' && (

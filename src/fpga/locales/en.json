@@ -300,9 +300,10 @@
   "build": {
     "tab": "Build & program",
     "title": "Build and program the board",
-    "intro": "The circuit is turned into a bitstream for this board with the open-source toolchain (Yosys, nextpnr, ecppack).",
-    "notSupported": "There is no open-source flow for {{board}} yet; only Lattice ECP5 boards (GECKO5) can be built for now. For other boards, download the project files and open them in the vendor tool.",
-    "unknownPart": "The board's FPGA part ({{part}}) is not known to nextpnr-ecp5.",
+    "intro": "The circuit is turned into a bitstream for this board with the open-source toolchain (Yosys and nextpnr; ecppack for Lattice ECP5, openXC7 for Xilinx 7-series).",
+    "notSupported": "There is no open-source flow for {{board}} yet; Lattice ECP5 (GECKO5) and Xilinx 7-series boards (Basys3, Nexys A7, PYNQ-Z2 ...) can be built. For other boards, download the project files and open them in the vendor tool.",
+    "unknownPart": "The board's FPGA part ({{part}}) is not known to the open-source flow.",
+    "xc7Web": "Xilinx 7-series boards ({{board}}) are built with openXC7, which runs only in the desktop app (there is no browser build of it). Download the project files from the \"FPGA project\" tab of the HDL window and build them with openXC7 or Vivado, or use the desktop app.",
     "badPackage": "The board's FPGA package ({{pkg}}) is not valid.",
     "drcBlocked": "The design check found {{count}} errors; fix them before building.",
     "noMapping": "The circuit is not mapped on a board yet; map it before building.",
@@ -328,14 +329,16 @@
       "sram": "SRAM (temporary)",
       "sramTitle": "The design is loaded into the FPGA's memory and is lost at power-off. Fast, and does not wear the flash.",
       "flash": "Flash (permanent)",
-      "flashTitle": "The design is written to the board's configuration flash and loads at every power-on. The app asks before writing."
+      "flashTitle": "The design is written to the board's configuration flash and loads at every power-on. The app asks before writing.",
+      "flashUnsupported": "On a Zynq board the flash is written through the processor side; only SRAM loading is available here."
     },
     "stage": {
       "prepare": "Preparing the tools",
       "vhdlToVerilog": "VHDL → Verilog (GHDL)",
       "synth": "Synthesis (Yosys)",
-      "placeRoute": "Place and route (nextpnr)",
-      "pack": "Bitstream (ecppack)",
+      "placeRoute": "Place and route ({{tool}})",
+      "frames": "FASM → frames (fasm2frames)",
+      "pack": "Bitstream ({{tool}})",
       "program": "Programming (openFPGALoader)",
       "detect": "Board detection (openFPGALoader)"
     },
@@ -366,6 +369,7 @@
       "internal": "The {{stage}} step could not start: {{message}}",
       "planFailed": "The build could not be planned.",
       "noProgrammer": "openFPGALoader was not found. Install it (it ships with oss-cad-suite) and make sure it is on the PATH.",
+      "noOpenXc7": "The openXC7 tools (nextpnr-xilinx, fasm2frames, xc7frames2bit) were not found. Install the openXC7 package (Apio's build) and put its bin folder on the PATH; fasm2frames also needs Python 3 (the oss-cad-suite has one).",
       "program": {
         "noCable": "No programming cable was found. Check that the board is plugged in over USB and that the driver is installed (on Windows, WinUSB/libusbK through Zadig).",
         "noFpga": "The cable answered but there is no FPGA on the JTAG chain. Check that the board is powered.",

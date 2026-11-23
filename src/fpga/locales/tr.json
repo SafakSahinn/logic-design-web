@@ -300,9 +300,10 @@
   "build": {
     "tab": "Sentez ve yükleme",
     "title": "Sentezle ve karta yükle",
-    "intro": "Devre, açık araç zinciriyle (Yosys, nextpnr, ecppack) bu kart için bit dosyasına (bitstream) çevrilir.",
-    "notSupported": "{{board}} kartı için açık araç zinciri yok; şimdilik yalnızca Lattice ECP5 kartları (GECKO5) sentezlenebilir. Diğer kartlar için proje dosyalarını indirip üreticinin aracında açın.",
-    "unknownPart": "Kartın FPGA parçası ({{part}}) nextpnr-ecp5 için tanınmıyor.",
+    "intro": "Devre, açık araç zinciriyle (Yosys ve nextpnr; Lattice ECP5 için ecppack, Xilinx 7-serisi için openXC7) bu kart için bit dosyasına (bitstream) çevrilir.",
+    "notSupported": "{{board}} kartı için henüz açık araç zinciri yok; Lattice ECP5 (GECKO5) ve Xilinx 7-serisi kartlar (Basys3, Nexys A7, PYNQ-Z2 ...) sentezlenebilir. Diğer kartlar için proje dosyalarını indirip üreticinin aracında açın.",
+    "unknownPart": "Kartın FPGA parçası ({{part}}) açık araç zinciri için tanınmıyor.",
+    "xc7Web": "Xilinx 7-serisi kartlar ({{board}}) openXC7 ile sentezlenir; openXC7 yalnızca masaüstü uygulamasında çalışır (tarayıcı sürümü yok). Proje dosyalarını HDL penceresinin \"FPGA projesi\" sekmesinden indirip openXC7 ya da Vivado ile sentezleyin veya masaüstü uygulamasını kullanın.",
     "badPackage": "Kartın FPGA kılıfı ({{pkg}}) geçersiz.",
     "drcBlocked": "Tasarım denetimi {{count}} hata buldu; sentezden önce bunları düzeltin.",
     "noMapping": "Devre henüz bir karta eşlenmedi; sentez için önce eşleme yapın.",
@@ -328,14 +329,16 @@
       "sram": "SRAM (geçici)",
       "sramTitle": "Tasarım FPGA belleğine yüklenir; kart kapanınca silinir. Hızlıdır ve flash yıpranmaz.",
       "flash": "Flash (kalıcı)",
-      "flashTitle": "Tasarım kartın yapılandırma flash'ına yazılır; kart her açılışta onu yükler. Uygulama yazmadan önce onay ister."
+      "flashTitle": "Tasarım kartın yapılandırma flash'ına yazılır; kart her açılışta onu yükler. Uygulama yazmadan önce onay ister.",
+      "flashUnsupported": "Zynq kartlarında flash işlemci tarafından yazılır; burada yalnızca SRAM'e yükleme yapılabilir."
     },
     "stage": {
       "prepare": "Araçlar hazırlanıyor",
       "vhdlToVerilog": "VHDL → Verilog (GHDL)",
       "synth": "Sentez (Yosys)",
-      "placeRoute": "Yerleştirme ve yönlendirme (nextpnr)",
-      "pack": "Bit dosyası (ecppack)",
+      "placeRoute": "Yerleştirme ve yönlendirme ({{tool}})",
+      "frames": "FASM → çerçeveler (fasm2frames)",
+      "pack": "Bit dosyası ({{tool}})",
       "program": "Karta yükleme (openFPGALoader)",
       "detect": "Kart algılama (openFPGALoader)"
     },
@@ -366,6 +369,7 @@
       "internal": "{{stage}} aşaması başlatılamadı: {{message}}",
       "planFailed": "Sentez planı hazırlanamadı.",
       "noProgrammer": "openFPGALoader bulunamadı. Kurun (oss-cad-suite içinde gelir) ve PATH üzerinde olduğundan emin olun.",
+      "noOpenXc7": "openXC7 araçları (nextpnr-xilinx, fasm2frames, xc7frames2bit) bulunamadı. openXC7 paketini (Apio sürümü) kurup bin klasörünü PATH'e ekleyin; fasm2frames ayrıca Python 3 ister (oss-cad-suite içinde vardır).",
       "program": {
         "noCable": "Programlama kablosu bulunamadı. Kartın USB ile takılı olduğunu ve sürücünün (Windows'ta Zadig ile WinUSB/libusbK) kurulu olduğunu denetleyin.",
         "noFpga": "Kablo yanıt verdi ama JTAG zincirinde FPGA yok. Kartın açık olduğunu denetleyin.",
