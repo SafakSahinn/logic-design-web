@@ -165,3 +165,7 @@ npx electron-builder --win portable
 ## 📄 Lisans
 
 Bu proje eğitim, akademik araştırma ve açık kaynaklı sayısal sistem mühendisliği çalışmaları için geliştirilmiştir.
+
+Logic Design Studio, **GNU General Public License v3.0 veya sonraki bir sürümü** (GPL-3.0-or-later) ile lisanslanmıştır; tam metin [`LICENSE`](LICENSE) dosyasındadır.
+
+`src/fpga/boards/` klasöründeki kart tanımlarının çoğu Logisim-evolution'dan (GPL-3.0) değiştirilmeden alınmıştır; kaynak ve telif bilgisi [`src/fpga/boards/NOTICE.md`](src/fpga/boards/NOTICE.md) dosyasındadır.

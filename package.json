@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "LogicDesign Studio - Modern Digital Logic Circuit CAD & Simulator",
   "author": "LogicDesign Studio Team",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
