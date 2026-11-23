@@ -1,0 +1,148 @@
+// Writing a bitstream to a board (Aşama 6j-3), as Logisim-evolution's OpenFpgaDownload.downloadToBoard:
+// `openFPGALoader [-f] toplevel.bit` (SRAM is spelled out as -m here), run where the bitstream is. Without -f the design goes to the FPGA's SRAM
+// (lost at power-off); with -f it goes to the configuration flash (kept). The desktop main process asks the user
+// before a flash write. openFPGALoader needs a USB device, so it runs on the desktop only; the web saves the .bit
+// file instead (saveBitstream).
+import type { BoardDefinition } from '../board/model';
+import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
+import { isEcp5Board } from './ecp5';
+
+export type ProgramTarget = 'sram' | 'flash';
+
+/**
+ * openFPGALoader cable or board options per board name. evo passes none and lets openFPGALoader use its default
+ * (a direct FT2232 JTAG interface), which is what the GECKO5 board has; openFPGALoader has no "gecko5" board entry.
+ * A board whose programmer needs an explicit choice gets one here, not in the board files (they stay evo's format);
+ * a -b board name must also be added to LOADER_BOARDS in electron/toolPolicy.cjs.
+ */
+const PROGRAMMER_ARGS: Record<string, string[]> = {
+  GECKO5_EDUCATION: [],
+};
+
+/** The cable / board options for a board, or null when the open flow cannot program it */
+export function programmerArgs(board: BoardDefinition): string[] | null {
+  if (!isEcp5Board(board)) return null;
+  return Object.prototype.hasOwnProperty.call(PROGRAMMER_ARGS, board.name) ? [...PROGRAMMER_ARGS[board.name]] : [];
+}
+
+/** One openFPGALoader run, shaped like a src/tools runTool request */
+export interface ProgramRequest {
+  tool: ToolId;
+  args: string[];
+  files: Record<string, ToolFileData>;
+  outputs: string[];
+  timeoutMs: number;
+}
+
+const MINUTE = 60_000;
+export const PROGRAM_FILE = 'toplevel.bit';
+
+export function planProgram(input: {
+  board: BoardDefinition;
+  bitstream: Uint8Array;
+  target: ProgramTarget;
+}): { ok: true; request: ProgramRequest } | { ok: false; reason: 'notSupported' | 'emptyBitstream' } {
+  const cable = programmerArgs(input.board);
+  if (!cable) return { ok: false, reason: 'notSupported' };
+  if (input.bitstream.length === 0) return { ok: false, reason: 'emptyBitstream' };
+  return {
+    ok: true,
+    request: {
+      tool: 'openfpgaloader',
+      // evo passes nothing for SRAM (openFPGALoader's default); the policy wants the target spelled out
+      args: [...cable, input.target === 'flash' ? '-f' : '-m', PROGRAM_FILE],
+      files: { [PROGRAM_FILE]: input.bitstream },
+      outputs: [],
+      // An ECP5-85 SRAM load takes seconds; erasing and writing flash can take a few minutes
+      timeoutMs: input.target === 'flash' ? 10 * MINUTE : 2 * MINUTE,
+    },
+  };
+}
+
+/** Looks for the board's FPGA on the JTAG chain without writing anything */
+export function planDetect(board: BoardDefinition): { ok: true; request: ProgramRequest } | { ok: false; reason: 'notSupported' } {
+  const cable = programmerArgs(board);
+  if (!cable) return { ok: false, reason: 'notSupported' };
+  return { ok: true, request: { tool: 'openfpgaloader', args: [...cable, '--detect'], files: {}, outputs: [], timeoutMs: MINUTE } };
+}
+
+/**
+ * What went wrong, read from openFPGALoader's output:
+ *   noCable: no programming cable found (board not plugged in, driver missing);
+ *   noFpga: the cable answered but no FPGA is on the JTAG chain (board off);
+ *   unknownBoard / unknownCable: the name in PROGRAMMER_ARGS is not known to this openFPGALoader;
+ *   wrongDevice: the bitstream is for another FPGA than the one found, or openFPGALoader does not know that FPGA;
+ *   other: anything else (the log has the details).
+ */
+export type ProgramProblem = 'noCable' | 'noFpga' | 'unknownBoard' | 'unknownCable' | 'wrongDevice' | 'other';
+
+// Messages of openFPGALoader 1.x (src/main.cpp, jtag.cpp, ftdipp_mpsse.cpp, lattice.cpp)
+export function classifyProgramOutput(text: string): ProgramProblem {
+  if (/cannot find board '/i.test(text)) return 'unknownBoard';
+  if (/^error : \S+ not found/im.test(text)) return 'unknownCable';
+  if (/JTAG init failed|unable to open ftdi device|unable to open usb|libusb\w*: .*(error|fail)/i.test(text)) return 'noCable';
+  if (/Error: no device found|Unknown device with IDCODE/i.test(text)) return 'noFpga';
+  if (/mismatch between target's idcode and bitstream idcode|Error: device [0-9a-f]+ not supported/i.test(text)) return 'wrongDevice';
+  return 'other';
+}
+
+export type ProgramResult =
+  | { ok: true; exitCode: 0; stdout: string; stderr: string }
+  | { ok: false; kind: 'toolFailed'; problem: ProgramProblem; exitCode: number; stdout: string; stderr: string }
+  /** The runner refused or broke off the run (not installed, the user declined the flash write, cancelled ...) */
+  | { ok: false; kind: 'runError'; error: unknown };
+
+/** The part of src/tools runTool programming uses */
+export type ProgramToolRun = (
+  request: ProgramRequest & { signal?: AbortSignal; onProgress?: (progress: ToolProgress) => void },
+) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+
+export async function runProgram(
+  request: ProgramRequest,
+  run: ProgramToolRun,
+  options: { signal?: AbortSignal; onLine?: (line: string, stream: 'stdout' | 'stderr') => void } = {},
+): Promise<ProgramResult> {
+  let r: Awaited<ReturnType<ProgramToolRun>>;
+  try {
+    r = await run({
+      ...request,
+      signal: options.signal,
+      onProgress: options.onLine ? (p) => p.phase === 'run' && p.line !== undefined && options.onLine!(p.line, p.stream ?? 'stdout') : undefined,
+    });
+  } catch (error) {
+    return { ok: false, kind: 'runError', error };
+  }
+  if (r.exitCode === 0) return { ok: true, exitCode: 0, stdout: r.stdout, stderr: r.stderr };
+  return {
+    ok: false,
+    kind: 'toolFailed',
+    problem: classifyProgramOutput(`${r.stderr}\n${r.stdout}`),
+    exitCode: r.exitCode,
+    stdout: r.stdout,
+    stderr: r.stderr,
+  };
+}
+
+/**
+ * Saves a bitstream as a file through the browser (the web's way to program: the user loads it with their own
+ * programmer). Returns false when the page cannot start a download.
+ */
+export function saveBitstream(bitstream: Uint8Array, fileName: string): boolean {
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return false;
+  const safeName = /^[\w.-]{1,100}\.bit$/.test(fileName) ? fileName : PROGRAM_FILE;
+  // Copy into a plain ArrayBuffer: a view on a SharedArrayBuffer cannot back a Blob
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bitstream)], { type: 'application/octet-stream' }));
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safeName;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Some browsers start the download after click() returns, so the address is released a little later
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+  return true;
+}

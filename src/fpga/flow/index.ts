@@ -8,6 +8,20 @@ import type { FlowPlan, OpenFlowFamily } from './model';
 export * from './model';
 export { ECP5_FILES, ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
 export { flowErrorLines, runFlow } from './run';
+export {
+  classifyProgramOutput,
+  planDetect,
+  planProgram,
+  programmerArgs,
+  PROGRAM_FILE,
+  runProgram,
+  saveBitstream,
+  type ProgramProblem,
+  type ProgramRequest,
+  type ProgramResult,
+  type ProgramTarget,
+  type ProgramToolRun,
+} from './program';
 
 /** The open flow that can build for a board, or null (vendor flows: Aşama 6k) */
 export function openFlowFamily(board: BoardDefinition): OpenFlowFamily | null {

@@ -72,6 +72,14 @@ export const TOOL_DEFINITIONS: Record<ToolId, ToolDefinition> = {
     wasm: { pkg: '@yowasp/nextpnr-ecp5', version: '0.11.825', entry: 'runEcppack', downloadMB: 172 },
     usedBy: ['6j'],
   },
+  openfpgaloader: {
+    id: 'openfpgaloader',
+    displayName: 'openFPGALoader',
+    // Writes the bitstream to a board over USB/JTAG. No WASM build (it needs the USB device): on the web the flow
+    // saves the .bit file instead. The desktop main process asks the user before a flash write (electron/main.cjs).
+    native: { executable: 'openFPGALoader', versionArgs: ['--version'] },
+    usedBy: ['6j'],
+  },
   tcl: {
     id: 'tcl',
     displayName: 'Tcl',

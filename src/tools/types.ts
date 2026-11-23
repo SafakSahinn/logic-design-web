@@ -10,7 +10,7 @@
 // File names are therefore always relative ("top.v", "build/out.json"), never absolute and never "..".
 
 /** Tools the runner knows. The list is closed on purpose: the desktop backend only starts these. */
-export type ToolId = 'ghdl' | 'yosys' | 'nextpnr-ecp5' | 'ecppack' | 'tcl';
+export type ToolId = 'ghdl' | 'yosys' | 'nextpnr-ecp5' | 'ecppack' | 'openfpgaloader' | 'tcl';
 
 export type ToolBackendKind = 'native' | 'wasm';
 
