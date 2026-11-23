@@ -297,6 +297,83 @@
     "clockDirect": "{{port}}: board clock, {{actual}}",
     "footer": "Design, top level and pin constraints for the board the circuit is mapped on."
   },
+  "build": {
+    "tab": "Build & program",
+    "title": "Build and program the board",
+    "intro": "The circuit is turned into a bitstream for this board with the open-source toolchain (Yosys, nextpnr, ecppack).",
+    "notSupported": "There is no open-source flow for {{board}} yet; only Lattice ECP5 boards (GECKO5) can be built for now. For other boards, download the project files and open them in the vendor tool.",
+    "unknownPart": "The board's FPGA part ({{part}}) is not known to nextpnr-ecp5.",
+    "badPackage": "The board's FPGA package ({{pkg}}) is not valid.",
+    "drcBlocked": "The design check found {{count}} errors; fix them before building.",
+    "noMapping": "The circuit is not mapped on a board yet; map it before building.",
+    "lang": "Language",
+    "vhdlAsVerilog": "GHDL does not run here, so the Verilog form of the same circuit is built instead of the VHDL.",
+    "buildAndProgram": "Build and program",
+    "buildOnly": "Build only",
+    "build": "Build",
+    "rebuild": "Build again",
+    "program": "Program board",
+    "detect": "Detect board",
+    "cancel": "Cancel",
+    "download": "Download bitstream",
+    "downloaded": "{{file}} downloaded. Load it onto the board with your own programmer (e.g. openFPGALoader).",
+    "downloadFailed": "The browser could not start the download.",
+    "clearLog": "Clear log",
+    "copyLog": "Copy log",
+    "logEmpty": "The tools' output appears here.",
+    "stale": "The circuit changed after the last build; build again before programming.",
+    "target": {
+      "label": "Target",
+      "sram": "SRAM (temporary)",
+      "sramTitle": "The design is loaded into the FPGA's memory and is lost at power-off. Fast, and does not wear the flash.",
+      "flash": "Flash (permanent)",
+      "flashTitle": "The design is written to the board's configuration flash and loads at every power-on. The app asks before writing."
+    },
+    "stage": {
+      "prepare": "Preparing the tools",
+      "vhdlToVerilog": "VHDL → Verilog (GHDL)",
+      "synth": "Synthesis (Yosys)",
+      "placeRoute": "Place and route (nextpnr)",
+      "pack": "Bitstream (ecppack)",
+      "program": "Programming (openFPGALoader)",
+      "detect": "Board detection (openFPGALoader)"
+    },
+    "state": {
+      "pending": "waiting",
+      "running": "running",
+      "done": "done",
+      "failed": "failed",
+      "skipped": "skipped"
+    },
+    "result": {
+      "built": "Bitstream ready ({{size}} KB, {{seconds}} s).",
+      "builtWeb": "Bitstream ready ({{size}} KB, {{seconds}} s). The browser cannot write to the board; download the file and load it with your own programmer.",
+      "programmedSram": "The design was loaded into the FPGA's SRAM; it runs until power-off.",
+      "programmedFlash": "The design was written to the configuration flash; it loads at every power-on.",
+      "detected": "Board found; details in the log.",
+      "cancelled": "Cancelled.",
+      "declined": "The flash write was not confirmed; nothing was written."
+    },
+    "error": {
+      "stageFailed": "The {{stage}} step failed with exit code {{code}}.",
+      "stageMissing": "The {{stage}} step did not write the expected file {{file}}.",
+      "toolUnavailable": "{{message}}",
+      "downloadDeclined": "The build cannot run without downloading {{tool}}.",
+      "timeout": "The {{stage}} step took too long and was stopped.",
+      "outputLimit": "The {{stage}} step printed too much output and was stopped.",
+      "internal": "The {{stage}} step could not start: {{message}}",
+      "planFailed": "The build could not be planned.",
+      "noProgrammer": "openFPGALoader was not found. Install it (it ships with oss-cad-suite) or set its path in the settings.",
+      "program": {
+        "noCable": "No programming cable was found. Check that the board is plugged in over USB and that the driver is installed (on Windows, WinUSB/libusbK through Zadig).",
+        "noFpga": "The cable answered but there is no FPGA on the JTAG chain. Check that the board is powered.",
+        "unknownBoard": "This openFPGALoader version does not know the board name; install a newer version.",
+        "unknownCable": "This openFPGALoader version does not know the board's cable; install a newer version.",
+        "wrongDevice": "The bitstream is not for the connected FPGA (or openFPGALoader does not know that FPGA). Check that the right board is selected.",
+        "other": "openFPGALoader ended with exit code {{code}}; details in the log."
+      }
+    }
+  },
   "circ": {
     "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",
     "exportedWarnings": "Logisim (.circ) file downloaded; {{count}} warning(s): {{first}}",

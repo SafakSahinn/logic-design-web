@@ -297,6 +297,83 @@
     "clockDirect": "{{port}}: kart saati, {{actual}}",
     "footer": "Devrenin eşlendiği kart için tasarım, üst modül ve pin kısıtları."
   },
+  "build": {
+    "tab": "Sentez ve yükleme",
+    "title": "Sentezle ve karta yükle",
+    "intro": "Devre, açık araç zinciriyle (Yosys, nextpnr, ecppack) bu kart için bit dosyasına (bitstream) çevrilir.",
+    "notSupported": "{{board}} kartı için açık araç zinciri yok; şimdilik yalnızca Lattice ECP5 kartları (GECKO5) sentezlenebilir. Diğer kartlar için proje dosyalarını indirip üreticinin aracında açın.",
+    "unknownPart": "Kartın FPGA parçası ({{part}}) nextpnr-ecp5 için tanınmıyor.",
+    "badPackage": "Kartın FPGA kılıfı ({{pkg}}) geçersiz.",
+    "drcBlocked": "Tasarım denetimi {{count}} hata buldu; sentezden önce bunları düzeltin.",
+    "noMapping": "Devre henüz bir karta eşlenmedi; sentez için önce eşleme yapın.",
+    "lang": "Dil",
+    "vhdlAsVerilog": "GHDL burada çalışmadığı için VHDL yerine aynı devrenin Verilog hâli sentezlenir.",
+    "buildAndProgram": "Sentezle ve yükle",
+    "buildOnly": "Yalnızca sentezle",
+    "build": "Sentezle",
+    "rebuild": "Yeniden sentezle",
+    "program": "Karta yükle",
+    "detect": "Kartı algıla",
+    "cancel": "İptal",
+    "download": "Bitstream'i indir",
+    "downloaded": "{{file}} indirildi. Kendi programlayıcınızla (ör. openFPGALoader) karta yükleyin.",
+    "downloadFailed": "Tarayıcı indirmeyi başlatamadı.",
+    "clearLog": "Günlüğü temizle",
+    "copyLog": "Günlüğü kopyala",
+    "logEmpty": "Araçların çıktısı burada görünür.",
+    "stale": "Devre son sentezden sonra değişti; yüklemeden önce yeniden sentezleyin.",
+    "target": {
+      "label": "Hedef",
+      "sram": "SRAM (geçici)",
+      "sramTitle": "Tasarım FPGA belleğine yüklenir; kart kapanınca silinir. Hızlıdır ve flash yıpranmaz.",
+      "flash": "Flash (kalıcı)",
+      "flashTitle": "Tasarım kartın yapılandırma flash'ına yazılır; kart her açılışta onu yükler. Uygulama yazmadan önce onay ister."
+    },
+    "stage": {
+      "prepare": "Araçlar hazırlanıyor",
+      "vhdlToVerilog": "VHDL → Verilog (GHDL)",
+      "synth": "Sentez (Yosys)",
+      "placeRoute": "Yerleştirme ve yönlendirme (nextpnr)",
+      "pack": "Bit dosyası (ecppack)",
+      "program": "Karta yükleme (openFPGALoader)",
+      "detect": "Kart algılama (openFPGALoader)"
+    },
+    "state": {
+      "pending": "bekliyor",
+      "running": "çalışıyor",
+      "done": "tamam",
+      "failed": "başarısız",
+      "skipped": "atlandı"
+    },
+    "result": {
+      "built": "Bit dosyası hazır ({{size}} KB, {{seconds}} s).",
+      "builtWeb": "Bit dosyası hazır ({{size}} KB, {{seconds}} s). Tarayıcı karta doğrudan yazamaz; dosyayı indirip kendi programlayıcınızla yükleyin.",
+      "programmedSram": "Tasarım FPGA'nın SRAM'ine yüklendi; kart kapanana kadar çalışır.",
+      "programmedFlash": "Tasarım yapılandırma flash'ına yazıldı; kart her açılışta onu yükler.",
+      "detected": "Kart bulundu; ayrıntılar günlükte.",
+      "cancelled": "İptal edildi.",
+      "declined": "Flash'a yazma onaylanmadı; hiçbir şey yazılmadı."
+    },
+    "error": {
+      "stageFailed": "{{stage}} aşaması {{code}} çıkış koduyla başarısız oldu.",
+      "stageMissing": "{{stage}} aşaması beklenen {{file}} dosyasını üretmedi.",
+      "toolUnavailable": "{{message}}",
+      "downloadDeclined": "{{tool}} indirilmeden sentez yapılamaz.",
+      "timeout": "{{stage}} aşaması süre sınırını aştı ve durduruldu.",
+      "outputLimit": "{{stage}} aşaması çok fazla çıktı üretti ve durduruldu.",
+      "internal": "{{stage}} aşaması başlatılamadı: {{message}}",
+      "planFailed": "Sentez planı hazırlanamadı.",
+      "noProgrammer": "openFPGALoader bulunamadı. Kurun (oss-cad-suite içinde gelir) ya da yolunu ayarlardan belirtin.",
+      "program": {
+        "noCable": "Programlama kablosu bulunamadı. Kartın USB ile takılı olduğunu ve sürücünün (Windows'ta Zadig ile WinUSB/libusbK) kurulu olduğunu denetleyin.",
+        "noFpga": "Kablo yanıt verdi ama JTAG zincirinde FPGA yok. Kartın açık olduğunu denetleyin.",
+        "unknownBoard": "Bu openFPGALoader sürümü kartın adını tanımıyor; daha yeni bir sürüm kurun.",
+        "unknownCable": "Bu openFPGALoader sürümü kartın kablosunu tanımıyor; daha yeni bir sürüm kurun.",
+        "wrongDevice": "Bit dosyası bağlı FPGA için değil (ya da openFPGALoader bu FPGA'yı tanımıyor). Doğru kartı seçtiğinizi denetleyin.",
+        "other": "openFPGALoader {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
+      }
+    }
+  },
   "circ": {
     "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",
     "exportedWarnings": "Logisim (.circ) dosyası indirildi; {{count}} uyarı: {{first}}",

@@ -1,9 +1,10 @@
 // The FPGA tab of the HDL window: the circuit's project files for the board it is mapped on (the design module,
 // the top level around it and the pin constraints), previewed one at a time and downloaded together. Nothing is
-// made while the design rule check finds an error; the findings are listed instead.
+// made while the design rule check finds an error; the findings are listed instead. The "build and program" view
+// runs the open-source flow on these files (FpgaBuildPanel).
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, Check, Copy, Cpu, Download } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Cpu, Download, Hammer } from 'lucide-react';
 import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit';
 import type { BoardDefinition } from '../board/model';
 import type { HdlLang } from '../hdl/drivers';
@@ -12,6 +13,7 @@ import { formatHz } from '../hdl/wrapper';
 import type { BoardMapping } from '../map/model';
 import { loadBoardByName } from './boardSource';
 import { DrcPanel } from './DrcPanel';
+import { FpgaBuildPanel } from './FpgaBuildPanel';
 import { describeDrcIssue } from '../index';
 
 export interface HdlFpgaTabProps {
@@ -30,11 +32,12 @@ export interface HdlFpgaTabProps {
 }
 
 type FileView = 'topLevel' | 'constraints' | 'design';
+type View = FileView | 'build';
 
 export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClockHz, onOpenMap, onGoToPart, onDownload, onToast }: HdlFpgaTabProps) {
   const { t } = useTranslation('fpga');
   const [lang, setLang] = useState<HdlLang>('verilog');
-  const [view, setView] = useState<FileView>('topLevel');
+  const [view, setView] = useState<View>('topLevel');
   const [fullSpeed, setFullSpeed] = useState(false);
   const [copied, setCopied] = useState(false);
   const boardName = mapping?.board ?? null;
@@ -111,11 +114,12 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
   }
 
   const files = { topLevel: project.topLevel, constraints: project.constraints, design: project.design };
-  const shown = files[view];
+  const shown = view === 'build' ? null : files[view];
   const warnings = project.issues.filter((i) => i.severity === 'warning').length;
 
   const copy = () => {
     // The browser may refuse (no focus / permission): the text is still on screen to copy by hand
+    if (!shown) return;
     navigator.clipboard?.writeText(shown.text).catch(() => undefined);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -150,6 +154,10 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
               {t(`hdl.file.${v}`)}
             </button>
           ))}
+          <button className={`${seg(view === 'build')} flex items-center gap-1`} onClick={() => setView('build')} data-fpga-hdl-view="build">
+            <Hammer className="w-3.5 h-3.5" />
+            {t('build.tab')}
+          </button>
         </div>
         <label className="flex items-center gap-1.5 font-semibold text-slate-600 cursor-pointer" title={t('hdl.fullSpeedTitle')}>
           <input type="checkbox" checked={fullSpeed} onChange={(e) => setFullSpeed(e.target.checked)} data-fpga-hdl-fullspeed />
@@ -159,8 +167,9 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
           {mapButton}
           <button
             onClick={copy}
+            disabled={!shown}
             data-fpga-hdl-copy
-            className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+            className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl border border-slate-300 font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
             <span>{copied ? t('hdl.copied') : t('hdl.copy')}</span>
@@ -192,14 +201,30 @@ export function HdlFpgaTab({ circuitName, components, wires, mapping, defaultClo
           ))}
         </div>
       )}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-950">
-        <p className="text-[11px] text-slate-400 font-mono mb-2" data-fpga-hdl-file>
-          {shown.fileName}
-        </p>
-        <pre className="font-mono text-xs text-indigo-200 leading-relaxed whitespace-pre selection:bg-indigo-700 selection:text-white">
-          <code>{shown.text}</code>
-        </pre>
-      </div>
+      {shown ? (
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-950">
+          <p className="text-[11px] text-slate-400 font-mono mb-2" data-fpga-hdl-file>
+            {shown.fileName}
+          </p>
+          <pre className="font-mono text-xs text-indigo-200 leading-relaxed whitespace-pre selection:bg-indigo-700 selection:text-white">
+            <code>{shown.text}</code>
+          </pre>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 flex flex-col p-4 bg-slate-50">
+          <FpgaBuildPanel
+            circuitName={circuitName}
+            components={components}
+            wires={wires}
+            board={board}
+            mapping={mapping}
+            lang={lang}
+            fullSpeed={fullSpeed}
+            defaultClockHz={defaultClockHz}
+            dark={false}
+          />
+        </div>
+      )}
     </div>
   );
 }

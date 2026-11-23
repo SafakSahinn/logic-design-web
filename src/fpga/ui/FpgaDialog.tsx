@@ -1,5 +1,5 @@
 // The "FPGA map" dialog: map the circuit's top-level I/O parts on a board's resources, check the design for the
-// board, and make or import boards. The mapping itself belongs to the circuit and is kept by the caller.
+// board, build it and program the board (open-source flow), and make or import boards. The mapping itself belongs to the circuit and is kept by the caller.
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cpu, X } from 'lucide-react';
@@ -15,6 +15,8 @@ import { suggestMapping, type MapNote } from '../map/suggest';
 import { BoardEditor } from './BoardEditor';
 import { DEFAULT_BOARD_NAME, loadBoardByName } from './boardSource';
 import { DrcPanel } from './DrcPanel';
+import { FpgaBuildPanel } from './FpgaBuildPanel';
+import type { HdlLang } from '../hdl/drivers';
 import { MapPanel } from './MapPanel';
 import { listUserBoards } from './userBoards';
 import '../index';
@@ -29,12 +31,14 @@ export interface FpgaDialogProps {
   /** Select the part on the canvas and bring it into view (the dialog closes) */
   onGoToPart: (compId: string) => void;
   onClose: () => void;
+  /** Rate of a clock part without a rate of its own (the simulator's global clock), Hz, for the build */
+  defaultClockHz: number;
   dark: boolean;
 }
 
-type Tab = 'map' | 'drc' | 'editor';
+type Tab = 'map' | 'drc' | 'build' | 'editor';
 
-export function FpgaDialog({ circuitName, components, wires, mapping, onMappingChange, onGoToPart, onClose, dark }: FpgaDialogProps) {
+export function FpgaDialog({ circuitName, components, wires, mapping, onMappingChange, onGoToPart, onClose, defaultClockHz, dark }: FpgaDialogProps) {
   const { t } = useTranslation('fpga');
   const [tab, setTab] = useState<Tab>('map');
   const [userBoards, setUserBoards] = useState<string[]>(() => listUserBoards());
@@ -43,6 +47,8 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
   const [notes, setNotes] = useState<MapNote[]>([]);
   // Bumped when a user board is saved, so a board of the same name is read again
   const [boardVersion, setBoardVersion] = useState(0);
+  const [buildLang, setBuildLang] = useState<HdlLang>('verilog');
+  const [buildFullSpeed, setBuildFullSpeed] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -56,7 +62,8 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
   }, [boardName, boardVersion]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // A dialog on top (the WASM download question) handles its own Escape and marks it handled
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !e.defaultPrevented && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -149,6 +156,7 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
           <div className={`flex gap-1 p-1 rounded-xl ${dark ? 'bg-slate-900' : 'bg-slate-100'}`}>
             {tabBtn('map', t('ui.tab.map'))}
             {tabBtn('drc', t('ui.tab.drc'), errorCount)}
+            {tabBtn('build', t('build.tab'))}
             {tabBtn('editor', t('ui.tab.editor'))}
           </div>
           <button onClick={onClose} className={`p-1.5 rounded-xl cursor-pointer ${dark ? 'hover:bg-slate-800' : 'hover:bg-slate-200'}`} title={t('ui.close')} data-fpga-close>
@@ -187,6 +195,26 @@ export function FpgaDialog({ circuitName, components, wires, mapping, onMappingC
             />
           )}
           {tab === 'drc' && <DrcPanel issues={issues} onGoToPart={onGoToPart} dark={dark} />}
+          {tab === 'build' &&
+            (board && mapping ? (
+              <div className="h-full flex flex-col">
+                <FpgaBuildPanel
+                  circuitName={circuitName}
+                  components={components}
+                  wires={wires}
+                  board={board}
+                  mapping={current}
+                  lang={buildLang}
+                  onLangChange={setBuildLang}
+                  fullSpeed={buildFullSpeed}
+                  onFullSpeedChange={setBuildFullSpeed}
+                  defaultClockHz={defaultClockHz}
+                  dark={dark}
+                />
+              </div>
+            ) : (
+              !boardMissing && <p className={`p-6 text-center text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{t(board ? 'build.noMapping' : 'ui.loadingBoard')}</p>
+            ))}
           {tab === 'editor' && (
             <BoardEditor
               current={board}

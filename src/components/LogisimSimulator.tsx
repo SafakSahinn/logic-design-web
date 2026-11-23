@@ -14369,6 +14369,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           onMappingChange={(m) => setFpgaMappings((all) => ({ ...all, [activeSheetId]: m }))}
           onGoToPart={goToFpgaPart}
           onClose={() => setShowFpgaDialog(false)}
+          defaultClockHz={clockHz}
           dark={cadTheme === 'dark'}
         />
       )}
