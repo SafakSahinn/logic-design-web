@@ -48,7 +48,7 @@
       <Button ActivityLevel="Active low" FPGAPinIOStandard="LVCMOS33" InputPinSet="C12" Label="CPU_RESETN" Rect_x_y_w_h="680,112,26,26"/>
       <RgbLed FPGAPinIOStandard="LVCMOS33" Label="LD16" OutputPinSet="N15,M16,R12" Rect_x_y_w_h="506,262,20,20"/>
       <RgbLed FPGAPinIOStandard="LVCMOS33" Label="LD17" OutputPinSet="N16,R11,G14" Rect_x_y_w_h="470,262,20,20"/>
-      <SevenSegmentScanning ActivityLevel="Active low" FPGAPinIOStandard="LVCMOS33" Label="DISPLAY" OutputPinSet="T10,R10,K16,K13,P15,T11,L18,H15,J17,J18,T9,J14,P14,T14,K2,U13" Rect_x_y_w_h="60,170,360,92" ScanningSevenSegInfo="8,-1,SevenSegScanningActiveLow"/>
+      <SevenSegmentScanning ActivityLevel="Active low" FPGAPinIOStandard="LVCMOS33" Label="DISPLAY" OutputPinSet="T10,R10,K16,K13,P15,T11,L18,H15,U13,K2,T14,P14,J14,T9,J18,J17" Rect_x_y_w_h="60,170,360,92" ScanningSevenSegInfo="8,-1,SevenSegScanningActiveLow"/>
       <PortIo BiDirPinSet="C17,D18,E18,G17,D17,E17,F18,G18" FPGAPinIOStandard="LVCMOS33" Label="JA" Rect_x_y_w_h="8,16,28,56"/>
       <PortIo BiDirPinSet="D14,F16,G16,H14,E16,F13,G13,H16" FPGAPinIOStandard="LVCMOS33" Label="JB" Rect_x_y_w_h="8,90,28,56"/>
       <PortIo BiDirPinSet="K1,F6,J2,G6,E7,J3,J4,E6" FPGAPinIOStandard="LVCMOS33" Label="JC" Rect_x_y_w_h="8,164,28,56"/>

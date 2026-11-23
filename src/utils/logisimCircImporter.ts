@@ -162,6 +162,8 @@ export interface ImportedCircFile {
   subcircuits: CustomSubcircuit[];
   /** Name of the file's main circuit (Logisim <main>) */
   main?: string;
+  /** The main circuit's clock rate (Hz) from evo's tick frequency (simulationFrequency / 2, see evoTickFrequency) */
+  clockHz?: number;
 }
 
 /**
@@ -2941,7 +2943,22 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const boardmaps = readBoardmaps(circuitByName.get(name)!);
     sheets.push(boardmaps.length ? { ...r.sheet, boardmaps } : r.sheet);
   }
-  return { sheets, subcircuits, main: xmlDoc.getElementsByTagName('main')[0]?.getAttribute('name') || undefined };
+  const main = xmlDoc.getElementsByTagName('main')[0]?.getAttribute('name') || undefined;
+  const clockHz = readClockHz(main !== undefined ? circuitByName.get(main) : undefined);
+  return { sheets, subcircuits, main, ...(clockHz !== undefined ? { clockHz } : {}) };
+}
+
+/** evo's per-circuit tick frequency (two ticks per clock cycle) as a clock rate; nothing when unset (evo: -1) */
+function readClockHz(circuit: Element | undefined): number | undefined {
+  if (!circuit) return undefined;
+  // childNodes: the importer also runs on xmldom, which has no Element.children
+  for (const n of Array.from(circuit.childNodes)) {
+    const a = n as Element;
+    if (n.nodeType !== 1 || a.tagName !== 'a' || a.getAttribute('name') !== 'simulationFrequency') continue;
+    const v = Number(a.getAttribute('val'));
+    return Number.isFinite(v) && v > 0 ? v / 2 : undefined;
+  }
+  return undefined;
 }
 
 // Logisim writes a Constant's value as hex (0x..); older files may hold a decimal

@@ -36,6 +36,15 @@
     "origin": "evo"
   },
   {
+    "file": "BASYS3_7SEG",
+    "name": "BASYS3_7SEG",
+    "vendor": "vivado",
+    "family": "Artix-7",
+    "part": "xc7a35t",
+    "clockHz": 100000000,
+    "origin": "lds"
+  },
+  {
     "file": "BEMICRO_SDK",
     "name": "BEMICRO_SDK",
     "vendor": "altera",

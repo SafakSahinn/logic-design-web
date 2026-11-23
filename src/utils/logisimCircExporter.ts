@@ -225,7 +225,25 @@ export interface CircExportResult {
 export interface CircExportOptions {
   /** The canvas's FPGA board mapping and its board: written as the main circuit's <boardmap> */
   fpga?: { mapping: BoardMapping; board: BoardDefinition };
+  /** The simulation's global clock rate (Hz), used by the clocks without their own rate */
+  clockHz?: number;
 }
+
+/**
+ * evo's per-circuit tick frequency for a set of clock rates: evo ticks `freq` times a second (simulator and FPGA
+ * tick generator alike) and a clock steps once per tick, while a clock rate here is the rate of a 1-high / 1-low
+ * clock, i.e. two ticks per cycle. One value only when every clock runs at the same rate.
+ */
+export function evoTickFrequency(clockRates: (number | undefined)[], clockHz?: number): number | undefined {
+  const rates = new Set(clockRates.map((r) => r ?? clockHz));
+  if (!rates.size && clockHz !== undefined) rates.add(clockHz);
+  if (rates.size !== 1) return undefined;
+  const hz = [...rates][0];
+  return hz !== undefined && Number.isFinite(hz) && hz > 0 ? 2 * hz : undefined;
+}
+
+/** A double as Java's Double.toString writes small values ("1.0", "0.5") */
+const javaDouble = (v: number) => (Number.isInteger(v) ? `${v}.0` : String(v));
 
 // evo's annotation names (Circuit.getAnnotationName) for a mapped part written without a usable label
 const EVO_ANNOTATION_NAME: Partial<Record<ComponentType, string>> = { dipSwitch: 'DipSwitch', sevenSegment: 'SevenSegment', rgbLed: 'RGBLED', portIo: 'PortIO' };
@@ -298,6 +316,8 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   let usesImage = false;
   const inputs: CircExportResult['inputs'] = [];
   const outputs: CircExportResult['outputs'] = [];
+  // Own rate (or undefined = the global rate) of every clock written, in all circuits
+  const clockRates: (number | undefined)[] = [];
 
   // Circuit names of the file: the canvas first, then one per IC definition
   const circuitNames = new Set<string>();
@@ -595,6 +615,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           if (inScope && c.outputs[0] && alias.has(c.outputs[0].id)) break;
           if (inScope) P.push({ kind: 'const', value: 0, out: out(0) });
           else {
+            clockRates.push(c.state?.clockRateHz);
             P.push({ kind: 'clock', label, out: out(0), ...getClockConfig(c) });
             inputs.push({ label, compId: c.id, pinIndex: 0 });
           }
@@ -2052,6 +2073,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
 
   const top = buildCircuit(topName, components, wires, null, 0);
   const circuit = xmlEsc(topName);
+  // evo's tick frequency of the main circuit, for its simulator and its FPGA download
+  const tick = evoTickFrequency(clockRates, options.clockHz);
+  const tickAttrs =
+    tick === undefined ? '' : `    <a name="downloadFrequency" val="${javaDouble(tick)}"/>\n    <a name="simulationFrequency" val="${javaDouble(tick)}"/>\n`;
   if (usesTtl)
     warnings.unshift(
       "TTL çipleri Logisim-evolution'ın TTL kütüphanesiyle yazıldı; Logisim 2.7.1'de bu kütüphane yok, dosyayı yalnız Logisim-evolution açar."
@@ -2075,7 +2100,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
   <lib desc="#I/O" name="5"/>${usesTtl ? `\n  <lib desc="#TTL" name="${TTL_LIB}"/>` : ''}${usesBfh ? `\n  <lib desc="#BFH-Praktika" name="${BFH_LIB}"/>` : ''}${usesBase ? `\n  <lib desc="#Base" name="${BASE_LIB}"/>` : ''}${usesExtra ? `\n  <lib desc="#Input/Output-Extra" name="${EXTRA_LIB}"/>` : ''}${usesHdl ? `\n  <lib desc="#HDL-IP" name="${HDL_LIB}"/>` : ''}${usesTcl ? `\n  <lib desc="#TCL" name="${TCL_LIB}"/>` : ''}${usesSoc ? `\n  <lib desc="#Soc" name="${SOC_LIB}"/>` : ''}
   <main name="${circuit}"/>
   <circuit name="${circuit}">
-${top}
+${tickAttrs}${top}
   </circuit>
 ${circuitXml.join('\n')}
 </project>

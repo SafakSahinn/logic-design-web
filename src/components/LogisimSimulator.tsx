@@ -3125,6 +3125,8 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             // The file's board maps (Logisim-evolution <boardmap>): each on its sheet, once its board is loaded
             setFpgaMappings({});
             void applyCircBoardmaps(newSheets, importedCircuits, importToast);
+            // evo's tick frequency of the main circuit sets the simulation's clock rate
+            if (imported.clockHz !== undefined) setClockHz(imported.clockHz);
             // Open Logisim's main circuit
             const first = newSheets[Math.max(0, importedCircuits.findIndex((c) => c.name === imported.main))];
             setActiveSheetId(first.id);
@@ -3290,7 +3292,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const mapping = fpgaMappings[activeSheetId];
     const mapped = !!mapping && mappedPartIds({ circuitName: currentCircuitName, components, wires, mapping }).size > 0;
     const board = mapped ? await loadBoardByName(mapping.board).catch(() => undefined) : undefined;
-    const { xml, warnings, boardmap } = exportLogisimCirc(currentCircuitName, components, wires, mapping && board ? { fpga: { mapping, board } } : {});
+    const { xml, warnings, boardmap } = exportLogisimCirc(currentCircuitName, components, wires, { clockHz, ...(mapping && board ? { fpga: { mapping, board } } : {}) });
     const blob = new Blob([xml], { type: 'application/xml;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     downloadUrl(url, `${exportBaseName()}.circ`);

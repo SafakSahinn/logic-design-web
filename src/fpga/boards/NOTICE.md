@@ -20,6 +20,12 @@ Their pins come from the vendors' master constraint files:
 
 - `DIGILENT_NEXYS_A7_100T.xml`: Digilent `Nexys-A7-100T-Master.xdc` (https://github.com/Digilent/digilent-xdc)
 - `TUL_PYNQ_Z2.xml`: TUL PYNQ-Z2 v1.0 master XDC
+- `BASYS3_7SEG.xml`: a copy of Logisim-evolution's `BASYS3.xml` (GPL-3.0, same source as above; photo and all other
+  pins unchanged) in which the twelve single LEDs that evo places on the 4-digit display are replaced by one
+  multiplexed 7-segment display. Pins from Digilent `Basys-3-Master.xdc`.
+
+Multiplexed displays list their digit selects from left to right (`AN3`..`AN0` on the Basys 3, `AN7`..`AN0` on
+the Nexys A7), because evo draws, and maps, digit 0 at the left edge of the display's rectangle.
 
 `index.json` lists every board, so the board list is available without loading the files. Keep it in step when
 adding or changing a file.
