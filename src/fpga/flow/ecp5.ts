@@ -32,10 +32,18 @@ export interface Ecp5FlowInput {
   lang: 'verilog' | 'vhdl';
   /** The .lpf constraint file */
   constraints: { fileName: string; text: string };
+  /** Also write nextpnr's routed netlist (kept in the result) for the post-route functional check */
+  writeRouted?: boolean;
 }
 
 const MINUTE = 60_000;
-export const ECP5_FILES = { ghdlVerilog: 'ghdl_out.v', json: 'toplevel.json', config: 'toplevel.config', bitstream: 'toplevel.bit' } as const;
+export const ECP5_FILES = {
+  ghdlVerilog: 'ghdl_out.v',
+  json: 'toplevel.json',
+  config: 'toplevel.config',
+  routed: 'routed.json',
+  bitstream: 'toplevel.bit',
+} as const;
 
 export function planEcp5Flow(input: Ecp5FlowInput): { ok: true; plan: FlowPlan } | { ok: false; reason: 'notEcp5' | 'unknownPart' | 'badPackage' } {
   if (!isEcp5Board(input.board)) return { ok: false, reason: 'notEcp5' };
@@ -69,12 +77,13 @@ export function planEcp5Flow(input: Ecp5FlowInput): { ok: true; plan: FlowPlan }
     outputs: [ECP5_FILES.json],
     timeoutMs: 15 * MINUTE,
   });
+  const routed = input.writeRouted ? ['--write', ECP5_FILES.routed] : [];
   stages.push({
     id: 'placeRoute',
     tool: 'nextpnr-ecp5',
-    args: [dev.device, '--package', dev.pkg, '--json', ECP5_FILES.json, '--lpf', input.constraints.fileName, '--textcfg', ECP5_FILES.config],
+    args: [dev.device, '--package', dev.pkg, '--json', ECP5_FILES.json, '--lpf', input.constraints.fileName, '--textcfg', ECP5_FILES.config, ...routed],
     needs: [ECP5_FILES.json, input.constraints.fileName],
-    outputs: [ECP5_FILES.config],
+    outputs: input.writeRouted ? [ECP5_FILES.config, ECP5_FILES.routed] : [ECP5_FILES.config],
     timeoutMs: 20 * MINUTE,
   });
   stages.push({
@@ -86,5 +95,8 @@ export function planEcp5Flow(input: Ecp5FlowInput): { ok: true; plan: FlowPlan }
     outputs: [ECP5_FILES.bitstream],
     timeoutMs: 5 * MINUTE,
   });
-  return { ok: true, plan: { family: 'ecp5', files, stages, bitstream: ECP5_FILES.bitstream } };
+  return {
+    ok: true,
+    plan: { family: 'ecp5', files, stages, bitstream: ECP5_FILES.bitstream, ...(input.writeRouted ? { keep: [ECP5_FILES.routed] } : {}) },
+  };
 }

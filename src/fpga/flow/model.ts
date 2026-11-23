@@ -30,6 +30,8 @@ export interface FlowPlan {
   stages: FlowStage[];
   /** File name of the bitstream the last stage writes */
   bitstream: string;
+  /** Intermediate outputs handed back with the result (the routed netlist for the post-route check ...) */
+  keep?: string[];
 }
 
 /** The part of src/tools runTool a flow uses */
@@ -59,7 +61,7 @@ export type FlowFailure =
   | { kind: 'runError'; stage: FlowStageId; error: unknown };
 
 export type FlowResult =
-  | { ok: true; bitstream: Uint8Array; stages: FlowStageResult[] }
+  | { ok: true; bitstream: Uint8Array; stages: FlowStageResult[]; kept: Record<string, ToolFileData> }
   | { ok: false; failure: FlowFailure; stages: FlowStageResult[] };
 
 export interface FlowRunOptions {

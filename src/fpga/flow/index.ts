@@ -30,7 +30,7 @@ export type OpenFlowPlanResult =
  * where ghdl runs (the desktop with ghdl installed); elsewhere the same circuit is written in Verilog for the
  * flow, which the HDL tests keep equivalent to the VHDL.
  */
-export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boolean }): OpenFlowPlanResult {
+export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boolean; writeRouted?: boolean }): OpenFlowPlanResult {
   if (!openFlowFamily(input.board)) return { ok: false, reason: 'notSupported' };
   const synthLang = input.lang === 'vhdl' && options.canRunGhdl ? 'vhdl' : 'verilog';
   const project = buildFpgaProject({ ...input, lang: synthLang });
@@ -41,6 +41,7 @@ export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boo
     sources: [project.design, project.topLevel],
     lang: synthLang,
     constraints: project.constraints,
+    writeRouted: options.writeRouted,
   });
   if (!planned.ok) return { ok: false, reason: planned.reason === 'notEcp5' ? 'notSupported' : planned.reason };
   return { ok: true, plan: planned.plan, project, synthLang };

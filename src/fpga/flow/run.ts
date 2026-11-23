@@ -44,7 +44,12 @@ export async function runFlow(plan: FlowPlan, run: FlowToolRun, options: FlowRun
     const last = plan.stages[plan.stages.length - 1];
     return { ok: false, failure: { kind: 'toolFailed', stage: last.id, exitCode: 0, missing: plan.bitstream }, stages: results };
   }
-  return { ok: true, bitstream: bit, stages: results };
+  const kept: Record<string, ToolFileData> = {};
+  for (const name of plan.keep ?? []) {
+    const data = available.get(name);
+    if (data !== undefined) kept[name] = data;
+  }
+  return { ok: true, bitstream: bit, stages: results, kept };
 }
 
 /** The ERROR / Error lines of a failed stage's output, for the summary (the full log stays available) */
