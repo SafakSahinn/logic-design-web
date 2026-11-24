@@ -9,12 +9,28 @@ import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 export type OpenFlowFamily = 'ecp5' | 'xc7';
 
 /** Families a vendor flow builds (Aşama 6k, desktop only) */
-export type VendorFlowFamily = 'vivado' | 'quartus';
+export type VendorFlowFamily = 'vivado' | 'quartus' | 'ise';
 
 export type FlowFamily = OpenFlowFamily | VendorFlowFamily;
 
-/** vendorBuild: a vendor tool's whole build in one run (synthesis to bitstream) */
-export type FlowStageId = 'vhdlToVerilog' | 'synth' | 'placeRoute' | 'frames' | 'pack' | 'vendorBuild';
+/**
+ * vendorBuild: a vendor tool's whole build in one run (synthesis to bitstream); ise*: the programs of the ISE chain
+ * (xst, ngdbuild, map, par, bitgen; a CPLD's cpldfit and hprep6)
+ */
+export type FlowStageId =
+  | 'vhdlToVerilog'
+  | 'synth'
+  | 'placeRoute'
+  | 'frames'
+  | 'pack'
+  | 'vendorBuild'
+  | 'iseSynth'
+  | 'iseTranslate'
+  | 'iseMap'
+  | 'isePlaceRoute'
+  | 'iseBitgen'
+  | 'iseFit'
+  | 'iseJedec';
 
 export interface FlowStage {
   id: FlowStageId;

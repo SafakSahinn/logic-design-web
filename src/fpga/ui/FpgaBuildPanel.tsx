@@ -24,6 +24,7 @@ import {
   planOpenFlow,
   planProgram,
   planVendorFlow,
+  planIseProgram,
   planQuartusProgram,
   planVivadoProgram,
   runFlow,
@@ -123,17 +124,19 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
   const [chosenTarget, setTarget] = useState<ProgramTarget>('sram');
   // A board built with Vivado is programmed with Vivado too (its own hw_server; SRAM only, see planVivadoProgram),
-  // one built with Quartus with quartus_pgm (an FPGA's SRAM, or a CPLD's own memory: see planQuartusProgram)
+  // one built with Quartus with quartus_pgm (an FPGA's SRAM, or a CPLD's own memory: see planQuartusProgram), one
+  // built with ISE with iMPACT (the same two cases: planIseProgram)
   const vivadoFlow = !!planned?.ok && planned.plan.family === 'vivado';
   const quartusFlow = !!planned?.ok && planned.plan.family === 'quartus';
-  const vendorFlow = vivadoFlow || quartusFlow;
-  // A CPLD (MAX 7000, MAX II / V) has no SRAM load: programming writes its memory for good
-  const cpldFlow = quartusFlow && !!planned?.ok && planned.plan.bitstream.endsWith('.pof');
+  const iseFlow = !!planned?.ok && planned.plan.family === 'ise';
+  const vendorFlow = vivadoFlow || quartusFlow || iseFlow;
+  // A CPLD (MAX 7000, MAX II / V, CoolRunner-II) has no SRAM load: programming writes its memory for good
+  const cpldFlow = (quartusFlow || iseFlow) && !!planned?.ok && /\.(pof|jed)$/.test(planned.plan.bitstream);
   // A Zynq's flash belongs to its processor side: only SRAM is offered there
   const flashOk = canWriteFlash(board) && !vendorFlow;
   const target: ProgramTarget = cpldFlow ? 'flash' : flashOk ? chosenTarget : 'sram';
   /** The programmer's name in the step list and the log */
-  const programmerName = vivadoFlow ? 'Vivado' : quartusFlow ? 'Quartus' : 'openFPGALoader';
+  const programmerName = vivadoFlow ? 'Vivado' : quartusFlow ? 'Quartus' : iseFlow ? 'iMPACT' : 'openFPGALoader';
   const abortRef = useRef<AbortController | null>(null);
   // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
   const [flashWriting, setFlashWriting] = useState(false);
@@ -190,7 +193,8 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const stageName = (id: StepId) => {
     if (id === 'program' || id === 'detect') return t(`build.stage.${id}`, { tool: id === 'program' ? programmerName : 'openFPGALoader' });
     const stage = planned?.ok ? planned.plan.stages.find((s) => s.id === id) : undefined;
-    return t(`build.stage.${id}`, { tool: stage?.tool === 'vivado' ? 'Vivado' : stage?.tool === 'quartus' ? 'Quartus' : (stage?.tool ?? '') });
+    const toolName = stage?.tool === 'vivado' ? 'Vivado' : stage?.tool === 'quartus' ? 'Quartus' : stage?.tool === 'ise' ? 'ISE' : (stage?.tool ?? '');
+    return t(`build.stage.${id}`, { tool: toolName });
   };
 
   /** The message for a run the tool runner refused or broke off */
@@ -200,7 +204,8 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean, tool: ToolId = 'openfpgaloader'): Message => {
     const tr = (key: string, vars?: Record<string, unknown>) => t(key, vars ?? {});
     if (r.kind === 'runError') return withVendorHint(tr, runErrorMessage(r.error, step, aborted), tool, { error: r.error });
-    // Vivado and Quartus have their own cable drivers and messages (build.error.programVivado.* / programQuartus.*);
+    // Vivado, Quartus and ISE have their own cable drivers and messages (build.error.programVivado.* / programQuartus.* /
+    // programIse.*);
     // neither reports a board or cable name
     const vendorProblem = r.problem === 'unknownBoard' || r.problem === 'unknownCable' ? 'other' : r.problem;
     const key =
@@ -208,20 +213,28 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
         ? `build.error.programVivado.${vendorProblem}`
         : tool === 'quartus'
           ? `build.error.programQuartus.${vendorProblem}`
-          : `build.error.program.${r.problem}`;
+          : tool === 'ise'
+            ? `build.error.programIse.${vendorProblem}`
+            : `build.error.program.${r.problem}`;
     return withVendorHint(tr, { kind: 'error', text: t(key, { code: r.exitCode }) }, tool, { exitCode: r.exitCode, log: `${r.stdout}\n${r.stderr}` });
   };
 
   /** Writes a bitstream to the board; shared by "build and program" (afterBuild) and "program board" */
   const program = async (bitstream: Uint8Array, ctl: AbortController, afterBuild: boolean): Promise<void> => {
-    const p = vivadoFlow ? planVivadoProgram({ board, bitstream }) : quartusFlow ? planQuartusProgram({ board, bitstream }) : planProgram({ board, bitstream, target });
+    const p = vivadoFlow
+      ? planVivadoProgram({ board, bitstream })
+      : quartusFlow
+        ? planQuartusProgram({ board, bitstream })
+        : iseFlow
+          ? planIseProgram({ board, bitstream })
+          : planProgram({ board, bitstream, target });
     if (!p.ok) {
       failFrom('program');
       setMessage({ kind: 'error', text: t('build.error.planFailed') });
       return;
     }
     setStep('program', 'running');
-    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `${p.request.tool === 'vivado' ? 'vivado' : p.request.tool === 'quartus' ? 'quartus_pgm' : 'openFPGALoader'} ${p.request.args.join(' ')}`);
+    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `${({ vivado: 'vivado', quartus: 'quartus_pgm', ise: 'impact' } as Partial<Record<ToolId, string>>)[p.request.tool] ?? 'openFPGALoader'} ${p.request.args.join(' ')}`);
     const flash = target === 'flash';
     flashWritingRef.current = flash;
     setFlashWriting(flash);
@@ -331,7 +344,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
         return;
       }
       if (current) setStep(current, 'done');
-      // A vendor flow's file keeps its own type (<top>.bit from Vivado, <top>.sof / .pof from Quartus)
+      // A vendor flow's file keeps its own type (<top>.bit from Vivado / ISE, <top>.sof / .pof from Quartus, <top>.jed for an ISE CPLD)
       const fileName = vendorFlow ? planned.plan.bitstream : `${planned.project.plan.name}.bit`;
       setBuilt({ key: planKey, bitstream: result.bitstream, fileName });
       const vars = { size: Math.max(1, Math.round(result.bitstream.length / 1024)), seconds: ((Date.now() - started) / 1000).toFixed(1) };
@@ -566,6 +579,11 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
           {quartusFlow && (
             <p className={`text-[11px] ${c.sub}`} data-fpga-build-vendor-note>
               {t(cpldFlow ? 'build.quartusCpldNote' : 'build.quartusFlowNote')}
+            </p>
+          )}
+          {iseFlow && (
+            <p className={`text-[11px] ${c.sub}`} data-fpga-build-vendor-note>
+              {t(cpldFlow ? 'build.iseCpldNote' : 'build.iseFlowNote')}
             </p>
           )}
           {probe?.programmer === 'missing' && !vendorFlow && (

@@ -341,7 +341,14 @@
       "pack": "Bit dosyası ({{tool}})",
       "program": "Karta yükleme ({{tool}})",
       "detect": "Kart algılama ({{tool}})",
-      "vendorBuild": "Sentez, yerleştirme ve bitstream ({{tool}})"
+      "vendorBuild": "Sentez, yerleştirme ve bitstream ({{tool}})",
+      "iseSynth": "Sentez (XST)",
+      "iseTranslate": "Çeviri (NGDBuild)",
+      "iseMap": "Eşleme (MAP)",
+      "isePlaceRoute": "Yerleştirme ve yönlendirme (PAR)",
+      "iseBitgen": "Bit dosyası (BitGen)",
+      "iseFit": "CPLD sığdırma (CPLDFit)",
+      "iseJedec": "JEDEC dosyası (Hprep6)"
     },
     "state": {
       "pending": "bekliyor",
@@ -392,6 +399,12 @@
         "noFpga": "Kablo yanıt verdi ama JTAG zincirinde aygıt bulunamadı. Kartın beslemesinin açık olduğunu denetleyin.",
         "wrongDevice": "JTAG zincirindeki aygıt, dosyanın derlendiği aygıt değil. Doğru kartın seçili ve takılı olduğunu denetleyin.",
         "other": "quartus_pgm {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
+      },
+      "programIse": {
+        "noCable": "iMPACT programlama kablosu bulamadı (\"Cable autodetection failed\"). Kartın USB ile takılı olduğunu ve Xilinx kablo sürücüsünün kurulu olduğunu denetleyin (ISE klasöründeki common\\bin\\nt64\\install_drivers.exe dosyasını yönetici olarak çalıştırın). Adept USB bağlantılı Digilent kartları (Basys 2) için Digilent'in iMPACT eklentisi ya da Digilent Adept gerekir; dosyayı kaydedip Adept ile de yükleyebilirsiniz.",
+        "noFpga": "Kablo yanıt verdi ama JTAG zincirinde aygıt bulunamadı. Kartın beslendiğini denetleyin.",
+        "wrongDevice": "Kartın JTAG konumundaki aygıt, dosyanın üretildiği aygıt değil. Doğru kartın seçili ve takılı olduğunu denetleyin.",
+        "other": "iMPACT {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
       }
     },
     "vendorHint": {
@@ -404,7 +417,9 @@
     },
     "vivadoFlowNote": "Açık kaynak akış bu kartın FPGA'sını derleyemiyor; bu yüzden kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir).",
     "quartusFlowNote": "Bu kart kurulu Quartus'unuzla derlenip yükleniyor (Cyclone I-III ve MAX 7000 için Quartus II 13.0sp1, yeni aileler için Quartus Prime). Yükleme ilk USB-Blaster üzerinden FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir.",
-    "quartusCpldNote": "Bu kartın CPLD'si kurulu Quartus'unuzla derlenip programlanıyor. CPLD'de SRAM yüklemesi yoktur: programlama tasarımı ilk USB-Blaster üzerinden yongaya kalıcı olarak yazar (önce onayınız sorulur)."
+    "quartusCpldNote": "Bu kartın CPLD'si kurulu Quartus'unuzla derlenip programlanıyor. CPLD'de SRAM yüklemesi yoktur: programlama tasarımı ilk USB-Blaster üzerinden yongaya kalıcı olarak yazar (önce onayınız sorulur).",
+    "iseFlowNote": "Bu kart, kurulu ISE 14.7 (WebPACK) ile derlenir ve programlanır. Programlama, iMPACT ile ilk Xilinx kablosu üzerinden FPGA'nın SRAM'ine yükler; tasarım güç kesilince silinir.",
+    "iseCpldNote": "Bu kartın CoolRunner-II CPLD'si kurulu ISE 14.7 ile derlenir ve programlanır. CPLD'de SRAM yüklemesi yoktur: programlama yongayı siler ve tasarımı kalıcı olarak içine yazar (önce size sorulur); ilk Xilinx kablosu kullanılır."
   },
   "circ": {
     "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",

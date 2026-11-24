@@ -9,6 +9,7 @@ import { isEcp5Board } from './ecp5';
 import { isXc7Board } from './xc7';
 import { isVivadoBoard, vivadoDevice } from './vivado';
 import { isQuartusBoard, quartusDevice, type QuartusOutput } from './quartus';
+import { iseDevice, isIseBoard, type IseOutput } from './ise';
 
 export type ProgramTarget = 'sram' | 'flash';
 
@@ -191,6 +192,51 @@ export function classifyQuartusProgramOutput(text: string): ProgramProblem {
   return 'other';
 }
 
+/**
+ * Programming through the user's ISE (Aşama 6k-4): the main process runs iMPACT with a fixed batch file
+ * (electron/vendorScripts.cjs iseProgram) on the first cable it finds (a Xilinx Platform Cable USB, or the one built
+ * into the board). The page names the part, the device's JTAG chain position from the board file, and the file:
+ * an FPGA gets the .bit in its SRAM, a CPLD (CoolRunner-II) gets the .jed in its own memory, which the main
+ * process asks the user about first.
+ */
+export const ISE_PROGRAM_FILES: Record<IseOutput, string> = { bit: 'design.bit', jed: 'design.jed' };
+
+export function planIseProgram(input: {
+  board: BoardDefinition;
+  bitstream: Uint8Array;
+}): { ok: true; request: ProgramRequest; target: ProgramTarget } | { ok: false; reason: 'notSupported' | 'emptyBitstream' } {
+  if (!isIseBoard(input.board)) return { ok: false, reason: 'notSupported' };
+  const dev = iseDevice(input.board);
+  if (!dev.ok) return { ok: false, reason: 'notSupported' };
+  if (input.bitstream.length === 0) return { ok: false, reason: 'emptyBitstream' };
+  const file = ISE_PROGRAM_FILES[dev.output];
+  return {
+    ok: true,
+    target: dev.output === 'jed' ? 'flash' : 'sram',
+    request: {
+      tool: 'ise',
+      args: ['--step', 'program', '--part', dev.part, '--position', String(dev.jtagPos), '--bitstream', file],
+      files: { [file]: input.bitstream },
+      outputs: [],
+      // iMPACT starts in seconds; erasing, writing and verifying a CPLD takes seconds too
+      timeoutMs: 4 * MINUTE,
+    },
+  };
+}
+
+/**
+ * What went wrong in an iMPACT run (ISE 14.7): no cable ("Cable autodetection failed.", also when the cable driver
+ * is not installed; seen on this machine), nothing on the chain (iMPACT:585 "A problem may exist in the hardware
+ * configuration"), or a file for another device than the one at the position. Only the no-cable text could be
+ * checked without a board; the other two follow iMPACT's documented messages and fall back to "other".
+ */
+export function classifyIseProgramOutput(text: string): ProgramProblem {
+  if (/Cable autodetection failed|Platform Cable USB is not detected/i.test(text)) return 'noCable';
+  if (/ERROR:iMPACT:585\b|No devices? (?:were |was )?(?:found|detected)|Boundary-scan chain (?:test )?(?:failed|validated unsuccessfully)/i.test(text)) return 'noFpga';
+  if (/idcode .*(?:does not match|mismatch)|is not a valid (?:bitstream|JEDEC) file|is not compatible with|Device mismatch/i.test(text)) return 'wrongDevice';
+  return 'other';
+}
+
 export type ProgramResult =
   | { ok: true; exitCode: 0; stdout: string; stderr: string }
   | { ok: false; kind: 'toolFailed'; problem: ProgramProblem; exitCode: number; stdout: string; stderr: string }
@@ -221,9 +267,13 @@ export async function runProgram(
   return {
     ok: false,
     kind: 'toolFailed',
-    problem: (request.tool === 'vivado' ? classifyVivadoProgramOutput : request.tool === 'quartus' ? classifyQuartusProgramOutput : classifyProgramOutput)(
-      `${r.stderr}\n${r.stdout}`,
-    ),
+    problem: (request.tool === 'vivado'
+      ? classifyVivadoProgramOutput
+      : request.tool === 'quartus'
+        ? classifyQuartusProgramOutput
+        : request.tool === 'ise'
+          ? classifyIseProgramOutput
+          : classifyProgramOutput)(`${r.stderr}\n${r.stdout}`),
     exitCode: r.exitCode,
     stdout: r.stdout,
     stderr: r.stderr,
@@ -236,8 +286,8 @@ export async function runProgram(
  */
 export function saveBitstream(bitstream: Uint8Array, fileName: string): boolean {
   if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return false;
-  // .bit (Xilinx, ECP5), .sof / .pof (Quartus)
-  const safeName = /^[\w.-]{1,100}\.(bit|sof|pof)$/.test(fileName) ? fileName : PROGRAM_FILE;
+  // .bit (Xilinx, ECP5), .sof / .pof (Quartus), .jed (ISE CPLD)
+  const safeName = /^[\w.-]{1,100}\.(bit|sof|pof|jed)$/.test(fileName) ? fileName : PROGRAM_FILE;
   // Copy into a plain ArrayBuffer: a view on a SharedArrayBuffer cannot back a Blob
   const url = URL.createObjectURL(new Blob([new Uint8Array(bitstream)], { type: 'application/octet-stream' }));
   try {

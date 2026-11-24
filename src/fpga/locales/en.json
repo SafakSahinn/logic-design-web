@@ -341,7 +341,14 @@
       "pack": "Bitstream ({{tool}})",
       "program": "Programming ({{tool}})",
       "detect": "Board detection ({{tool}})",
-      "vendorBuild": "Synthesis, implementation and bitstream ({{tool}})"
+      "vendorBuild": "Synthesis, implementation and bitstream ({{tool}})",
+      "iseSynth": "Synthesis (XST)",
+      "iseTranslate": "Translate (NGDBuild)",
+      "iseMap": "Map (MAP)",
+      "isePlaceRoute": "Place and route (PAR)",
+      "iseBitgen": "Bitstream (BitGen)",
+      "iseFit": "CPLD fit (CPLDFit)",
+      "iseJedec": "JEDEC file (Hprep6)"
     },
     "state": {
       "pending": "waiting",
@@ -392,6 +399,12 @@
         "noFpga": "The cable answered but no device was found on its JTAG chain. Check that the board is powered.",
         "wrongDevice": "The device on the JTAG chain is not the one the file was built for. Check that the right board is selected and plugged in.",
         "other": "quartus_pgm ended with exit code {{code}}; details in the log."
+      },
+      "programIse": {
+        "noCable": "iMPACT found no programming cable (\"Cable autodetection failed\"). Check that the board is plugged in over USB and that the Xilinx cable driver is installed (run install_drivers.exe from the ISE folder common\\bin\\nt64 as administrator). Digilent boards with an Adept USB port (Basys 2) need Digilent's iMPACT plug-in or Digilent Adept; you can also save the file and load it with Adept.",
+        "noFpga": "The cable answered but no device was found on its JTAG chain. Check that the board is powered.",
+        "wrongDevice": "The device at the board's JTAG position is not the one the file was built for. Check that the right board is selected and plugged in.",
+        "other": "iMPACT ended with exit code {{code}}; details in the log."
       }
     },
     "vendorHint": {
@@ -404,7 +417,9 @@
     },
     "vivadoFlowNote": "The open-source flow cannot build this board's FPGA, so it is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off).",
     "quartusFlowNote": "This board is built and programmed with your installed Quartus (Quartus II 13.0sp1 for Cyclone I-III and MAX 7000, Quartus Prime for the newer families). Programming loads the FPGA's SRAM through the first USB-Blaster; the design is lost at power-off.",
-    "quartusCpldNote": "This board's CPLD is built and programmed with your installed Quartus. A CPLD has no SRAM load: programming writes the design into the chip for good (you are asked first), through the first USB-Blaster."
+    "quartusCpldNote": "This board's CPLD is built and programmed with your installed Quartus. A CPLD has no SRAM load: programming writes the design into the chip for good (you are asked first), through the first USB-Blaster.",
+    "iseFlowNote": "This board is built and programmed with your installed ISE 14.7 (WebPACK). Programming loads the FPGA's SRAM with iMPACT through the first Xilinx cable; the design is lost at power-off.",
+    "iseCpldNote": "This board's CoolRunner-II CPLD is built and programmed with your installed ISE 14.7. A CPLD has no SRAM load: programming erases the chip and writes the design into it for good (you are asked first), through the first Xilinx cable."
   },
   "circ": {
     "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",
