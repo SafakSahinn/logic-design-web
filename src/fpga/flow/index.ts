@@ -10,6 +10,7 @@ export * from './model';
 export { ECP5_FILES, ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
 export { XC7_FILES, isXc7Board, planXc7Flow, xc7Device } from './xc7';
 export { flowErrorLines, runFlow } from './run';
+export { vendorHint, type VendorFailure, type VendorHintKey, type VendorTool } from './vendorHints';
 export {
   canWriteFlash,
   classifyProgramOutput,

@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, CheckCircle2, Circle, Copy, Download, Hammer, Loader2, MinusCircle, Search, Square, Trash2, Upload, XCircle } from 'lucide-react';
 import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit';
-import { describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, type ToolId } from '../../tools';
+import { describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, vendorToolsSupported, type ToolId } from '../../tools';
 import type { BoardDefinition } from '../board/model';
 import {
   canWriteFlash,
@@ -386,8 +386,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   if (!probe || !planned) {
     body = blocked(probe ? t('build.error.planFailed') : t('ui.loadingBoard'));
   } else if (!planned.ok) {
-    if (planned.reason === 'notSupported') body = blocked(t('build.notSupported', { board: board.name }));
-    else if (planned.reason === 'unknownPart') body = blocked(t('build.unknownPart', { part: board.fpga.part }));
+    if (planned.reason === 'notSupported') {
+      // Vendor-tool boards (Quartus, ISE): the vendor flows need the desktop app (Aşama 6k)
+      const vendorBoard = board.fpga.vendor === 'altera' || board.fpga.vendor === 'xilinx' || board.fpga.vendor === 'vivado';
+      const note = vendorBoard && !vendorToolsSupported() ? ` ${t('build.vendorHint.desktopOnly')}` : '';
+      body = blocked(`${t('build.notSupported', { board: board.name })}${note}`);
+    } else if (planned.reason === 'unknownPart') body = blocked(t('build.unknownPart', { part: board.fpga.part }));
     else if (planned.reason === 'badPackage') body = blocked(t('build.badPackage', { pkg: board.fpga.package }));
     else if (planned.reason === 'drc') body = blocked(t('build.drcBlocked', { count: planned.issues.filter((i) => i.severity === 'error').length }));
   } else if (planned.plan.family === 'xc7' && probe.xc7 === 'web') {

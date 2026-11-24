@@ -104,6 +104,27 @@ export const TOOL_DEFINITIONS: Record<ToolId, ToolDefinition> = {
     native: { executable: 'openFPGALoader', versionArgs: ['--version'] },
     usedBy: ['6j'],
   },
+  // Vendor FPGA tools (Aşama 6k). Native only, never on PATH: the desktop main process finds the installs
+  // (electron/vendorTools.cjs: settings, the installers' variables, the default folders) and picks one per part
+  // (Quartus Prime, or Quartus II 13.0 for Cyclone I-III / MAX 7000). The executable names are informative only.
+  vivado: {
+    id: 'vivado',
+    displayName: 'Vivado',
+    native: { executable: 'vivado', versionArgs: [] },
+    usedBy: ['6k'],
+  },
+  quartus: {
+    id: 'quartus',
+    displayName: 'Quartus',
+    native: { executable: 'quartus_sh', versionArgs: [] },
+    usedBy: ['6k'],
+  },
+  ise: {
+    id: 'ise',
+    displayName: 'ISE',
+    native: { executable: 'xst', versionArgs: [] },
+    usedBy: ['6k'],
+  },
   tcl: {
     id: 'tcl',
     displayName: 'Tcl',

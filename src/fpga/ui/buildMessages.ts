@@ -28,6 +28,8 @@ export function runErrorMessage(t: Translate, error: unknown, stage: string, pro
         return { kind: 'info', text: t(error.message === DECLINED_MESSAGE ? 'build.result.declined' : 'build.result.cancelled') };
       case 'timeout':
         return { kind: 'error', text: t('build.error.timeout', { stage }) };
+      case 'stalled':
+        return { kind: 'error', text: t('build.error.stalled', { stage }) };
       case 'output-limit':
         return { kind: 'error', text: t('build.error.outputLimit', { stage }) };
       case 'busy':

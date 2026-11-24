@@ -19,6 +19,11 @@ export type ToolId =
   | 'fasm2frames'
   | 'xc7frames2bit'
   | 'openfpgaloader'
+  // Vendor FPGA tools (Aşama 6k): desktop only, the user's own install; the page sends an option line, the main
+  // process builds the script from a fixed template (electron/vendorPolicy.cjs, vendorScripts.cjs)
+  | 'vivado'
+  | 'quartus'
+  | 'ise'
   | 'tcl';
 
 export type ToolBackendKind = 'native' | 'wasm';
@@ -85,6 +90,7 @@ export type ToolErrorKind =
   | 'unavailable' // see ToolStatus.reason
   | 'cancelled'
   | 'timeout'
+  | 'stalled' // a vendor tool printed nothing at all after it started (hung while starting)
   | 'bad-request' // unknown tool, absolute or ".." path, ...
   | 'busy' // a tool that runs one at a time (openFPGALoader) is already running
   | 'output-limit' // the tool printed more than the backend accepts

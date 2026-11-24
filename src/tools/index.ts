@@ -13,6 +13,19 @@ export {
 } from './runner';
 
 export type { DownloadRequest } from './runner';
+export {
+  VENDOR_KINDS,
+  checkVendorInstall,
+  chooseVendorFolder,
+  clearVendorFolder,
+  vendorStatus,
+  vendorToolsSupported,
+  type VendorCheckResult,
+  type VendorChooseResult,
+  type VendorInstall,
+  type VendorKind,
+  type VendorStatus,
+} from './vendor';
 export { stopWasmWorkers } from './wasmBackend';
 export { ToolDownloadDialog } from './ToolDownloadDialog';
 export { useToolDownloadConsent } from './useToolDownloadConsent';
