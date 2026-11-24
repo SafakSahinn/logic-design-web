@@ -357,7 +357,8 @@
       "programmedFlash": "The design was written to the configuration flash; it loads at every power-on.",
       "detected": "Board found; details in the log.",
       "cancelled": "Cancelled.",
-      "declined": "The flash write was not confirmed; nothing was written."
+      "declined": "The write was not confirmed; nothing was written.",
+      "programmedCpld": "The design was written into the CPLD; it keeps it after power-off."
     },
     "error": {
       "stageFailed": "The {{stage}} step failed with exit code {{code}}.",
@@ -385,6 +386,12 @@
         "noFpga": "The JTAG cable answered but there is no FPGA on its chain. Check that the board is powered.",
         "wrongDevice": "None of the connected JTAG chains holds this board's FPGA, or the bitstream is for another device. Check that the right board is selected and plugged in.",
         "other": "Vivado ended programming with exit code {{code}}; details in the log."
+      },
+      "programQuartus": {
+        "noCable": "quartus_pgm found no programming cable (Error 213013). Check that the board is plugged in over USB and that the USB-Blaster driver is installed (Device Manager: update the driver from the Quartus folder quartus\\drivers\\usb-blaster or usb-blaster-ii). A cable whose driver was switched to WinUSB with Zadig (for openFPGALoader) is not seen by Quartus.",
+        "noFpga": "The cable answered but no device was found on its JTAG chain. Check that the board is powered.",
+        "wrongDevice": "The device on the JTAG chain is not the one the file was built for. Check that the right board is selected and plugged in.",
+        "other": "quartus_pgm ended with exit code {{code}}; details in the log."
       }
     },
     "vendorHint": {
@@ -395,7 +402,9 @@
       "iseDeviceNotInWebpack": "This FPGA is not in the free ISE WebPACK edition (Xst:1817, invalid target device). It needs a licensed ISE edition.",
       "desktopOnly": "Vivado, Quartus and ISE run only in the desktop app, with your installed vendor tool."
     },
-    "vivadoFlowNote": "The open-source flow cannot build this board's FPGA, so it is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off)."
+    "vivadoFlowNote": "The open-source flow cannot build this board's FPGA, so it is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off).",
+    "quartusFlowNote": "This board is built and programmed with your installed Quartus (Quartus II 13.0sp1 for Cyclone I-III and MAX 7000, Quartus Prime for the newer families). Programming loads the FPGA's SRAM through the first USB-Blaster; the design is lost at power-off.",
+    "quartusCpldNote": "This board's CPLD is built and programmed with your installed Quartus. A CPLD has no SRAM load: programming writes the design into the chip for good (you are asked first), through the first USB-Blaster."
   },
   "circ": {
     "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",

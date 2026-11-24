@@ -357,7 +357,8 @@
       "programmedFlash": "Tasarım yapılandırma flash'ına yazıldı; kart her açılışta onu yükler.",
       "detected": "Kart bulundu; ayrıntılar günlükte.",
       "cancelled": "İptal edildi.",
-      "declined": "Flash'a yazma onaylanmadı; hiçbir şey yazılmadı."
+      "declined": "Yazma onaylanmadı; hiçbir şey yazılmadı.",
+      "programmedCpld": "Tasarım CPLD'ye yazıldı; güç kesilince de korunur."
     },
     "error": {
       "stageFailed": "{{stage}} aşaması {{code}} çıkış koduyla başarısız oldu.",
@@ -385,6 +386,12 @@
         "noFpga": "JTAG kablosu yanıt verdi ama zincirinde FPGA yok. Kartın beslemesinin açık olduğunu denetleyin.",
         "wrongDevice": "Bağlı JTAG zincirlerinin hiçbirinde bu kartın FPGA'sı yok ya da bitstream başka bir aygıt için. Doğru kartın seçili ve takılı olduğunu denetleyin.",
         "other": "Vivado yüklemeyi {{code}} çıkış koduyla bitirdi; ayrıntılar günlükte."
+      },
+      "programQuartus": {
+        "noCable": "quartus_pgm hiç programlama kablosu bulamadı (Error 213013). Kartın USB ile takılı olduğunu ve USB-Blaster sürücüsünün kurulu olduğunu denetleyin (Aygıt Yöneticisi: sürücüyü Quartus klasöründeki quartus\\drivers\\usb-blaster ya da usb-blaster-ii klasöründen güncelleyin). Sürücüsü Zadig ile WinUSB'ye çevrilmiş bir kablo (openFPGALoader için) Quartus'ta görünmez.",
+        "noFpga": "Kablo yanıt verdi ama JTAG zincirinde aygıt bulunamadı. Kartın beslemesinin açık olduğunu denetleyin.",
+        "wrongDevice": "JTAG zincirindeki aygıt, dosyanın derlendiği aygıt değil. Doğru kartın seçili ve takılı olduğunu denetleyin.",
+        "other": "quartus_pgm {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
       }
     },
     "vendorHint": {
@@ -395,7 +402,9 @@
       "iseDeviceNotInWebpack": "Bu FPGA ücretsiz ISE WebPACK sürümünde yok (Xst:1817, geçersiz hedef aygıt). Lisanslı bir ISE sürümü gerekir.",
       "desktopOnly": "Vivado, Quartus ve ISE yalnız masaüstü uygulamasında, bilgisayarınızda kurulu üretici aracıyla çalışır."
     },
-    "vivadoFlowNote": "Açık kaynak akış bu kartın FPGA'sını derleyemiyor; bu yüzden kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir)."
+    "vivadoFlowNote": "Açık kaynak akış bu kartın FPGA'sını derleyemiyor; bu yüzden kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir).",
+    "quartusFlowNote": "Bu kart kurulu Quartus'unuzla derlenip yükleniyor (Cyclone I-III ve MAX 7000 için Quartus II 13.0sp1, yeni aileler için Quartus Prime). Yükleme ilk USB-Blaster üzerinden FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir.",
+    "quartusCpldNote": "Bu kartın CPLD'si kurulu Quartus'unuzla derlenip programlanıyor. CPLD'de SRAM yüklemesi yoktur: programlama tasarımı ilk USB-Blaster üzerinden yongaya kalıcı olarak yazar (önce onayınız sorulur)."
   },
   "circ": {
     "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",

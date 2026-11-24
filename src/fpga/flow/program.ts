@@ -8,6 +8,7 @@ import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 import { isEcp5Board } from './ecp5';
 import { isXc7Board } from './xc7';
 import { isVivadoBoard, vivadoDevice } from './vivado';
+import { isQuartusBoard, quartusDevice, type QuartusOutput } from './quartus';
 
 export type ProgramTarget = 'sram' | 'flash';
 
@@ -146,6 +147,50 @@ export function classifyVivadoProgramOutput(text: string): ProgramProblem {
   return 'other';
 }
 
+/**
+ * Programming through the user's Quartus (Aşama 6k-3): the main process runs quartus_pgm on the first JTAG cable
+ * (USB-Blaster) with a fixed command line (electron/vendorScripts.cjs quartusProgram); the page names only the
+ * part (which picks the Quartus install) and the file. An FPGA gets the .sof in its SRAM (lost at power-off); a
+ * CPLD gets the .pof in its own non-volatile memory, which the main process asks the user about first, as a flash
+ * write.
+ */
+export const QUARTUS_PROGRAM_FILES: Record<QuartusOutput, string> = { sof: 'design.sof', pof: 'design.pof' };
+
+export function planQuartusProgram(input: {
+  board: BoardDefinition;
+  bitstream: Uint8Array;
+}): { ok: true; request: ProgramRequest; target: ProgramTarget } | { ok: false; reason: 'notSupported' | 'emptyBitstream' } {
+  if (!isQuartusBoard(input.board)) return { ok: false, reason: 'notSupported' };
+  const dev = quartusDevice(input.board);
+  if (!dev.ok) return { ok: false, reason: 'notSupported' };
+  if (input.bitstream.length === 0) return { ok: false, reason: 'emptyBitstream' };
+  const file = QUARTUS_PROGRAM_FILES[dev.output];
+  return {
+    ok: true,
+    target: dev.output === 'pof' ? 'flash' : 'sram',
+    request: {
+      tool: 'quartus',
+      args: ['--step', 'program', '--part', dev.part, '--bitstream', file],
+      files: { [file]: input.bitstream },
+      outputs: [],
+      // quartus_pgm starts in seconds; erasing and writing a CPLD takes seconds too
+      timeoutMs: 4 * MINUTE,
+    },
+  };
+}
+
+/**
+ * What went wrong in a quartus_pgm run (Quartus Prime 25.1 and Quartus II 13.0 print the same messages):
+ * Error 213013 "Programming hardware cable not detected" (also when no USB-Blaster driver is installed), a JTAG
+ * chain without devices, or a device whose JTAG ID is not the one the file is for.
+ */
+export function classifyQuartusProgramOutput(text: string): ProgramProblem {
+  if (/Error \(213013\)|Programming hardware cable not detected|No JTAG hardware available/i.test(text)) return 'noCable';
+  if (/Error \(209053\)|Error \(209040\)|Can't access JTAG chain|Unable to scan device chain|JTAG chain (?:is )?broken/i.test(text)) return 'noFpga';
+  if (/Error \(209015\)|Expected JTAG ID code|Unexpected JTAG ID|Device chain in Chain Description File does not match/i.test(text)) return 'wrongDevice';
+  return 'other';
+}
+
 export type ProgramResult =
   | { ok: true; exitCode: 0; stdout: string; stderr: string }
   | { ok: false; kind: 'toolFailed'; problem: ProgramProblem; exitCode: number; stdout: string; stderr: string }
@@ -176,7 +221,9 @@ export async function runProgram(
   return {
     ok: false,
     kind: 'toolFailed',
-    problem: (request.tool === 'vivado' ? classifyVivadoProgramOutput : classifyProgramOutput)(`${r.stderr}\n${r.stdout}`),
+    problem: (request.tool === 'vivado' ? classifyVivadoProgramOutput : request.tool === 'quartus' ? classifyQuartusProgramOutput : classifyProgramOutput)(
+      `${r.stderr}\n${r.stdout}`,
+    ),
     exitCode: r.exitCode,
     stdout: r.stdout,
     stderr: r.stderr,
@@ -189,7 +236,8 @@ export async function runProgram(
  */
 export function saveBitstream(bitstream: Uint8Array, fileName: string): boolean {
   if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return false;
-  const safeName = /^[\w.-]{1,100}\.bit$/.test(fileName) ? fileName : PROGRAM_FILE;
+  // .bit (Xilinx, ECP5), .sof / .pof (Quartus)
+  const safeName = /^[\w.-]{1,100}\.(bit|sof|pof)$/.test(fileName) ? fileName : PROGRAM_FILE;
   // Copy into a plain ArrayBuffer: a view on a SharedArrayBuffer cannot back a Blob
   const url = URL.createObjectURL(new Blob([new Uint8Array(bitstream)], { type: 'application/octet-stream' }));
   try {

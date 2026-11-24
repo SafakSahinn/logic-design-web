@@ -24,6 +24,7 @@ import {
   planOpenFlow,
   planProgram,
   planVendorFlow,
+  planQuartusProgram,
   planVivadoProgram,
   runFlow,
   vendorFlowFamily,
@@ -121,11 +122,18 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const [message, setMessage] = useState<Message | null>(null);
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
   const [chosenTarget, setTarget] = useState<ProgramTarget>('sram');
-  // A board built with Vivado is programmed with Vivado too (its own hw_server; SRAM only, see planVivadoProgram)
+  // A board built with Vivado is programmed with Vivado too (its own hw_server; SRAM only, see planVivadoProgram),
+  // one built with Quartus with quartus_pgm (an FPGA's SRAM, or a CPLD's own memory: see planQuartusProgram)
   const vivadoFlow = !!planned?.ok && planned.plan.family === 'vivado';
+  const quartusFlow = !!planned?.ok && planned.plan.family === 'quartus';
+  const vendorFlow = vivadoFlow || quartusFlow;
+  // A CPLD (MAX 7000, MAX II / V) has no SRAM load: programming writes its memory for good
+  const cpldFlow = quartusFlow && !!planned?.ok && planned.plan.bitstream.endsWith('.pof');
   // A Zynq's flash belongs to its processor side: only SRAM is offered there
-  const flashOk = canWriteFlash(board) && !vivadoFlow;
-  const target: ProgramTarget = flashOk ? chosenTarget : 'sram';
+  const flashOk = canWriteFlash(board) && !vendorFlow;
+  const target: ProgramTarget = cpldFlow ? 'flash' : flashOk ? chosenTarget : 'sram';
+  /** The programmer's name in the step list and the log */
+  const programmerName = vivadoFlow ? 'Vivado' : quartusFlow ? 'Quartus' : 'openFPGALoader';
   const abortRef = useRef<AbortController | null>(null);
   // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
   const [flashWriting, setFlashWriting] = useState(false);
@@ -180,9 +188,9 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     });
   /** A step's name; flow stages name their tool (nextpnr-ecp5 / nextpnr-xilinx, ecppack / xc7frames2bit) */
   const stageName = (id: StepId) => {
-    if (id === 'program' || id === 'detect') return t(`build.stage.${id}`, { tool: vivadoFlow && id === 'program' ? 'Vivado' : 'openFPGALoader' });
+    if (id === 'program' || id === 'detect') return t(`build.stage.${id}`, { tool: id === 'program' ? programmerName : 'openFPGALoader' });
     const stage = planned?.ok ? planned.plan.stages.find((s) => s.id === id) : undefined;
-    return t(`build.stage.${id}`, { tool: stage?.tool === 'vivado' ? 'Vivado' : (stage?.tool ?? '') });
+    return t(`build.stage.${id}`, { tool: stage?.tool === 'vivado' ? 'Vivado' : stage?.tool === 'quartus' ? 'Quartus' : (stage?.tool ?? '') });
   };
 
   /** The message for a run the tool runner refused or broke off */
@@ -192,21 +200,28 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean, tool: ToolId = 'openfpgaloader'): Message => {
     const tr = (key: string, vars?: Record<string, unknown>) => t(key, vars ?? {});
     if (r.kind === 'runError') return withVendorHint(tr, runErrorMessage(r.error, step, aborted), tool, { error: r.error });
-    // Vivado has its own cable drivers and messages (build.error.programVivado.*); it never reports a board or cable name
-    const key = tool === 'vivado' ? `build.error.programVivado.${r.problem === 'unknownBoard' || r.problem === 'unknownCable' ? 'other' : r.problem}` : `build.error.program.${r.problem}`;
+    // Vivado and Quartus have their own cable drivers and messages (build.error.programVivado.* / programQuartus.*);
+    // neither reports a board or cable name
+    const vendorProblem = r.problem === 'unknownBoard' || r.problem === 'unknownCable' ? 'other' : r.problem;
+    const key =
+      tool === 'vivado'
+        ? `build.error.programVivado.${vendorProblem}`
+        : tool === 'quartus'
+          ? `build.error.programQuartus.${vendorProblem}`
+          : `build.error.program.${r.problem}`;
     return withVendorHint(tr, { kind: 'error', text: t(key, { code: r.exitCode }) }, tool, { exitCode: r.exitCode, log: `${r.stdout}\n${r.stderr}` });
   };
 
   /** Writes a bitstream to the board; shared by "build and program" (afterBuild) and "program board" */
   const program = async (bitstream: Uint8Array, ctl: AbortController, afterBuild: boolean): Promise<void> => {
-    const p = vivadoFlow ? planVivadoProgram({ board, bitstream }) : planProgram({ board, bitstream, target });
+    const p = vivadoFlow ? planVivadoProgram({ board, bitstream }) : quartusFlow ? planQuartusProgram({ board, bitstream }) : planProgram({ board, bitstream, target });
     if (!p.ok) {
       failFrom('program');
       setMessage({ kind: 'error', text: t('build.error.planFailed') });
       return;
     }
     setStep('program', 'running');
-    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `${p.request.tool === 'vivado' ? 'vivado' : 'openFPGALoader'} ${p.request.args.join(' ')}`);
+    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `${p.request.tool === 'vivado' ? 'vivado' : p.request.tool === 'quartus' ? 'quartus_pgm' : 'openFPGALoader'} ${p.request.args.join(' ')}`);
     const flash = target === 'flash';
     flashWritingRef.current = flash;
     setFlashWriting(flash);
@@ -219,7 +234,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     }
     if (r.ok) {
       setStep('program', 'done');
-      setMessage({ kind: 'ok', text: t(target === 'flash' ? 'build.result.programmedFlash' : 'build.result.programmedSram') });
+      setMessage({ kind: 'ok', text: t(cpldFlow ? 'build.result.programmedCpld' : target === 'flash' ? 'build.result.programmedFlash' : 'build.result.programmedSram') });
     } else {
       failFrom('program');
       if (r.kind === 'toolFailed' && !r.stdout && !r.stderr) addLines(`(exit code ${r.exitCode})`);
@@ -316,7 +331,8 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
         return;
       }
       if (current) setStep(current, 'done');
-      const fileName = `${planned.project.plan.name}.bit`;
+      // A vendor flow's file keeps its own type (<top>.bit from Vivado, <top>.sof / .pof from Quartus)
+      const fileName = vendorFlow ? planned.plan.bitstream : `${planned.project.plan.name}.bit`;
       setBuilt({ key: planKey, bitstream: result.bitstream, fileName });
       const vars = { size: Math.max(1, Math.round(result.bitstream.length / 1024)), seconds: ((Date.now() - started) / 1000).toFixed(1) };
       setMessage({ kind: 'ok', text: t(probe?.programmer === 'web' ? 'build.result.builtWeb' : 'build.result.built', vars) });
@@ -416,8 +432,8 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
 
   const stale = !!built && built.key !== planKey;
   const usable = built && !stale ? built : null;
-  // The Vivado flow programs with Vivado (found when the flow is prepared); the open flows need openFPGALoader
-  const canProgram = vivadoFlow || probe?.programmer === 'native';
+  // A vendor flow programs with its own tool (found when the flow is prepared); the open flows need openFPGALoader
+  const canProgram = vendorFlow || probe?.programmer === 'native';
 
   const stepIcon = (s: StepState) => {
     switch (s) {
@@ -494,28 +510,30 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
             <span className="mx-1 h-5 border-l border-slate-300/60" />
             {canProgram && (
               <>
-                <label className="flex items-center gap-1.5 font-semibold">
-                  {t('build.target.label')}
-                  <div className={`flex items-center gap-1 p-0.5 rounded-xl border ${c.seg}`}>
-                    <button className={segBtn(target === 'sram')} onClick={() => setTarget('sram')} disabled={!!busy} title={t('build.target.sramTitle')} data-fpga-build-target="sram">
-                      {t('build.target.sram')}
-                    </button>
-                    <button
-                      className={segBtn(target === 'flash')}
-                      onClick={() => setTarget('flash')}
-                      disabled={!!busy || !flashOk}
-                      title={t(flashOk ? 'build.target.flashTitle' : 'build.target.flashUnsupported')}
-                      data-fpga-build-target="flash"
-                    >
-                      {t('build.target.flash')}
-                    </button>
-                  </div>
-                </label>
+                {!cpldFlow && (
+                  <label className="flex items-center gap-1.5 font-semibold">
+                    {t('build.target.label')}
+                    <div className={`flex items-center gap-1 p-0.5 rounded-xl border ${c.seg}`}>
+                      <button className={segBtn(target === 'sram')} onClick={() => setTarget('sram')} disabled={!!busy} title={t('build.target.sramTitle')} data-fpga-build-target="sram">
+                        {t('build.target.sram')}
+                      </button>
+                      <button
+                        className={segBtn(target === 'flash')}
+                        onClick={() => setTarget('flash')}
+                        disabled={!!busy || !flashOk}
+                        title={t(flashOk ? 'build.target.flashTitle' : 'build.target.flashUnsupported')}
+                        data-fpga-build-target="flash"
+                      >
+                        {t('build.target.flash')}
+                      </button>
+                    </div>
+                  </label>
+                )}
                 <button className={btn} disabled={!!busy || !usable} onClick={() => void programBuilt()} data-fpga-build-program>
                   <Upload className="w-3.5 h-3.5" />
                   {t('build.program')}
                 </button>
-                {!vivadoFlow && (
+                {!vendorFlow && (
                   <button className={btn} disabled={!!busy} onClick={() => void detect()} data-fpga-build-detect>
                     <Search className="w-3.5 h-3.5" />
                     {t('build.detect')}
@@ -545,7 +563,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
               {t('build.vivadoFlowNote')}
             </p>
           )}
-          {probe?.programmer === 'missing' && !vivadoFlow && (
+          {quartusFlow && (
+            <p className={`text-[11px] ${c.sub}`} data-fpga-build-vendor-note>
+              {t(cpldFlow ? 'build.quartusCpldNote' : 'build.quartusFlowNote')}
+            </p>
+          )}
+          {probe?.programmer === 'missing' && !vendorFlow && (
             <p className="text-[11px] text-amber-600 font-semibold flex items-center gap-1" data-fpga-build-no-programmer>
               <AlertTriangle className="w-3.5 h-3.5" />
               {t('build.error.noProgrammer')}

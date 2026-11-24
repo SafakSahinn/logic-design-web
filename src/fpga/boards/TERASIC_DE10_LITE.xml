@@ -10,40 +10,40 @@
       <!--This section describes all Components present on the boards-->
       <Button ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Up" InputPinSet="PIN_B8" Label="KEY0" Rect_x_y_w_h="630,245,45,30"/>
       <Button ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Up" InputPinSet="PIN_A7" Label="KEY1" Rect_x_y_w_h="630,281,45,30"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX5" OutputPinSet="PIN_J20,PIN_K20,PIN_L18,PIN_N18,PIN_M20,PIN_N19,PIN_N20,PIN_L19" Rect_x_y_w_h="30,325,50,70"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX3" OutputPinSet="PIN_F21,PIN_E22,PIN_E21,PIN_C19,PIN_C20,PIN_D19,PIN_E17,PIN_D22" Rect_x_y_w_h="137,325,50,70"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX2" OutputPinSet="PIN_B20,PIN_A20,PIN_B19,PIN_A21,PIN_B21,PIN_C22,PIN_B22,PIN_A19" Rect_x_y_w_h="191,325,50,70"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX1" OutputPinSet="PIN_C18,PIN_D18,PIN_E18,PIN_B16,PIN_A17,PIN_A18,PIN_B17,PIN_A16" Rect_x_y_w_h="245,325,50,70"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX0" OutputPinSet="PIN_C14,PIN_E15,PIN_C15,PIN_C16,PIN_E16,PIN_D17,PIN_C17,PIN_D15" Rect_x_y_w_h="300,325,50,70"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX5" OutputPinSet="PIN_J20,PIN_K20,PIN_L18,PIN_N18,PIN_M20,PIN_N19,PIN_N20,PIN_L19" Rect_x_y_w_h="30,325,50,70"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX3" OutputPinSet="PIN_F21,PIN_E22,PIN_E21,PIN_C19,PIN_C20,PIN_D19,PIN_E17,PIN_D22" Rect_x_y_w_h="137,325,50,70"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX2" OutputPinSet="PIN_B20,PIN_A20,PIN_B19,PIN_A21,PIN_B21,PIN_C22,PIN_B22,PIN_A19" Rect_x_y_w_h="191,325,50,70"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX1" OutputPinSet="PIN_C18,PIN_D18,PIN_E18,PIN_B16,PIN_A17,PIN_A18,PIN_B17,PIN_A16" Rect_x_y_w_h="245,325,50,70"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX0" OutputPinSet="PIN_C14,PIN_E15,PIN_C15,PIN_C16,PIN_E16,PIN_D17,PIN_C17,PIN_D15" Rect_x_y_w_h="300,325,50,70"/>
       <DIPSwitch ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Down" InputPinSet="PIN_C10,PIN_C11,PIN_D12,PIN_C12,PIN_A12,PIN_B12,PIN_A13,PIN_A14,PIN_B14,PIN_F15" Label="SW" Rect_x_y_w_h="355,346,330,50"/>
       <PortIo BiDirPinSet="PIN_AA1,PIN_V1,PIN_Y2,PIN_Y1" FPGAPinIOStandard="LVTTL" Label="VGA_RED" Rect_x_y_w_h="585,80,70,15"/>
       <PortIo BiDirPinSet="PIN_W1,PIN_T2,PIN_R2,PIN_R1" FPGAPinIOStandard="LVTTL" Label="VGA_GREEN" Rect_x_y_w_h="585,100,70,15"/>
       <PortIo BiDirPinSet="PIN_P1,PIN_T1,PIN_P4,PIN_N2" FPGAPinIOStandard="LVTTL" Label="VGA_BLUE" Rect_x_y_w_h="585,120,70,15"/>
       <PortIo BiDirPinSet="PIN_V10,PIN_W10,PIN_V9,PIN_W9,PIN_V8,PIN_W8,PIN_V7,PIN_W7,PIN_W6,PIN_V5,PIN_W5,PIN_AA15,PIN_AA14,PIN_W13,PIN_W12,PIN_AB13,PIN_AB12,PIN_Y11,PIN_AB11,PIN_W11,PIN_AB10,PIN_AA10,PIN_AA9,PIN_Y8,PIN_AA8,PIN_Y7,PIN_AA7,PIN_Y6,PIN_AA6,PIN_Y5,PIN_AA5,PIN_Y4,PIN_AB3,PIN_Y3,PIN_AB2,PIN_AA2" FPGAPinIOStandard="LVTTL" Label="JP1" Rect_x_y_w_h="154,3,400,50"/>
-      <Pin FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Down" Label="VGA_HS" Rect_x_y_w_h="585,140,15,15"/>
-      <Pin FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Down" Label="VGA_VS" Rect_x_y_w_h="605,140,15,15"/>
+      <Pin FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Down" Label="VGA_HS" Rect_x_y_w_h="585,140,15,15"/>
+      <Pin FPGAPinIOStandard="LVTTL" FPGAPinPullBehavior="Pull Down" Label="VGA_VS" Rect_x_y_w_h="605,140,15,15"/>
       <PortIo BiDirPinSet="PIN_AB5,PIN_AB6,PIN_AB7,PIN_AB8,PIN_AB9,PIN_Y10,PIN_AA11,PIN_AA12,PIN_AB17,PIN_AA17,PIN_AB19,PIN_AA19,PIN_Y19,PIN_AB20,PIN_AB21,PIN_AA20" FPGAPinIOStandard="LVTTL" Label="Arduino_IO" Rect_x_y_w_h="190,60,320,20"/>
-      <SevenSegment ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="HEX4" OutputPinSet="PIN_F18,PIN_E20,PIN_E19,PIN_J18,PIN_H19,PIN_F19,PIN_F20,PIN_J20" Rect_x_y_w_h="83,325,50,70"/>
-      <Pin BiDirPinSet="PIN_F16" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="Arduino_RST" Rect_x_y_w_h="277,300,15,15"/>
+      <SevenSegment ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="HEX4" OutputPinSet="PIN_F18,PIN_E20,PIN_E19,PIN_J18,PIN_H19,PIN_F19,PIN_F20,PIN_J20" Rect_x_y_w_h="83,325,50,70"/>
+      <Pin BiDirPinSet="PIN_F16" FPGAPinIOStandard="LVTTL" Label="Arduino_RST" Rect_x_y_w_h="277,300,15,15"/>
       <PortIo BiDirPinSet="PIN_U17,PIN_UW19,PIN_V18,PIN_U18,PIN_U19,PIN_T18,PIN_T19,PIN_R18,PIN_P18,PIN_P19,PIN_T20,PIN_P20,PIN_R20" FPGAPinIOStandard="LVTTL" Label="SDRAM_ADDR" Rect_x_y_w_h="90,187,110,15"/>
-      <Pin BiDirPinSet="PIN_T21" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_BA0" Rect_x_y_w_h="205,187,15,15"/>
-      <Pin BiDirPinSet="PIN_T22" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRA_BA1" Rect_x_y_w_h="225,187,15,15"/>
+      <Pin BiDirPinSet="PIN_T21" FPGAPinIOStandard="LVTTL" Label="SDRAM_BA0" Rect_x_y_w_h="205,187,15,15"/>
+      <Pin BiDirPinSet="PIN_T22" FPGAPinIOStandard="LVTTL" Label="SDRA_BA1" Rect_x_y_w_h="225,187,15,15"/>
       <PortIo BiDirPinSet="PIN_Y21,PIN_Y20,PIN_AA22,PIN_AA21,PIN_Y22,PIN_W22,PIN_W20,PIN_V21,PIN_P21,PIN_J22,PIN_H21,PIN_H22,PIN_G22,PIN_G20,PIN_G19,PIN_F22" FPGAPinIOStandard="LVTTL" Label="SDRAM_Data" Rect_x_y_w_h="90,206,110,15"/>
-      <Pin BiDirPinSet="PIN_V22" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_LDQM" Rect_x_y_w_h="205,206,15,15"/>
-      <Pin BiDirPinSet="PIN_J21" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_UDQM" Rect_x_y_w_h="225,206,15,15"/>
-      <Pin BiDirPinSet="PIN_U22" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_RAS" Rect_x_y_w_h="90,225,15,15"/>
-      <Pin BiDirPinSet="PIN_U21" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_CAS" Rect_x_y_w_h="110,225,15,15"/>
-      <Pin BiDirPinSet="PIN_L14" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_CLK" Rect_x_y_w_h="150,225,15,15"/>
-      <Pin BiDirPinSet="PIN_V20" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_WE" Rect_x_y_w_h="170,225,15,15"/>
-      <Pin BiDirPinSet="PIN_U20" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_CS" Rect_x_y_w_h="190,225,15,15"/>
-      <Pin BiDirPinSet="PIN_N22" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="SDRAM_CLKE" Rect_x_y_w_h="130,225,15,15"/>
-      <Pin BiDirPinSet="PIN_V11" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SDI" Rect_x_y_w_h="325,97,10,10"/>
-      <Pin BiDirPinSet="PIN_V12" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SDO" Rect_x_y_w_h="340,97,10,10"/>
-      <Pin BiDirPinSet="PIN_AB16" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_CS_n" Rect_x_y_w_h="355,97,10,10"/>
-      <Pin BiDirPinSet="PIN_AB15" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SCLK" Rect_x_y_w_h="325,112,10,10"/>
-      <Pin BiDirPinSet="PIN_Y14" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_INT1" Rect_x_y_w_h="340,112,10,10"/>
-      <Pin BiDirPinSet="PIN_Y13" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="GSENSOR_INT2" Rect_x_y_w_h="355,112,10,10"/>
-      <LedArray ActivityLevel="Active low" FPGAPinDriveStrength="24 mA" FPGAPinIOStandard="LVTTL" Label="LEDR" LedArrayInfo="1,10,LedDefault" OutputPinSet="PIN_A8,PIN_A9,PIN_A10,PIN_B10,PIN_D13,PIN_C13,PIN_E14,PIN_D14,PIN_A11,PIN_B11" Rect_x_y_w_h="355,325,330,20"/>
+      <Pin BiDirPinSet="PIN_V22" FPGAPinIOStandard="LVTTL" Label="SDRAM_LDQM" Rect_x_y_w_h="205,206,15,15"/>
+      <Pin BiDirPinSet="PIN_J21" FPGAPinIOStandard="LVTTL" Label="SDRAM_UDQM" Rect_x_y_w_h="225,206,15,15"/>
+      <Pin BiDirPinSet="PIN_U22" FPGAPinIOStandard="LVTTL" Label="SDRAM_RAS" Rect_x_y_w_h="90,225,15,15"/>
+      <Pin BiDirPinSet="PIN_U21" FPGAPinIOStandard="LVTTL" Label="SDRAM_CAS" Rect_x_y_w_h="110,225,15,15"/>
+      <Pin BiDirPinSet="PIN_L14" FPGAPinIOStandard="LVTTL" Label="SDRAM_CLK" Rect_x_y_w_h="150,225,15,15"/>
+      <Pin BiDirPinSet="PIN_V20" FPGAPinIOStandard="LVTTL" Label="SDRAM_WE" Rect_x_y_w_h="170,225,15,15"/>
+      <Pin BiDirPinSet="PIN_U20" FPGAPinIOStandard="LVTTL" Label="SDRAM_CS" Rect_x_y_w_h="190,225,15,15"/>
+      <Pin BiDirPinSet="PIN_N22" FPGAPinIOStandard="LVTTL" Label="SDRAM_CLKE" Rect_x_y_w_h="130,225,15,15"/>
+      <Pin BiDirPinSet="PIN_V11" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SDI" Rect_x_y_w_h="325,97,10,10"/>
+      <Pin BiDirPinSet="PIN_V12" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SDO" Rect_x_y_w_h="340,97,10,10"/>
+      <Pin BiDirPinSet="PIN_AB16" FPGAPinIOStandard="LVTTL" Label="GSENSOR_CS_n" Rect_x_y_w_h="355,97,10,10"/>
+      <Pin BiDirPinSet="PIN_AB15" FPGAPinIOStandard="LVTTL" Label="GSENSOR_SCLK" Rect_x_y_w_h="325,112,10,10"/>
+      <Pin BiDirPinSet="PIN_Y14" FPGAPinIOStandard="LVTTL" Label="GSENSOR_INT1" Rect_x_y_w_h="340,112,10,10"/>
+      <Pin BiDirPinSet="PIN_Y13" FPGAPinIOStandard="LVTTL" Label="GSENSOR_INT2" Rect_x_y_w_h="355,112,10,10"/>
+      <LedArray ActivityLevel="Active low" FPGAPinIOStandard="LVTTL" Label="LEDR" LedArrayInfo="1,10,LedDefault" OutputPinSet="PIN_A8,PIN_A9,PIN_A10,PIN_B10,PIN_D13,PIN_C13,PIN_E14,PIN_D14,PIN_A11,PIN_B11" Rect_x_y_w_h="355,325,330,20"/>
    </IOComponents>
    <BoardPicture>
       <!--This section hold the board picture-->

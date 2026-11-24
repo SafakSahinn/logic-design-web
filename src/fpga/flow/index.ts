@@ -5,21 +5,26 @@ import { buildFpgaProject, type FpgaProject, type FpgaProjectInput } from '../hd
 import { isEcp5Board, planEcp5Flow } from './ecp5';
 import { isXc7Board, planXc7Flow } from './xc7';
 import { isVivadoBoard, planVivadoFlow } from './vivado';
+import { isQuartusBoard, planQuartusFlow } from './quartus';
 import type { FlowPlan, OpenFlowFamily, VendorFlowFamily } from './model';
 
 export * from './model';
 export { ECP5_FILES, ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
 export { XC7_FILES, isXc7Board, planXc7Flow, xc7Device } from './xc7';
 export { isVivadoBoard, planVivadoFlow, vivadoBitstream, vivadoDevice } from './vivado';
+export { isQuartusBoard, planQuartusFlow, quartusBitstream, quartusDevice, type QuartusOutput } from './quartus';
 export { flowErrorLines, runFlow } from './run';
 export { vendorHint, type VendorFailure, type VendorHintKey, type VendorTool } from './vendorHints';
 export {
   canWriteFlash,
   classifyProgramOutput,
+  classifyQuartusProgramOutput,
   classifyVivadoProgramOutput,
   planDetect,
   planProgram,
+  planQuartusProgram,
   planVivadoProgram,
+  QUARTUS_PROGRAM_FILES,
   VIVADO_PROGRAM_FILE,
   programmerArgs,
   PROGRAM_FILE,
@@ -80,24 +85,26 @@ export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boo
  */
 export function vendorFlowFamily(board: BoardDefinition): VendorFlowFamily | null {
   if (isVivadoBoard(board)) return 'vivado';
+  if (isQuartusBoard(board)) return 'quartus';
   return null;
 }
 
 /**
  * Builds the project and plans the board's vendor flow (desktop only: the tools are the user's own installs).
- * Vivado reads Verilog and VHDL itself, so the chosen language is always the one synthesized.
+ * Vivado and Quartus read Verilog and VHDL themselves, so the chosen language is always the one synthesized.
  */
 export function planVendorFlow(input: FpgaProjectInput): OpenFlowPlanResult {
   const family = vendorFlowFamily(input.board);
   if (!family) return { ok: false, reason: 'notSupported' };
   const project = buildFpgaProject(input);
   if (!project.ok) return { ok: false, reason: 'drc', issues: project.issues };
-  const planned = planVivadoFlow({
+  const flowInput = {
     board: input.board,
     top: project.plan.name,
     sources: [project.design, project.topLevel],
     constraints: project.constraints,
-  });
-  if (!planned.ok) return { ok: false, reason: planned.reason === 'notVivado' ? 'notSupported' : planned.reason };
+  };
+  const planned = family === 'vivado' ? planVivadoFlow(flowInput) : planQuartusFlow(flowInput);
+  if (!planned.ok) return { ok: false, reason: planned.reason === 'notVivado' || planned.reason === 'notQuartus' ? 'notSupported' : planned.reason };
   return { ok: true, plan: planned.plan, project, synthLang: input.lang };
 }

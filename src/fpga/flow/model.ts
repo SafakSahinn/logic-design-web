@@ -9,7 +9,7 @@ import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 export type OpenFlowFamily = 'ecp5' | 'xc7';
 
 /** Families a vendor flow builds (Aşama 6k, desktop only) */
-export type VendorFlowFamily = 'vivado';
+export type VendorFlowFamily = 'vivado' | 'quartus';
 
 export type FlowFamily = OpenFlowFamily | VendorFlowFamily;
 

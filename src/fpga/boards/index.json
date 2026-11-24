@@ -237,8 +237,8 @@
     "file": "SLO_MAX7000S",
     "name": "SLO_MAX7000S",
     "vendor": "altera",
-    "family": "MAX7000S",
-    "part": "EPM7256SQC208-7",
+    "family": "MAX7000AE",
+    "part": "EPM7256AETC144-7",
     "clockHz": 5000000,
     "origin": "evo"
   },

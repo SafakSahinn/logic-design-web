@@ -105,13 +105,42 @@ function ise(plan: TopLevelPlan): string[] {
 
 // --- Intel / Altera Quartus .qsf -------------------------------------------------------------------------------
 
+/**
+ * Quartus family names by device prefix. The board files keep evo's family text ("MAX 7000", "Cyclone IV"), which
+ * Quartus refuses ("MAX 7000": Error 125094, invalid family) or overrides with a warning ("Cyclone IV": the part
+ * belongs to Cyclone IV E); the name Quartus wants follows from the part.
+ */
+const QUARTUS_FAMILIES: [RegExp, string][] = [
+  [/^EP1C/, 'Cyclone'],
+  [/^EP2C/, 'Cyclone II'],
+  [/^EP3C/, 'Cyclone III'],
+  [/^EP4CE/, 'Cyclone IV E'],
+  [/^EP4CGX/, 'Cyclone IV GX'],
+  [/^5C[EGST]/, 'Cyclone V'],
+  [/^10CL/, 'Cyclone 10 LP'],
+  [/^10M/, 'MAX 10'],
+  [/^EPM(240|570|1270|2210)/, 'MAX II'],
+  [/^5M/, 'MAX V'],
+  [/^EPM7\d+AE/, 'MAX7000AE'],
+  [/^EPM7\d+B/, 'MAX7000B'],
+  [/^EPM7\d+S/, 'MAX7000S'],
+  [/^EPM3\d+A/, 'MAX3000A'],
+];
+
+/** The family name Quartus knows for a board's part (the board's own text when the prefix is not listed) */
+export function quartusFamily(fpga: { part: string; family: string }): string {
+  const part = fpga.part.trim().toUpperCase();
+  const hit = QUARTUS_FAMILIES.find(([re]) => re.test(part));
+  return hit ? hit[1] : fpga.family;
+}
+
 function quartus(plan: TopLevelPlan, board: BoardDefinition, options: ConstraintOptions): string[] {
   const f = board.fpga;
   const g = 'set_global_assignment -name';
   const pkg = f.package.trim().split(/\s+/);
   const unused = f.unusedPull === 'pullUp' ? 'PULLUP' : f.unusedPull === 'pullDown' ? 'PULLDOWN' : 'TRI-STATED';
   const out: string[] = [
-    `${g} FAMILY "${f.family}"`,
+    `${g} FAMILY "${quartusFamily(f)}"`,
     `${g} DEVICE ${f.part}`,
     ...(pkg.length === 2 ? [`${g} DEVICE_FILTER_PACKAGE ${pkg[0]}`, `${g} DEVICE_FILTER_PIN_COUNT ${pkg[1]}`] : []),
     `${g} TOP_LEVEL_ENTITY ${plan.name}`,
@@ -128,7 +157,9 @@ function quartus(plan: TopLevelPlan, board: BoardDefinition, options: Constraint
     if (p.ioStandard !== 'default') out.push(`set_instance_assignment -name IO_STANDARD "${QUARTUS_IO[p.ioStandard]}" -to ${ref}`);
     // Quartus has a weak pull-up only (evo writes nothing for a pull-down either)
     if (p.pull === 'pullUp') out.push(`set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to ${ref}`);
-    if (p.drive) out.push(`set_instance_assignment -name CURRENT_STRENGTH_NEW "${p.drive}MA" -to ${ref}`);
+    // Quartus checks a current strength against the pin's I/O standard and refuses one on a pin that has none
+    // (Error ECUT_CUT_ATOM_PIN_MISSING_IO_STANDARD: the GECKO4 boards' LED drives); such a pin keeps the default
+    if (p.drive && p.ioStandard !== 'default') out.push(`set_instance_assignment -name CURRENT_STRENGTH_NEW "${p.drive}MA" -to ${ref}`);
   }
   return out;
 }
