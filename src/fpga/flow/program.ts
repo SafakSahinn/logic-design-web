@@ -7,6 +7,7 @@ import type { BoardDefinition } from '../board/model';
 import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 import { isEcp5Board } from './ecp5';
 import { isXc7Board } from './xc7';
+import { isVivadoBoard, vivadoDevice } from './vivado';
 
 export type ProgramTarget = 'sram' | 'flash';
 
@@ -105,6 +106,46 @@ export function classifyProgramOutput(text: string): ProgramProblem {
   return 'other';
 }
 
+/**
+ * Programming through the user's Vivado (Aşama 6k-2): the main process runs a fixed hardware-manager script
+ * (electron/vendorScripts.cjs) that starts Vivado's own hw_server on this computer, opens the JTAG cable whose chain
+ * holds the board's FPGA, and loads the bitstream into the FPGA's SRAM. The page names only the part and the file.
+ * The configuration flash is not written this way (it needs Vivado's flash-part settings per board).
+ */
+export const VIVADO_PROGRAM_FILE = 'design.bit';
+
+export function planVivadoProgram(input: {
+  board: BoardDefinition;
+  bitstream: Uint8Array;
+}): { ok: true; request: ProgramRequest } | { ok: false; reason: 'notSupported' | 'emptyBitstream' } {
+  if (!isVivadoBoard(input.board)) return { ok: false, reason: 'notSupported' };
+  const dev = vivadoDevice(input.board);
+  if (!dev.ok) return { ok: false, reason: 'notSupported' };
+  if (input.bitstream.length === 0) return { ok: false, reason: 'emptyBitstream' };
+  return {
+    ok: true,
+    request: {
+      tool: 'vivado',
+      args: ['--step', 'program', '--part', dev.part, '--bitstream', VIVADO_PROGRAM_FILE],
+      files: { [VIVADO_PROGRAM_FILE]: input.bitstream },
+      outputs: [],
+      // Vivado and its hw_server take 20-30 s to start; the SRAM load itself takes seconds
+      timeoutMs: 4 * MINUTE,
+    },
+  };
+}
+
+/**
+ * What went wrong in a Vivado programming run: the script's own "LDS-ERROR:" lines first, then Vivado's messages
+ * (Labtools 27-3303: the bitstream is for another device).
+ */
+export function classifyVivadoProgramOutput(text: string): ProgramProblem {
+  if (/LDS-ERROR: no hardware target|No hardware targets? (?:exist|found)|There is no (?:active|current) (?:hw_)?target/i.test(text)) return 'noCable';
+  if (/LDS-ERROR: no FPGA on the chain/.test(text)) return 'noFpga';
+  if (/LDS-ERROR: no matching FPGA|Labtools 27-3303|Incorrect bitstream assigned/i.test(text)) return 'wrongDevice';
+  return 'other';
+}
+
 export type ProgramResult =
   | { ok: true; exitCode: 0; stdout: string; stderr: string }
   | { ok: false; kind: 'toolFailed'; problem: ProgramProblem; exitCode: number; stdout: string; stderr: string }
@@ -135,7 +176,7 @@ export async function runProgram(
   return {
     ok: false,
     kind: 'toolFailed',
-    problem: classifyProgramOutput(`${r.stderr}\n${r.stdout}`),
+    problem: (request.tool === 'vivado' ? classifyVivadoProgramOutput : classifyProgramOutput)(`${r.stderr}\n${r.stdout}`),
     exitCode: r.exitCode,
     stdout: r.stdout,
     stderr: r.stderr,

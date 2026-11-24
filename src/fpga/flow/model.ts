@@ -8,7 +8,13 @@ import type { ToolFileData, ToolId, ToolProgress } from '../../tools/types';
 /** Families the open flow can build */
 export type OpenFlowFamily = 'ecp5' | 'xc7';
 
-export type FlowStageId = 'vhdlToVerilog' | 'synth' | 'placeRoute' | 'frames' | 'pack';
+/** Families a vendor flow builds (Aşama 6k, desktop only) */
+export type VendorFlowFamily = 'vivado';
+
+export type FlowFamily = OpenFlowFamily | VendorFlowFamily;
+
+/** vendorBuild: a vendor tool's whole build in one run (synthesis to bitstream) */
+export type FlowStageId = 'vhdlToVerilog' | 'synth' | 'placeRoute' | 'frames' | 'pack' | 'vendorBuild';
 
 export interface FlowStage {
   id: FlowStageId;
@@ -24,7 +30,7 @@ export interface FlowStage {
 }
 
 export interface FlowPlan {
-  family: OpenFlowFamily;
+  family: FlowFamily;
   /** The project files, keyed by file name */
   files: Record<string, string>;
   stages: FlowStage[];

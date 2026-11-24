@@ -1,12 +1,32 @@
 // Pure parts of the "build and program" panel (FpgaBuildPanel), kept apart so they can be tested without React:
 // which message a failed tool run shows, and which plan a built bitstream belongs to.
-import { ToolError } from '../../tools';
-import type { FlowPlan } from '../flow';
+import { ToolError, type ToolId } from '../../tools';
+import { vendorHint, type FlowPlan, type VendorTool } from '../flow';
 
 export interface BuildMessage {
   kind: 'ok' | 'error' | 'info';
   text: string;
   details?: string[];
+  /** What to do about a known vendor-tool failure (build.vendorHint.*) */
+  hint?: string;
+}
+
+const VENDOR_TOOLS: readonly ToolId[] = ['vivado', 'quartus', 'ise'];
+
+/**
+ * Adds the hint for a known vendor-tool failure (no license, a hang at start-up ...) to a failure message. The
+ * run either ended with an exit code and output, or the runner broke it off (error).
+ */
+export function withVendorHint(
+  t: Translate,
+  message: BuildMessage,
+  tool: ToolId,
+  failure: { exitCode?: number; log?: string; error?: unknown },
+): BuildMessage {
+  if (!VENDOR_TOOLS.includes(tool)) return message;
+  const errorKind = failure.error instanceof ToolError ? failure.error.kind : undefined;
+  const key = vendorHint({ tool: tool as VendorTool, exitCode: failure.exitCode, errorKind, log: failure.log });
+  return key ? { ...message, hint: t(`build.vendorHint.${key}`) } : message;
 }
 
 /** The translation function the panel uses (react-i18next's t for the "fpga" namespace) */

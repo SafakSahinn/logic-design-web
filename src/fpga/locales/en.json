@@ -339,8 +339,9 @@
       "placeRoute": "Place and route ({{tool}})",
       "frames": "FASM → frames (fasm2frames)",
       "pack": "Bitstream ({{tool}})",
-      "program": "Programming (openFPGALoader)",
-      "detect": "Board detection (openFPGALoader)"
+      "program": "Programming ({{tool}})",
+      "detect": "Board detection ({{tool}})",
+      "vendorBuild": "Synthesis, implementation and bitstream ({{tool}})"
     },
     "state": {
       "pending": "waiting",
@@ -378,7 +379,13 @@
         "wrongDevice": "The bitstream is not for the connected FPGA (or openFPGALoader does not know that FPGA). Check that the right board is selected.",
         "other": "openFPGALoader ended with exit code {{code}}; details in the log."
       },
-      "stalled": "The {{stage}} step printed nothing after it started and was stopped: the program hung while starting."
+      "stalled": "The {{stage}} step printed nothing after it started and was stopped: the program hung while starting.",
+      "programVivado": {
+        "noCable": "Vivado's hw_server found no JTAG cable. Check that the board is plugged in over USB and that Vivado's cable drivers are installed (Vivado\\data\\xicom\\cable_drivers\\nt64\\install_drivers.cmd, run as administrator). A cable whose driver was switched to WinUSB with Zadig (for openFPGALoader) is not seen by Vivado.",
+        "noFpga": "The JTAG cable answered but there is no FPGA on its chain. Check that the board is powered.",
+        "wrongDevice": "None of the connected JTAG chains holds this board's FPGA, or the bitstream is for another device. Check that the right board is selected and plugged in.",
+        "other": "Vivado ended programming with exit code {{code}}; details in the log."
+      }
     },
     "vendorHint": {
       "vivadoLicense": "Vivado did not find a valid license (exit code 42). Since 2026.1 even the free tier needs a license file: create one in AMD's license portal, save it as %USERPROFILE%\\.Xilinx\\Xilinx.lic (or set XILINXD_LICENSE_FILE to its path) and restart the app.",
@@ -387,7 +394,8 @@
       "quartusFamilyLicense": "This FPGA family needs a paid Quartus license: Quartus II 13.0sp1 Web Edition does not build for it (Error 20005). The free editions cannot build this board.",
       "iseDeviceNotInWebpack": "This FPGA is not in the free ISE WebPACK edition (Xst:1817, invalid target device). It needs a licensed ISE edition.",
       "desktopOnly": "Vivado, Quartus and ISE run only in the desktop app, with your installed vendor tool."
-    }
+    },
+    "vivadoFlowNote": "The open-source flow cannot build this board's FPGA, so it is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off)."
   },
   "circ": {
     "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",

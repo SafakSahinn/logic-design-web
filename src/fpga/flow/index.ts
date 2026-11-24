@@ -4,18 +4,23 @@ import type { DrcIssue } from '../drc/issue';
 import { buildFpgaProject, type FpgaProject, type FpgaProjectInput } from '../hdl/project';
 import { isEcp5Board, planEcp5Flow } from './ecp5';
 import { isXc7Board, planXc7Flow } from './xc7';
-import type { FlowPlan, OpenFlowFamily } from './model';
+import { isVivadoBoard, planVivadoFlow } from './vivado';
+import type { FlowPlan, OpenFlowFamily, VendorFlowFamily } from './model';
 
 export * from './model';
 export { ECP5_FILES, ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
 export { XC7_FILES, isXc7Board, planXc7Flow, xc7Device } from './xc7';
+export { isVivadoBoard, planVivadoFlow, vivadoBitstream, vivadoDevice } from './vivado';
 export { flowErrorLines, runFlow } from './run';
 export { vendorHint, type VendorFailure, type VendorHintKey, type VendorTool } from './vendorHints';
 export {
   canWriteFlash,
   classifyProgramOutput,
+  classifyVivadoProgramOutput,
   planDetect,
   planProgram,
+  planVivadoProgram,
+  VIVADO_PROGRAM_FILE,
   programmerArgs,
   PROGRAM_FILE,
   runProgram,
@@ -67,4 +72,32 @@ export function planOpenFlow(input: FpgaProjectInput, options: { canRunGhdl: boo
   const planned = family === 'ecp5' ? planEcp5Flow(flowInput) : planXc7Flow(flowInput);
   if (!planned.ok) return { ok: false, reason: planned.reason === 'notEcp5' || planned.reason === 'notXc7' ? 'notSupported' : planned.reason };
   return { ok: true, plan: planned.plan, project, synthLang };
+}
+
+/**
+ * The vendor flow that can build for a board, or null. A board can have both an open and a vendor flow (the
+ * Vivado boards); the build panel chooses (Aşama 6k-5).
+ */
+export function vendorFlowFamily(board: BoardDefinition): VendorFlowFamily | null {
+  if (isVivadoBoard(board)) return 'vivado';
+  return null;
+}
+
+/**
+ * Builds the project and plans the board's vendor flow (desktop only: the tools are the user's own installs).
+ * Vivado reads Verilog and VHDL itself, so the chosen language is always the one synthesized.
+ */
+export function planVendorFlow(input: FpgaProjectInput): OpenFlowPlanResult {
+  const family = vendorFlowFamily(input.board);
+  if (!family) return { ok: false, reason: 'notSupported' };
+  const project = buildFpgaProject(input);
+  if (!project.ok) return { ok: false, reason: 'drc', issues: project.issues };
+  const planned = planVivadoFlow({
+    board: input.board,
+    top: project.plan.name,
+    sources: [project.design, project.topLevel],
+    constraints: project.constraints,
+  });
+  if (!planned.ok) return { ok: false, reason: planned.reason === 'notVivado' ? 'notSupported' : planned.reason };
+  return { ok: true, plan: planned.plan, project, synthLang: input.lang };
 }

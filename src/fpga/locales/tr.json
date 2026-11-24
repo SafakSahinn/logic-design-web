@@ -339,8 +339,9 @@
       "placeRoute": "Yerleştirme ve yönlendirme ({{tool}})",
       "frames": "FASM → çerçeveler (fasm2frames)",
       "pack": "Bit dosyası ({{tool}})",
-      "program": "Karta yükleme (openFPGALoader)",
-      "detect": "Kart algılama (openFPGALoader)"
+      "program": "Karta yükleme ({{tool}})",
+      "detect": "Kart algılama ({{tool}})",
+      "vendorBuild": "Sentez, yerleştirme ve bitstream ({{tool}})"
     },
     "state": {
       "pending": "bekliyor",
@@ -378,7 +379,13 @@
         "wrongDevice": "Bit dosyası bağlı FPGA için değil (ya da openFPGALoader bu FPGA'yı tanımıyor). Doğru kartı seçtiğinizi denetleyin.",
         "other": "openFPGALoader {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
       },
-      "stalled": "{{stage}} adımı başladıktan sonra hiçbir şey yazmadı ve durduruldu: program açılırken takıldı."
+      "stalled": "{{stage}} adımı başladıktan sonra hiçbir şey yazmadı ve durduruldu: program açılırken takıldı.",
+      "programVivado": {
+        "noCable": "Vivado'nun hw_server'ı hiç JTAG kablosu bulamadı. Kartın USB ile takılı olduğunu ve Vivado kablo sürücülerinin kurulu olduğunu denetleyin (Vivado\\data\\xicom\\cable_drivers\\nt64\\install_drivers.cmd, yönetici olarak). Sürücüsü Zadig ile WinUSB'ye çevrilmiş bir kablo (openFPGALoader için) Vivado'da görünmez.",
+        "noFpga": "JTAG kablosu yanıt verdi ama zincirinde FPGA yok. Kartın beslemesinin açık olduğunu denetleyin.",
+        "wrongDevice": "Bağlı JTAG zincirlerinin hiçbirinde bu kartın FPGA'sı yok ya da bitstream başka bir aygıt için. Doğru kartın seçili ve takılı olduğunu denetleyin.",
+        "other": "Vivado yüklemeyi {{code}} çıkış koduyla bitirdi; ayrıntılar günlükte."
+      }
     },
     "vendorHint": {
       "vivadoLicense": "Vivado geçerli bir lisans bulamadı (çıkış kodu 42). 2026.1 sürümünden beri ücretsiz katman da lisans dosyası ister: AMD lisans portalında oluşturup %USERPROFILE%\\.Xilinx\\Xilinx.lic olarak kaydedin (ya da XILINXD_LICENSE_FILE değişkenine yolunu yazın) ve uygulamayı yeniden başlatın.",
@@ -387,7 +394,8 @@
       "quartusFamilyLicense": "Bu FPGA ailesi ücretli Quartus lisansı ister: Quartus II 13.0sp1 Web Edition bu aile için derlemez (Error 20005). Ücretsiz sürümler bu kartı derleyemez.",
       "iseDeviceNotInWebpack": "Bu FPGA ücretsiz ISE WebPACK sürümünde yok (Xst:1817, geçersiz hedef aygıt). Lisanslı bir ISE sürümü gerekir.",
       "desktopOnly": "Vivado, Quartus ve ISE yalnız masaüstü uygulamasında, bilgisayarınızda kurulu üretici aracıyla çalışır."
-    }
+    },
+    "vivadoFlowNote": "Açık kaynak akış bu kartın FPGA'sını derleyemiyor; bu yüzden kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir)."
   },
   "circ": {
     "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",

@@ -23,7 +23,10 @@ import {
   planDetect,
   planOpenFlow,
   planProgram,
+  planVendorFlow,
+  planVivadoProgram,
   runFlow,
+  vendorFlowFamily,
   runProgram,
   saveBitstream,
   type FlowResult,
@@ -34,7 +37,7 @@ import {
 import type { HdlLang } from '../hdl/drivers';
 import type { BoardMapping } from '../map/model';
 import { describeDrcIssue } from '../index';
-import { bitstreamKey, runErrorMessage as runErrorText, type BuildMessage } from './buildMessages';
+import { bitstreamKey, runErrorMessage as runErrorText, withVendorHint, type BuildMessage } from './buildMessages';
 
 export interface FpgaBuildPanelProps {
   circuitName: string;
@@ -97,10 +100,14 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const planned = useMemo(() => {
     if (!probe) return null;
     try {
-      return planOpenFlow(
-        { circuitName, components, wires, board, mapping, lang, clock: { fullSpeed, defaultHz: defaultClockHz }, describe: describeDrcIssue },
-        { canRunGhdl: probe.canRunGhdl },
-      );
+      const input = { circuitName, components, wires, board, mapping, lang, clock: { fullSpeed, defaultHz: defaultClockHz }, describe: describeDrcIssue };
+      const open = planOpenFlow(input, { canRunGhdl: probe.canRunGhdl });
+      // A board the open flow cannot build (the CMOD A7-15T's xc7a15t) is built with the installed vendor tool on
+      // the desktop. Boards with both flows keep the open one until the panel offers the choice (Aşama 6k-5).
+      if (!open.ok && (open.reason === 'notSupported' || open.reason === 'unknownPart') && vendorToolsSupported() && vendorFlowFamily(board)) {
+        return planVendorFlow(input);
+      }
+      return open;
     } catch {
       return null;
     }
@@ -114,8 +121,10 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const [message, setMessage] = useState<Message | null>(null);
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
   const [chosenTarget, setTarget] = useState<ProgramTarget>('sram');
+  // A board built with Vivado is programmed with Vivado too (its own hw_server; SRAM only, see planVivadoProgram)
+  const vivadoFlow = !!planned?.ok && planned.plan.family === 'vivado';
   // A Zynq's flash belongs to its processor side: only SRAM is offered there
-  const flashOk = canWriteFlash(board);
+  const flashOk = canWriteFlash(board) && !vivadoFlow;
   const target: ProgramTarget = flashOk ? chosenTarget : 'sram';
   const abortRef = useRef<AbortController | null>(null);
   // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
@@ -171,29 +180,33 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     });
   /** A step's name; flow stages name their tool (nextpnr-ecp5 / nextpnr-xilinx, ecppack / xc7frames2bit) */
   const stageName = (id: StepId) => {
+    if (id === 'program' || id === 'detect') return t(`build.stage.${id}`, { tool: vivadoFlow && id === 'program' ? 'Vivado' : 'openFPGALoader' });
     const stage = planned?.ok ? planned.plan.stages.find((s) => s.id === id) : undefined;
-    return t(`build.stage.${id}`, { tool: stage?.tool ?? '' });
+    return t(`build.stage.${id}`, { tool: stage?.tool === 'vivado' ? 'Vivado' : (stage?.tool ?? '') });
   };
 
   /** The message for a run the tool runner refused or broke off */
   const runErrorMessage = (error: unknown, step: StepId, aborted: boolean): Message =>
     runErrorText((key, vars) => t(key, vars ?? {}), error, stageName(step), step === 'program' || step === 'detect', aborted);
 
-  const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean): Message => {
-    if (r.kind === 'runError') return runErrorMessage(r.error, step, aborted);
-    return { kind: 'error', text: t(`build.error.program.${r.problem}`, { code: r.exitCode }) };
+  const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean, tool: ToolId = 'openfpgaloader'): Message => {
+    const tr = (key: string, vars?: Record<string, unknown>) => t(key, vars ?? {});
+    if (r.kind === 'runError') return withVendorHint(tr, runErrorMessage(r.error, step, aborted), tool, { error: r.error });
+    // Vivado has its own cable drivers and messages (build.error.programVivado.*); it never reports a board or cable name
+    const key = tool === 'vivado' ? `build.error.programVivado.${r.problem === 'unknownBoard' || r.problem === 'unknownCable' ? 'other' : r.problem}` : `build.error.program.${r.problem}`;
+    return withVendorHint(tr, { kind: 'error', text: t(key, { code: r.exitCode }) }, tool, { exitCode: r.exitCode, log: `${r.stdout}\n${r.stderr}` });
   };
 
   /** Writes a bitstream to the board; shared by "build and program" (afterBuild) and "program board" */
   const program = async (bitstream: Uint8Array, ctl: AbortController, afterBuild: boolean): Promise<void> => {
-    const p = planProgram({ board, bitstream, target });
+    const p = vivadoFlow ? planVivadoProgram({ board, bitstream }) : planProgram({ board, bitstream, target });
     if (!p.ok) {
       failFrom('program');
       setMessage({ kind: 'error', text: t('build.error.planFailed') });
       return;
     }
     setStep('program', 'running');
-    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `openFPGALoader ${p.request.args.join(' ')}`);
+    addLines(...(afterBuild ? [''] : []), `== ${stageName('program')} ==`, `${p.request.tool === 'vivado' ? 'vivado' : 'openFPGALoader'} ${p.request.args.join(' ')}`);
     const flash = target === 'flash';
     flashWritingRef.current = flash;
     setFlashWriting(flash);
@@ -210,7 +223,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     } else {
       failFrom('program');
       if (r.kind === 'toolFailed' && !r.stdout && !r.stderr) addLines(`(exit code ${r.exitCode})`);
-      setMessage(programMessage(r, 'program', ctl.signal.aborted));
+      setMessage(programMessage(r, 'program', ctl.signal.aborted, p.request.tool));
     }
   };
 
@@ -288,15 +301,17 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
       if (!result.ok) {
         const f = result.failure;
         failFrom(f.stage);
+        const tool = plan.stages.find((s) => s.id === f.stage)?.tool;
+        const tr = (key: string, vars?: Record<string, unknown>) => t(key, vars ?? {});
         if (f.kind === 'runError') {
-          setMessage(runErrorMessage(f.error, f.stage, ctl.signal.aborted));
+          const m = runErrorMessage(f.error, f.stage, ctl.signal.aborted);
+          setMessage(tool ? withVendorHint(tr, m, tool, { error: f.error }) : m);
         } else {
           const stageResult = result.stages.find((s) => s.id === f.stage);
-          setMessage(
-            f.missing
-              ? { kind: 'error', text: t('build.error.stageMissing', { stage: stageName(f.stage), file: f.missing }) }
-              : { kind: 'error', text: t('build.error.stageFailed', { stage: stageName(f.stage), code: f.exitCode }), details: stageResult ? flowErrorLines(stageResult) : [] },
-          );
+          const m: Message = f.missing
+            ? { kind: 'error', text: t('build.error.stageMissing', { stage: stageName(f.stage), file: f.missing }) }
+            : { kind: 'error', text: t('build.error.stageFailed', { stage: stageName(f.stage), code: f.exitCode }), details: stageResult ? flowErrorLines(stageResult) : [] };
+          setMessage(tool ? withVendorHint(tr, m, tool, { exitCode: f.exitCode, log: stageResult ? `${stageResult.stdout}\n${stageResult.stderr}` : '' }) : m);
         }
         return;
       }
@@ -401,7 +416,8 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
 
   const stale = !!built && built.key !== planKey;
   const usable = built && !stale ? built : null;
-  const canProgram = probe?.programmer === 'native';
+  // The Vivado flow programs with Vivado (found when the flow is prepared); the open flows need openFPGALoader
+  const canProgram = vivadoFlow || probe?.programmer === 'native';
 
   const stepIcon = (s: StepState) => {
     switch (s) {
@@ -499,10 +515,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
                   <Upload className="w-3.5 h-3.5" />
                   {t('build.program')}
                 </button>
-                <button className={btn} disabled={!!busy} onClick={() => void detect()} data-fpga-build-detect>
-                  <Search className="w-3.5 h-3.5" />
-                  {t('build.detect')}
-                </button>
+                {!vivadoFlow && (
+                  <button className={btn} disabled={!!busy} onClick={() => void detect()} data-fpga-build-detect>
+                    <Search className="w-3.5 h-3.5" />
+                    {t('build.detect')}
+                  </button>
+                )}
               </>
             )}
             <button className={btn} disabled={!!busy || !usable} onClick={download} data-fpga-build-download>
@@ -522,7 +540,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
               {t('build.error.noOpenXc7')}
             </p>
           )}
-          {probe?.programmer === 'missing' && (
+          {vivadoFlow && (
+            <p className={`text-[11px] ${c.sub}`} data-fpga-build-vendor-note>
+              {t('build.vivadoFlowNote')}
+            </p>
+          )}
+          {probe?.programmer === 'missing' && !vivadoFlow && (
             <p className="text-[11px] text-amber-600 font-semibold flex items-center gap-1" data-fpga-build-no-programmer>
               <AlertTriangle className="w-3.5 h-3.5" />
               {t('build.error.noProgrammer')}
@@ -563,6 +586,12 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
               </p>
               {message.details && message.details.length > 0 && (
                 <pre className="mt-1.5 font-mono text-[11px] whitespace-pre-wrap break-all">{message.details.join('\n')}</pre>
+              )}
+              {message.hint && (
+                <p className="mt-1.5 flex items-start gap-1.5" data-fpga-build-hint>
+                  <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>{message.hint}</span>
+                </p>
               )}
             </div>
           )}
