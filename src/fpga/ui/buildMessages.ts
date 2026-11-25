@@ -9,6 +9,8 @@ export interface BuildMessage {
   details?: string[];
   /** What to do about a known vendor-tool failure (build.vendorHint.*) */
   hint?: string;
+  /** The hint points to the panel's "Vendor tools" section: the panel opens it */
+  openVendorTools?: boolean;
 }
 
 const VENDOR_TOOLS: readonly ToolId[] = ['vivado', 'quartus', 'ise'];
@@ -35,11 +37,29 @@ export type Translate = (key: string, vars?: Record<string, unknown>) => string;
 /** How the desktop runner reports a flash write the user did not confirm (electron/toolRunner.cjs) */
 export const DECLINED_MESSAGE = 'Declined by the user';
 
+/** The program a step runs, as the messages name it */
+export interface StepTool {
+  /** "openFPGALoader", "Vivado", "quartus_pgm", "iMPACT" ... */
+  name: string;
+  /** A vendor tool the user installs (Vivado, Quartus, ISE): set up under the panel's vendor tools */
+  vendor: boolean;
+}
+
+const OPEN_PROGRAMMER: StepTool = { name: 'openFPGALoader', vendor: false };
+
 /**
  * The message for a run the tool runner refused or broke off. `stage` is the step's display name, `programming`
- * tells whether the step was openFPGALoader (program or detect), `aborted` whether the panel itself cancelled it.
+ * tells whether the step was a programming one (program or detect), `aborted` whether the panel itself cancelled
+ * it, `tool` which program the step ran (openFPGALoader when not given).
  */
-export function runErrorMessage(t: Translate, error: unknown, stage: string, programming: boolean, aborted: boolean): BuildMessage {
+export function runErrorMessage(
+  t: Translate,
+  error: unknown,
+  stage: string,
+  programming: boolean,
+  aborted: boolean,
+  tool: StepTool = OPEN_PROGRAMMER,
+): BuildMessage {
   if (aborted) return { kind: 'info', text: t('build.result.cancelled') };
   if (error instanceof ToolError) {
     switch (error.kind) {
@@ -53,8 +73,9 @@ export function runErrorMessage(t: Translate, error: unknown, stage: string, pro
       case 'output-limit':
         return { kind: 'error', text: t('build.error.outputLimit', { stage }) };
       case 'busy':
-        return { kind: 'error', text: t('build.error.busy') };
+        return { kind: 'error', text: t('build.error.busy', { tool: tool.name }) };
       case 'unavailable':
+        if (tool.vendor) return vendorMissingMessage(t, tool.name);
         if (programming && error.reason === 'not-installed') return { kind: 'error', text: t('build.error.noProgrammer') };
         return { kind: 'error', text: t('build.error.toolUnavailable', { message: error.message }) };
       default:
@@ -62,6 +83,21 @@ export function runErrorMessage(t: Translate, error: unknown, stage: string, pro
     }
   }
   return { kind: 'error', text: t('build.error.internal', { stage, message: error instanceof Error ? error.message : String(error) }) };
+}
+
+/** A vendor tool that is not installed (or not found): the hint points to the panel's vendor tools section */
+export function vendorMissingMessage(t: Translate, toolName: string): BuildMessage {
+  return { kind: 'error', text: t('build.error.vendorMissing', { tool: toolName }), hint: t('build.vendorHint.setFolder'), openVendorTools: true };
+}
+
+/**
+ * openFPGALoader found no cable on a Xilinx board. Vivado leaves hw_server.exe (and cs_server.exe) running after
+ * it exits, and hw_server keeps the JTAG cable open, so openFPGALoader cannot reach it. `running` is whether
+ * hw_server runs now (null: not known). A hint the message already has is kept.
+ */
+export function withHwServerHint(t: Translate, message: BuildMessage, running: boolean | null): BuildMessage {
+  if (running === false || message.hint) return message;
+  return { ...message, hint: t(running ? 'build.vendorHint.hwServerRunning' : 'build.vendorHint.hwServerMaybe') };
 }
 
 /**

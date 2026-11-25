@@ -15,7 +15,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Check, CheckCircle2, Circle, Copy, Download, Hammer, Loader2, MinusCircle, Search, Square, Trash2, Upload, XCircle } from 'lucide-react';
 import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit';
-import { describeToolStatus, prepareTool, runTool, toolStatus, useToolDownloadConsent, vendorToolsSupported, type ToolId } from '../../tools';
+import {
+  describeToolStatus,
+  hwServerRunning,
+  prepareTool,
+  runTool,
+  toolStatus,
+  useToolDownloadConsent,
+  vendorToolsSupported,
+  type ToolId,
+  type VendorStatus,
+} from '../../tools';
 import type { BoardDefinition } from '../board/model';
 import {
   canWriteFlash,
@@ -39,7 +49,17 @@ import {
 import type { HdlLang } from '../hdl/drivers';
 import type { BoardMapping } from '../map/model';
 import { describeDrcIssue } from '../index';
-import { bitstreamKey, runErrorMessage as runErrorText, withVendorHint, type BuildMessage } from './buildMessages';
+import {
+  bitstreamKey,
+  runErrorMessage as runErrorText,
+  vendorMissingMessage,
+  withHwServerHint,
+  withVendorHint,
+  type BuildMessage,
+  type StepTool,
+} from './buildMessages';
+import { loadFlowChoice, saveFlowChoice, selectFlow, vendorInstalled, vendorKindsFor, type FlowChoice } from './flowChoice';
+import { VendorToolsSection } from './VendorToolsSection';
 
 export interface FpgaBuildPanelProps {
   circuitName: string;
@@ -73,6 +93,9 @@ type Xc7Tools = 'native' | 'missing' | 'web';
 /** The log keeps the last lines only: a yosys run alone prints thousands */
 const MAX_LOG_LINES = 20_000;
 
+/** The vendor tools a flow stage can need, as the messages name them */
+const VENDOR_TOOL_NAMES: Partial<Record<ToolId, string>> = { vivado: 'Vivado', quartus: 'Quartus', ise: 'ISE' };
+
 export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const { circuitName, components, wires, board, mapping, lang, onLangChange, fullSpeed, onFullSpeedChange, defaultClockHz, dark } = props;
   const { t } = useTranslation('fpga');
@@ -98,29 +121,54 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     };
   }, []);
 
+  // --- Vendor tools (desktop): the installs found, and the open / vendor choice for boards with both flows ---
+  const vendorFamily = useMemo(() => vendorFlowFamily(board), [board]);
+  const vendorHere = vendorToolsSupported() && vendorFamily !== null;
+  // Filled by the "Vendor tools" section, which reads it on mount and after every change
+  const [vendorSt, setVendorSt] = useState<VendorStatus | null>(null);
+  const [vendorOpen, setVendorOpen] = useState(false);
+  const [storedChoice, setStoredChoice] = useState<{ board: string; choice: FlowChoice | null }>(() => ({ board: board.name, choice: loadFlowChoice(board.name) }));
+  const flowChoice = storedChoice.board === board.name ? storedChoice.choice : loadFlowChoice(board.name);
+  const chooseFlow = (choice: FlowChoice) => {
+    saveFlowChoice(board.name, choice);
+    setStoredChoice({ board: board.name, choice });
+  };
+
   // --- The plan for the current circuit ---
-  const planned = useMemo(() => {
+  const plannedSel = useMemo(() => {
     if (!probe) return null;
     try {
       const input = { circuitName, components, wires, board, mapping, lang, clock: { fullSpeed, defaultHz: defaultClockHz }, describe: describeDrcIssue };
       const open = planOpenFlow(input, { canRunGhdl: probe.canRunGhdl });
-      // A board the open flow cannot build (the CMOD A7-15T's xc7a15t) is built with the installed vendor tool on
-      // the desktop. Boards with both flows keep the open one until the panel offers the choice (Aşama 6k-5).
-      if (!open.ok && (open.reason === 'notSupported' || open.reason === 'unknownPart') && vendorToolsSupported() && vendorFlowFamily(board)) {
-        return planVendorFlow(input);
-      }
-      return open;
+      // A board the open flow cannot build (the CMOD A7-15T's xc7a15t, every Quartus and ISE board) is built with
+      // the installed vendor tool on the desktop; a board both can build (the other Vivado boards) uses the
+      // remembered choice, the open flow by default
+      const sel = selectFlow({
+        open,
+        vendorFamily,
+        vendorSupported: vendorToolsSupported(),
+        stored: flowChoice,
+        openToolsMissing: open.ok && open.plan.family === 'xc7' && probe.xc7 === 'missing',
+        vendorFound: vendorInstalled(vendorFamily, vendorSt),
+      });
+      return { result: sel.flow === 'vendor' ? planVendorFlow(input) : open, choosable: sel.choosable, flow: sel.flow };
     } catch {
       return null;
     }
-  }, [probe, circuitName, components, wires, board, mapping, lang, fullSpeed, defaultClockHz]);
+  }, [probe, circuitName, components, wires, board, mapping, lang, fullSpeed, defaultClockHz, vendorFamily, flowChoice, vendorSt]);
+  const planned = plannedSel?.result ?? null;
   // A built bitstream belongs to exactly these project files
   const planKey = useMemo(() => (planned?.ok ? bitstreamKey(planned.plan) : null), [planned]);
 
   // --- Run state ---
   const [busy, setBusy] = useState<null | 'build' | 'program' | 'detect'>(null);
   const [steps, setSteps] = useState<Step[]>([]);
-  const [message, setMessage] = useState<Message | null>(null);
+  const [message, setMessageState] = useState<Message | null>(null);
+  // A message whose hint points to the "Vendor tools" section (a vendor tool not found) opens it
+  const setMessage = (m: Message | null) => {
+    setMessageState(m);
+    if (m?.openVendorTools) setVendorOpen(true);
+  };
   const [built, setBuilt] = useState<{ key: string; bitstream: Uint8Array; fileName: string } | null>(null);
   const [chosenTarget, setTarget] = useState<ProgramTarget>('sram');
   // A board built with Vivado is programmed with Vivado too (its own hw_server; SRAM only, see planVivadoProgram),
@@ -137,6 +185,14 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   const target: ProgramTarget = cpldFlow ? 'flash' : flashOk ? chosenTarget : 'sram';
   /** The programmer's name in the step list and the log */
   const programmerName = vivadoFlow ? 'Vivado' : quartusFlow ? 'Quartus' : iseFlow ? 'iMPACT' : 'openFPGALoader';
+  /** The program that writes the board, as the messages name it (a busy or missing programmer) */
+  const programmerTool: StepTool = vivadoFlow
+    ? { name: 'Vivado', vendor: true }
+    : quartusFlow
+      ? { name: 'quartus_pgm', vendor: true }
+      : iseFlow
+        ? { name: 'iMPACT', vendor: true }
+        : { name: 'openFPGALoader', vendor: false };
   const abortRef = useRef<AbortController | null>(null);
   // True while openFPGALoader writes the flash: that run is not cancelled (see the header)
   const [flashWriting, setFlashWriting] = useState(false);
@@ -192,14 +248,32 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
   /** A step's name; flow stages name their tool (nextpnr-ecp5 / nextpnr-xilinx, ecppack / xc7frames2bit) */
   const stageName = (id: StepId) => {
     if (id === 'program' || id === 'detect') return t(`build.stage.${id}`, { tool: id === 'program' ? programmerName : 'openFPGALoader' });
-    const stage = planned?.ok ? planned.plan.stages.find((s) => s.id === id) : undefined;
-    const toolName = stage?.tool === 'vivado' ? 'Vivado' : stage?.tool === 'quartus' ? 'Quartus' : stage?.tool === 'ise' ? 'ISE' : (stage?.tool ?? '');
-    return t(`build.stage.${id}`, { tool: toolName });
+    return t(`build.stage.${id}`, { tool: stepTool(id).name });
+  };
+  /** The program a step runs */
+  const stepTool = (id: StepId): StepTool => {
+    if (id === 'program') return programmerTool;
+    if (id === 'detect') return { name: 'openFPGALoader', vendor: false };
+    const tool = planned?.ok ? planned.plan.stages.find((s) => s.id === id)?.tool : undefined;
+    const vendorName = tool === 'vivado' ? 'Vivado' : tool === 'quartus' ? 'Quartus' : tool === 'ise' ? 'ISE' : null;
+    return vendorName ? { name: vendorName, vendor: true } : { name: tool ?? '', vendor: false };
   };
 
   /** The message for a run the tool runner refused or broke off */
   const runErrorMessage = (error: unknown, step: StepId, aborted: boolean): Message =>
-    runErrorText((key, vars) => t(key, vars ?? {}), error, stageName(step), step === 'program' || step === 'detect', aborted);
+    runErrorText((key, vars) => t(key, vars ?? {}), error, stageName(step), step === 'program' || step === 'detect', aborted, stepTool(step));
+
+  /**
+   * openFPGALoader found no cable on a Xilinx board: Vivado's hw_server may hold it (it stays running after Vivado
+   * closes). Asks the desktop app whether hw_server runs; never stops it.
+   */
+  const addHwServerHint = async (m: Message, r: ProgramResult, tool: ToolId): Promise<Message> => {
+    if (tool !== 'openfpgaloader' || r.ok || r.kind !== 'toolFailed' || r.problem !== 'noCable' || board.fpga.vendor !== 'vivado') return m;
+    const running = await hwServerRunning();
+    // Without a desktop answer (web, not Windows) the hint is only worth showing where Vivado can run at all
+    if (running === null && !vendorToolsSupported()) return m;
+    return withHwServerHint((key, vars) => t(key, vars ?? {}), m, running);
+  };
 
   const programMessage = (r: Exclude<ProgramResult, { ok: true }>, step: 'program' | 'detect', aborted: boolean, tool: ToolId = 'openfpgaloader'): Message => {
     const tr = (key: string, vars?: Record<string, unknown>) => t(key, vars ?? {});
@@ -251,7 +325,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
     } else {
       failFrom('program');
       if (r.kind === 'toolFailed' && !r.stdout && !r.stderr) addLines(`(exit code ${r.exitCode})`);
-      setMessage(programMessage(r, 'program', ctl.signal.aborted, p.request.tool));
+      setMessage(await addHwServerHint(programMessage(r, 'program', ctl.signal.aborted, p.request.tool), r, p.request.tool));
     }
   };
 
@@ -292,6 +366,11 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
         }
         if (!status.available) {
           failFrom('prepare');
+          const vendorName = VENDOR_TOOL_NAMES[tool];
+          if (vendorName) {
+            setMessage(vendorMissingMessage((key, vars) => t(key, vars ?? {}), vendorName));
+            return;
+          }
           setMessage({
             kind: 'error',
             text:
@@ -380,7 +459,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
         setMessage({ kind: 'ok', text: t('build.result.detected') });
       } else {
         failFrom('detect');
-        setMessage(programMessage(r, 'detect', ctl.signal.aborted));
+        setMessage(await addHwServerHint(programMessage(r, 'detect', ctl.signal.aborted), r, 'openfpgaloader'));
       }
     } finally {
       finish(ctl);
@@ -480,6 +559,31 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
             </button>
           </div>
         )}
+        {plannedSel?.choosable && vendorFamily && (
+          <div className="flex items-center gap-1.5 font-semibold" title={t('build.flow.title')}>
+            {t('build.flow.label')}
+            <div className={`flex items-center gap-1 p-0.5 rounded-xl border ${c.seg}`}>
+              <button
+                className={segBtn(plannedSel.flow === 'open')}
+                onClick={() => chooseFlow('open')}
+                disabled={!!busy}
+                title={t('build.flow.openTitle')}
+                data-fpga-build-flow="open"
+              >
+                {t('build.flow.open', { tools: 'openXC7' })}
+              </button>
+              <button
+                className={segBtn(plannedSel.flow === 'vendor')}
+                onClick={() => chooseFlow('vendor')}
+                disabled={!!busy}
+                title={t('build.flow.vendorTitle', { tool: VENDOR_TOOL_NAMES[vendorFamily] })}
+                data-fpga-build-flow="vendor"
+              >
+                {VENDOR_TOOL_NAMES[vendorFamily]}
+              </button>
+            </div>
+          </div>
+        )}
         {onFullSpeedChange && (
           <label className="flex items-center gap-1.5 font-semibold cursor-pointer" title={t('hdl.fullSpeedTitle')}>
             <input type="checkbox" checked={fullSpeed} disabled={!!busy} onChange={(e) => onFullSpeedChange(e.target.checked)} data-fpga-build-fullspeed />
@@ -571,9 +675,15 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
               {t('build.error.noOpenXc7')}
             </p>
           )}
+          {vendorFlow && vendorFamily && vendorInstalled(vendorFamily, vendorSt) === false && (
+            <p className="text-[11px] text-amber-600 font-semibold flex items-center gap-1" data-fpga-build-no-vendor>
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              {t('build.vendorNotFoundNote', { tool: VENDOR_TOOL_NAMES[vendorFamily] })}
+            </p>
+          )}
           {vivadoFlow && (
             <p className={`text-[11px] ${c.sub}`} data-fpga-build-vendor-note>
-              {t('build.vivadoFlowNote')}
+              {t(plannedSel?.choosable ? 'build.vivadoChosenNote' : 'build.vivadoFlowNote')}
             </p>
           )}
           {quartusFlow && (
@@ -666,6 +776,16 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
             </pre>
           </div>
         </>
+      )}
+      {vendorHere && vendorFamily && (
+        <VendorToolsSection
+          dark={dark}
+          disabled={!!busy}
+          open={vendorOpen}
+          onOpenChange={setVendorOpen}
+          relevant={vendorKindsFor(vendorFamily)}
+          onStatus={setVendorSt}
+        />
       )}
       {downloadDialog}
     </div>

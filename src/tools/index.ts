@@ -18,6 +18,7 @@ export {
   checkVendorInstall,
   chooseVendorFolder,
   clearVendorFolder,
+  hwServerRunning,
   vendorStatus,
   vendorToolsSupported,
   type VendorCheckResult,

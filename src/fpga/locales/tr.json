@@ -374,7 +374,7 @@
       "downloadDeclined": "{{tool}} indirilmeden sentez yapılamaz.",
       "timeout": "{{stage}} aşaması süre sınırını aştı ve durduruldu.",
       "outputLimit": "{{stage}} aşaması çok fazla çıktı üretti ve durduruldu.",
-      "busy": "openFPGALoader zaten çalışıyor (başka bir yükleme ya da algılama). Bitmesini bekleyin.",
+      "busy": "{{tool}} zaten çalışıyor (başka bir yükleme). Bitmesini bekleyin.",
       "internal": "{{stage}} aşaması başlatılamadı: {{message}}",
       "planFailed": "Sentez planı hazırlanamadı.",
       "noProgrammer": "openFPGALoader bulunamadı. Kurun (oss-cad-suite içinde gelir) ve PATH üzerinde olduğundan emin olun.",
@@ -405,7 +405,8 @@
         "noFpga": "Kablo yanıt verdi ama JTAG zincirinde aygıt bulunamadı. Kartın beslendiğini denetleyin.",
         "wrongDevice": "Kartın JTAG konumundaki aygıt, dosyanın üretildiği aygıt değil. Doğru kartın seçili ve takılı olduğunu denetleyin.",
         "other": "iMPACT {{code}} çıkış koduyla bitti; ayrıntılar günlükte."
-      }
+      },
+      "vendorMissing": "{{tool}} bu bilgisayarda bulunamadı."
     },
     "vendorHint": {
       "vivadoLicense": "Vivado geçerli bir lisans bulamadı (çıkış kodu 42). 2026.1 sürümünden beri ücretsiz katman da lisans dosyası ister: AMD lisans portalında oluşturup %USERPROFILE%\\.Xilinx\\Xilinx.lic olarak kaydedin (ya da XILINXD_LICENSE_FILE değişkenine yolunu yazın) ve uygulamayı yeniden başlatın.",
@@ -413,13 +414,53 @@
       "stalled": "Üretici aracı başladıktan sonra hiçbir şey yazmadı ve durduruldu. Bir şey isteyip istemediğini (lisans, ilk açılış kurulumu) görmek için aracı bir kez elle başlatın.",
       "quartusFamilyLicense": "Bu FPGA ailesi ücretli Quartus lisansı ister: Quartus II 13.0sp1 Web Edition bu aile için derlemez (Error 20005). Ücretsiz sürümler bu kartı derleyemez.",
       "iseDeviceNotInWebpack": "Bu FPGA ücretsiz ISE WebPACK sürümünde yok (Xst:1817, geçersiz hedef aygıt). Lisanslı bir ISE sürümü gerekir.",
-      "desktopOnly": "Vivado, Quartus ve ISE yalnız masaüstü uygulamasında, bilgisayarınızda kurulu üretici aracıyla çalışır."
+      "desktopOnly": "Vivado, Quartus ve ISE yalnız masaüstü uygulamasında, bilgisayarınızda kurulu üretici aracıyla çalışır.",
+      "setFolder": "Kurun; kuruluysa klasörünü bu panelin altındaki \"Üretici araçları\" bölümünden seçin.",
+      "hwServerRunning": "Vivado'nun donanım sunucusu hâlâ çalışıyor (hw_server.exe, cs_server.exe) ve JTAG kablosunu tutuyor; bu yüzden openFPGALoader kabloyu kullanamıyor. Vivado kapandıktan sonra da bu sunucuyu açık bırakır: Görev Yöneticisi'nden hw_server.exe ve cs_server.exe'yi sonlandırıp yeniden deneyin.",
+      "hwServerMaybe": "Bu bilgisayarda Vivado kullandıysanız donanım sunucusu (hw_server.exe, cs_server.exe) hâlâ çalışıyor ve JTAG kablosunu tutuyor olabilir: ikisini de Görev Yöneticisi'nden sonlandırıp yeniden deneyin."
     },
     "vivadoFlowNote": "Açık kaynak akış bu kartın FPGA'sını derleyemiyor; bu yüzden kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir).",
     "quartusFlowNote": "Bu kart kurulu Quartus'unuzla derlenip yükleniyor (Cyclone I-III ve MAX 7000 için Quartus II 13.0sp1, yeni aileler için Quartus Prime). Yükleme ilk USB-Blaster üzerinden FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir.",
     "quartusCpldNote": "Bu kartın CPLD'si kurulu Quartus'unuzla derlenip programlanıyor. CPLD'de SRAM yüklemesi yoktur: programlama tasarımı ilk USB-Blaster üzerinden yongaya kalıcı olarak yazar (önce onayınız sorulur).",
     "iseFlowNote": "Bu kart, kurulu ISE 14.7 (WebPACK) ile derlenir ve programlanır. Programlama, iMPACT ile ilk Xilinx kablosu üzerinden FPGA'nın SRAM'ine yükler; tasarım güç kesilince silinir.",
-    "iseCpldNote": "Bu kartın CoolRunner-II CPLD'si kurulu ISE 14.7 ile derlenir ve programlanır. CPLD'de SRAM yüklemesi yoktur: programlama yongayı siler ve tasarımı kalıcı olarak içine yazar (önce size sorulur); ilk Xilinx kablosu kullanılır."
+    "iseCpldNote": "Bu kartın CoolRunner-II CPLD'si kurulu ISE 14.7 ile derlenir ve programlanır. CPLD'de SRAM yüklemesi yoktur: programlama yongayı siler ve tasarımı kalıcı olarak içine yazar (önce size sorulur); ilk Xilinx kablosu kullanılır.",
+    "flow": {
+      "label": "Araçlar",
+      "title": "Bu kartı hangi araçların derleyip yükleyeceği. Her kart için ayrı hatırlanır.",
+      "open": "Açık kaynak ({{tools}})",
+      "openTitle": "yosys, nextpnr-xilinx ve Project X-Ray veritabanı; openFPGALoader ile yüklenir",
+      "vendorTitle": "Kurulu {{tool}}; yükleme de {{tool}} ile yapılır"
+    },
+    "vivadoChosenNote": "Bu kart kurulu Vivado'nuzla derlenip yükleniyor (yükleme FPGA'nın SRAM'ine yapılır; tasarım güç kesilince silinir). Açık kaynak akış da bu kartı derleyebilir: yukarıdan değiştirin.",
+    "vendorNotFoundNote": "{{tool}} bu bilgisayarda bulunamadı. Kurun ya da klasörünü aşağıdaki \"Üretici araçları\" bölümünden seçin.",
+    "vendorTools": {
+      "title": "Üretici araçları",
+      "intro": "Uygulamanın bulduğu Vivado, Quartus ve ISE kurulumları. Sizinki uygulamanın bakmadığı bir yerde kuruluysa klasörünü seçin (uygulama klasörü denetler ve yalnızca bilinen bir üretici programını saklar).",
+      "kind": {
+        "vivado": "Vivado",
+        "quartus": "Quartus Prime",
+        "quartusLegacy": "Quartus II 13.0",
+        "ise": "ISE 14.7"
+      },
+      "notFound": "bulunamadı",
+      "inUse": "kullanılan",
+      "source": {
+        "settings": "seçilen klasör",
+        "auto": "bulundu"
+      },
+      "check": "Denetle",
+      "checking": "Denetleniyor...",
+      "choose": "Klasör seç...",
+      "clear": "Klasörü unut",
+      "chosen": "{{tool}} kaydedildi ({{exe}}).",
+      "chooseNotFound": "Bu klasörde Vivado, Quartus ya da ISE programı bulunamadı. Kurulum klasörünü seçin (örneğin C:\\AMDDesignTools\\2026.1\\Vivado, C:\\altera_lite\\25.1std ya da C:\\Xilinx\\14.7\\ISE_DS).",
+      "cleared": "{{tool}} için seçilen klasör unutuldu.",
+      "checkOk": "Çalışıyor: {{line}}",
+      "checkFailed": "Düzgün başlamadı (çıkış kodu {{code}}); çıktı: {{output}}",
+      "checkError": "Başlatılamadı: {{message}}",
+      "checkNotInstalled": "Kurulu değil.",
+      "loadFailed": "Üretici araçlarının listesi okunamadı."
+    }
   },
   "circ": {
     "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",

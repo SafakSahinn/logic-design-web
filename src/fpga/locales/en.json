@@ -374,7 +374,7 @@
       "downloadDeclined": "The build cannot run without downloading {{tool}}.",
       "timeout": "The {{stage}} step took too long and was stopped.",
       "outputLimit": "The {{stage}} step printed too much output and was stopped.",
-      "busy": "openFPGALoader is already running (another programming or detection run). Wait for it to finish.",
+      "busy": "{{tool}} is already running (another programming run). Wait for it to finish.",
       "internal": "The {{stage}} step could not start: {{message}}",
       "planFailed": "The build could not be planned.",
       "noProgrammer": "openFPGALoader was not found. Install it (it ships with oss-cad-suite) and make sure it is on the PATH.",
@@ -405,7 +405,8 @@
         "noFpga": "The cable answered but no device was found on its JTAG chain. Check that the board is powered.",
         "wrongDevice": "The device at the board's JTAG position is not the one the file was built for. Check that the right board is selected and plugged in.",
         "other": "iMPACT ended with exit code {{code}}; details in the log."
-      }
+      },
+      "vendorMissing": "{{tool}} was not found on this computer."
     },
     "vendorHint": {
       "vivadoLicense": "Vivado did not find a valid license (exit code 42). Since 2026.1 even the free tier needs a license file: create one in AMD's license portal, save it as %USERPROFILE%\\.Xilinx\\Xilinx.lic (or set XILINXD_LICENSE_FILE to its path) and restart the app.",
@@ -413,13 +414,53 @@
       "stalled": "The vendor tool printed nothing after it started and was stopped. Start it once by hand to see whether it asks for something (a license, a first-run setup).",
       "quartusFamilyLicense": "This FPGA family needs a paid Quartus license: Quartus II 13.0sp1 Web Edition does not build for it (Error 20005). The free editions cannot build this board.",
       "iseDeviceNotInWebpack": "This FPGA is not in the free ISE WebPACK edition (Xst:1817, invalid target device). It needs a licensed ISE edition.",
-      "desktopOnly": "Vivado, Quartus and ISE run only in the desktop app, with your installed vendor tool."
+      "desktopOnly": "Vivado, Quartus and ISE run only in the desktop app, with your installed vendor tool.",
+      "setFolder": "Install it, or if it is already installed, choose its folder under \"Vendor tools\" at the bottom of this panel.",
+      "hwServerRunning": "Vivado's hardware server is still running (hw_server.exe, cs_server.exe) and holds the JTAG cable, so openFPGALoader cannot use it. Vivado leaves it running after it closes: end hw_server.exe and cs_server.exe in Task Manager, then try again.",
+      "hwServerMaybe": "If you used Vivado on this computer, its hardware server (hw_server.exe, cs_server.exe) may still be running and holding the JTAG cable: end both in Task Manager, then try again."
     },
     "vivadoFlowNote": "The open-source flow cannot build this board's FPGA, so it is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off).",
     "quartusFlowNote": "This board is built and programmed with your installed Quartus (Quartus II 13.0sp1 for Cyclone I-III and MAX 7000, Quartus Prime for the newer families). Programming loads the FPGA's SRAM through the first USB-Blaster; the design is lost at power-off.",
     "quartusCpldNote": "This board's CPLD is built and programmed with your installed Quartus. A CPLD has no SRAM load: programming writes the design into the chip for good (you are asked first), through the first USB-Blaster.",
     "iseFlowNote": "This board is built and programmed with your installed ISE 14.7 (WebPACK). Programming loads the FPGA's SRAM with iMPACT through the first Xilinx cable; the design is lost at power-off.",
-    "iseCpldNote": "This board's CoolRunner-II CPLD is built and programmed with your installed ISE 14.7. A CPLD has no SRAM load: programming erases the chip and writes the design into it for good (you are asked first), through the first Xilinx cable."
+    "iseCpldNote": "This board's CoolRunner-II CPLD is built and programmed with your installed ISE 14.7. A CPLD has no SRAM load: programming erases the chip and writes the design into it for good (you are asked first), through the first Xilinx cable.",
+    "flow": {
+      "label": "Tools",
+      "title": "Which tools build and program this board. Remembered per board.",
+      "open": "Open source ({{tools}})",
+      "openTitle": "yosys, nextpnr-xilinx and the Project X-Ray database; programmed with openFPGALoader",
+      "vendorTitle": "Your installed {{tool}}; programmed with {{tool}} too"
+    },
+    "vivadoChosenNote": "This board is built and programmed with your installed Vivado (programming loads the FPGA's SRAM; the design is lost at power-off). The open-source flow can build it too: switch above.",
+    "vendorNotFoundNote": "{{tool}} was not found on this computer. Install it, or choose its folder under \"Vendor tools\" below.",
+    "vendorTools": {
+      "title": "Vendor tools",
+      "intro": "The Vivado, Quartus and ISE installs this app found. If yours is installed somewhere the app does not look, choose its folder (the app checks the folder and keeps only a known vendor program).",
+      "kind": {
+        "vivado": "Vivado",
+        "quartus": "Quartus Prime",
+        "quartusLegacy": "Quartus II 13.0",
+        "ise": "ISE 14.7"
+      },
+      "notFound": "not found",
+      "inUse": "used",
+      "source": {
+        "settings": "chosen folder",
+        "auto": "found"
+      },
+      "check": "Check",
+      "checking": "Checking...",
+      "choose": "Choose folder...",
+      "clear": "Forget folder",
+      "chosen": "{{tool}} saved ({{exe}}).",
+      "chooseNotFound": "No Vivado, Quartus or ISE program was found in that folder. Choose the install folder (for example C:\\AMDDesignTools\\2026.1\\Vivado, C:\\altera_lite\\25.1std or C:\\Xilinx\\14.7\\ISE_DS).",
+      "cleared": "The chosen folder for {{tool}} was forgotten.",
+      "checkOk": "It starts: {{line}}",
+      "checkFailed": "It did not start correctly (exit code {{code}}); output: {{output}}",
+      "checkError": "It could not be started: {{message}}",
+      "checkNotInstalled": "Not installed.",
+      "loadFailed": "The list of vendor tools could not be read."
+    }
   },
   "circ": {
     "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",

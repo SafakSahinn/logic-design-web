@@ -39,6 +39,7 @@ interface VendorBridge {
   vendorCheck(kind: VendorKind): Promise<VendorCheckResult>;
   vendorChoose(): Promise<VendorChooseResult>;
   vendorClear(kind: VendorKind): Promise<boolean>;
+  vendorHwServer?(): Promise<boolean | null>;
 }
 
 function bridge(): VendorBridge | null {
@@ -68,4 +69,19 @@ export async function chooseVendorFolder(): Promise<VendorChooseResult> {
 export async function clearVendorFolder(kind: VendorKind): Promise<boolean> {
   const b = bridge();
   return b ? b.vendorClear(kind) : false;
+}
+
+/**
+ * Whether Vivado's hw_server runs now (it keeps the JTAG cable, so openFPGALoader finds none). null when it cannot
+ * be told (web, not Windows). The app only looks: it never stops the process.
+ */
+export async function hwServerRunning(): Promise<boolean | null> {
+  const b = bridge();
+  if (!b || typeof b.vendorHwServer !== 'function') return null;
+  try {
+    const r = await b.vendorHwServer();
+    return typeof r === 'boolean' ? r : null;
+  } catch {
+    return null;
+  }
 }
