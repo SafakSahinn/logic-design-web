@@ -2,8 +2,8 @@
 import type { BoardDefinition } from '../board/model';
 import type { DrcIssue } from '../drc/issue';
 import { buildFpgaProject, type FpgaProject, type FpgaProjectInput } from '../hdl/project';
-import { isEcp5Board, planEcp5Flow } from './ecp5';
-import { isXc7Board, planXc7Flow } from './xc7';
+import { ecp5Device, isEcp5Board, planEcp5Flow } from './ecp5';
+import { isXc7Board, planXc7Flow, xc7Device } from './xc7';
 import { isVivadoBoard, planVivadoFlow } from './vivado';
 import { isQuartusBoard, planQuartusFlow } from './quartus';
 import { isIseBoard, planIseFlow } from './ise';
@@ -47,6 +47,17 @@ export function openFlowFamily(board: BoardDefinition): OpenFlowFamily | null {
   if (isEcp5Board(board)) return 'ecp5';
   if (isXc7Board(board)) return 'xc7';
   return null;
+}
+
+/**
+ * True when the open flow can build for the board at all: its family and its part and package are known. It does not
+ * depend on the circuit (a design rule error does not make a board vendor-only).
+ */
+export function openFlowBuildable(board: BoardDefinition): boolean {
+  const family = openFlowFamily(board);
+  if (family === 'ecp5') return ecp5Device(board).ok;
+  if (family === 'xc7') return xc7Device(board).ok;
+  return false;
 }
 
 export type OpenFlowPlanResult =

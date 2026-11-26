@@ -17,7 +17,7 @@ export function isIseBoard(board: BoardDefinition): boolean {
 }
 
 /** ISE device-speed-package, as the policy takes it (electron/vendorPolicy.cjs ISE_PART_RE) */
-const PART_RE = /^xc(?:3s[0-9]{2,4}(?:e|a|an|adsp)?|6slx[0-9]{1,3}t?|2c[0-9]{2,3}a?|95[0-9]{2,3}(?:xl|xv)?)-[1-5]l?-[a-z]{2,4}[0-9]{2,4}$/;
+const PART_RE = /^xc(?:3s[0-9]{2,4}(?:e|a|an|adsp)?|6slx[0-9]{1,3}t?|2c[0-9]{2,3}a?|95[0-9]{2,3}(?:xl|xv)?)-(?:[1-9]|1[0-9]|20)l?-[a-z]{2,4}[0-9]{2,4}$/;
 /** CoolRunner-II and XC9500 CPLDs: fitted by cpldfit, programmed from a .jed */
 const CPLD_RE = /^xc(?:2c|95)/;
 
@@ -32,7 +32,7 @@ export function iseDevice(
 ): { ok: true; part: string; output: IseOutput; jtagPos: number } | { ok: false; reason: 'unknownPart' | 'badPackage' } {
   const die = board.fpga.part.trim().toLowerCase();
   if (!/^xc[0-9a-z]{3,12}$/.test(die)) return { ok: false, reason: 'unknownPart' };
-  const speed = /^-?([1-5]l?)$/i.exec(board.fpga.speedGrade.trim());
+  const speed = /^-?((?:[1-9]|1[0-9]|20)l?)$/i.exec(board.fpga.speedGrade.trim());
   const pkg = board.fpga.package.trim().toLowerCase();
   if (!speed || !/^[a-z]{2,4}[0-9]{2,4}$/.test(pkg)) return { ok: false, reason: 'badPackage' };
   const part = `${die}-${speed[1].toLowerCase()}-${pkg}`;

@@ -31,6 +31,7 @@ import {
   canWriteFlash,
   flowErrorLines,
   planDetect,
+  openFlowBuildable,
   planOpenFlow,
   planProgram,
   planVendorFlow,
@@ -144,7 +145,7 @@ export function FpgaBuildPanel(props: FpgaBuildPanelProps) {
       // the installed vendor tool on the desktop; a board both can build (the other Vivado boards) uses the
       // remembered choice, the open flow by default
       const sel = selectFlow({
-        open,
+        openBuildable: openFlowBuildable(board),
         vendorFamily,
         vendorSupported: vendorToolsSupported(),
         stored: flowChoice,
