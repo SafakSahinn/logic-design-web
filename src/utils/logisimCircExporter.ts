@@ -2045,22 +2045,65 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
       xml[p.at] =
         `    <comp lib="0" loc="(${p.x},${p.y})" name="Pin"><a name="facing" val="west"/><a name="output" val="true"/>${widthAttr(w)}<a name="label" val="${xmlEsc(p.label)}"/></comp>`;
     }
+    // Logisim-evolution clears, when it loads the file, every label (a tunnel's too) that is the name of a kind of
+    // part used in that circuit, ignoring case (Circuit.removeWrongLabels), and stops on a message box for it.
+    // A part labelled with its own kind's name (an IC instance keeps its circuit's name by default) loses
+    // nothing: that label is left out. Any other such label is renamed, the same way on every tunnel of a net.
+    {
+      const compRe = /<comp (?:lib="\d+" )?loc="[^"]*" name="([^"]*)"/;
+      const labelRe = /<a name="label" val="([^"]*)"\/>/;
+      const kinds = new Set<string>();
+      const taken = new Set<string>();
+      for (const l of xml) {
+        const m = compRe.exec(l);
+        if (!m) continue;
+        kinds.add(m[1].toUpperCase());
+        const lb = labelRe.exec(l);
+        if (lb) taken.add(lb[1].toUpperCase());
+      }
+      const renamed = new Map<string, string>();
+      const fresh = (label: string) => {
+        let n = `${label}_1`;
+        for (let i = 2; kinds.has(n.toUpperCase()) || taken.has(n.toUpperCase()); i++) n = `${label}_${i}`;
+        taken.add(n.toUpperCase());
+        return n;
+      };
+      for (let k = 0; k < xml.length; k++) {
+        const m = compRe.exec(xml[k]);
+        const lb = m ? labelRe.exec(xml[k]) : null;
+        // (a Pin labelled with its circuit's name loses it as well: Circuit.isCorrectLabel)
+        const circuitNamed = !!lb && m?.[1] === 'Pin' && lb[1].toUpperCase() === xmlEsc(circuitName).toUpperCase();
+        if (!m || !lb || (!kinds.has(lb[1].toUpperCase()) && !circuitNamed)) continue;
+        if (m[1] !== 'Tunnel' && lb[1].toUpperCase() === m[1].toUpperCase()) {
+          xml[k] = xml[k].replace(lb[0], '');
+          continue;
+        }
+        // (a tunnel's net keeps one new name; a part's label gets its own)
+        const key = m[1] === 'Tunnel' ? `T:${lb[1]}` : `P:${k}`;
+        if (!renamed.has(key)) renamed.set(key, fresh(lb[1]));
+        const to = renamed.get(key)!;
+        xml[k] = xml[k].replace(lb[0], `<a name="label" val="${to}"/>`);
+        if (m[1] === 'Pin' && def === null)
+          for (const r of [...inputs, ...outputs]) if (xmlEsc(r.label) === lb[1]) r.label = to.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+        if (m[1] !== 'Tunnel')
+          warnings.push(`"${circuitName}" devresi: "${lb[1]}" etiketi ${circuitNamed ? 'devrenin kendi adı' : 'devrede kullanılan bir parça türünün adı'}; Logisim-evolution onu silerdi, "${to}" olarak yazıldı.`);
+      }
+    }
     // Logisim-evolution keeps a label on one part per circuit (ignoring case) and none that is the name of the
-    // circuit or of a kind of part used in it: it clears the others when it loads the file (2.7.1 keeps them all)
+    // circuit: it clears the others when it loads the file (2.7.1 keeps them all)
     if (labelOf.size) {
       const names = new Set([xmlEsc(circuitName).toUpperCase()]);
       const count = new Map<string, number>();
       for (const l of xml) {
         const m = /<comp (?:lib="\d+" )?loc="[^"]*" name="([^"]*)"/.exec(l);
         if (!m) continue;
-        names.add(m[1].toUpperCase());
         const lb = m[1] === 'Tunnel' ? null : /<a name="label" val="([^"]*)"\/>/.exec(l);
         if (lb) count.set(lb[1].toUpperCase(), (count.get(lb[1].toUpperCase()) ?? 0) + 1);
       }
       const lost = [...new Set(labelOf.values())].filter((l) => names.has(xmlEsc(l).toUpperCase()) || (count.get(xmlEsc(l).toUpperCase()) ?? 0) > 1);
       if (lost.length)
         warnings.push(
-          `"${circuitName}" devresi: Logisim-evolution bir devrede aynı etiketi (büyük / küçük harf ayırmadan) yalnız bir parçada tutar, devrenin ya da kullanılan bir parça türünün adıyla aynı etiketi de siler; şu etiket(ler) orada bir parçadan silinir: ${lost.join(', ')}. Logisim 2.7.1 hepsini tutar.`
+          `"${circuitName}" devresi: Logisim-evolution bir devrede aynı etiketi (büyük / küçük harf ayırmadan) yalnız bir parçada tutar, devrenin adıyla aynı etiketi de siler; şu etiket(ler) orada bir parçadan silinir: ${lost.join(', ')}. Logisim 2.7.1 hepsini tutar.`
         );
     }
     if (def === null && options.fpga) {

@@ -210,6 +210,9 @@ function mapCircCompType(name: string, isOutputPin: boolean, constantVal?: strin
   if (n === 'constant') {
     return constantVal === '0' || constantVal === '0x0' ? 'gnd' : 'vcc';
   }
+  // evolution's Wiring Ground / Power: every bit 0 / 1, connection point at loc (like a Constant)
+  if (n === 'ground') return 'gnd';
+  if (n === 'power') return 'vcc';
   if (n === 'probe') return 'probe';
   if (n === 'led') return 'led';
   // evolution's Button (I/O): a push button, written back as an input Pin
@@ -1618,8 +1621,18 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
   );
   // Library number -> description ("#Gates"), to find the component-registry part a component stands for
   const libDesc = new Map(Array.from(xmlDoc.getElementsByTagName('lib')).map((l) => [l.getAttribute('name') ?? '', l.getAttribute('desc') ?? '']));
+  // evolution's project VHDL entities (<vhdl name="..."> beside the circuits): an instance is a part with no
+  // library named after the entity; it becomes our VHDL Entity part holding that text
+  const projectVhdl = new Map<string, string>();
+  for (const n of Array.from(xmlDoc.documentElement?.childNodes ?? [])) {
+    const e = n as Element;
+    if (n.nodeType === 1 && e.tagName === 'vhdl' && e.getAttribute('name')) projectVhdl.set(e.getAttribute('name')!, e.textContent ?? '');
+  }
+  const usedVhdl = new Set<string>();
   // Logisim parts that carry no logic
   const DECORATIVE = new Set(['probe text']);
+  // Logisim 2.7.1 / evolution 5.0.0 built-in libraries (any other one is a library this program lacks)
+  const BUILTIN_LIBS = new Set(['#Wiring', '#Gates', '#Plexers', '#Arithmetic', '#FPArithmetic', '#Memory', '#I/O', '#Input/Output-Extra', '#HDL-IP', '#TCL', '#Base', '#BFH-Praktika', '#TTL', '#Soc', '#Legacy']);
 
   // partAt: our part id of each "Factory(x,y)" a dynamic appearance element can name
   const imported = new Map<string, { sheet: ImportedCircuitSheet; pins: CircPin[]; signature: string; partAt: Map<string, string> }>();
@@ -2028,7 +2041,15 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       // A part named after another circuit of the file (no library) is a subcircuit instance
       const isSub = !compNode.getAttribute('lib') && circuitByName.has(compName);
       const ttlType = ttlLibs.has(compNode.getAttribute('lib') ?? '') && isTtlType(`ttl${compName.trim()}`) ? (`ttl${compName.trim()}` as ComponentType) : null;
-      const registryPart = isSub || ttlType ? undefined : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName, attr);
+      const isProjectVhdl = !isSub && !compNode.getAttribute('lib') && projectVhdl.has(compName);
+      if (isProjectVhdl) {
+        attr.content = projectVhdl.get(compName)!;
+        usedVhdl.add(compName);
+      }
+      const registryPart =
+        isSub || ttlType ? undefined
+        : isProjectVhdl ? partOfCirc('#HDL-IP', 'VHDL Entity', attr)
+        : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName, attr);
       let nativeType = isSub ? 'subcircuit' : ttlType ?? registryPart?.id ?? mapCircCompType(compName, isOutput, constVal);
       let sub: SubcircuitInfo | undefined;
       if (isSub) {
@@ -2041,13 +2062,26 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       }
       if (!nativeType) {
         if (!DECORATIVE.has(compName.trim().toLowerCase())) {
-          const why = compName || '(adsız)';
+          // a part from a library the file only refers to (another .circ file, a Java .jar, an unknown built-in
+          // one): say where it comes from, since importing that file too is the fix for a .circ library
+          const desc = libDesc.get(compNode.getAttribute('lib') ?? '') ?? '';
+          const ext = desc.match(/^(file|jar)#([^#]*)/);
+          const from = ext
+            ? `; ${ext[2].split(/[\\/]/).pop()} ${ext[1] === 'file' ? 'dosyasındaki alt devre, o dosya ayrıca içe aktarılmalı' : 'Java kütüphanesinden'}`
+            : desc && !BUILTIN_LIBS.has(desc) ? `; ${desc.replace(/^#/, '')} kütüphanesi burada yok` : '';
+          const why = `${compName || '(adsız)'}${from}`;
           skipped.set(why, (skipped.get(why) || 0) + 1);
         }
         continue;
       }
       // Wide constants and output pins keep their width
-      if ((nativeType === 'gnd' || nativeType === 'vcc') && width > 1) nativeType = 'constant';
+      if ((nativeType === 'gnd' || nativeType === 'vcc') && width > 1) {
+        // a wide Power is all ones, a wide Ground all zeros (neither has a value attribute)
+        const kind = compName.trim().toLowerCase();
+        if (kind === 'power') attr.value = '0xffffffff';
+        else if (kind === 'ground') attr.value = '0x0';
+        nativeType = 'constant';
+      }
       // A Logisim output Pin has a fixed width, like our LED (drawn the same way when wide); a probe would
       // follow its net and hide a width mismatch
       if (nativeType === 'probe' && compName.trim().toLowerCase() === 'pin') nativeType = 'led';
@@ -2931,7 +2965,10 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
       }
     }
 
-    skipped.forEach((count, what) => warnings.unshift(`Desteklenmeyen bileşen atlandı: ${what}${count > 1 ? ` ×${count}` : ''}`));
+    skipped.forEach((count, what) => {
+      const [part, ...why] = what.split('; ');
+      warnings.unshift(`Desteklenmeyen bileşen atlandı: ${part}${count > 1 ? ` ×${count}` : ''}${why.length ? ` (${why.join('; ')})` : ''}`);
+    });
 
     return { sheet: { name: circuitName, components, wires, warnings }, pins, signature: sig.join(';'), partAt };
   };
@@ -2944,6 +2981,11 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     sheets.push(boardmaps.length ? { ...r.sheet, boardmaps } : r.sheet);
   }
   const main = xmlDoc.getElementsByTagName('main')[0]?.getAttribute('name') || undefined;
+  // project VHDL entities no circuit uses would be lost without a word: note them on the main sheet
+  const unusedVhdl = [...projectVhdl.keys()].filter((n) => !usedVhdl.has(n));
+  const noteSheet = sheets.find((s) => s.name === main) ?? sheets[0];
+  if (unusedVhdl.length && noteSheet)
+    noteSheet.warnings.push(`Projedeki VHDL varlığı hiçbir devrede kullanılmadığından alınmadı: ${unusedVhdl.join(', ')} (bir devreye yerleştirilip kaydedilirse alınır).`);
   const clockHz = readClockHz(main !== undefined ? circuitByName.get(main) : undefined);
   return { sheets, subcircuits, main, ...(clockHz !== undefined ? { clockHz } : {}) };
 }

@@ -836,7 +836,22 @@ export const computeWireShortening = (
  * 3. Splits segments wherever another wire's endpoint or a component pin touches their interior (`doSplits`).
  * 4. Merges collinear segments meeting at a degree-2 point where no pin or perpendicular wire exists (`doMerges`).
  */
-export const repairWires = (
+export const repairWires = (wires: CircuitWire[], components: CircuitComponentInstance[]): CircuitWire[] => {
+  // Routing a big circuit takes seconds, and a .circ import routes each circuit used as an IC twice (its
+  // definition, then its sheet) with the same input: big inputs keep their result for the same input
+  if (wires.length <= REPAIR_CACHE_MIN) return repairWiresNow(wires, components);
+  const key = JSON.stringify(wires) + '\u0000' + JSON.stringify(components);
+  const hit = repairCache.get(key);
+  if (hit) return structuredClone(hit);
+  const out = repairWiresNow(wires, components);
+  repairCache.set(key, structuredClone(out));
+  while (repairCache.size > 4) repairCache.delete(repairCache.keys().next().value!);
+  return out;
+};
+const REPAIR_CACHE_MIN = 300;
+const repairCache = new Map<string, CircuitWire[]>();
+
+const repairWiresNow = (
   wires: CircuitWire[],
   components: CircuitComponentInstance[]
 ): CircuitWire[] => {
@@ -940,7 +955,37 @@ export const repairWires = (
     netId: string;
   }
   const placedNetSegs: RoutedNetSeg[] = [];
+  // placedNetSegs by line: vertical ones by x, horizontal ones by y (a point or a collinear segment can only
+  // meet the segments on its own line, so the checks below look there instead of scanning every segment)
+  const vSegsAtX = new Map<number, RoutedNetSeg[]>();
+  const hSegsAtY = new Map<number, RoutedNetSeg[]>();
+  const indexSeg = (s: RoutedNetSeg) => {
+    const m = s.isVertical ? vSegsAtX : hSegsAtY;
+    const k = s.isVertical ? s.x0 : s.y0;
+    const list = m.get(k);
+    if (list) list.push(s);
+    else m.set(k, [s]);
+  };
+  const reindexSegs = () => {
+    vSegsAtX.clear();
+    hSegsAtY.clear();
+    for (const s of placedNetSegs) indexSeg(s);
+  };
   const netCorners = new Map<string, string>(); // "x,y" -> netId
+  // Grid points as one number (routes run on the 10px grid), for the per-point checks of a candidate path;
+  // pinNum / cornerNum mirror pinNetAtLoc / netCorners under that key
+  const numKey = (x: number, y: number) => (x + 1e6) * 4e6 + (y + 1e6);
+  const keyNum = (k: string) => {
+    const c = k.indexOf(',');
+    return numKey(Number(k.slice(0, c)), Number(k.slice(c + 1)));
+  };
+  const pinNum = new Map<number, string>();
+  for (const [k, net] of pinNetAtLoc) pinNum.set(keyNum(k), net);
+  const cornerNum = new Map<number, string>();
+  const syncCornerNum = () => {
+    cornerNum.clear();
+    for (const [k, net] of netCorners) cornerNum.set(keyNum(k), net);
+  };
 
   // Auto-routed wires must not run through component bodies (pins sit on the body border, so only the
   // strict interior is an obstacle). Dense or overlapping layouts fall back to body-blind routing.
@@ -949,7 +994,18 @@ export const repairWires = (
     const r = getComponentBodyRect(comp);
     if (r) bodyRects.push(r);
   }
+  // the grid points strictly inside a body, found once (a candidate path asks for every point it passes)
+  const insideBodyPts = new Set<number>();
+  for (const r of bodyRects) {
+    for (let x = Math.floor(r.x0 / GRID_SIZE) * GRID_SIZE; x < r.x1; x += GRID_SIZE) {
+      if (x <= r.x0) continue;
+      for (let y = Math.floor(r.y0 / GRID_SIZE) * GRID_SIZE; y < r.y1; y += GRID_SIZE) {
+        if (y > r.y0) insideBodyPts.add(numKey(x, y));
+      }
+    }
+  }
   const isInsideBody = (x: number, y: number): boolean => {
+    if (x % GRID_SIZE === 0 && y % GRID_SIZE === 0) return insideBodyPts.has(numKey(x, y));
     for (const r of bodyRects) {
       if (x > r.x0 && x < r.x1 && y > r.y0 && y < r.y1) return true;
     }
@@ -958,17 +1014,20 @@ export const repairWires = (
 
   const recordCorner = (pt: WirePoint, netId: string) => {
     netCorners.set(`${pt.x},${pt.y}`, netId);
+    cornerNum.set(numKey(pt.x, pt.y), netId);
   };
 
   const recordSeg = (cSeg: CanonicalSeg, netId: string) => {
-    placedNetSegs.push({
+    const s: RoutedNetSeg = {
       isVertical: cSeg.isVertical,
       x0: cSeg.x0,
       y0: cSeg.y0,
       x1: cSeg.x1,
       y1: cSeg.y1,
       netId,
-    });
+    };
+    placedNetSegs.push(s);
+    indexSeg(s);
     recordCorner({ x: cSeg.x0, y: cSeg.y0 }, netId);
     recordCorner({ x: cSeg.x1, y: cSeg.y1 }, netId);
   };
@@ -995,10 +1054,11 @@ export const repairWires = (
       if (pinNet && pinNet !== netId) return false;
       const cornerNet = netCorners.get(k);
       if (cornerNet && cornerNet !== netId) return false;
-      for (const s of placedNetSegs) {
-        if (s.netId !== netId && isPointOnRoutedSeg(pt.x, pt.y, s)) {
-          return false;
-        }
+      for (const s of vSegsAtX.get(pt.x) ?? []) {
+        if (s.netId !== netId && isPointOnRoutedSeg(pt.x, pt.y, s)) return false;
+      }
+      for (const s of hSegsAtY.get(pt.y) ?? []) {
+        if (s.netId !== netId && isPointOnRoutedSeg(pt.x, pt.y, s)) return false;
       }
     }
 
@@ -1015,32 +1075,28 @@ export const repairWires = (
       if (isVert) {
         for (let y = y0; y <= y1; y += GRID_SIZE) {
           if (avoidBodies && isInsideBody(x0, y)) return false;
-          const k = `${x0},${y}`;
-          const pNet = pinNetAtLoc.get(k);
+          const k = numKey(x0, y);
+          const pNet = pinNum.get(k);
           if (pNet && pNet !== netId) return false;
-          const cNet = netCorners.get(k);
+          const cNet = cornerNum.get(k);
           if (cNet && cNet !== netId) return false;
         }
-        for (const s of placedNetSegs) {
+        for (const s of vSegsAtX.get(x0) ?? []) {
           if (s.netId === netId) continue;
-          if (s.isVertical && s.x0 === x0) {
-            if (Math.max(y0, s.y0) <= Math.min(y1, s.y1)) return false;
-          }
+          if (Math.max(y0, s.y0) <= Math.min(y1, s.y1)) return false;
         }
       } else {
         for (let x = x0; x <= x1; x += GRID_SIZE) {
           if (avoidBodies && isInsideBody(x, y0)) return false;
-          const k = `${x},${y0}`;
-          const pNet = pinNetAtLoc.get(k);
+          const k = numKey(x, y0);
+          const pNet = pinNum.get(k);
           if (pNet && pNet !== netId) return false;
-          const cNet = netCorners.get(k);
+          const cNet = cornerNum.get(k);
           if (cNet && cNet !== netId) return false;
         }
-        for (const s of placedNetSegs) {
+        for (const s of hSegsAtY.get(y0) ?? []) {
           if (s.netId === netId) continue;
-          if (!s.isVertical && s.y0 === y0) {
-            if (Math.max(x0, s.x0) <= Math.min(x1, s.x1)) return false;
-          }
+          if (Math.max(x0, s.x0) <= Math.min(x1, s.x1)) return false;
         }
       }
     }
@@ -1048,6 +1104,8 @@ export const repairWires = (
     return true;
   };
 
+  // A big circuit (an imported RAM of hundreds of parts) takes seconds per pass: see BIG below
+  let gridAstar = false;
   const gridRoute = (sPt: WirePoint, ePt: WirePoint, netId: string, avoidBodies = false): WirePoint[] | null => {
     const MARGIN = 300;
     const minX = Math.min(sPt.x, ePt.x) - MARGIN;
@@ -1112,43 +1170,73 @@ export const repairWires = (
     const N = W * H * 2;
     const dist = new Float64Array(N).fill(Infinity);
     const prev = new Int32Array(N).fill(-1);
-    const heap: Array<[number, number]> = [];
+    // Binary min-heap of (cost, state) as two parallel arrays (no pair objects): the same sift steps as a
+    // heap of pairs, so equal costs come out in the same order
+    const heapC: number[] = [];
+    const heapS: number[] = [];
+    const swap = (a: number, b: number) => {
+      const c = heapC[a];
+      heapC[a] = heapC[b];
+      heapC[b] = c;
+      const s = heapS[a];
+      heapS[a] = heapS[b];
+      heapS[b] = s;
+    };
     const push = (c: number, st: number) => {
-      heap.push([c, st]);
-      let i = heap.length - 1;
+      heapC.push(c);
+      heapS.push(st);
+      let i = heapC.length - 1;
       while (i > 0) {
         const p = (i - 1) >> 1;
-        if (heap[p][0] <= heap[i][0]) break;
-        [heap[p], heap[i]] = [heap[i], heap[p]];
+        if (heapC[p] <= heapC[i]) break;
+        swap(p, i);
         i = p;
       }
     };
-    const pop = (): [number, number] => {
-      const top = heap[0];
-      const last = heap.pop()!;
-      if (heap.length > 0) {
-        heap[0] = last;
+    let popC = 0;
+    let popS = 0;
+    const pop = () => {
+      popC = heapC[0];
+      popS = heapS[0];
+      const lastC = heapC.pop()!;
+      const lastS = heapS.pop()!;
+      const n = heapC.length;
+      if (n > 0) {
+        heapC[0] = lastC;
+        heapS[0] = lastS;
         let i = 0;
         for (;;) {
           const l = 2 * i + 1;
           const r = l + 1;
           let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (l < n && heapC[l] < heapC[m]) m = l;
+          if (r < n && heapC[r] < heapC[m]) m = r;
           if (m === i) break;
-          [heap[m], heap[i]] = [heap[i], heap[m]];
+          swap(m, i);
           i = m;
         }
       }
-      return top;
     };
+    // A big circuit searches toward the goal (A*: the cells still to go as the estimate, which never
+    // overestimates, so the route found costs the same; among equally cheap routes another may be taken).
+    // Elsewhere the estimate is 0: the plain search, unchanged.
+    const ex = eI % W;
+    const ey = (eI - ex) / W;
+    const est = gridAstar
+      ? (cell: number) => {
+          const x = cell % W;
+          return Math.abs(x - ex) + Math.abs((cell - x) / W - ey);
+        }
+      : () => 0;
     for (const d of [0, 1]) {
       dist[sI * 2 + d] = 0;
-      push(0, sI * 2 + d);
+      push(est(sI), sI * 2 + d);
     }
     let goal = -1;
-    while (heap.length > 0) {
-      const [c, st] = pop();
+    while (heapC.length > 0) {
+      pop();
+      const st = popS;
+      const c = popC - est(st >> 1);
       if (c > dist[st]) continue;
       const cell = st >> 1;
       const d = st & 1; // 0 = horizontal, 1 = vertical
@@ -1160,7 +1248,7 @@ export const repairWires = (
         if (nc < dist[nst]) {
           dist[nst] = nc;
           prev[nst] = st;
-          push(nc, nst);
+          push(nc + est(nst >> 1), nst);
         }
       };
       // Turn in place (not allowed on foreign wires: a corner there would connect to them)
@@ -1227,8 +1315,10 @@ export const repairWires = (
   const resetPass2 = () => {
     rawSegs.length = baseSegCount;
     placedNetSegs.length = basePlacedCount;
+    reindexSegs();
     netCorners.clear();
     baseCorners.forEach((v, k) => netCorners.set(k, v));
+    syncCornerNum();
   };
 
   // Returns the items that needed the unsafe (collision-blind) fallback
@@ -1379,11 +1469,32 @@ export const repairWires = (
   return unsafe;
   };
 
+  // What a pass placed (routing is deterministic: keeping it is the same as routing that order again)
+  const snapshotPass2 = () => ({
+    segs: rawSegs.slice(baseSegCount),
+    placed: placedNetSegs.slice(basePlacedCount),
+    corners: new Map(netCorners),
+  });
+  const restorePass2 = (s: ReturnType<typeof snapshotPass2>) => {
+    rawSegs.length = baseSegCount;
+    rawSegs.push(...s.segs);
+    placedNetSegs.length = basePlacedCount;
+    placedNetSegs.push(...s.placed);
+    reindexSegs();
+    netCorners.clear();
+    s.corners.forEach((v, k) => netCorners.set(k, v));
+    syncCornerNum();
+  };
+  // A big circuit (an imported RAM of hundreds of parts) takes seconds per pass: its grid search goes toward
+  // the goal (gridAstar). The retries stay as they are everywhere: stopping them early leaves more unsafe
+  // fallbacks, and those can join nets.
+  const BIG = 300;
+  gridAstar = pendingItems.length > BIG;
   let order = pendingItems;
   let unsafe = routePending(order);
   if (unsafe.length > 0) {
-    let bestOrder = order;
     let bestUnsafe = unsafe.length;
+    let best = snapshotPass2();
     for (let attempt = 0; attempt < 6 && unsafe.length > 0; attempt++) {
       const failed = new Set(unsafe);
       order = [...unsafe, ...order.filter((item) => !failed.has(item))];
@@ -1391,13 +1502,10 @@ export const repairWires = (
       unsafe = routePending(order);
       if (unsafe.length < bestUnsafe) {
         bestUnsafe = unsafe.length;
-        bestOrder = order;
+        best = snapshotPass2();
       }
     }
-    if (unsafe.length > bestUnsafe) {
-      resetPass2();
-      routePending(bestOrder);
-    }
+    if (unsafe.length > bestUnsafe) restorePass2(best);
   }
 
   if (rawSegs.length === 0) return [];
