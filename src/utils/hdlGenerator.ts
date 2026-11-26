@@ -1261,7 +1261,6 @@ function buildModule(
           return ys.map((y) => `(${y})`).join(v ? (op === 'and' ? ' && ' : ' || ') : ` ${op} `);
         };
         const cAnd = (...xs: string[]) => cJoin('and', xs);
-        const cOr = (...xs: string[]) => cJoin('or', xs);
         const ifs = (cond: string, then: string[], els: string[] = []): string[] => {
           if (cond === T) return then;
           if (cond === F) return els;
@@ -1338,13 +1337,11 @@ function buildModule(
           break;
         }
 
-        const evo = cfg.flavor === 'evolution';
         const N = 2 ** cfg.addrWidth;
         const aOpen = (() => {
           const p = pinOf('a');
           return !p || readBits(p.id, cfg.addrWidth).floating || readBits(p.id, cfg.addrWidth).mismatch;
         })();
-        const cs = !evo ? ctl('cs', L.one) : L.one;
         // Stored words (RAM: its current contents, the simulator's starting point)
         const words: [number, number][] = [];
         for (const [k, page] of Object.entries(c.state.memPages ?? {})) {
@@ -1557,7 +1554,7 @@ function buildModule(
             body.push(`  with ${a} select ${rd} <=`, ...words.map(([k, val]) => `    ${lit(val, w)} when ${lit(k, cfg.addrWidth)},`), `    ${zeros} when others;`);
           }
           if (!declared.has(rd)) declare(rd, w);
-          select(d, [[is0c(cs), allZ]], rd);
+          select(d, [], rd);
           break;
         }
 
@@ -1567,7 +1564,7 @@ function buildModule(
         if (v) emit(rd, idx(mem));
         else body.push(`  ${rd} <= ${idx(mem)};`);
         // Data to store: a separate input with open bits stores all ones; a bus word with an undefined bit too
-        const sepData = evo ? cfg.dataBus !== 'bidir' : cfg.bus === 'separate';
+        const sepData = cfg.dataBus !== 'bidir';
         let din: string;
         if (sepData) {
           if (isOpen('din') || readBits(pinOf('din')!.id, w).floating) {
@@ -1584,39 +1581,7 @@ function buildModule(
         }
         const store = (blocking: boolean, value: string) => `${idx(mem)} ${blocking && v ? '=' : '<='} ${value};`;
 
-        if (!evo) {
-          // 2.7.1: CLR = 1 clears at once; with the part selected a rising edge (asynch bus: any time) stores
-          // when OE = 0 (combined / asynch bus) or WE is not 0 (separate); the data shows unless select / OE is 0
-          const clr = ctl('clr', L.zero);
-          const oe = ctl('oe', L.one);
-          const asynch = cfg.bus === 'asynch';
-          const clkPin = pinOf('clk');
-          const clk = asynch || !clkPin || isFloating(clkPin.id) ? L.zero : ctl('clk', L.zero);
-          const we = cfg.bus === 'separate' ? ctl('we', L.one) : L.one;
-          const wcond = cAnd(is1c(cs), cfg.bus === 'separate' ? is1c(we) : is0c(oe));
-          if (clr === L.one) notes.push('CLR hep 1: bellek hep sıfır, yazılmaz');
-          else if (asynch) {
-            proc(sigs(clr, cs, oe, a, din), ifs(is1c(clr), clearAll(true), ifs(wcond, [store(true, din)])));
-          } else if (isSignalName(clk) && wcond !== F) {
-            const body2 = ifs(is1c(clr), clearAll(false), ifs(wcond, [store(false, din)]));
-            if (v) proc([], body2, clr === L.zero ? `posedge ${clk}` : `posedge ${clk} or posedge ${clr}`);
-            else {
-              const lines = clr === L.zero
-                ? [`if rising_edge(${clk}) then`, ...ind(ifs(wcond, [store(false, din)])), 'end if;']
-                : [`if ${clr} = '1' then`, ...ind(clearAll(false)), `elsif rising_edge(${clk}) then`, ...ind(ifs(wcond, [store(false, din)])), 'end if;'];
-              proc(sigs(clk, clr), lines);
-            }
-          } else if (clr !== L.zero) {
-            if (v) proc([], clearAll(false), `posedge ${clr}`, false);
-            else proc([clr], ifs(is1c(clr), clearAll(false)));
-          }
-          if (clr === L.one) select(d, [[cOr(is0c(cs), is0c(oe)), allZ]], zeros);
-          else select(d, [[cOr(is0c(cs), is0c(oe)), allZ]], rd);
-          for (const n of notes) body.push(L.comment(n));
-          break;
-        }
-
-        // evolution: the clear pin (1) clears and drives 0 (separate) or floats (bidir); a write needs WE = 1 at
+        // RAM (evolution's rules): the clear pin (1) clears and drives 0 (separate) or floats (bidir); a write needs WE = 1 at
         // the clock edge, or WE at the trigger level (high: 1, low: 0); byte enables pick the bytes. OE = 0 floats
         // a bidir / controlled bus and keeps a plain separate one; an asynchronous read (or a level trigger)
         // shows the word at once, a clocked read takes it at the edge (after the write, or before it with 'war')

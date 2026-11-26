@@ -149,11 +149,11 @@ const SEQUENTIAL_TYPES: string[] = [
 ];
 // Timing paths end at these parts' inputs and restart at their outputs (RAM reads asynchronously, so it is not one)
 const PATH_BREAK_TYPES = SEQUENTIAL_TYPES.filter((t) => t !== 'ram' && t !== 'dualRam');
-/** evolution RAM with a clocked read: its output changes only at the clock edge, so it starts a new path */
+/** RAM with a clocked read: its output changes only at the clock edge, so it starts a new path */
 function ramSyncRead(c: CircuitComponentInstance): boolean {
   if (c.type !== 'ram' && c.type !== 'dualRam') return false;
   const cfg = getRamConfig(c);
-  return cfg.flavor === 'evolution' && (cfg.trigger === 'rising' || cfg.trigger === 'falling') && !c.state.ramAsyncRead;
+  return (cfg.trigger === 'rising' || cfg.trigger === 'falling') && !c.state.ramAsyncRead;
 }
 const breaksPath = (c: CircuitComponentInstance) => PATH_BREAK_TYPES.includes(c.type) || ramSyncRead(c);
 // Parts that are only wiring / display and add no logic level
@@ -290,7 +290,7 @@ function memGroupDetail(c: CircuitComponentInstance, enWired: boolean): string {
 function ramGroupDetail(c: CircuitComponentInstance, wired: Set<string>): string {
   if (c.type === 'random') return '';
   const cfg = getRamConfig(c);
-  const parts = [`${2 ** cfg.addrWidth}×${cfg.dataWidth}`, cfg.flavor === 'evolution' ? 'evo' : '2.7.1'];
+  const parts = [`${2 ** cfg.addrWidth}×${cfg.dataWidth}`];
   if (c.type === 'dualRam') parts.push('2 port');
   if (ramTriState(c)) parts.push('üç durumlu');
   if (ramSyncRead(c)) parts.push('eşzamanlı okuma');
@@ -299,10 +299,9 @@ function ramGroupDetail(c: CircuitComponentInstance, wired: Set<string>): string
   if (nBE) parts.push(`${nBE} bayt`);
   return parts.join(', ');
 }
-// The data output can float: 2.7.1 select (RAM and ROM), an evolution bidirectional or OE-controlled RAM bus
+// The data output can float: a bidirectional or OE-controlled RAM bus
 function ramTriState(c: CircuitComponentInstance): boolean {
   const cfg = getRamConfig(c);
-  if (cfg.flavor !== 'evolution') return true;
   return (c.type === 'ram' || c.type === 'dualRam') && cfg.dataBus !== 'separate';
 }
 function ramClearWired(c: CircuitComponentInstance, wired: Set<string>): boolean {

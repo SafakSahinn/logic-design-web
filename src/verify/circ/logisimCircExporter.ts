@@ -1573,12 +1573,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             break;
           }
           if (RAM_TYPES.has(c.type)) {
-            // Logisim has the same part. A 2.7.1-rule RAM / ROM is written in the 2.7.1 layout; a ROM and the
-            // random generator get tunnels on evolution's points too (evolution opens a file without an
-            // appearance in its own look and reads them alike). An evolution-rule memory is written with its
-            // evolution attributes and the classic appearance, on evolution's points only.
+            // Logisim has the same part. The random generator is written in the 2.7.1 layout with tunnels on
+            // evolution's points too (evolution opens a file without an appearance in its own look and reads them
+            // alike). A RAM / ROM follows evolution's rules: written with its evolution attributes and the classic
+            // appearance, on evolution's points only.
             const cfg = getRamConfig(c);
-            const evo = c.type !== 'random' && cfg.flavor === 'evolution';
+            const evo = c.type !== 'random';
             const a = (name: string, val: string | number | boolean) => `<a name="${name}" val="${val}"/>`;
             let attrs = '';
             let looks: LogisimRamLook[];
@@ -1587,20 +1587,19 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
               looks = ['logisim', 'evolution'];
             } else {
               attrs = a('addrWidth', cfg.addrWidth) + a('dataWidth', cfg.dataWidth);
-              if (c.type === 'ram' && !evo) attrs += a('bus', cfg.bus);
-              if ((c.type === 'ram' || c.type === 'dualRam') && evo) {
+              if (c.type === 'ram' || c.type === 'dualRam') {
                 const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
                 attrs += a('enables', 'byte') + a('databus', { bidir: 'bidir', separate: 'bibus', controlled: 'bibusControlled' }[cfg.dataBus]);
                 attrs += a('trigger', cfg.trigger) + a('clearpin', cfg.clearPin);
                 if (edge) attrs += a('asyncread', !!c.state.ramAsyncRead) + a('readbehav', c.state.ramReadBehavior ?? 'raw');
                 if (edge && cfg.dataWidth > 8) attrs += a('byteenables', cfg.byteEnables ? 'byteEnables' : 'NobyteEnables');
               }
-              if (evo) attrs += a('appearance', 'classic');
+              attrs += a('appearance', 'classic');
               if (c.type === 'rom') {
                 const body = memToRawText(c.state.memPages ?? {}, 2 ** cfg.addrWidth).replace(/^v2\.0 raw\n/, '');
                 attrs += `<a name="contents">addr/data: ${cfg.addrWidth} ${cfg.dataWidth}\n${body}</a>`;
               }
-              looks = evo ? ['classic'] : c.type === 'rom' ? ['logisim', 'evolution'] : ['logisim'];
+              looks = ['classic'];
             }
             const byKey = new Map([...c.inputs, ...c.outputs].map((p) => [pinKey(c, p), p]));
             const ports: Array<{ off: Pt; net: string; width: number; sink: boolean }> = [];
@@ -1615,17 +1614,12 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
               }
             }
             P.push({ kind: 'ram', part: c.type, attrs, ports });
-            const wired = (k: string) => isConn(byKey.get(k)?.id);
             if ((c.type === 'ram' || c.type === 'dualRam') && Object.values(c.state.memPages ?? {}).some((pg) => pg.some((v) => v)))
               warnings.push(`${label}: RAM içeriği dosyaya yazılmadı (Logisim RAM içeriğini .circ'te saklamaz); gerekiyorsa içerik düzenleyicisinden v2.0 raw dosyası olarak kaydedin.`);
             if (c.type === 'dualRam')
               warnings.push(`${label}: Logisim-evolution 5'in çift portlu RAM'i (DualRAM) olarak yazıldı; Logisim 2.7.1'de ve evolution'ın 5'ten eski sürümlerinde bu parça yok.`);
             else if (evo)
               warnings.push(`${label}: Logisim-evolution kurallı ${c.type === 'ram' ? 'RAM' : 'ROM'} olarak yazıldı; Logisim 2.7.1 bu parçayı kendi düzeniyle açar, bağlantıları tutmaz.`);
-            else if (c.type === 'ram')
-              warnings.push(`${label}: Logisim 2.7.1 RAM'i olarak yazıldı; Logisim-evolution bu RAM'i kendi düzenine çevirir (veri yolu ayarını okumaz), bağlantıları tutmaz.`);
-            else if (c.type === 'rom' && wired('cs'))
-              warnings.push(`${label}: Logisim-evolution'ın ROM'unda seçim (sel) girişi yok; orada ROM hep seçilidir.`);
             if (c.type === 'random')
               warnings.push(`${label}: Logisim-evolution aynı bağlantılarla açar ama başka bir sayı dizisi üretir (Xoshiro256++); dizi Logisim 2.7.1'de tutar.`);
             break;

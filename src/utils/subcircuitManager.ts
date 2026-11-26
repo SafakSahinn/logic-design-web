@@ -12,6 +12,7 @@ import {
   updatePinPositions,
 } from './circuitEngine';
 import { getInternalWires, snapTo10 } from './wiringEngine';
+import { upgradeLegacySubcircuit } from './legacyMemory';
 
 const SUBCIRCUITS_STORAGE_KEY = 'logicdesign_custom_subcircuits_v1';
 
@@ -188,7 +189,8 @@ export function initSubcircuits(): CustomSubcircuit[] {
       const parsed: CustomSubcircuit[] = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         parsed.forEach((item) => {
-          if (item && item.id) runtimeSubcircuits.set(item.id, item);
+          // a 2.7.1-rule RAM / ROM inside becomes an evolution one (saved so the next time the library is written)
+          if (item && item.id) runtimeSubcircuits.set(item.id, Array.isArray(item.components) ? upgradeLegacySubcircuit(item).def : item);
         });
       }
     }

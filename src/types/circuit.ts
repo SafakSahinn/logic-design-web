@@ -357,22 +357,22 @@ export interface CircuitComponentInstance {
     /** Shift register: stage values, stage 0 = the one the serial input enters, last = OUT; each LSB first */
     shiftStages?: SignalValue[][];
     /**
-     * RAM / ROM: whose rules the part follows. 'logisim' = Logisim 2.7.1 (chip select pin; RAM bus modes
-     * combined / asynch / separate, rising edge); 'evolution' = Logisim-evolution (no chip select; RAM write
-     * enable pin, trigger, clocked or asynchronous read, byte enables, optional clear pin). Unset = logisim
+     * RAM / ROM: every part follows Logisim-evolution's rules and carries 'evolution'. Unset (or 'logisim') is a
+     * Logisim 2.7.1-rule part of a project file saved before Aşama 7a-3, converted when it is opened
+     * (utils/legacyMemory)
      */
     memFlavor?: 'logisim' | 'evolution';
-    /** RAM, Logisim 2.7.1 flavor: data bus (Logisim 'bus'); unset = combined */
+    /** RAM of an older file, 2.7.1 rules: data bus (Logisim 'bus'; unset = combined); read only by the conversion */
     ramBus?: 'combined' | 'asynch' | 'separate';
-    /** RAM, evolution flavor: data bus (evolution 'databus': bidir / bibus / bibusControlled); unset = separate */
+    /** RAM: data bus (evolution 'databus': bidir / bibus / bibusControlled); unset = separate */
     ramDataBus?: 'bidir' | 'separate' | 'controlled';
-    /** RAM, evolution flavor: read without the clock (evolution 'asyncread'); unset = false */
+    /** RAM: read without the clock (evolution 'asyncread'); unset = false */
     ramAsyncRead?: boolean;
-    /** RAM, evolution flavor, clocked read: the value read at the edge is the one after the write ('raw') or before it ('war'); unset = raw */
+    /** RAM, clocked read: the value read at the edge is the one after the write ('raw') or before it ('war'); unset = raw */
     ramReadBehavior?: 'raw' | 'war';
-    /** RAM, evolution flavor: one byte enable pin per 8 data bits when wider than 8 (evolution 'byteenables'); unset = false */
+    /** RAM: one byte enable pin per 8 data bits when wider than 8 (evolution 'byteenables'); unset = false */
     ramByteEnables?: boolean;
-    /** RAM, evolution flavor: clear pin (evolution 'clearpin'); unset = false */
+    /** RAM: clear pin (evolution 'clearpin'); unset = false */
     ramClearPin?: boolean;
     /** RAM / ROM contents: pages of MEM_PAGE_SIZE words (missing page or word = 0), shared copy-on-write */
     memPages?: Record<string, number[]>;

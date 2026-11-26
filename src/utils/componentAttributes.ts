@@ -1474,14 +1474,13 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       list.push(memWidthAttr, shiftLengthAttr, shiftParallelAttr, triggerAttr);
       break;
     case 'ram':
-      list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr, ramBusAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
+      list.push(ramAddrAttr, ramDataAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
       break;
     case 'dualRam':
-      // Logisim-evolution only: no rules switch
       list.push(ramAddrAttr, ramDataAttr, ramDataBusAttr, ramTriggerAttr, ramAsyncReadAttr, ramReadBehaviorAttr, ramByteEnablesAttr, ramClearPinAttr);
       break;
     case 'rom':
-      list.push(ramAddrAttr, ramDataAttr, ramFlavorAttr);
+      list.push(ramAddrAttr, ramDataAttr);
       break;
     case 'random':
       list.push(randomWidthAttr, randomSeedAttr, triggerAttr);
@@ -2515,7 +2514,6 @@ const ioColorAttr: AttrDef = {
   set: (c, v) => ((c.state.ioOnColor ?? ioDefaultOnColor(c.type)) === v ? null : withState(c, { ioOnColor: String(v) })),
 };
 
-const isEvo = (c: CircuitComponentInstance) => (c.state.memFlavor ?? 'logisim') === 'evolution';
 const isEdge = (c: CircuitComponentInstance) => {
   const t = c.state.trigger ?? 'rising';
   return t === 'rising' || t === 'falling';
@@ -2541,34 +2539,6 @@ const ramDataAttr: AttrDef = {
   set: (c, v) => reconfigureRam(c, { dataWidth: Number(v) }),
 };
 
-const ramFlavorAttr: AttrDef = {
-  key: 'memFlavor',
-  label: 'Kurallar',
-  kind: 'buttons',
-  title: 'Parçanın hangi Logisim sürümünün kurallarıyla çalıştığı; bacaklar buna göre değişir',
-  options: [
-    { value: 'logisim', label: '2.7.1', title: 'Logisim 2.7.1: sel (seçme) bacağı, yükselen kenarda yazma, okuma hep anında' },
-    { value: 'evolution', label: 'evolution', title: 'Logisim-evolution: sel yok; RAM\'de WE bacağı, tetikleme seçimi, saatli ya da anında okuma' },
-  ],
-  get: (c) => getRamConfig(c).flavor,
-  set: (c, v) => reconfigureRam(c, { flavor: v as RamConfig['flavor'] }),
-};
-
-const ramBusAttr: AttrDef = {
-  key: 'ramBus',
-  label: 'Veri yolu',
-  kind: 'select',
-  title: 'Logisim 2.7.1 "Data Interface"',
-  options: [
-    { value: 'combined', label: 'Ortak (tek D)', title: 'Okuma ve yazma aynı D bacağından; ld = 0 iken kenarda D\'deki değer yazılır' },
-    { value: 'asynch', label: 'Asenkron (saatsiz)', title: 'Ortak D, saat bacağı yok: ld = 0 olduğu sürece yazılır' },
-    { value: 'separate', label: 'Ayrı (D + DIN)', title: 'Yazma ayrı DIN bacağından, str (WE) = 1 iken kenarda' },
-  ],
-  visible: (c) => !isEvo(c),
-  get: (c) => getRamConfig(c).bus,
-  set: (c, v) => reconfigureRam(c, { bus: v as RamConfig['bus'] }),
-};
-
 const ramDataBusAttr: AttrDef = {
   key: 'ramDataBus',
   label: 'Veri yolu',
@@ -2579,7 +2549,6 @@ const ramDataBusAttr: AttrDef = {
     { value: 'controlled', label: 'Ayrı, kontrollü', title: 'Ayrı D ve DIN; OE = 0 iken D yüzer' },
     { value: 'bidir', label: 'Çift yönlü (tek D)', title: 'Okuma ve yazma aynı D bacağından; OE = 0 iken D yüzer' },
   ],
-  visible: isEvo,
   get: (c) => getRamConfig(c).dataBus,
   set: (c, v) => reconfigureRam(c, { dataBus: v as RamConfig['dataBus'] }),
 };
@@ -2590,7 +2559,6 @@ const ramTriggerAttr: AttrDef = {
   kind: 'select',
   title: 'Yazmanın ne zaman olduğu (Logisim-evolution "Trigger"); seviyede saat bacağı yoktur, WE seviyesi yazar',
   options: TRIGGER_OPTIONS,
-  visible: isEvo,
   get: (c) => getRamConfig(c).trigger,
   set: (c, v) => reconfigureRam(c, { trigger: v as RamConfig['trigger'] }),
 };
@@ -2604,7 +2572,7 @@ const ramAsyncReadAttr: AttrDef = {
     { value: 'off', label: 'Saatli', title: 'D yalnız saat kenarında güncellenir (evolution varsayılanı)' },
     { value: 'on', label: 'Anında', title: 'D, adres değişince hemen güncellenir' },
   ],
-  visible: (c) => isEvo(c) && isEdge(c),
+  visible: isEdge,
   get: (c) => (c.state.ramAsyncRead ? 'on' : 'off'),
   set: (c, v) => ((c.state.ramAsyncRead ? 'on' : 'off') === v ? null : withState(c, { ramAsyncRead: v === 'on' })),
 };
@@ -2618,7 +2586,7 @@ const ramReadBehaviorAttr: AttrDef = {
     { value: 'raw', label: 'Yeni değer', title: 'Read after write: yazılan değer okunur' },
     { value: 'war', label: 'Eski değer', title: 'Write after read: yazmadan önceki değer okunur' },
   ],
-  visible: (c) => isEvo(c) && isEdge(c) && !c.state.ramAsyncRead,
+  visible: (c) => isEdge(c) && !c.state.ramAsyncRead,
   get: (c) => c.state.ramReadBehavior ?? 'raw',
   set: (c, v) => ((c.state.ramReadBehavior ?? 'raw') === v ? null : withState(c, { ramReadBehavior: v as 'raw' | 'war' })),
 };
@@ -2632,7 +2600,7 @@ const ramByteEnablesAttr: AttrDef = {
     { value: 'on', label: 'Açık' },
     { value: 'off', label: 'Kapalı' },
   ],
-  visible: (c) => isEvo(c) && isEdge(c) && getRamConfig(c).dataWidth > 8,
+  visible: (c) => isEdge(c) && getRamConfig(c).dataWidth > 8,
   get: (c) => (getRamConfig(c).byteEnables ? 'on' : 'off'),
   set: (c, v) => reconfigureRam(c, { byteEnables: v === 'on' }),
 };
@@ -2646,7 +2614,6 @@ const ramClearPinAttr: AttrDef = {
     { value: 'on', label: 'Var' },
     { value: 'off', label: 'Yok' },
   ],
-  visible: isEvo,
   get: (c) => (getRamConfig(c).clearPin ? 'on' : 'off'),
   set: (c, v) => reconfigureRam(c, { clearPin: v === 'on' }),
 };

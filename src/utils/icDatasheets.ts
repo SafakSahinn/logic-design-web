@@ -410,9 +410,12 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     packageType: '16-Pin DIP',
     pinCount: 16,
     simulatorCompType: 'ram',
-    simulatorSetup: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
+    simulatorSetup: (c) => {
+      const r = configureRam(c, { addrWidth: 4, dataWidth: 4, dataBus: 'controlled' });
+      return { ...r, state: { ...r.state, ramAsyncRead: true } };
+    },
     simulatorNote:
-      'Tuvale 16x4 RAM eklenir (4 bit adres, ayrı 4 bitlik veri girişi ve çıkışı). Saatli yazar (WE=1 iken CLK yükselen kenarında); çıkışları ters değildir, CS ve OE aktif-yüksektir. Başlangıçta bellek sıfırdır.',
+      'Tuvale 16x4 RAM eklenir (4 bit adres, ayrı 4 bitlik veri girişi ve çıkışı). Saatli yazar (WE=1 iken CLK yükselen kenarında), anında okur; çıkışları ters değildir, OE aktif-yüksektir (OE = 0 iken çıkış yüzer, çipteki CS\' gibi). Başlangıçta bellek sıfırdır.',
     pins: [
       { pin: 1, label: 'A0', desc: 'Adres Girişi Bit 0', type: 'in' },
       { pin: 2, label: 'CS\'', desc: 'Yonga Seçimi / Chip Select (Aktif 0)', type: 'ctrl' },

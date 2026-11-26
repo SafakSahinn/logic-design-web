@@ -268,47 +268,39 @@ export interface RamConfig {
   addrWidth: number;
   /** Data bits (1-32; random generator: its output width) */
   dataWidth: number;
-  flavor: 'logisim' | 'evolution';
-  /** Logisim 2.7.1 RAM bus */
-  bus: 'combined' | 'asynch' | 'separate';
-  /** evolution RAM data bus */
+  /** RAM data bus (evolution 'databus') */
   dataBus: 'bidir' | 'separate' | 'controlled';
-  /** evolution RAM trigger */
+  /** RAM trigger */
   trigger: 'rising' | 'falling' | 'high' | 'low';
-  /** evolution RAM: byte enable pins wanted (they exist only above 8 data bits with an edge trigger) */
+  /** RAM: byte enable pins wanted (they exist only above 8 data bits with an edge trigger) */
   byteEnables: boolean;
-  /** evolution RAM: clear pin */
+  /** RAM: clear pin */
   clearPin: boolean;
 }
 
-/** Default settings: Logisim's 8 address and 8 data bits, 2.7.1 rules (random generator: 8 bits) */
+/**
+ * Default settings: Logisim-evolution's RAM / ROM (8 address and 8 data bits, separate data bus, rising trigger;
+ * random generator: 8 bits). Every memory follows evolution's rules; a 2.7.1 RAM / ROM of an older project file
+ * is converted when it is opened (utils/legacyMemory).
+ */
 export function defaultRamConfig(): RamConfig {
-  return { addrWidth: 8, dataWidth: 8, flavor: 'logisim', bus: 'combined', dataBus: 'separate', trigger: 'rising', byteEnables: false, clearPin: false };
+  return { addrWidth: 8, dataWidth: 8, dataBus: 'separate', trigger: 'rising', byteEnables: false, clearPin: false };
 }
 
-/** Byte enable pins of an evolution RAM (RamAppearance.getNrBEPorts) */
+/** Byte enable pins of a RAM (evolution RamAppearance.getNrBEPorts) */
 export function ramByteEnableCount(cfg: RamConfig): number {
   const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
-  return cfg.flavor === 'evolution' && cfg.byteEnables && edge && cfg.dataWidth > 8 ? Math.ceil(cfg.dataWidth / 8) : 0;
+  return cfg.byteEnables && edge && cfg.dataWidth > 8 ? Math.ceil(cfg.dataWidth / 8) : 0;
 }
 
 /**
  * Pin keys of a RAM / ROM / random generator in the order the simulator relies on. A bidirectional data bus
- * (2.7.1 combined / asynch, evolution bidir) is the output 'd' plus the input 'dio' on the same point, which
- * reads the bus back.
+ * is the output 'd' plus the input 'dio' on the same point, which reads the bus back.
  */
 export function ramPinKeys(type: ComponentType, cfg: RamConfig): { inputs: string[]; outputs: string[] } {
   if (type === 'random') return { inputs: ['ck', 'nxt', 'rst'], outputs: ['out'] };
   if (type === 'dualRam') return dualRamPinKeys(cfg);
-  const evo = cfg.flavor === 'evolution';
-  if (type === 'rom') return { inputs: evo ? ['a'] : ['a', 'cs'], outputs: ['d'] };
-  if (!evo) {
-    const sep = cfg.bus === 'separate';
-    return {
-      inputs: ['a', 'cs', 'oe', 'clr', ...(cfg.bus === 'asynch' ? [] : ['clk']), ...(sep ? ['we', 'din'] : ['dio'])],
-      outputs: ['d'],
-    };
-  }
+  if (type === 'rom') return { inputs: ['a'], outputs: ['d'] };
   const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
   const bidir = cfg.dataBus === 'bidir';
   return {
@@ -363,8 +355,8 @@ export function ramPinWidth(type: ComponentType, key: string, cfg: RamConfig): n
 /**
  * Unrotated layout, origin at the body's top-left corner. RAM / ROM: Logisim's 140 x 80 box (Mem bounds -140,-40):
  * address on the left, data on the right (its location), separate data input below the address, controls along
- * the bottom (2.7.1: WE 'str', CS 'sel', CLK, OE 'ld', CLR); an evolution RAM keeps those spots and puts byte
- * enables on top. Random generator: Logisim's 30 x 40 box made 10px wider on the right (a quarter turn about the
+ * the bottom (WE, CLK, OE, CLR; 'cs' is where Logisim 2.7.1's select pin sat, kept so that a 2.7.1 part of an
+ * older file still has a place until it is converted), byte enables on top. Random generator: Logisim's 30 x 40 box made 10px wider on the right (a quarter turn about the
  * centre keeps the pins on the grid), clock and next on the left, reset at the bottom.
  */
 export function ramGeometry(type: ComponentType, _cfg: RamConfig): {
@@ -434,7 +426,7 @@ export function ramPinLabel(key: string, type?: ComponentType): string {
 }
 
 function ramMeta(type: ComponentType, name: string, description: string): ComponentMetadata {
-  const cfg = { ...defaultRamConfig(), ...(type === 'dualRam' ? { flavor: 'evolution' as const } : {}) };
+  const cfg = defaultRamConfig();
   const g = ramGeometry(type, cfg);
   const keys = ramPinKeys(type, cfg);
   const pin = (id: string, kind: 'input' | 'output') => {
@@ -3275,8 +3267,8 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
   flipFlopSR: memMeta('flipFlopSR', 'S-R Flip-Flop', 'Saat tetiklendiğinde S=1 R=0 kurar, S=0 R=1 sıfırlar; S=R=1 ya da tanımsız giriş durumu değiştirmez. Kenar veya seviye tetikleme; CLR / PRE asenkron, EN yalnız 0 iken engeller'),
   register: memMeta('register', 'Yazmaç (Register)', 'Saat tetiklendiğinde ve EN 0 değilken D verisini saklar (x / E bitleri de saklanır). CLR asenkron sıfırlar. Genişlik 1-32 bit, kenar veya seviye tetikleme'),
   counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
-  ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. Logisim 2.7.1 kuralları (sel seçme bacağı; ortak, asenkron ya da ayrı veri yolu; yükselen kenarda yazma) ya da Logisim-evolution kuralları (WE bacağı; tetikleme seçimi; saatli ya da asenkron okuma; bayt etkinleştirme; CLR bacağı)'),
-  rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir. Logisim 2.7.1 kurallarında sel = 0 iken çıkış yüzer'),
+  ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. WE bacağı, tetikleme seçimi (kenar ya da seviye), ayrı ya da çift yönlü veri yolu, saatli ya da anında okuma, bayt etkinleştirme, CLR bacağı'),
+  rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir'),
   dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek (Logisim-evolution 5): her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı Logisim-evolution RAM'i gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
   random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
@@ -5142,8 +5134,6 @@ export function getRamConfig(comp: CircuitComponentInstance): RamConfig {
   return {
     addrWidth: find('a')?.width ?? d.addrWidth,
     dataWidth: find('d')?.width ?? 1,
-    flavor: comp.type === 'dualRam' ? 'evolution' : st.memFlavor ?? 'logisim',
-    bus: st.ramBus ?? 'combined',
     dataBus: st.ramDataBus ?? 'separate',
     trigger: st.trigger ?? 'rising',
     byteEnables: st.ramByteEnables ?? false,
@@ -5175,8 +5165,6 @@ export function memWrite(comp: CircuitComponentInstance, addr: number, value: nu
 export function configureRam(comp: CircuitComponentInstance, patch: Partial<RamConfig>): CircuitComponentInstance {
   const cur = comp.inputs.length ? getRamConfig(comp) : defaultRamConfig();
   const cfg: RamConfig = { ...cur, ...patch };
-  // the dual-port RAM exists only in Logisim-evolution
-  if (comp.type === 'dualRam') cfg.flavor = 'evolution';
   cfg.dataWidth = clampWidth(cfg.dataWidth);
   cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, Math.round(cfg.addrWidth)));
   const keys = ramPinKeys(comp.type, cfg);
@@ -5188,9 +5176,11 @@ export function configureRam(comp: CircuitComponentInstance, patch: Partial<RamC
   };
   const state = { ...comp.state };
   if (comp.type !== 'random') {
-    state.memFlavor = cfg.flavor;
+    // every memory follows evolution's rules: the mark tells a converted or new part from a 2.7.1 one of an
+    // older file (utils/legacyMemory)
+    state.memFlavor = 'evolution';
+    delete state.ramBus;
     if (comp.type === 'ram' || comp.type === 'dualRam') {
-      state.ramBus = cfg.bus;
       state.ramDataBus = cfg.dataBus;
       state.trigger = cfg.trigger;
       state.ramByteEnables = cfg.byteEnables;
@@ -5250,12 +5240,7 @@ const fillBits = (w: number, v: SignalValue): SignalValue[] => new Array<SignalV
  * returns its outputs; an output it does not drive this time keeps its last value, like a Logisim port nobody
  * sets. A floating output (Logisim's unknown value) is Z.
  *
- * Logisim 2.7.1 (Ram / Rom.propagate): CLR = 1 clears (any time); sel = 0 floats the data; an address that is not
- * fully defined changes nothing; otherwise a rising edge (2.7.1 asynch bus: always) stores when OE = 0
- * (combined / asynch, from the bus) or WE is not 0 (separate, from DIN), not while clearing; the data shows the
- * word unless OE = 0 (floats). Clock, select and OE act unless 0, open counts as 1.
- *
- * evolution (Ram.propagateByteEnables, Rom.propagate): CLR pin = 1 clears and drives 0 (separate) or floats (bidir),
+ * RAM / ROM follow Logisim-evolution (Ram.propagateByteEnables, Rom.propagate): CLR pin = 1 clears and drives 0 (separate) or floats (bidir),
  * without looking at the clock; the write needs WE = 1 at the edge, or WE at the level of a high / low trigger
  * (no clock then); byte enables at 1 pick the bytes written. Reading: OE = 0 floats a bidir / controlled bus and
  * leaves a plain separate one as it is; an address with an E bit gives E, an undefined one x; asynchronous read
@@ -5286,7 +5271,6 @@ export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): S
   if (comp.type === 'dualRam') return stepDualRam(comp, cfg, at);
   const w = cfg.dataWidth;
   const mask = memMask(w);
-  const evo = cfg.flavor === 'evolution';
   let out: SignalValue[] = st.memOut?.[0]?.length === w ? st.memOut[0] : fillBits(w, 'Z');
   const finish = (bits: SignalValue[]): SignalValue[][] => {
     st.memOut = [bits];
@@ -5301,40 +5285,12 @@ export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): S
   const show = (n: number): SignalValue[] => numBits(n, w);
 
   if (comp.type === 'rom') {
-    if (!evo) {
-      if (one('cs') === 0) {
-        st.memCurrent = -1;
-        return finish(fillBits(w, 'Z'));
-      }
-      if (addr < 0) return finish(out);
-      st.memCurrent = addr;
-      return finish(show(memRead(comp, addr)));
-    }
     if (aBits.includes('E')) return finish(fillBits(w, 'E'));
     if (addr < 0) return finish(fillBits(w, 'Z'));
     st.memCurrent = addr;
     return finish(show(memRead(comp, addr)));
   }
 
-  if (!evo) {
-    const triggered = cfg.bus === 'asynch' || clockActs(comp, one('clk'), 'rising');
-    const oe = one('oe') !== 0;
-    const clear = one('clr') === 1;
-    if (clear) st.memPages = {};
-    if (one('cs') === 0) {
-      st.memCurrent = -1;
-      return finish(fillBits(w, 'Z'));
-    }
-    if (addr < 0) return finish(out);
-    st.memCurrent = addr;
-    if (!clear && triggered) {
-      const sep = cfg.bus === 'separate';
-      if (sep ? one('we') !== 0 : !oe) memWrite(comp, addr, word(sep ? 'din' : 'dio'));
-    }
-    return finish(oe ? show(memRead(comp, addr)) : fillBits(w, 'Z'));
-  }
-
-  // evolution RAM
   const sep = cfg.dataBus !== 'bidir';
   if (cfg.clearPin && one('clr') === 1) {
     st.memPages = {};
@@ -7661,9 +7617,10 @@ function ramMemoryPreset(): CircuitPreset {
   const din = busPart('switch', 60, 180, 'Veri (D3..D0)', 'ram_sw_d', { width: 4 });
   const clk = busPart('clock', 60, 280, 'CLK (Yazma Saati)', 'ram_clk');
   const we = busPart('switch', 60, 360, 'WE (Yazma İzni)', 'ram_sw_we');
-  const vcc = busPart('vcc', 140, 440, 'Seçili / Okuma (1)', 'ram_vcc');
+  const vcc = busPart('vcc', 140, 440, 'Okuma (OE = 1)', 'ram_vcc');
   const ram = busPart('ram', 240, 80, '16x4 RAM', 'ram_chip', {
-    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
+    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4 }),
+    state: { ramAsyncRead: true },
   });
   const hex = hexDigitPart(560, 100, 'Okunan Veri (Hex)', 'ram_disp');
   const { wires, link } = busWires();
@@ -7671,7 +7628,6 @@ function ramMemoryPreset(): CircuitPreset {
   link(din, din.outputs[0], ram, pk(ram, 'din'));
   link(clk, clk.outputs[0], ram, pk(ram, 'clk'));
   link(we, we.outputs[0], ram, pk(ram, 'we'));
-  link(vcc, vcc.outputs[0], ram, pk(ram, 'cs'));
   link(vcc, vcc.outputs[0], ram, pk(ram, 'oe'));
   link(ram, pk(ram, 'd'), hex, pk(hex, 'in'));
   return {
@@ -7720,11 +7676,11 @@ function sap1Preset(): CircuitPreset {
   const rst = busPart('switch', 60, 140, 'Sıfırla (Reset=0)', 'cpu_rst');
   const pc = busPart('counter', 180, 60, 'Program Sayacı (PC)', 'cpu_pc', { configure: (c) => configureMem(c, { width: 4 }) });
   const ram = busPart('ram', 340, 60, '16x4 Program Belleği (RAM)', 'cpu_ram', {
-    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4, bus: 'separate' }),
-    state: { memPages: memContents([3, 7, 2, 9, 12, 5, 1, 14, 0, 4, 8, 11, 15, 6, 10, 13]) },
+    configure: (c) => configureRam(c, { addrWidth: 4, dataWidth: 4 }),
+    state: { ramAsyncRead: true, memPages: memContents([3, 7, 2, 9, 12, 5, 1, 14, 0, 4, 8, 11, 15, 6, 10, 13]) },
   });
   const we = busPart('switch', 200, 260, 'RAM Yazma (WE=0)', 'cpu_we');
-  const vcc = busPart('vcc', 260, 330, 'Seçili / Okuma (1)', 'cpu_vcc');
+  const vcc = busPart('vcc', 260, 330, 'Okuma (OE = 1)', 'cpu_vcc');
   const regA = busPart('register', 620, 60, 'A Yazmacı (Akümülatör)', 'cpu_reg_a', { configure: (c) => configureMem(c, { width: 4 }) });
   const regEn = busPart('switch', 500, 170, 'A-Yazmaç İzni (EN=1)', 'cpu_reg_we', { state: { on: true } });
   const disp = hexDigitPart(780, 60, 'Çıkış Portu (Display)', 'cpu_disp');
@@ -7738,7 +7694,6 @@ function sap1Preset(): CircuitPreset {
   link(pc, pk(pc, 'q'), ram, pk(ram, 'a'));
   link(clk, clk.outputs[0], ram, pk(ram, 'clk'));
   link(we, we.outputs[0], ram, pk(ram, 'we'));
-  link(vcc, vcc.outputs[0], ram, pk(ram, 'cs'));
   link(vcc, vcc.outputs[0], ram, pk(ram, 'oe'));
   link(ram, pk(ram, 'd'), regA, pk(regA, 'd'));
   link(clk, clk.outputs[0], regA, pk(regA, 'clk'));
@@ -7775,7 +7730,6 @@ function melodyCore(prefix: string, romLabel: string, notes: number[], cntLabel:
   link(clk, clk.outputs[0], cnt, pk(cnt, 'clk'));
   link(rst, rst.outputs[0], cnt, pk(cnt, 'clr'));
   link(cnt, pk(cnt, 'q'), rom, pk(rom, 'a'));
-  link(vcc, vcc.outputs[0], rom, pk(rom, 'cs'));
   return { vcc, clk, rst, cnt, rom, wires, link };
 }
 

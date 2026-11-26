@@ -121,6 +121,7 @@ import {
   resetClockState,
 } from '../../utils/circuitEngine';
 import { rawTextToMem } from '../../utils/memImage';
+import { legacyRamSettings, type LegacyRamBus } from '../../utils/legacyMemory';
 import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from '../../utils/subcircuitManager';
 import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, type Facing } from '../../utils/subcircuitAppearance';
 import { DYNAMIC_ELEMENT_OF, DYNAMIC_ELEMENT_TYPE, DYNAMIC_FACTORY, dynamicElementOfTag, dynamicShapeFromSvg, parseDynamicPath, type DynamicPathStep } from '../../utils/dynamicElements';
@@ -816,7 +817,12 @@ export type LogisimRamLook = 'logisim' | 'classic' | 'evolution';
  * Its ROM has only A and D (control block 60); Random: classic Q (40,20) CK (10,40) NXT (0,30) RST (30,40),
  * evolution Q (80,80) CK (0,50) NXT (0,40) RST (0,30).
  */
-export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: LogisimRamLook): Array<{ key: string; off: Pt }> {
+export function logisimRamPorts(
+  type: ComponentType,
+  cfg: RamConfig,
+  look: LogisimRamLook,
+  legacyBus: LegacyRamBus = 'combined'
+): Array<{ key: string; off: Pt }> {
   const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
   if (type === 'dualRam') return dualRamPorts(cfg, look);
   if (type === 'random') {
@@ -828,16 +834,15 @@ export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: Logis
     const ps = [P('a', -140, 0), P('d', 0, 0), P('cs', -90, 40)];
     if (type === 'rom') return ps;
     ps.push(P('oe', -50, 40), P('clr', -30, 40));
-    if (cfg.bus !== 'asynch') ps.push(P('clk', -70, 40));
-    if (cfg.bus === 'separate') ps.push(P('we', -110, 40), P('din', -140, 20));
+    if (legacyBus !== 'asynch') ps.push(P('clk', -70, 40));
+    if (legacyBus === 'separate') ps.push(P('we', -110, 40), P('din', -140, 20));
     else ps.push(P('dio', 0, 0));
     return ps;
   }
   const oneBit = look === 'evolution' && cfg.dataWidth === 1 ? 10 : 0;
   if (type === 'rom') return [P('a', 0, 10), P('d', 240, 60 + oneBit)];
-  const evoCfg: RamConfig = { ...cfg, flavor: 'evolution' };
   const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
-  const nBE = ramByteEnableCount(evoCfg);
+  const nBE = ramByteEnableCount(cfg);
   const dataY = 80 + (edge ? 10 : 0) + nBE * 10 + oneBit;
   const sep = cfg.dataBus !== 'bidir';
   const right = look === 'classic' ? 240 : sep ? 240 : 250;
@@ -860,7 +865,7 @@ export function logisimRamPorts(type: ComponentType, cfg: RamConfig, look: Logis
 function dualRamPorts(cfg: RamConfig, look: LogisimRamLook): Array<{ key: string; off: Pt }> {
   const P = (key: string, x: number, y: number) => ({ key, off: { x, y } });
   const edge = cfg.trigger === 'rising' || cfg.trigger === 'falling';
-  const nBE = ramByteEnableCount({ ...cfg, flavor: 'evolution' });
+  const nBE = ramByteEnableCount(cfg);
   const ctrl = (80 + (edge ? 10 : 0) + nBE * 10) * 2;
   const sep = cfg.dataBus !== 'bidir';
   const classic = look === 'classic';
@@ -911,6 +916,8 @@ export function logisimRamSettings(
   seed: number;
   pages?: Record<string, number[]>;
   notes: string[];
+  /** a Logisim 2.7.1 RAM's data bus (its pins sit in the 2.7.1 layout; the part follows evolution's rules) */
+  legacyBus?: LegacyRamBus;
 } {
   const notes: string[] = [];
   const cfg = defaultRamConfig();
@@ -934,7 +941,6 @@ export function logisimRamSettings(
   }
   // the dual-port RAM exists only in evolution
   const evo = type === 'dualRam' || evolutionFile || (type === 'rom' ? attr.appearance !== undefined : EVO_RAM_ATTRS.some((k) => attr[k] !== undefined));
-  cfg.flavor = evo ? 'evolution' : 'logisim';
   cfg.addrWidth = Math.max(RAM_ADDR_MIN, Math.min(RAM_ADDR_MAX, int(attr.addrWidth, 8)));
   cfg.dataWidth = int(attr.dataWidth, 8);
   if (cfg.dataWidth > 32) {
@@ -943,9 +949,18 @@ export function logisimRamSettings(
   }
   let asyncRead = false;
   let readBehavior: 'raw' | 'war' = 'raw';
+  let legacyBus: LegacyRamBus | undefined;
+  if (!evo) notes.push(`Logisim 2.7.1 ${type === 'rom' ? 'ROM' : 'RAM'}'u Logisim-evolution kurallarıyla alındı (sel bacağı yok).`);
   if (type === 'ram' || type === 'dualRam') {
-    if (!evo) cfg.bus = attr.bus === 'asynch' || attr.bus === 'separate' ? attr.bus : 'combined';
-    else {
+    if (!evo) {
+      // the app's conversion of a 2.7.1 RAM (utils/legacyMemory), keeping the clear pin; a combined bus gets
+      // no NOT gate here, so WE stays open
+      legacyBus = attr.bus === 'asynch' || attr.bus === 'separate' ? attr.bus : 'combined';
+      const legacy = legacyRamSettings(legacyBus, true);
+      Object.assign(cfg, legacy.patch);
+      asyncRead = legacy.asyncRead;
+      if (legacyBus !== 'separate') notes.push('ortak / asenkron veri yolu: WE bacağı bağlanmadı, RAM yazmaz.');
+    } else {
       cfg.dataBus = attr.databus === 'bidir' ? 'bidir' : attr.databus === 'bibusControlled' ? 'controlled' : 'separate';
       cfg.trigger = (['rising', 'falling', 'high', 'low'] as const).find((t) => t === attr.trigger) ?? 'rising';
       cfg.byteEnables = attr.byteenables === 'byteEnables';
@@ -971,7 +986,7 @@ export function logisimRamSettings(
       else pages = r.pages;
     }
   }
-  return { cfg, look: evo ? evoAppearance : 'logisim', asyncRead, readBehavior, seed: 0, pages, notes };
+  return { cfg, look: evo ? evoAppearance : 'logisim', asyncRead, readBehavior, seed: 0, pages, notes, legacyBus };
 }
 
 /**
@@ -1993,7 +2008,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     // RAM / ROM / random generator settings and connection points (relative to loc)
     const ramSettings = (type: ComponentType, attr: Record<string, string>) => {
       const st = logisimRamSettings(type, attr, evolutionFile);
-      return { ...st, ports: logisimRamPorts(type, st.cfg, st.look) };
+      return { ...st, ports: logisimRamPorts(type, st.cfg, st.look, st.legacyBus) };
     };
     // A component-registry part (Aşama 6+) with the file's attributes, and its pins' connection points relative
     // to loc (turned like the part)
@@ -2645,7 +2660,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             state.trigger = st.cfg.trigger;
             if (st.seed) state.randomSeed = st.seed;
           }
-          if ((nativeType === 'ram' || nativeType === 'dualRam') && st.cfg.flavor === 'evolution') {
+          if (nativeType === 'ram' || nativeType === 'dualRam') {
             state.ramAsyncRead = st.asyncRead;
             state.ramReadBehavior = st.readBehavior;
           }

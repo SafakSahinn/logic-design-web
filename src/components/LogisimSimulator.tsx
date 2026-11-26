@@ -19,6 +19,7 @@ import {
   type WirePoint,
   type LogisimWireDirection,
 } from '../utils/wiringEngine';
+import { addLegacyReports, emptyLegacyReport, legacyMemoryNote, upgradeLegacyCircuit } from '../utils/legacyMemory';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type {
   ComponentType,
@@ -1299,6 +1300,15 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       const saved = localStorage.getItem('logic_workspace_autosave');
       if (saved) {
         const data = JSON.parse(saved);
+        // 2.7.1-rule RAM / ROM parts of an older session follow evolution's rules from now on
+        let legacyReport = emptyLegacyReport();
+        const upgrade = <T extends { components?: CircuitComponentInstance[]; wires?: CircuitWire[] }>(c: T): T => {
+          const r = upgradeLegacyCircuit(c);
+          legacyReport = addLegacyReports(legacyReport, r.report);
+          return r.circuit;
+        };
+        if (data && Array.isArray(data.components)) Object.assign(data, upgrade(data));
+        if (data && Array.isArray(data.sheets)) data.sheets = data.sheets.map((sh: CircuitSheet) => (sh.id === data.activeSheetId ? sh : upgrade(sh)));
         // Restore when any sheet has content (the active sheet may be an empty one)
         const hasSheetContent =
           Array.isArray(data?.sheets) &&
@@ -1341,11 +1351,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           setFpgaMappings(readSheetMappings(data.fpgaMappings, Array.isArray(data.sheets) && data.sheets.length > 0 ? data.sheets.map((sh: CircuitSheet) => sh.id) : ['sheet_1']));
           restored = true;
           if (!urlPreset) {
+            const memNote = legacyMemoryNote(legacyReport);
             showToast(
               droppedParts > 0
-                ? `Önceki çalışma oturumunuz geri yüklendi (${droppedParts} tanınmayan bileşen atlandı: eski sürümün sabit 4 bitlik parçaları ve 16x16 RGB matrisi artık yok, yerine ayarlanabilir parçaları ve RGB Video'yu kullanın).`
-                : 'Önceki çalışma oturumunuz otomatik olarak geri yüklendi.',
-              droppedParts > 0 ? 8000 : undefined
+                ? `Önceki çalışma oturumunuz geri yüklendi (${droppedParts} tanınmayan bileşen atlandı: eski sürümün sabit 4 bitlik parçaları ve 16x16 RGB matrisi artık yok, yerine ayarlanabilir parçaları ve RGB Video'yu kullanın${memNote ? `; ${memNote}` : ''}).`
+                : memNote
+                  ? `Önceki çalışma oturumunuz geri yüklendi (${memNote}).`
+                  : 'Önceki çalışma oturumunuz otomatik olarak geri yüklendi.',
+              droppedParts > 0 || memNote ? 8000 : undefined
             );
             return;
           }
@@ -3020,12 +3033,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // Standard JSON circuit parsing
       try {
         const json = JSON.parse(text);
+        // 2.7.1-rule RAM / ROM parts of an older file follow evolution's rules from now on
+        let legacyReport = emptyLegacyReport();
+        const upgrade = <T extends { components?: CircuitComponentInstance[]; wires?: CircuitWire[] }>(c: T): T => {
+          const r = upgradeLegacyCircuit(c);
+          legacyReport = addLegacyReports(legacyReport, r.report);
+          return r.circuit;
+        };
         // Custom ICs shipped with the file: add the ones this browser does not have yet
         let addedIcs = 0;
         if (Array.isArray(json.subcircuits)) {
           for (const def of json.subcircuits as CustomSubcircuit[]) {
             if (def && def.id && Array.isArray(def.components) && !getSubcircuitDefinition(def.id)) {
-              saveCustomSubcircuit(def);
+              saveCustomSubcircuit(upgrade(def));
               addedIcs++;
             }
           }
@@ -3040,16 +3060,19 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             return ok;
           });
         const loadNote = () =>
-          [addedIcs > 0 ? `${addedIcs} özel entegre kütüphaneye eklendi` : '', droppedParts > 0 ? `${droppedParts} tanınmayan bileşen atlandı` : '']
+          [
+            addedIcs > 0 ? `${addedIcs} özel entegre kütüphaneye eklendi` : '',
+            droppedParts > 0 ? `${droppedParts} tanınmayan bileşen atlandı` : '',
+            legacyMemoryNote(legacyReport),
+          ]
             .filter(Boolean)
             .join(', ');
         if (Array.isArray(json.sheets) && json.sheets.length > 0) {
           recordHistory();
-          const loadedSheets: CircuitSheet[] = json.sheets.map((s: CircuitSheet) => ({
-            ...s,
-            components: knownParts(s.components).map(updatePinPositions),
-            wires: s.wires || [],
-          }));
+          const loadedSheets: CircuitSheet[] = json.sheets.map((s: CircuitSheet) => {
+            const up = upgrade({ ...s, components: knownParts(s.components), wires: s.wires || [] });
+            return { ...up, components: up.components.map(updatePinPositions) };
+          });
           setSheets(loadedSheets);
           setFpgaMappings(readSheetMappings(json.fpgaMappings, loadedSheets.map((s) => s.id)));
           const firstSheet = loadedSheets.find((s) => s.id === json.activeSheetId) || loadedSheets[0];
@@ -3064,8 +3087,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           showToast(loadNote() ? `Proje yüklendi (${loadNote()}).` : 'Proje başarıyla yüklendi.', loadNote() ? 6000 : 3000);
         } else if (Array.isArray(json.components) && Array.isArray(json.wires)) {
           recordHistory();
-          const refreshedComps = knownParts(json.components).map(updatePinPositions);
-          const sim = simulateCircuit(refreshedComps, json.wires);
+          const up = upgrade({ components: knownParts(json.components), wires: json.wires as CircuitWire[] });
+          const refreshedComps = up.components.map(updatePinPositions);
+          const sim = simulateCircuit(refreshedComps, up.wires);
           const defaultSheet: CircuitSheet = {
             id: 'sheet_1',
             name: 'Ana Devre',
@@ -7235,11 +7259,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             </text>
           );
         };
-        // Clock mark in the body frame (it turns with the body). A 2.7.1 RAM stores on the rising edge; an
-        // evolution RAM with a level trigger (and a 2.7.1 asynch one) has no clock pin
+        // Clock mark in the body frame (it turns with the body). A RAM with a level trigger has no clock pin
         const clkKeys = comp.type === 'random' ? ['ck'] : comp.type === 'dualRam' ? ['clk', 'clk1'] : ['clk'];
         const trig =
-          comp.type === 'ram' && ramCfg!.flavor === 'logisim' ? 'rising' : comp.type === 'ram' || comp.type === 'dualRam' ? ramCfg!.trigger : getTrigger(comp);
+          comp.type === 'ram' || comp.type === 'dualRam' ? ramCfg!.trigger : getTrigger(comp);
         const edge = trig === 'rising' || trig === 'falling';
         const negated = trig === 'falling' || trig === 'low';
         const clockMark = clkKeys.map((clkKey) => {
@@ -7373,20 +7396,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             </g>
           );
         } else if (ramCfg) {
-          // Logisim Mem / MemState: port labels (2.7.1 names: sel, ld, clr, str; evolution: OE, WE, CLR, BE)
+          // Logisim Mem / MemState: port labels (evolution's OE, WE, CLR, BE)
           // and, as Logisim shows a running memory, four rows of words with the current address highlighted.
           // Logisim memories never turn; here the table stays upright, and a quarter-turned (tall) body shows a
           // short summary instead
-          const evo = ramCfg.flavor === 'evolution';
-          labels.push(portLabel('a', 'A', false), portLabel('d', 'D', false), portLabel('din', evo ? 'DIN' : 'D', false));
-          labels.push(
-            portLabel('cs', 'sel', true),
-            portLabel('oe', evo ? 'OE' : 'ld', false),
-            portLabel('clr', evo ? 'CLR' : 'clr', false),
-            portLabel('we', evo ? 'WE' : 'str', false)
-          );
+          labels.push(portLabel('a', 'A', false), portLabel('d', 'D', false), portLabel('din', 'DIN', false));
+          labels.push(portLabel('oe', 'OE', false), portLabel('clr', 'CLR', false), portLabel('we', 'WE', false));
           for (let i = 0; i < 4; i++) labels.push(portLabel(`be${i}`, `BE${i}`, true));
-          if (!edge && comp.type === 'ram' && evo) labels.push(<g key="lvl">{textAt(70, 72, trig === 'high' ? 'C=1' : 'C=0', 5.5, 'lv')}</g>);
+          if (!edge && comp.type === 'ram') labels.push(<g key="lvl">{textAt(70, 72, trig === 'high' ? 'C=1' : 'C=0', 5.5, 'lv')}</g>);
           const addrBits = ramCfg.addrWidth;
           const words = 2 ** addrBits;
           const cur = comp.state.memCurrent ?? -1;
@@ -7408,7 +7425,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const boxW = addrBits <= 12 ? 80 : 65;
             // Port labels on the screen's top / bottom edge push the table; both there make it shorter
             const sideHas = (keys: string[]) => keys.some((k) => has(k));
-            const controls = sideHas(['we', 'cs', 'clk', 'oe', 'clr']) || (!edge && comp.type === 'ram' && evo);
+            const controls = sideHas(['we', 'clk', 'oe', 'clr']) || (!edge && comp.type === 'ram');
             const bytes = sideHas(['be0']);
             const topBusy = rot === 180 ? controls : bytes;
             const bottomBusy = rot === 180 ? bytes : controls;
@@ -7440,7 +7457,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           inside = (
             <g key="mem" transform={unturn}>
               {cells}
-              <title>{`${comp.type === 'rom' ? 'ROM' : 'RAM'} ${memSizeText(addrBits)} × ${w} bit (${evo ? 'Logisim-evolution' : 'Logisim 2.7.1'} kuralları)`}</title>
+              <title>{`${comp.type === 'rom' ? 'ROM' : 'RAM'} ${memSizeText(addrBits)} × ${w} bit`}</title>
             </g>
           );
         } else if (FLIP_FLOP_TYPES.has(comp.type)) {
