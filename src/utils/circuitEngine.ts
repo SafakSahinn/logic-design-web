@@ -5566,7 +5566,8 @@ export function matrixDots(comp: CircuitComponentInstance): IoDot[] {
   return dots;
 }
 
-// Logisim HexDigit: the segments of each value, a..g (a dash for an input with any x / E bit, Logisim 2.7.1)
+// Logisim HexDigit: the segments of each value, a..g. An input with any x / E bit lights nothing (evolution's
+// BLANK no-data display; Logisim 2.7.1 drew a dash)
 const HEX_SEGMENTS = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x67, 0x77, 0x7c, 0x39, 0x5e, 0x79, 0x71];
 
 /**
@@ -5578,7 +5579,7 @@ export function segmentsLit(comp: CircuitComponentInstance): boolean[] {
   const dp = comp.state.ioDp ?? true;
   if (comp.type === 'hexDigit') {
     const v = bitsToNumber(readBits(comp.inputs.find((p) => pinKey(comp, p) === 'in'), 4));
-    const segs = v === undefined ? 0x40 : HEX_SEGMENTS[v & 15];
+    const segs = v === undefined ? 0 : HEX_SEGMENTS[v & 15];
     const dpIn = comp.inputs.find((p) => pinKey(comp, p) === 'dp');
     return [...Array.from({ length: 7 }, (_, i) => ((segs >> i) & 1) === 1), dp && dpIn?.value === 1];
   }
@@ -6647,11 +6648,12 @@ export function simulateCircuitStep(
         break;
       case 'triState':
       case 'controlledInverter': {
-        // Logisim controlled buffer / inverter: enable 1 passes the data (inverted: undefined bits -> E),
-        // 0 floats, anything else is an error on every bit (Logisim 2.7.1; evolution floats on x/open enable)
+        // Logisim-evolution ControlledBuffer.propagate: enable 1 passes the data (inverted: undefined bits -> E),
+        // an error enable is an error on every bit, and 0 or an x / open enable floats (evolution's default
+        // "gate undefined: ignore"; Logisim 2.7.1 gave E on an x / open enable too)
         const w = getGateWidth(comp);
         const en = comp.inputs[1]?.value ?? 'Z';
-        const isHiZ = en === 0;
+        const isHiZ = en !== 1 && en !== 'E';
         comp.state.hiZ = isHiZ;
         const data = readBits(comp.inputs[0], w);
         setBitsOut(
