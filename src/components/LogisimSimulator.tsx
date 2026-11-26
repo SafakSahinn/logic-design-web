@@ -206,7 +206,6 @@ import {
   Hand,
   MousePointer,
 } from 'lucide-react';
-import { importCircXmlFile } from '../utils/circXmlImporter';
 import { analyzeCircuit, type CircuitAnalysisReport } from '../utils/circuitAnalyzer';
 import { IC_DATASHEETS } from '../utils/icDatasheets';
 import { StandaloneKMapSolver } from './StandaloneKMapSolver';
@@ -291,13 +290,10 @@ const isKnownPart = (c: CircuitComponentInstance | null | undefined): c is Circu
 /** Parts whose contents the hex editor opens */
 const HEX_EDITABLE_TYPES = new Set<ComponentType>(['ram', 'rom', 'dualRam']);
 import { buildExportSvg } from '../utils/canvasExport';
-import { exportLogisimCirc } from '../utils/logisimCircExporter';
 import { FpgaDialog } from '../fpga/ui/FpgaDialog';
 import { HdlFpgaTab } from '../fpga/ui/HdlFpgaTab';
 import type { BoardMapping } from '../fpga';
 import { readSheetMappings } from '../fpga/map/persist';
-import { applyBoardmap, mappedPartIds, type CircBoardmap, type CircMapNote } from '../fpga/circ/boardmap';
-import { loadBoardByName } from '../fpga/ui/boardSource';
 import {
   runCircuitTestbench,
   generateExhaustiveTestVector,
@@ -3007,62 +3003,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     showToast('Doğruluk tablosu CSV formatında indirildi.');
   };
 
-  // A board map note of the .circ export / import as text
-  const circNoteText = (n: CircMapNote) => tFpga(`circ.note.${n.code}`, n.values);
-  // Board maps of an imported .circ on its new sheets: the first map whose board loads, per sheet. Boards load
-  // asynchronously: a later import drops this result, and a sheet the user has mapped meanwhile keeps the user's map.
-  // The board map lines are added to the import message (`importToast`), which they would otherwise replace.
-  const circImportTokenRef = useRef(0);
-  const applyCircBoardmaps = async (
-    newSheets: CircuitSheet[],
-    imported: { name: string; boardmaps?: CircBoardmap[] }[],
-    importToast: { text: string; ms: number },
-  ) => {
-    const token = ++circImportTokenRef.current;
-    const result: Record<string, BoardMapping> = {};
-    const notes: string[] = [];
-    for (let i = 0; i < newSheets.length; i++) {
-      const bms = imported[i]?.boardmaps ?? [];
-      const sh = newSheets[i];
-      for (let b = 0; b < bms.length; b++) {
-        const bm = bms[b];
-        const board = await loadBoardByName(bm.board).catch(() => undefined);
-        if (!board) {
-          notes.push(circNoteText({ code: 'boardMissing', values: { sheet: sh.name, board: bm.board } }));
-          continue;
-        }
-        const { mapping, notes: n } = applyBoardmap(bm, { circuitName: sh.name, components: sh.components, wires: sh.wires, board });
-        result[sh.id] = mapping;
-        notes.push(...n.map(circNoteText));
-        // the maps before this one are already reported as missing
-        const others = bms.slice(b + 1).map((x) => x.board);
-        if (others.length) notes.push(circNoteText({ code: 'otherBoards', values: { sheet: sh.name, board: bm.board, others: others.join(', ') } }));
-        break;
-      }
-    }
-    if (token !== circImportTokenRef.current) return;
-    const current = autosaveSnapshotRef.current.fpgaMappings;
-    for (const sh of newSheets) {
-      if (result[sh.id] && current[sh.id]) {
-        delete result[sh.id];
-        notes.push(circNoteText({ code: 'userMapKept', values: { sheet: sh.name } }));
-      }
-    }
-    const count = Object.keys(result).length;
-    if (count === 0 && notes.length === 0) return;
-    // (a sheet removed meanwhile keeps no map: autosave and project files keep only existing sheets)
-    setFpgaMappings((all) => {
-      const next = { ...all };
-      for (const [id, m] of Object.entries(result)) if (!next[id]) next[id] = m;
-      return next;
-    });
-    const mapText = [count ? tFpga('circ.imported', { sheets: count }) : '', notes.length ? tFpga('circ.importNotes', { count: notes.length, first: notes.slice(0, 2).join(' ') }) : '']
-      .filter(Boolean)
-      .join(' ');
-    showToast(`${importToast.text} ${mapText}`, Math.max(importToast.ms, notes.length ? 8000 : 4000));
-  };
-
-  // Import Circuit from JSON or Standard CAD (.circ) XML File
+  // Open a project or circuit file of this program (.json)
   const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3070,80 +3011,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     reader.onload = (event) => {
       const text = (event.target?.result as string) || '';
 
-      // Check if file is standard CAD (.circ) XML format
-      if (file.name.endsWith('.circ') || text.trim().startsWith('<?xml') || text.includes('<project') || text.includes('<circuit')) {
-        try {
-          const imported = importCircXmlFile(text);
-          const importedCircuits = imported.sheets;
-          if (importedCircuits.length > 0) {
-            recordHistory();
-            // Circuits used as subcircuits become library ICs (ids follow the content: a re-import reuses them)
-            let addedCircIcs = 0;
-            for (const def of imported.subcircuits) {
-              // the importer makes each new definition (or an older one without an appearance) known for this run
-              const known = getSubcircuitDefinition(def.id);
-              if (!known || known === def) {
-                saveCustomSubcircuit({ ...def, createdAt: Date.now() });
-                addedCircIcs++;
-              }
-            }
-            if (addedCircIcs > 0) setCustomSubcircuits(getAllSubcircuits());
-            // Anything the importer could not convert exactly is listed in a note on that sheet
-            const newSheets: CircuitSheet[] = importedCircuits.map((c, idx) => ({
-              id: `sheet_circ_${Date.now()}_${idx}`,
-              name: c.name || `Devre ${idx + 1}`,
-              components: c.components.map(updatePinPositions),
-              wires: c.wires,
-              annotations:
-                c.warnings.length > 0
-                  ? [
-                      {
-                        id: `ann_import_${Date.now()}_${idx}`,
-                        type: 'note' as const,
-                        title: 'İçe aktarma uyarıları',
-                        text: c.warnings.join('\n'),
-                        x: 40,
-                        y: 40,
-                        width: 360,
-                        height: Math.min(400, 60 + c.warnings.length * 30),
-                        color: 'rose' as const,
-                      },
-                    ]
-                  : [],
-            }));
-            const warningCount = importedCircuits.reduce((n, c) => n + c.warnings.length, 0);
-            // Imported connections are pin-to-pin: route every sheet once so they are stored as real wires
-            for (const sh of newSheets) sh.wires = repairWires(sh.wires, sh.components);
-            setSheets(newSheets);
-            const importToast =
-              warningCount > 0
-                ? { text: `${file.name} içe aktarıldı, ${warningCount} uyarı var (sayfalardaki kırmızı notlara bakın).`, ms: 6000 }
-                : {
-                    text: `CAD Devre Şeması (${file.name}) başarıyla içe aktarıldı!${addedCircIcs > 0 ? ` ${addedCircIcs} alt devre entegre olarak kütüphaneye eklendi.` : ''}`,
-                    ms: 3000,
-                  };
-            // The file's board maps (Logisim-evolution <boardmap>): each on its sheet, once its board is loaded
-            setFpgaMappings({});
-            void applyCircBoardmaps(newSheets, importedCircuits, importToast);
-            // evo's tick frequency of the main circuit sets the simulation's clock rate
-            if (imported.clockHz !== undefined) setClockHz(imported.clockHz);
-            // Open Logisim's main circuit
-            const first = newSheets[Math.max(0, importedCircuits.findIndex((c) => c.name === imported.main))];
-            setActiveSheetId(first.id);
-            const sim = simulateCircuit(first.components, first.wires);
-            setComponents(sim.components);
-            setWires(sim.wires);
-            setAnnotations(first.annotations || []);
-            setSelectedCompId(null);
-            setSelectedWireId(null);
-            handleResetView();
-            showToast(importToast.text, importToast.ms);
-            return;
-          }
-        } catch (err: unknown) {
-          alert('CAD .circ dosyasını okurken hata: ' + (err instanceof Error ? err.message : String(err)));
-          return;
-        }
+      // Logisim .circ files are no longer opened (the program is independent of Logisim)
+      if (file.name.toLowerCase().endsWith('.circ') || text.trim().startsWith('<')) {
+        alert('Logisim .circ dosyaları artık açılmıyor. Yalnız bu programın proje ve devre dosyaları (.json) açılır.');
+        return;
       }
 
       // Standard JSON circuit parsing
@@ -3180,8 +3051,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             wires: s.wires || [],
           }));
           setSheets(loadedSheets);
-          // a .circ import still loading its boards must not add its maps to this project
-          circImportTokenRef.current++;
           setFpgaMappings(readSheetMappings(json.fpgaMappings, loadedSheets.map((s) => s.id)));
           const firstSheet = loadedSheets.find((s) => s.id === json.activeSheetId) || loadedSheets[0];
           setActiveSheetId(firstSheet.id);
@@ -3217,7 +3086,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           alert('Hata: Dosyada geçerli devre bileşenleri bulunamadı.');
         }
       } catch {
-        alert('Hata: Geçersiz dosya formatı (JSON veya .circ XML bekleniyor)!');
+        alert('Hata: Geçersiz dosya formatı (proje dosyası .json bekleniyor)!');
       }
     };
     reader.readAsText(file);
@@ -3284,26 +3153,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     const url = URL.createObjectURL(blob);
     downloadUrl(url, `${exportBaseName()}.svg`);
     URL.revokeObjectURL(url);
-  };
-
-  // Export Circuit to Logisim (.circ): exact behaviour, connections through net-named tunnels
-  // The sheet's FPGA board mapping goes along as the circuit's Logisim-evolution <boardmap> (its board is loaded first)
-  const handleExportCirc = async () => {
-    const mapping = fpgaMappings[activeSheetId];
-    const mapped = !!mapping && mappedPartIds({ circuitName: currentCircuitName, components, wires, mapping }).size > 0;
-    const board = mapped ? await loadBoardByName(mapping.board).catch(() => undefined) : undefined;
-    const { xml, warnings, boardmap } = exportLogisimCirc(currentCircuitName, components, wires, { clockHz, ...(mapping && board ? { fpga: { mapping, board } } : {}) });
-    const blob = new Blob([xml], { type: 'application/xml;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    downloadUrl(url, `${exportBaseName()}.circ`);
-    URL.revokeObjectURL(url);
-    // (the exporter's own warnings are still Turkish text; the board map notes come from the locale)
-    const all = [...warnings, ...(boardmap?.notes ?? []).map(circNoteText)];
-    const mapLine = boardmap?.written ? tFpga('circ.mapWritten', { board: mapping!.board }) : mapped && !board ? tFpga('circ.mapBoardMissing', { board: mapping!.board }) : '';
-    showToast(
-      [all.length > 0 ? tFpga('circ.exportedWarnings', { count: all.length, first: all.slice(0, 2).join(' ') }) : tFpga('circ.exported'), mapLine].filter(Boolean).join(' '),
-      all.length > 0 || mapLine ? 7000 : 3000
-    );
   };
 
   // Switch Active Circuit Sheet
@@ -8073,18 +7922,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <div className={`h-[1px] my-1 ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
                 <button
                   onClick={() => {
-                    handleExportCirc();
-                    setActiveDesktopMenu(null);
-                  }}
-                  className={`w-full text-left px-3 py-1.5 flex items-center justify-between cursor-pointer transition-colors ${
-                    isDark ? 'hover:bg-blue-600 hover:text-white' : 'hover:bg-blue-50 hover:text-blue-700'
-                  }`}
-                >
-                  <span className="flex items-center gap-2"><Download className="w-3.5 h-3.5 text-indigo-500" /> Logisim Dışa Aktar</span>
-                  <span className="text-[10px] text-slate-400 font-mono">.circ</span>
-                </button>
-                <button
-                  onClick={() => {
                     handleExportPNG();
                     setActiveDesktopMenu(null);
                   }}
@@ -8672,16 +8509,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               >
                 <Download className="w-3 h-3 text-indigo-400" />
                 <span>SVG</span>
-              </button>
-              <button
-                onClick={handleExportCirc}
-                className={`px-2 py-0.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
-                  isDark ? 'text-slate-300 hover:text-sky-400 hover:bg-slate-700' : 'text-slate-700 hover:text-sky-700 hover:bg-white'
-                }`}
-                title="Logisim (.circ) CAD Dosyası Olarak İndir"
-              >
-                <FileCode className="w-3 h-3 text-sky-400" />
-                <span>.circ</span>
               </button>
             </div>
 
@@ -9959,16 +9786,6 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               >
                 <Download className="w-3.5 h-3.5 text-indigo-400" />
                 <span className="hidden md:inline">SVG</span>
-              </button>
-              <button
-                onClick={handleExportCirc}
-                className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors ${
-                  cadTheme === 'dark' ? 'text-slate-300 hover:text-sky-400 hover:bg-slate-700' : 'text-slate-700 hover:text-sky-700 hover:bg-white'
-                }`}
-                title="Devreyi Standart (.circ) CAD XML Dosyası Olarak Dışa Aktar"
-              >
-                <FileCode className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden md:inline">.circ</span>
               </button>
             </div>
           </div>
@@ -15101,7 +14918,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       {/* Desktop Extra Modals (K-Map, Number Converter, Presets, About) */}
       {/* File input for "Devre Aç / Yükle" (Ctrl+O): rendered in both layouts, the desktop one has no web toolbar */}
-      <input ref={fileInputRef} type="file" accept=".json,.circ" onChange={handleImportJSON} className="hidden" />
+      <input ref={fileInputRef} type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
       <input ref={imageFileInputRef} type="file" accept={IMAGE_FILE_ACCEPT} onChange={handleImageFileChosen} className="hidden" />
       {desktopMode && renderDesktopExtraModals()}
 
