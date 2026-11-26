@@ -1767,8 +1767,12 @@ function buildModule(
           const ud = ctl('ud', L.one);
           const goal = c.state.counterGoal ?? 'wrap';
           const needD = ld !== L.zero || goal === 'load';
-          const d = needD ? data('d') : zeros;
+          // An open (or width-mismatched) D reads x in the simulator, and a load of x stores the maximum
+          const dOpen = needD && isFloating(c.inputs[at('d')].id);
+          if (dOpen) notes.push('boştaki D: simülatörde x, yükleme en büyük değeri saklar; burada da öyle');
+          const d = needD && !dOpen ? data('d') : zeros;
           const loadVal = (): string[] => {
+            if (dOpen) return [set(MAX)];
             if (max === mask) return [set(d)];
             if (w === 1) return [set(L.zero)]; // max 0: every value above it masks to 0
             const gt = v ? `${d} > ${MAX}` : `unsigned(${d}) > unsigned'(${MAX})`;

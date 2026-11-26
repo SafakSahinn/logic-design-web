@@ -5035,9 +5035,11 @@ const defined = (b: SignalValue[]): boolean => b.every((v) => v === 0 || v === 1
  * - flip-flops store only a 0/1 next value (J-K or S-R inputs that are not 0/1, S = R = 1: no change); the enable
  *   pin is 2.7.1's (evolution dropped it)
  * - register stores D as it is, x / E bits included (evolution; 2.7.1 skips an undefined D)
- * - counter: evolution's up/down pin (open = up) and load before count (2.7.1 counts down on load + count);
- *   loading an undefined D stores it as it is (evolution would store the maximum), counting from an undefined
- *   value gives E, carry = value at the goal (max up, 0 down), E while the value is undefined
+ * - counter (evolution's Counter.propagate): up/down pin (open = up), load before count (2.7.1 counts down on
+ *   load + count); a D with any x / E bit reads as all ones, so loading it (also at the goal in load mode)
+ *   stores the maximum; a value above the maximum is masked with it. Carry = value at the goal (max up, 0
+ *   down). Only a pre-7a-3 project can hold an undefined value: counting from it gives E (evolution never
+ *   gets there), the carry is E while it lasts
  * - shift register: stage values move as they are (x included); load needs 1, shift is on unless 0
  */
 export function stepMem(comp: CircuitComponentInstance, ins: SignalValue[][]): SignalValue[][] {
@@ -5086,7 +5088,7 @@ export function stepMem(comp: CircuitComponentInstance, ins: SignalValue[][]): S
     }
     const load = (): SignalValue[] => {
       const d = fitBits(ins[0], w);
-      if (!defined(d)) return d;
+      if (!defined(d)) return numBits(max, w);
       const n = bitsBig(d);
       return numBits(n > max ? (n & max) >>> 0 : n, w);
     };
