@@ -9,7 +9,6 @@ import type { CircuitComponentInstance } from '../../types/circuit';
 import { bitsToNumber, numberToBits, type SignalValue } from '../../types/logic';
 import { partNamespace, registerPart, type PartAttribute } from '../registry';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { socJtagUartCirc } from './circ';
 import { drawSocJtagUart } from './draw';
 import { SocJtagUartTerminalRow } from './editor';
 import { PART_ID } from './id';
@@ -128,7 +127,6 @@ registerPart({
     },
   ],
   draw: drawSocJtagUart,
-  circ: socJtagUartCirc,
   simulate(comp, ctx) {
     const uart = peekJtagUart(comp.id) ?? jtagUartObject(jtagUartEntry(comp));
     const bits = comp.inputs[3]?.bits;

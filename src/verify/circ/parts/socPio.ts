@@ -7,12 +7,12 @@
 // setting show; all are written here, so a file read back keeps the hidden settings too (evo ignores them). Its body
 // is 380 x 120 with loc at the top left; the pins are at the part's own (evo's) places. The registers are run-time
 // state and are not written: evo does not save them either.
-import { PIO_CAPTURE_EDGES, PIO_DIRECTIONS, PIO_IRQ_TYPES, PIO_MAX_WIDTH, PIO_MIN_WIDTH } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, pinPoints, pioState, withPioState, type SocPioPartState } from './model';
-import { t } from './text';
+import { PIO_CAPTURE_EDGES, PIO_DIRECTIONS, PIO_IRQ_TYPES, PIO_MAX_WIDTH, PIO_MIN_WIDTH } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, pinPoints, pioState, withPioState, type SocPioPartState } from '../../../parts/socPio/model';
+import { t } from '../../../parts/socPio/text';
 
 type BoolKey = 'outputBitOps' | 'syncCapture' | 'captureBitClear' | 'genIrq';
 type OptionKey = 'direction' | 'captureEdge' | 'irqType';

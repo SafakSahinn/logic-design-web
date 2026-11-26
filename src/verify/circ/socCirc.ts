@@ -1,12 +1,13 @@
-// .circ helpers shared by the SoC parts (Aşama 6e): bus ids and evo's attribute value formats.
+// .circ helpers shared by the SoC parts (Aşama 6e; verification only since 7a-2): bus ids and evo's attribute value formats.
 //
 // evo stores a bus's identity in the SocBus's hidden "SocBusIdentifier" and the bus a slave uses in its
 // "SocBusSelection"; both are opaque strings. The ids are written as they are, except the fallback a bus without
 // one gets here ("lds:<component id>"): it becomes a stable id in evo's shape, the same for the bus and for every
 // part that names it, so the file stays connected and a re-export gives the same text.
 
-/** Longest bus id the parts keep (longer ones in a file are refused) */
-export const MAX_BUS_ID_LENGTH = 64;
+import { MAX_BUS_ID_LENGTH } from '../../parts/socBus/model';
+
+export { MAX_BUS_ID_LENGTH };
 
 const FNV64_OFFSET = 0xcbf29ce484222325n;
 const FNV64_PRIME = 0x100000001b3n;

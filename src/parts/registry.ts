@@ -130,64 +130,6 @@ export interface PartAttribute {
   editor?: ComponentType<PartEditorProps>;
 }
 
-/** Logisim libraries a part can be written to (the exporter gives each its library number) */
-export type CircLibrary =
-  | '#Wiring'
-  | '#Gates'
-  | '#Plexers'
-  | '#Arithmetic'
-  | '#Memory'
-  | '#I/O'
-  | '#TTL'
-  | '#BFH-Praktika'
-  | '#Base'
-  | '#Input/Output-Extra'
-  | '#HDL-IP'
-  | '#TCL'
-  | '#Soc';
-
-/** A point relative to the Logisim part's loc, the part facing east */
-export interface CircPoint {
-  x: number;
-  y: number;
-}
-
-/**
- * How a part maps to one Logisim component. The part is always written facing east and wired with a
- * tunnel on each connected pin's point; on import the file's facing turns it.
- */
-export interface PartCirc {
-  lib: CircLibrary;
-  /** Component name in that library */
-  name: string;
-  /** The part's label is written as Logisim's "label" attribute (and read back) */
-  labelled?: boolean;
-  /**
-   * For parts sharing one Logisim component name: on import the part takes a component only when this
-   * returns true for its attributes. Parts without it take the components no such part claimed.
-   */
-  claims?(attrs: Record<string, string>): boolean;
-  /** Logisim attributes to write, without facing and label */
-  exportAttrs?(comp: CircuitComponentInstance): Record<string, string>;
-  /** Texts for the export report (already translated, e.g. with partText) */
-  exportWarnings?(comp: CircuitComponentInstance): string[];
-  /**
-   * Logisim connection point of each pin, facing east, in comp.inputs / comp.outputs order; null = the pin has
-   * none in Logisim. On import it is called with the part importAttrs() made.
-   */
-  ports(comp: CircuitComponentInstance): { inputs: (CircPoint | null)[]; outputs: (CircPoint | null)[] };
-  /**
-   * The Logisim body relative to loc, facing east, when it reaches beyond the pins (or has none): export keeps
-   * the other parts clear of it.
-   */
-  box?(comp: CircuitComponentInstance): { x0: number; y0: number; x1: number; y1: number };
-  /**
-   * The part with the file's attributes applied; `comp` is a new default part. Unreadable values keep the
-   * default and give a translated text to `warn`. When it changes the pins, the importer places them again.
-   */
-  importAttrs?(comp: CircuitComponentInstance, attrs: Record<string, string>, warn: (text: string) => void): CircuitComponentInstance;
-}
-
 export type HdlLang = 'verilog' | 'vhdl';
 
 /**
@@ -257,8 +199,6 @@ export interface PartDefinition {
   pinPoints?(comp: CircuitComponentInstance): { inputs: { x: number; y: number }[]; outputs: { x: number; y: number }[] };
   /** Rows of the attribute panel, in order; the label-position row is added after them */
   attributes?: PartAttribute[];
-  /** Logisim .circ export / import; without it the part is reported as not exportable */
-  circ?: PartCirc;
   /**
    * Writes the part's behaviour into the Verilog / VHDL module through `ctx`; every output pin should be
    * driven. Without it the part is reported as not convertible and its outputs are tied to 0.
@@ -372,12 +312,6 @@ export function getPart(type: string): PartDefinition | undefined {
 
 export function allParts(): PartDefinition[] {
   return [...parts.values()];
-}
-
-/** The registered part a Logisim component (library description + component name + attributes) stands for */
-export function partOfCirc(lib: string, name: string, attrs: Record<string, string> = {}): PartDefinition | undefined {
-  const named = [...parts.values()].filter((def) => def.circ && def.circ.lib === lib && def.circ.name === name.trim());
-  return named.find((def) => def.circ!.claims?.(attrs) === true) ?? named.find((def) => !def.circ!.claims);
 }
 
 /** Body size of a registered part, unrotated */

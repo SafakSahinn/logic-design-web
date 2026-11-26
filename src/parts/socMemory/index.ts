@@ -5,7 +5,6 @@ import { registerNamespace } from '../../i18n';
 import { MEM_SIZE_MAX_BITS, MEM_SIZE_MIN_BITS, memSizeText } from '../../soc';
 import { partNamespace, registerPart } from '../registry';
 import { peekSocMemory, socBusOptions, socManager, syncSocMemories } from '../shared/socRuntime';
-import { socMemoryCirc } from './circ';
 import { drawSocMemory } from './draw';
 import { PART_ID } from './id';
 import en from './locales/en.json';
@@ -63,7 +62,6 @@ registerPart({
       },
     },
   ],
-  circ: socMemoryCirc,
   draw: drawSocMemory,
   create: newMemory,
   // a memory copied together with its bus stays on the bus copy

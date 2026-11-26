@@ -3,11 +3,11 @@
 // evo's attributes: SocBusIdentifier (hidden; the id the slaves name), TraceSize (a bit width, the shown
 // transactions), TraceVisible, label. Its body is 640 x (TraceSize + 1) * 30 with loc at the top left; its one
 // pin, Reset, is at (0,10). The trace itself is not written (evo does not save it either).
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { circBusId, readCircBusId, MAX_BUS_ID_LENGTH } from '../shared/socCirc';
-import { TRACE_SIZE_DEFAULT, TRACE_SIZE_MAX, busIdOf, busSize, busState, withBusState, type SocBusPartState } from './model';
-import { t } from './text';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { circBusId, readCircBusId, MAX_BUS_ID_LENGTH } from '../socCirc';
+import { TRACE_SIZE_DEFAULT, TRACE_SIZE_MAX, busIdOf, busSize, busState, withBusState, type SocBusPartState } from '../../../parts/socBus/model';
+import { t } from '../../../parts/socBus/text';
 
 function importAttrs(comp: CircuitComponentInstance, attrs: Record<string, string>, warn: (text: string) => void): CircuitComponentInstance {
   const patch: Partial<SocBusPartState> = {};

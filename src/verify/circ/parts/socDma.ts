@@ -6,12 +6,12 @@
 // read from / written to; empty means the control bus). Its body is 320 x 120 with loc at the top left, and the
 // pins are at the part's own (evo's) places. The registers are run-time state and are not written: evo does not
 // save them either.
-import { clampDmaBurstSize } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, dmaState, pinPoints, withDmaState, type SocDmaPartState } from './model';
-import { t } from './text';
+import { clampDmaBurstSize } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, dmaState, pinPoints, withDmaState, type SocDmaPartState } from '../../../parts/socDma/model';
+import { t } from '../../../parts/socDma/text';
 
 type BusField = 'busId' | 'srcBusId' | 'dstBusId';
 

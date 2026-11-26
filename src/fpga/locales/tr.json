@@ -461,27 +461,5 @@
       "checkNotInstalled": "Kurulu değil.",
       "loadFailed": "Üretici araçlarının listesi okunamadı."
     }
-  },
-  "circ": {
-    "exported": "Logisim (.circ) dosyası indirildi (bağlantılar net adlı tünellerle).",
-    "exportedWarnings": "Logisim (.circ) dosyası indirildi; {{count}} uyarı: {{first}}",
-    "mapWritten": "Kart eşlemesi ({{board}}) dosyaya yazıldı.",
-    "mapBoardMissing": "Kart eşlemesi yazılmadı: \"{{board}}\" kartı yüklenemedi.",
-    "imported": "Dosyadaki kart eşlemesi okundu: {{sheets}} sayfa.",
-    "importNotes": "Kart eşlemesinde {{count}} kayıt kullanılamadı: {{first}}",
-    "note": {
-      "notWritten": "\"{{part}}\" parçasının Logisim-evolution'da kart eşlemesi yok; eşlemesi dosyaya yazılmadı.",
-      "renamed": "\"{{from}}\" etiketi, kart eşlemesi parçayı adıyla bulabilsin diye \"{{to}}\" olarak yazıldı.",
-      "otherBoards": "\"{{sheet}}\" sayfası: yalnız {{board}} eşlemesi okundu ({{others}} atlandı).",
-      "boardMissing": "\"{{sheet}}\" sayfası: \"{{board}}\" kartı bilinmiyor, eşlemesi atlandı.",
-      "unknownKey": "{{key}}: bu etikette bir parça yok.",
-      "ambiguousKey": "{{key}}: bu etiket birden çok parçada var.",
-      "notMappable": "{{key}}: bu parça eşlenemez.",
-      "nestedKey": "{{key}}: alt devrenin içindeki parçalar burada eşlenmez.",
-      "legacyKey": "{{key}}: eski bacak bacak anahtar, okunmadı.",
-      "sizeMismatch": "{{key}}: dosyada {{pins}} bacak var, parçanın {{expected}} bacağı var.",
-      "userMapKept": "\"{{sheet}}\" sayfası: kartlar yüklenirken siz eşlediniz, sizin eşlemeniz korundu, dosyadaki eşleme uygulanmadı.",
-      "badTarget": "{{key}}: eşlemedeki bir kart kaynağı ya da bacağı kartta yok."
-    }
   }
 }

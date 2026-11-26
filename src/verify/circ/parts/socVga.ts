@@ -5,12 +5,12 @@
 // on and sniffs), label. It has no pins. Its bounds are the size of the mode in use with loc at the top left; in a
 // file that is the initial mode (DisplayMode). The picture is run-time state and is not written: evo does not save
 // it either.
-import { VGA_MODES, VGA_SOFT_KEYS, vgaModeByName, vgaPartSize } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../shared/socCirc';
-import { vgaState, withVgaState, type SocVgaPartState } from './model';
-import { t } from './text';
+import { VGA_MODES, VGA_SOFT_KEYS, vgaModeByName, vgaPartSize } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../socCirc';
+import { vgaState, withVgaState, type SocVgaPartState } from '../../../parts/socVga/model';
+import { t } from '../../../parts/socVga/text';
 
 /** Each address attribute's evo name and the warning for an unreadable value */
 const ADDRESSES: readonly [key: 'startAddress' | 'bufferAddress', name: string, warning: string][] = [

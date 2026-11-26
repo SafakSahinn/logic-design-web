@@ -461,27 +461,5 @@
       "checkNotInstalled": "Not installed.",
       "loadFailed": "The list of vendor tools could not be read."
     }
-  },
-  "circ": {
-    "exported": "Logisim (.circ) file downloaded (connections through net-named tunnels).",
-    "exportedWarnings": "Logisim (.circ) file downloaded; {{count}} warning(s): {{first}}",
-    "mapWritten": "The board mapping ({{board}}) was written into the file.",
-    "mapBoardMissing": "The board mapping was not written: board \"{{board}}\" could not be loaded.",
-    "imported": "Board mapping read from the file: {{sheets}} sheet(s).",
-    "importNotes": "{{count}} board map entr(ies) could not be used: {{first}}",
-    "note": {
-      "notWritten": "\"{{part}}\" has no board map in Logisim-evolution; its mapping was not written.",
-      "renamed": "Label \"{{from}}\" written as \"{{to}}\" so the board map can name the part.",
-      "otherBoards": "Sheet \"{{sheet}}\": only the map for {{board}} was read ({{others}} skipped).",
-      "boardMissing": "Sheet \"{{sheet}}\": board \"{{board}}\" is unknown, its map was skipped.",
-      "unknownKey": "{{key}}: no part with this label.",
-      "ambiguousKey": "{{key}}: more than one part has this label.",
-      "notMappable": "{{key}}: this part cannot be mapped.",
-      "nestedKey": "{{key}}: parts inside a subcircuit are not mapped here.",
-      "legacyKey": "{{key}}: old pin-by-pin key, not read.",
-      "sizeMismatch": "{{key}}: {{pins}} pins in the file, the part has {{expected}}.",
-      "userMapKept": "Sheet \"{{sheet}}\": you mapped it while the boards were loading, so your map was kept and the file's map was not applied.",
-      "badTarget": "{{key}}: a board resource or pin of the map is not on the board."
-    }
   }
 }

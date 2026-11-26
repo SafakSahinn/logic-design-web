@@ -3,13 +3,13 @@
 // Evo keeps only the text ("content"). The generics and the stored netlist go into two more attributes that
 // evo ignores when it opens the file (and drops when it saves it), so a file written here opens here with its
 // netlist and simulates without the tools.
-import { isStoredNetlist, type StoredNetlist } from '../../hdl';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { evoPorts, pinsFor, type PortShape } from '../shared/netlistPart';
-import { evoIssues, readEvoVhdl, type EvoIssue } from './evo';
-import { currentKey, netlistEntry, partState, wantedPorts, type VhdlPartState } from './model';
-import { errorText, t } from './text';
+import { isStoredNetlist, type StoredNetlist } from '../../../hdl';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { evoPorts, pinsFor, type PortShape } from '../../../parts/shared/netlistPart';
+import { evoIssues, readEvoVhdl, type EvoIssue } from '../../../parts/vhdlEntity/evo';
+import { currentKey, netlistEntry, partState, wantedPorts, type VhdlPartState } from '../../../parts/vhdlEntity/model';
+import { errorText, t } from '../../../parts/vhdlEntity/text';
 
 /** LDS-only attributes (evo ignores attribute names it does not know) */
 export const ATTR_GENERICS = 'lds-generics';

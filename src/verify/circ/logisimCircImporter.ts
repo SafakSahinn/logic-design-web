@@ -8,9 +8,9 @@ import type {
   SubcircuitAppearance,
   SubcircuitAppearanceStyle,
   SubcircuitPortDefinition,
-} from '../types/circuit';
-import { readBoardmaps, type CircBoardmap } from '../fpga/circ/boardmap';
-import type { Radix } from '../types/logic';
+} from '../../types/circuit';
+import { readBoardmaps, type CircBoardmap } from './boardmap';
+import type { Radix } from '../../types/logic';
 import {
   ARITH_PINS,
   ARITH_TYPES,
@@ -119,14 +119,16 @@ import {
   getClockConfig,
   getPorConfig,
   resetClockState,
-} from './circuitEngine';
-import { rawTextToMem } from './memImage';
-import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from './subcircuitManager';
-import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, type Facing } from './subcircuitAppearance';
-import { DYNAMIC_ELEMENT_OF, DYNAMIC_ELEMENT_TYPE, DYNAMIC_FACTORY, dynamicElementOfTag, dynamicShapeFromSvg, parseDynamicPath, type DynamicPathStep } from './dynamicElements';
-import { repairWires } from './wiringEngine';
-import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getPart, partOfCirc } from '../parts';
+} from '../../utils/circuitEngine';
+import { rawTextToMem } from '../../utils/memImage';
+import { createSubcircuitInstance, peekSubcircuitDefinition, registerSubcircuit } from '../../utils/subcircuitManager';
+import { appearanceShapeFromSvg, subcircuitAppearanceShapes, subcircuitLayout, type Facing } from '../../utils/subcircuitAppearance';
+import { DYNAMIC_ELEMENT_OF, DYNAMIC_ELEMENT_TYPE, DYNAMIC_FACTORY, dynamicElementOfTag, dynamicShapeFromSvg, parseDynamicPath, type DynamicPathStep } from '../../utils/dynamicElements';
+import { repairWires } from '../../utils/wiringEngine';
+import { isTtlType, parseEng, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from '../../utils/ttlChips';
+import { getPart } from '../../parts';
+import { circOf, partOfCirc } from './partCirc';
+import './parts';
 
 /**
  * Evolution TTL chip connection points relative to loc (east-facing), by our pin key; an in/out pin's input
@@ -1996,7 +1998,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     // A component-registry part (Aşama 6+) with the file's attributes, and its pins' connection points relative
     // to loc (turned like the part)
     const partImport = (type: ComponentType, attr: Record<string, string>, rot: number, warn: (text: string) => void) => {
-      const circ = getPart(type)!.circ!;
+      const circ = circOf(type)!;
       const fresh = createComponentInstance(type, 0, 0);
       const made = circ.importAttrs ? circ.importAttrs(fresh, attr, warn) : fresh;
       const inst = updatePinPositions({ ...made, rotation: rot ? (rot as 90 | 180 | 270) : undefined });
@@ -2050,7 +2052,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
         isSub || ttlType ? undefined
         : isProjectVhdl ? partOfCirc('#HDL-IP', 'VHDL Entity', attr)
         : partOfCirc(libDesc.get(compNode.getAttribute('lib') ?? '') ?? '', compName, attr);
-      let nativeType = isSub ? 'subcircuit' : ttlType ?? registryPart?.id ?? mapCircCompType(compName, isOutput, constVal);
+      let nativeType = isSub ? 'subcircuit' : ttlType ?? registryPart ?? mapCircCompType(compName, isOutput, constVal);
       let sub: SubcircuitInfo | undefined;
       if (isSub) {
         sub = subcircuitOf(compName) ?? undefined;
@@ -2142,7 +2144,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
                 ? logisimIo5Settings(nativeType, attr).ports.map((p) => p.off)
                 : IO_IMPORT.has(nativeType)
                 ? logisimIoSettings(nativeType, attr, evolutionFile).ports.map((p) => p.off)
-                : getPart(nativeType)?.circ
+                : circOf(nativeType)
                 ? partImport(nativeType, attr, rot, () => {}).points.flatMap(([, off]) => (off ? [off] : []))
                 : isTtlType(nativeType)
                 ? ttlImportPorts(nativeType, attr.VccGndPorts === 'true').map((p) => rotateOffset(p.off, rot))
@@ -2582,9 +2584,9 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
             warnings.push(`${where}: yukarı/aşağı (UD) girişi Logisim 2.7.1'de yok (hep yukarı sayar); burada evolution gibi bağlandı.`);
           continue;
         }
-        if (getPart(nativeType)?.circ) {
+        if (circOf(nativeType)) {
           // Component-registry part (Aşama 6+): turned like its facing, every pin joined at its connection point
-          const circ = getPart(nativeType)!.circ!;
+          const circ = circOf(nativeType)!;
           const { inst, points } = partImport(nativeType, attr, rot, (text) => warnings.push(`${where}: ${text}`));
           const abs = points.map(([id, off]): [string, Pt | null] => [id, off && at(loc, off)]);
           const anchor = abs.find(([, pt]) => pt);

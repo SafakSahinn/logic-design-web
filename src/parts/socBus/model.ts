@@ -2,9 +2,11 @@
 import { newSocBusId } from '../../soc';
 import type { CircuitComponentInstance } from '../../types/circuit';
 import { partName } from '../registry';
-import { MAX_BUS_ID_LENGTH } from '../shared/socCirc';
 import { socPartName } from '../shared/socRuntime';
 import { PART_ID } from './id';
+
+/** Longest bus id the parts keep (longer ones in a file are refused) */
+export const MAX_BUS_ID_LENGTH = 64;
 
 export const BODY_WIDTH = 640;
 /** Height of one trace row and of the title row (evo's TRACE_HEIGHT) */

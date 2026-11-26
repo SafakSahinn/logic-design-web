@@ -4,13 +4,13 @@
 // ("filePath") in its own tclsh. The script text goes into one more attribute that evo ignores when it opens the
 // file (and drops when it saves it), so a file written here opens here with its script. The run state (tick,
 // outputs, console) is not written: an imported part starts from power-on.
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { evoPorts, pinsFor, type PortShape } from '../shared/netlistPart';
-import { readEvoVhdl } from '../vhdlEntity/evo';
-import { defaultScriptFileName, partState, readInterface, scriptFileName, scriptFilePath, type TclPartState } from './model';
-import { DEFAULT_SCRIPT } from './defaults';
-import { t } from './text';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { evoPorts, pinsFor, type PortShape } from '../../../parts/shared/netlistPart';
+import { readEvoVhdl } from '../../../parts/vhdlEntity/evo';
+import { defaultScriptFileName, partState, readInterface, scriptFileName, scriptFilePath, type TclPartState } from '../../../parts/tclGeneric/model';
+import { DEFAULT_SCRIPT } from '../../../parts/tclGeneric/defaults';
+import { t } from '../../../parts/tclGeneric/text';
 
 /** LDS-only attribute: the script text (evo ignores attribute names it does not know) */
 export const ATTR_SCRIPT = 'lds-tcl';

@@ -7,7 +7,6 @@ import { PIO_CAPTURE_EDGES, PIO_DIRECTIONS, PIO_IRQ_TYPES, PIO_MAX_WIDTH, PIO_MI
 import type { CircuitComponentInstance } from '../../types/circuit';
 import { partNamespace, registerPart, type PartAttribute } from '../registry';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { socPioCirc } from './circ';
 import { drawSocPio } from './draw';
 import { SocPioExportRow } from './editor';
 import { PART_ID } from './id';
@@ -172,7 +171,6 @@ registerPart({
     },
   ],
   draw: drawSocPio,
-  circ: socPioCirc,
   simulate(comp, ctx) {
     const s = pioState(comp);
     const pio = peekPio(comp.id) ?? pioObject(entryOf(comp));

@@ -4,7 +4,6 @@
 import { registerNamespace } from '../../i18n';
 import { partNamespace, registerPart } from '../registry';
 import { peekSocBus, syncSocBuses } from '../shared/socRuntime';
-import { socBusCirc } from './circ';
 import { drawSocBus } from './draw';
 import { SocBusEditorRow } from './editor';
 import { PART_ID } from './id';
@@ -77,7 +76,6 @@ registerPart({
       },
     },
   ],
-  circ: socBusCirc,
   draw: drawSocBus,
   simulate(comp, ctx) {
     // evo: Reset high clears the trace

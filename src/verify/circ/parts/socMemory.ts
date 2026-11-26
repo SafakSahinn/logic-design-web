@@ -3,13 +3,13 @@
 // evo's attributes: StartAddress (hex integer, word aligned), MemSize (a bit width 10..26: 2^n bytes),
 // SocBusSelection (the id of the bus it answers on), label. Its body is 320 x 60 with loc at the top left and it
 // has no pins. The contents are not written: evo does not save them either.
-import type { CircuitComponentInstance } from '../../types/circuit';
-import { MEM_SIZE_DEFAULT_BITS, MEM_SIZE_MAX_BITS, MEM_SIZE_MIN_BITS } from '../../soc';
-import type { PartCirc } from '../registry';
-import { peekSocMemory } from '../shared/socRuntime';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, memoryState, withMemoryState, type SocMemoryPartState } from './model';
-import { t } from './text';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import { MEM_SIZE_DEFAULT_BITS, MEM_SIZE_MAX_BITS, MEM_SIZE_MIN_BITS } from '../../../soc';
+import type { PartCirc } from '../partCirc';
+import { peekSocMemory } from '../../../parts/shared/socRuntime';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, memoryState, withMemoryState, type SocMemoryPartState } from '../../../parts/socMemory/model';
+import { t } from '../../../parts/socMemory/text';
 
 function importAttrs(comp: CircuitComponentInstance, attrs: Record<string, string>, warn: (text: string) => void): CircuitComponentInstance {
   const patch: Partial<SocMemoryPartState> = {};

@@ -5,13 +5,13 @@
 // the top left; its pins are the custom-instruction pins on the top edge (dataa .. writerc out, done and result in),
 // Reset (0,620), Clock (0,640) and IRQi (0, 40 + 10 i). The processor state, the loaded program and the assembler
 // source are not written: evo does not save them either.
-import { NIOS2_MAX_IRQS } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, cpuState, pinPoints, withCpuState, withIrqWidth, type Nios2PartState } from './model';
-import { peekCpu } from './runtime';
-import { hex, t } from './text';
+import { NIOS2_MAX_IRQS } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, cpuState, pinPoints, withCpuState, withIrqWidth, type Nios2PartState } from '../../../parts/nios2/model';
+import { peekCpu } from '../../../parts/nios2/runtime';
+import { hex, t } from '../../../parts/nios2/text';
 
 type VectorKey = 'resetVector' | 'exceptionVector' | 'breakVector';
 

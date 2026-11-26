@@ -10,7 +10,6 @@ import type { CircuitComponentInstance } from '../../types/circuit';
 import type { SignalValue } from '../../types/logic';
 import { partNamespace, registerPart, type PartAttribute } from '../registry';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { socDmaCirc } from './circ';
 import { drawSocDma } from './draw';
 import { SocDmaExportRow } from './editor';
 import { PART_ID } from './id';
@@ -103,7 +102,6 @@ registerPart({
     },
   ],
   draw: drawSocDma,
-  circ: socDmaCirc,
   simulate(comp, ctx) {
     const dma = peekDma(comp.id) ?? dmaObject(dmaEntry(comp));
     const irq = dma.step({ reset: level(ctx.raw[0]), clock: level(ctx.raw[1]) }, dmaTransact(dmaState(comp)));

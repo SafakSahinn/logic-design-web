@@ -10,7 +10,6 @@ import { bitsToNumber, numberToBits, type SignalValue } from '../../types/logic'
 import { partNamespace, registerPart } from '../registry';
 import type { CpuEditorCommand } from '../shared/cpu/types';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { nios2Circ } from './circ';
 import { drawNios2 } from './draw';
 import { Nios2EditorRow } from './editor';
 import { PART_ID } from './id';
@@ -133,7 +132,6 @@ registerPart({
     },
   ],
   draw: drawNios2,
-  circ: nios2Circ,
   simulate(comp, ctx) {
     const s = cpuState(comp);
     const reset = ctx.raw[0];

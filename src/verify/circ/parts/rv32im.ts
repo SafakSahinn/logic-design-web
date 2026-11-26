@@ -4,13 +4,13 @@
 // down to a word), stateVisible (boolean), SocBusSelection (the id of the bus it masters), label. Its body is
 // 640 x 640 with loc at the top left; its pins are Reset (0,610), Clock (0,630) and IRQi (0, 10 + 10 i). The
 // processor state, the loaded program and the assembler source are not written: evo does not save them either.
-import { MAX_IRQS, PLIC_DEFAULT_BASE } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, cpuState, pinPoints, withCpuState, withIrqWidth, type Rv32imPartState } from './model';
-import { peekCpu } from './runtime';
-import { hex, t } from './text';
+import { MAX_IRQS, PLIC_DEFAULT_BASE } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex, readCircWidth } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, cpuState, pinPoints, withCpuState, withIrqWidth, type Rv32imPartState } from '../../../parts/rv32im/model';
+import { peekCpu } from '../../../parts/rv32im/runtime';
+import { hex, t } from '../../../parts/rv32im/text';
 
 function importAttrs(comp: CircuitComponentInstance, attrs: Record<string, string>, warn: (text: string) => void): CircuitComponentInstance {
   const patch: Partial<Rv32imPartState> = {};

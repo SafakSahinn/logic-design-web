@@ -10,7 +10,6 @@ import type { CircuitComponentInstance } from '../../types/circuit';
 import { partNamespace, registerPart } from '../registry';
 import { BODY_WIDTH, bodyHeight, bodySize, decodeRun, encodeRun, pinPoints, pinsMatch } from '../shared/netlistPart';
 import { drawVerilogEntity } from './draw';
-import { verilogEntityCirc } from './circ';
 import { VerilogEditorRow } from './editor';
 import { PART_ID } from './id';
 import en from './locales/en.json';
@@ -87,7 +86,6 @@ registerPart({
     const encoded = encodeRun(run);
     if (encoded !== state.run) comp.state.part = { ...(comp.state.part as VerilogPartState | undefined ?? newPartState()), run: encoded } satisfies VerilogPartState;
   },
-  circ: verilogEntityCirc,
   resetState(comp) {
     const state = comp.state.part as VerilogPartState | undefined;
     if (state?.run !== undefined) {

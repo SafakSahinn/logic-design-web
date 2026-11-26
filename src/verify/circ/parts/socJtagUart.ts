@@ -5,12 +5,12 @@
 // ReadThreshold (plain decimal integers, Integer.valueOf), SocBusSelection (the id of the bus it answers on), label.
 // Its body is 300 x 60 with loc at the top left; the pins are fixed, at evo's places. The FIFOs are run-time state
 // and are not written: evo does not save them either.
-import { JTAG_UART_FIFO_SIZES } from '../../soc';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../shared/socCirc';
-import { BODY_HEIGHT, BODY_WIDTH, jtagUartState, pinPoints, withJtagUartState, type SocJtagUartPartState } from './model';
-import { t } from './text';
+import { JTAG_UART_FIFO_SIZES } from '../../../soc';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { MAX_BUS_ID_LENGTH, circBusId, circHex, readCircBusId, readCircHex } from '../socCirc';
+import { BODY_HEIGHT, BODY_WIDTH, jtagUartState, pinPoints, withJtagUartState, type SocJtagUartPartState } from '../../../parts/socJtagUart/model';
+import { t } from '../../../parts/socJtagUart/text';
 
 type SizeKey = 'writeFifoSize' | 'readFifoSize';
 type ThresholdKey = 'writeThreshold' | 'readThreshold';

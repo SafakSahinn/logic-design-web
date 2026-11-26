@@ -8,7 +8,6 @@ import { VGA_MODES, VGA_REGISTER_SIZE, VGA_SOFT_KEYS, clampVgaMode, vgaPartSize,
 import type { CircuitComponentInstance } from '../../types/circuit';
 import { partNamespace, registerPart, type PartAttribute } from '../registry';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { socVgaCirc } from './circ';
 import { drawSocVga } from './draw';
 import { SocVgaExportRow } from './editor';
 import { PART_ID } from './id';
@@ -114,7 +113,6 @@ registerPart({
     },
   ],
   draw: drawSocVga,
-  circ: socVgaCirc,
   create: newVga,
   // a VGA copied together with its bus answers on the bus copy
   relink(comp, renamed) {

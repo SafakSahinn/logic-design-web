@@ -26,7 +26,6 @@ export {
   onSimulationRequest,
   partName,
   partNamespace,
-  partOfCirc,
   partSize,
   partText,
   partTextOptional,
@@ -39,12 +38,9 @@ export {
   PART_TOOLBOX_GROUPS,
 } from './registry';
 export type {
-  CircLibrary,
-  CircPoint,
   DrawContext,
   HdlContext,
   HdlLang,
-  PartCirc,
   PartAttrEdit,
   PartAttribute,
   PartAttrKind,

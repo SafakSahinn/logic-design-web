@@ -1,0 +1,41 @@
+// Registers the .circ handler of every registry part that has one (verification only, Aşama 7a-2), in the parts'
+// registration order (src/parts/index.ts): partOfCirc() picks the first fitting handler, as the registry did.
+import '../../../parts';
+import { registerPartCirc } from '../partCirc';
+import { blifCircuitCirc } from './blifCircuit';
+import { vhdlEntityCirc } from './vhdlEntity';
+import { verilogEntityCirc } from './verilogEntity';
+import { tclGenericCirc } from './tclGeneric';
+import { socBusCirc } from './socBus';
+import { socMemoryCirc } from './socMemory';
+import { rv32imCirc } from './rv32im';
+import { nios2Circ } from './nios2';
+import { socPioCirc } from './socPio';
+import { socJtagUartCirc } from './socJtagUart';
+import { socVgaCirc } from './socVga';
+import { socDmaCirc } from './socDma';
+import { PART_ID as blifCircuitId } from '../../../parts/blifCircuit/id';
+import { PART_ID as vhdlEntityId } from '../../../parts/vhdlEntity/id';
+import { PART_ID as verilogEntityId } from '../../../parts/verilogEntity/id';
+import { PART_ID as tclGenericId } from '../../../parts/tclGeneric/id';
+import { PART_ID as socBusId } from '../../../parts/socBus/id';
+import { PART_ID as socMemoryId } from '../../../parts/socMemory/id';
+import { PART_ID as rv32imId } from '../../../parts/rv32im/id';
+import { PART_ID as nios2Id } from '../../../parts/nios2/id';
+import { PART_ID as socPioId } from '../../../parts/socPio/id';
+import { PART_ID as socJtagUartId } from '../../../parts/socJtagUart/id';
+import { PART_ID as socVgaId } from '../../../parts/socVga/id';
+import { PART_ID as socDmaId } from '../../../parts/socDma/id';
+
+registerPartCirc(blifCircuitId, blifCircuitCirc);
+registerPartCirc(vhdlEntityId, vhdlEntityCirc);
+registerPartCirc(verilogEntityId, verilogEntityCirc);
+registerPartCirc(tclGenericId, tclGenericCirc);
+registerPartCirc(socBusId, socBusCirc);
+registerPartCirc(socMemoryId, socMemoryCirc);
+registerPartCirc(rv32imId, rv32imCirc);
+registerPartCirc(nios2Id, nios2Circ);
+registerPartCirc(socPioId, socPioCirc);
+registerPartCirc(socJtagUartId, socJtagUartCirc);
+registerPartCirc(socVgaId, socVgaCirc);
+registerPartCirc(socDmaId, socDmaCirc);

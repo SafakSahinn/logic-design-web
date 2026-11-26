@@ -12,8 +12,8 @@
 import type { CircuitComponentInstance, CircuitWire } from '../../types/circuit';
 import { pinKey } from '../../utils/circuitEngine';
 import { getTopLevelPorts } from '../../utils/hdlGenerator';
-import type { BoardDefinition } from '../board/model';
-import { labelProblem } from '../drc/design';
+import type { BoardDefinition } from '../../fpga/board/model';
+import { labelProblem } from '../../fpga/drc/design';
 import {
   boardIoKey,
   collectMappableParts,
@@ -28,7 +28,7 @@ import {
   type MappablePart,
   type PinDir,
   type PinTarget,
-} from '../map/model';
+} from '../../fpga/map/model';
 
 // --- the evo parts canvas parts are written as -------------------------------------------------------------
 
@@ -107,7 +107,7 @@ export function evoAttrKey(attrs: readonly (readonly [string, string])[]): strin
 
 // --- writing ------------------------------------------------------------------------------------------------------
 
-/** What the .circ could not carry, as an i18n code of the fpga namespace ('circ.note.<code>') and its values */
+/** What the .circ could not carry, as a code and its values (the tests read them; the app shows none since 7a-1) */
 export interface CircMapNote {
   code: 'notWritten' | 'renamed' | 'otherBoards' | 'boardMissing' | 'unknownKey' | 'notMappable' | 'nestedKey' | 'legacyKey' | 'sizeMismatch' | 'badTarget' | 'ambiguousKey' | 'userMapKept';
   values: Record<string, string | number>;

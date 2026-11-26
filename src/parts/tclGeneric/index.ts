@@ -8,7 +8,6 @@ import { partNamespace, registerPart } from '../registry';
 import { BODY_WIDTH, bodyHeight, bodySize, pinPoints } from '../shared/netlistPart';
 import vhdlEn from '../vhdlEntity/locales/en.json';
 import vhdlTr from '../vhdlEntity/locales/tr.json';
-import { tclGenericCirc } from './circ';
 import { drawTclGeneric } from './draw';
 import { TclEditorRow } from './editor';
 import { simulateTcl } from './engine';
@@ -60,7 +59,6 @@ registerPart({
     },
   ],
   simulate: simulateTcl,
-  circ: tclGenericCirc,
   resetState(comp) {
     // a simulation reset starts the script again (a new epoch gets a new interpreter), as evo restarts its tclsh
     const state = comp.state.part as TclPartState | undefined;

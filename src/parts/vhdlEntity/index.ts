@@ -10,7 +10,6 @@ import type { CircuitComponentInstance } from '../../types/circuit';
 import { partNamespace, registerPart } from '../registry';
 import { BODY_WIDTH, bodyHeight, bodySize, decodeRun, encodeRun, pinPoints, pinsMatch } from '../shared/netlistPart';
 import { drawVhdlEntity } from './draw';
-import { vhdlEntityCirc } from './circ';
 import { VhdlEditorRow } from './editor';
 import { PART_ID } from './id';
 import en from './locales/en.json';
@@ -87,7 +86,6 @@ registerPart({
     const encoded = encodeRun(run);
     if (encoded !== state.run) comp.state.part = { ...(comp.state.part as VhdlPartState | undefined ?? newPartState()), run: encoded } satisfies VhdlPartState;
   },
-  circ: vhdlEntityCirc,
   resetState(comp) {
     const state = comp.state.part as VhdlPartState | undefined;
     if (state?.run !== undefined) {

@@ -6,7 +6,6 @@ import { registerNamespace } from '../../i18n';
 import { MAX_IRQS } from '../../soc';
 import { partNamespace, registerPart } from '../registry';
 import { parseU32 as u32, socBusOptions, socManager } from '../shared/socRuntime';
-import { rv32imCirc } from './circ';
 import { drawRv32im } from './draw';
 import type { CpuEditorCommand as EditorCommand } from '../shared/cpu/types';
 import { Rv32imEditorRow } from './editor';
@@ -118,7 +117,6 @@ registerPart({
     },
   ],
   draw: drawRv32im,
-  circ: rv32imCirc,
   simulate(comp, ctx) {
     const s = cpuState(comp);
     const reset = ctx.raw[0];

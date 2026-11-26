@@ -5,13 +5,13 @@
 // Verilog text, the parameters and the stored netlist go into LDS-only attributes that evo ignores when it
 // opens the file and drops when it saves it. On import a BLIFCircuit with the Verilog attribute comes back as
 // this part; without it (e.g. after evo saved the file) it stays a plain BLIF Circuit.
-import { isStoredNetlist, type StoredNetlist } from '../../hdl';
-import { evoBitNames, evoBlifPorts, writeEvoBlif, type EvoBlifPort, type Netlist } from '../../netlist';
-import type { CircuitComponentInstance } from '../../types/circuit';
-import type { PartCirc } from '../registry';
-import { EVO_PIN_GAP, EVO_PIN_TOP, EVO_WIDTH, pinsFor, pinsSame, type PortShape } from '../shared/netlistPart';
-import { currentKey, netlistEntry, partState, preview, wantedPorts, type VerilogPartState } from './model';
-import { errorText, t } from './text';
+import { isStoredNetlist, type StoredNetlist } from '../../../hdl';
+import { evoBitNames, evoBlifPorts, writeEvoBlif, type EvoBlifPort, type Netlist } from '../../../netlist';
+import type { CircuitComponentInstance } from '../../../types/circuit';
+import type { PartCirc } from '../partCirc';
+import { EVO_PIN_GAP, EVO_PIN_TOP, EVO_WIDTH, pinsFor, pinsSame, type PortShape } from '../../../parts/shared/netlistPart';
+import { currentKey, netlistEntry, partState, preview, wantedPorts, type VerilogPartState } from '../../../parts/verilogEntity/model';
+import { errorText, t } from '../../../parts/verilogEntity/text';
 
 /** LDS-only attributes (evo ignores attribute names it does not know) */
 export const ATTR_VERILOG = 'lds-verilog';

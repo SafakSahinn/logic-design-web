@@ -1,5 +1,5 @@
-import type { AppearanceDynamicShape, AppearanceShape, CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../types/circuit';
-import { getLogicalConnections, snapTo10 } from './wiringEngine';
+import type { AppearanceDynamicShape, AppearanceShape, CircuitComponentInstance, CircuitPin, CircuitWire, ComponentType, CustomSubcircuit, SubcircuitPortDefinition } from '../../types/circuit';
+import { getLogicalConnections, snapTo10 } from '../../utils/wiringEngine';
 import {
   ALU_OP_BITS,
   ARITH_PINS,
@@ -46,15 +46,15 @@ import {
   ramPinWidth,
   splitterThreads,
   COMPONENT_CATALOG,
-} from './circuitEngine';
-import { getSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
-import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from './subcircuitAppearance';
-import { DYNAMIC_ELEMENT_OF, DYNAMIC_FACTORY, dynamicPathString, dynamicShapeToSvg, type DynamicPathStep } from './dynamicElements';
-import { solveKMap } from './kmapSolver';
-import { evoMapLabel, evoPartPins, mappedPartIds, writeBoardmap, type CircMapNote, type EvoMapUnit } from '../fpga/circ/boardmap';
-import type { BoardDefinition } from '../fpga/board/model';
-import type { BoardMapping } from '../fpga/map/model';
-import { memToRawText } from './memImage';
+} from '../../utils/circuitEngine';
+import { getSubcircuitDefinition, subcircuitPortWidth } from '../../utils/subcircuitManager';
+import { appearanceShapeToSvg, subcircuitAppearanceShapes, subcircuitLayout, type AppearanceSvgElement } from '../../utils/subcircuitAppearance';
+import { DYNAMIC_ELEMENT_OF, DYNAMIC_FACTORY, dynamicPathString, dynamicShapeToSvg, type DynamicPathStep } from '../../utils/dynamicElements';
+import { solveKMap } from '../../utils/kmapSolver';
+import { evoMapLabel, evoPartPins, mappedPartIds, writeBoardmap, type CircMapNote, type EvoMapUnit } from './boardmap';
+import type { BoardDefinition } from '../../fpga/board/model';
+import type { BoardMapping } from '../../fpga/map/model';
+import { memToRawText } from '../../utils/memImage';
 import {
   ARITH_MODE_PARTS,
   EVO_ONLY_ARITH,
@@ -98,10 +98,11 @@ import {
   type LogisimPlexer,
   type LogisimRamLook,
 } from './logisimCircImporter';
-import type { LogicValue } from '../types/logic';
-import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from './ttlChips';
-import { getPart, type CircLibrary } from '../parts';
-import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, pgStateCount, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from './circuitEngine';
+import type { LogicValue } from '../../types/logic';
+import { isTtlType, ttlChipOf, ttlEvoOffset, ttlEvoPin, ttlEvoRemapped, ttlInKey, ttlPorts, ttlRcOf } from '../../utils/ttlChips';
+import { circOf, type CircLibrary } from './partCirc';
+import './parts';
+import { TWO_PIN_LED_DEFAULTS, getEvoBuzzerConfig, getOscConfig, pgStateCount, getClockConfig, getExtraSwitchConfig, getPlaConfig, getPlaRomConfig, getPorConfig, getSliderConfig, getTtlConfig, plaRomContents, plaTableText, porSizeOf } from '../../utils/circuitEngine';
 
 /** Library number of evolution's #TTL in the exported file */
 const TTL_LIB = 6;
@@ -298,7 +299,7 @@ const LABELLED_PARTS = new Set<ComponentType>([
   'subcircuit',
 ]);
 const hasLogisimLabel = (type: ComponentType) =>
-  LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type) || !!getPart(type)?.circ?.labelled;
+  LABELLED_PARTS.has(type) || MEM_TYPES.has(type) || RAM_TYPES.has(type) || isTtlType(type) || !!circOf(type)?.labelled;
 
 export function exportLogisimCirc(circuitName: string, components: CircuitComponentInstance[], wires: CircuitWire[], options: CircExportOptions = {}): CircExportResult {
   const warnings: string[] = [];
@@ -1509,10 +1510,10 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
           break;
         }
         default:
-          if (getPart(c.type)?.circ) {
+          if (circOf(c.type)) {
             // Parts of the component registry (Aşama 6+): one Logisim component facing east, a tunnel on each
             // wired pin's point
-            const circ = getPart(c.type)!.circ!;
+            const circ = circOf(c.type)!;
             const lib = CIRC_LIB_NUMBER[circ.lib];
             if (lib === TTL_LIB) usesTtl = true;
             if (lib === BFH_LIB) usesBfh = true;
