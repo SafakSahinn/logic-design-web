@@ -386,7 +386,12 @@ export interface CircuitComponentInstance {
     memOut?: SignalValue[][];
     /** Random generator: seed (Logisim 'seed', 0 = from the time) */
     randomSeed?: number;
-    /** Random generator: 48-bit generator state and the seed it started from, as decimal strings */
+    /** Random generator: xoshiro256++ state (4 x 64 bits, hex) and the 64-bit seed it starts from (decimal) */
+    randomState?: string[];
+    randomStart?: string;
+    /** Random generator: RST as last seen (a new seed is read when it goes from 0 to 1) */
+    randomLastRst?: SignalValue;
+    /** Older files: the Logisim 2.7.1 generator's state, dropped on the first evaluation */
     randomCur?: string;
     randomInit?: string;
     /** Random generator: current output value (unsigned 32-bit) */

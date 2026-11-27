@@ -1,4 +1,5 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit, PlaRow } from '../types/circuit';
+import { XOSHIRO_HDL_DEFAULT_SEED, xoshiroInitialState } from './xoshiro';
 import { numberToBits, type SignalValue } from '../types/logic';
 import { getLogicalConnections } from './wiringEngine';
 import {
@@ -415,7 +416,7 @@ function buildModule(
     const msb = [...bits].reverse().join('');
     if (bits.length === 1) return bits[0] ? L.one : L.zero;
     if (lang === 'verilog') {
-      return bits.length % 4 === 0 ? `${bits.length}'h${parseInt(msb, 2).toString(16)}` : `${bits.length}'b${msb}`;
+      return bits.length % 4 === 0 ? `${bits.length}'h${BigInt(`0b${msb}`).toString(16)}` : `${bits.length}'b${msb}`;
     }
     if (bits.length % 4 !== 0) return `"${msb}"`;
     let hex = '';
@@ -1297,24 +1298,43 @@ function buildModule(
         const d = out[0];
 
         if (c.type === 'random') {
-          // Logisim 2.7.1: java.util.Random's 48-bit LCG; after a reset the output is the low bits of the seed,
-          // after a step bits 12 .. of the new state
+          // Logisim-evolution (RandomHdlGeneratorFactory): xoshiro256++, four 64-bit state registers starting from
+          // the seed's SplitMix64 state; the output is the low bits of rotl(s0 + s3, 23) + s0
           const trig = getTrigger(c);
           const clkPin = pinOf('ck');
           const clk = !clkPin || isFloating(clkPin.id) ? L.zero : ctl('ck', L.zero);
           const nxt = ctl('nxt', L.one);
           const rst = ctl('rst', L.zero);
-          const seed = c.state.randomSeed ?? 0;
-          if (seed === 0) notes.push('tohum 0: simülatör saate göre rastgele bir başlangıç seçer, burada 0 ile başlar');
-          const start = BigInt.asUintN(48, BigInt(seed | 0));
-          const cur = names.make(`${nm}_state`, 'state');
-          const fresh = names.make(`${nm}_fresh`, 'fresh');
-          declare(cur, 48, start.toString(2).padStart(48, '0'));
-          declare(fresh, 1, '1');
-          const startLit = lit(start, 48);
-          const next = v ? `${cur} * 48'h5deece66d + 48'hb` : `std_logic_vector(resize(unsigned(${cur}) * unsigned'(x"5DEECE66D"), 48) + 11)`;
-          const reset = [`${cur} <= ${startLit};`, `${fresh} <= ${L.one};`];
-          const step = ifs(is1c(nxt), [`${cur} <= ${next};`, `${fresh} <= ${L.zero};`]);
+          const seed = (c.state.randomSeed ?? 0) >>> 0;
+          if (seed === 0) notes.push('tohum 0: simülatör saate göre rastgele bir başlangıç seçer, burada Logisim-evolution gibi 0x5DEECE66D tohumuyla başlar');
+          const start = xoshiroInitialState(seed ? BigInt(seed) : XOSHIRO_HDL_DEFAULT_SEED);
+          const s = start.map((x, i) => {
+            const n = names.make(`${nm}_s${i}`, `s${i}`);
+            declare(n, 64, x.toString(2).padStart(64, '0'));
+            return n;
+          });
+          const wire = (hint: string, rhs: string) => {
+            const n = names.make(`${nm}_${hint}`, hint);
+            declare(n, 64);
+            emit(n, rhs);
+            return n;
+          };
+          const sl = (x: string, hi: number, lo: number) => (v ? `${x}[${hi}:${lo}]` : `${x}(${hi} downto ${lo})`);
+          const cat = (a: string, b: string) => (v ? `{${a}, ${b}}` : `${a} & ${b}`);
+          const add = (a: string, b: string) => (v ? `${a} + ${b}` : `std_logic_vector(unsigned(${a}) + unsigned(${b}))`);
+          const xor = (...xs: string[]) => xs.join(v ? ' ^ ' : ' xor ');
+          const sum = wire('sum', add(s[0], s[3]));
+          const rot = wire('rot', cat(sl(sum, 40, 0), sl(sum, 63, 41)));
+          const res = wire('res', add(rot, s[0]));
+          const mix = wire('s31', xor(s[3], s[1]));
+          const shifted = v ? `{${sl(s[1], 46, 0)}, 17'b0}` : `(${sl(s[1], 46, 0)} & "${'0'.repeat(17)}")`;
+          const reset = s.map((n, i) => `${n} <= ${lit(start[i], 64)};`);
+          const step = ifs(is1c(nxt), [
+            `${s[0]} <= ${xor(s[0], mix)};`,
+            `${s[1]} <= ${xor(s[1], s[2], s[0])};`,
+            `${s[2]} <= ${xor(s[2], s[0], shifted)};`,
+            `${s[3]} <= ${cat(sl(mix, 18, 0), sl(mix, 63, 19))};`,
+          ]);
           if (trig === 'high' || trig === 'low') notes.push('seviye tetikleme: simülatör saat etkin seviyedeyken her değerlendirmede adım atar, burada seviyeye geçişte bir adım');
           const falling = trig === 'falling' || trig === 'low';
           if (rst === L.one) notes.push('RST hep 1: değer hep tohumda kalır');
@@ -1331,8 +1351,7 @@ function buildModule(
             if (v) proc([], reset, `posedge ${rst}`, false);
             else proc([rst], ifs(is1c(rst), reset));
           } else notes.push('saat girişi boşta: değer hiç değişmez');
-          const hi = (lo: number) => (w === 1 ? vecIndex(cur, lo) : v ? `${cur}[${lo + w - 1}:${lo}]` : `${cur}(${lo + w - 1} downto ${lo})`);
-          select(d, [[is1c(fresh), hi(0)]], hi(12));
+          emit(d, w === 1 ? vecIndex(res, 0) : sl(res, w - 1, 0));
           for (const n of notes) body.push(L.comment(n));
           break;
         }

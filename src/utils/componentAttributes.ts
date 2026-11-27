@@ -2622,7 +2622,7 @@ const randomWidthAttr: AttrDef = {
   key: 'randomWidth',
   label: 'Bit genişliği',
   kind: 'select',
-  title: 'Çıkışın genişliği (1-32): üretilen 32 bitlik sayının düşük bitleri',
+  title: 'Çıkışın genişliği (1-32): üretilen 64 bitlik sayının düşük bitleri',
   options: WIDTH_OPTIONS,
   get: (c) => getRamConfig(c).dataWidth,
   set: (c, v) => reconfigureRam(c, { dataWidth: Number(v) }),
@@ -2632,7 +2632,7 @@ const randomSeedAttr: AttrDef = {
   key: 'randomSeed',
   label: 'Tohum',
   kind: 'int',
-  title: 'Dizinin başlangıcı (Logisim "Seed"); 0 = her başlangıçta zamandan. Yeni tohum, bir sonraki RST = 1\'de geçerli olur',
+  title: 'Dizinin başlangıcı (Seed); 0 = her başlangıçta zamandan. Yeni tohum, RST 0\'dan 1\'e geçince geçerli olur',
   get: (c) => c.state.randomSeed ?? 0,
   set: (c, v) => {
     const n = Number(v) | 0;

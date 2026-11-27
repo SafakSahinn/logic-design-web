@@ -936,7 +936,7 @@ export function logisimRamSettings(
     cfg.trigger = attr.trigger === 'falling' ? 'falling' : 'rising';
     const seed = parseInt(attr.seed ?? '0', 10);
     const look = evolutionFile || attr.appearance !== undefined ? evoAppearance : 'logisim';
-    if (evolutionFile) notes.push(`Logisim-evolution'ın üreteci başka bir dizi verir (Xoshiro256++); burada Logisim 2.7.1'in dizisi kullanılıyor.`);
+    if (!evolutionFile) notes.push(`Logisim 2.7.1'in üreteci başka bir dizi verir (java.util.Random); burada Logisim-evolution'ın dizisi (xoshiro256++) kullanılıyor.`);
     return { cfg, look, asyncRead: false, readBehavior: 'raw', seed: Number.isFinite(seed) ? seed | 0 : 0, notes };
   }
   // the dual-port RAM exists only in evolution

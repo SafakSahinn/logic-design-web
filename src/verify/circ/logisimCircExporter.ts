@@ -1621,7 +1621,7 @@ export function exportLogisimCirc(circuitName: string, components: CircuitCompon
             else if (evo)
               warnings.push(`${label}: Logisim-evolution kurallı ${c.type === 'ram' ? 'RAM' : 'ROM'} olarak yazıldı; Logisim 2.7.1 bu parçayı kendi düzeniyle açar, bağlantıları tutmaz.`);
             if (c.type === 'random')
-              warnings.push(`${label}: Logisim-evolution aynı bağlantılarla açar ama başka bir sayı dizisi üretir (Xoshiro256++); dizi Logisim 2.7.1'de tutar.`);
+              warnings.push(`${label}: Logisim 2.7.1 aynı bağlantılarla açar ama başka bir sayı dizisi üretir (java.util.Random); dizi Logisim-evolution'da tutar.`);
             break;
           }
           if (MEM_TYPES.has(c.type)) {

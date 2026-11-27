@@ -380,6 +380,10 @@ export function resetCircuitState(components: CircuitComponentInstance[]): Circu
     delete st.oscillating;
     if (c.type === 'random') {
       delete st.randomCur;
+      delete st.randomInit;
+      delete st.randomState;
+      delete st.randomStart;
+      delete st.randomLastRst;
       delete st.randomValue;
     }
     if (c.type === 'clock') resetClockState(st);

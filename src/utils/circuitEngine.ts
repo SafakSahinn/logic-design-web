@@ -9,6 +9,7 @@ import type {
   TruthTableData,
   TruthTableEntry,
 } from '../types/circuit';
+import { xoshiroBumpSeed, xoshiroInitialState, xoshiroStep, xoshiroValue } from './xoshiro';
 import { MAX_BIT_WIDTH, bitsToNumber, numberToBits, resolveDrivers, summarizeBits, type SignalValue } from '../types/logic';
 import { evaluateSubcircuitStateful, getSubcircuitDefinition, peekSubcircuitDefinition, subcircuitPortWidth } from './subcircuitManager';
 import { subcircuitLayout, type SubcircuitLayout } from './subcircuitAppearance';
@@ -3270,7 +3271,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
   ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. WE bacağı, tetikleme seçimi (kenar ya da seviye), ayrı ya da çift yönlü veri yolu, saatli ya da anında okuma, bayt etkinleştirme, CLR bacağı'),
   rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir'),
   dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek (Logisim-evolution 5): her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı Logisim-evolution RAM'i gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
-  random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (Logisim 2.7.1 dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
+  random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (xoshiro256++ dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   subcircuit: {
     type: 'subcircuit',
@@ -5211,28 +5212,34 @@ export function configureRam(comp: CircuitComponentInstance, patch: Partial<RamC
   });
 }
 
-// Logisim 2.7.1 Random: java.util.Random's 48-bit linear congruential generator
-const RND_MULT = 0x5deece66dn;
-const RND_ADD = 0xbn;
-const RND_MASK = (1n << 48n) - 1n;
+// Logisim-evolution Random (std/memory/Random.java): xoshiro256++ (utils/xoshiro)
 
-/** Start (or restart) the random generator from its seed (Random.StateData.reset; seed 0 = from the time) */
+/** The seed a (re)start uses (Random.StateData.getRandomSeed): the unsigned 32-bit seed, 0 = from the time */
+function randomSeedValue(comp: CircuitComponentInstance): bigint {
+  const seed = BigInt((comp.state.randomSeed ?? 0) >>> 0);
+  if (seed !== 0n) return seed;
+  const now = BigInt(Date.now());
+  const last = comp.state.randomStart;
+  return last !== undefined && now === BigInt(last) ? xoshiroBumpSeed(now) : now;
+}
+
+const putRandomState = (comp: CircuitComponentInstance, s: bigint[]): void => {
+  comp.state.randomState = s.map((x) => x.toString(16));
+  comp.state.randomValue = Number(BigInt.asUintN(32, xoshiroValue(s)));
+};
+
+/** Start again from the seed picked last (Random.StateData.reset) */
 function randomReset(comp: CircuitComponentInstance): void {
   const st = comp.state;
-  let start = BigInt((st.randomSeed ?? 0) | 0);
-  if (start === 0n) {
-    start = (BigInt(Date.now()) ^ RND_MULT) & RND_MASK;
-    if (st.randomInit !== undefined && start === BigInt(st.randomInit)) start = (start + RND_MULT) & RND_MASK;
-  }
-  st.randomInit = start.toString();
-  st.randomCur = start.toString();
-  st.randomValue = Number(BigInt.asUintN(32, start));
+  // a part of an older file holds the 2.7.1 generator's state: drop it
+  delete st.randomCur;
+  delete st.randomInit;
+  if (st.randomStart === undefined) st.randomStart = randomSeedValue(comp).toString();
+  putRandomState(comp, xoshiroInitialState(BigInt(st.randomStart)));
 }
 
 function randomStep(comp: CircuitComponentInstance): void {
-  const v = (BigInt(comp.state.randomCur ?? '0') * RND_MULT + RND_ADD) & RND_MASK;
-  comp.state.randomCur = v.toString();
-  comp.state.randomValue = Number(BigInt.asUintN(32, v >> 12n));
+  putRandomState(comp, xoshiroStep((comp.state.randomState ?? []).map((x) => BigInt(`0x${x}`))));
 }
 
 const fillBits = (w: number, v: SignalValue): SignalValue[] => new Array<SignalValue>(w).fill(v);
@@ -5251,8 +5258,9 @@ const fillBits = (w: number, v: SignalValue): SignalValue[] => new Array<SignalV
  *
  * An undefined data word is stored as all ones in both (Value.toIntValue / toLongValue = -1).
  *
- * Random (2.7.1): RST = 1 restarts from the seed, else the clock edge with NXT not 0 steps the generator; the
- * output is the low bits of the 32-bit value.
+ * Random (Logisim-evolution): RST = 1 restarts from the seed, else the clock edge with NXT not 0 steps the
+ * xoshiro256++ generator; the output is the low bits of its 64-bit value. The seed is read again only when RST goes
+ * from 0 to 1 (a seed of 0 then picks a new time seed).
  */
 export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): SignalValue[][] {
   const cfg = getRamConfig(comp);
@@ -5264,9 +5272,12 @@ export function stepRam(comp: CircuitComponentInstance, ins: SignalValue[][]): S
   };
   const one = (k: string): SignalValue => at(k)?.[0] ?? 'X';
   if (comp.type === 'random') {
-    if (st.randomCur === undefined) randomReset(comp);
+    if (st.randomState?.length !== 4) randomReset(comp);
     const acts = clockActs(comp, one('ck'), getTrigger(comp));
-    if (one('rst') === 1) randomReset(comp);
+    const rst = one('rst');
+    if (st.randomLastRst === 0 && rst === 1) st.randomStart = randomSeedValue(comp).toString();
+    st.randomLastRst = rst;
+    if (rst === 1) randomReset(comp);
     else if (acts && one('nxt') !== 0) randomStep(comp);
     return [numBits(st.randomValue ?? 0, cfg.dataWidth)];
   }

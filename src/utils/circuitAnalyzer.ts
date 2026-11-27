@@ -452,10 +452,14 @@ function transistorsOf(c: CircuitComponentInstance, wired: Set<string>, seen: Se
       return 8 * N * w + 2 * perPort + (ramClearWired(c, wired) ? N * w : 0);
     }
     case 'random':
-      // Logisim 2.7.1's 48-bit LCG: state register 48 x 28, seed load + next hold MUXes 2 x 48 x 14, the
-      // constant multiply (0x5DEECE66D has 23 one bits: an adder of 48 - k bits per shifted copy, 18004) and
-      // + 0xB (48 half adders, 672); the output is bits of the state, whatever its width
-      return 48 * 28 + 2 * 48 * 14 + 18004 + 48 * 14;
+    {
+      // Logisim-evolution's xoshiro256++ (as the HDL): state registers 4 x 64 x 28, seed load + next hold MUXes
+      // 2 x 256 x 14, the next state's XOR2s (s3 ^ s1, s0 ^ that, s2 ^ s0, s1 ^ that, ^ s1 << 17 on 47 bits: 303 x 8)
+      // and the output adders, cut to the bits the output needs: s0 + s3 up to bit 40 + w (rotated by 23, its
+      // bits 41 .. 40 + w are the low w), then + s0 on w bits (full adders 28)
+      const w = getRamConfig(c).dataWidth;
+      return 256 * 28 + 2 * 256 * 14 + 303 * 8 + (41 + w) * 28 + w * 28;
+    }
     case 'plaRom': {
       // The logic the HDL describes (evolution has no count): an inverter per input bit used inverted, per AND gate
       // of k > 1 literals NAND + NOT (2k + 2), per output of j > 1 gates NOR + NOT (2j + 2), and with a wired chip
