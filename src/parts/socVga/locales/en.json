@@ -2,7 +2,7 @@
   "meta": {
     "badge": "VGA",
     "name": "VGA screen",
-    "description": "A display of a SoC (Logisim-evolution's SoC VGA screen): a program draws by writing one 0xRRGGBB word per pixel into a frame buffer in memory, which the screen watches on its SoC bus; a mode register selects 160x120 up to 1024x768, and the part grows with the mode"
+    "description": "A display of a SoC: a program draws by writing one 0xRRGGBB word per pixel into a frame buffer in memory, which the screen watches on its SoC bus; a mode register selects 160x120 up to 1024x768, and the part grows with the mode"
   },
   "options": {
     "on": "On",
@@ -11,7 +11,7 @@
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus the screen answers on and watches (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus the screen answers on and watches",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },
@@ -49,7 +49,7 @@
     },
     "cExport": {
       "label": "C header",
-      "title": "Writes a C driver for this screen: <NAME>.h and <NAME>.c with the mode masks, the mode sizes, the addresses and the mode register's setter / getter (Logisim-evolution's Export C)"
+      "title": "Writes a C driver for this screen: <NAME>.h and <NAME>.c with the mode masks, the mode sizes, the addresses and the mode register's setter / getter"
     },
     "status": {
       "label": "Status",

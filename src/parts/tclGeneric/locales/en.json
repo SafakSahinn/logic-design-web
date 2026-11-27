@@ -2,7 +2,7 @@
   "meta": {
     "badge": "TCL",
     "name": "TCL Generic",
-    "description": "A part driven by a Tcl script (Logisim-evolution's TCL Generic protocol); its pins come from the ports of a VHDL entity"
+    "description": "A part driven by a Tcl script (TCL Generic protocol); its pins come from the ports of a VHDL entity"
   },
   "attributes": {
     "tcl": {
@@ -55,7 +55,7 @@
     "ports": "Inputs: {{inputs}}  Outputs: {{outputs}}",
     "interfaceError": "Interface: {{message}}",
     "save": "Save file…",
-    "saveScriptTitle": "Save the script as {{file}} (Logisim-evolution runs the script from this file)",
+    "saveScriptTitle": "Save the script as {{file}}",
     "saveVhdlTitle": "Save the interface as a .vhd file"
   },
   "scriptErrors": {

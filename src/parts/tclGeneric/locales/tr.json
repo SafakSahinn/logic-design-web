@@ -2,7 +2,7 @@
   "meta": {
     "badge": "TCL",
     "name": "TCL Generic",
-    "description": "Bir Tcl betiğiyle çalışan parça (Logisim-evolution'ın TCL Generic protokolü); uçları bir VHDL varlığının portlarından gelir"
+    "description": "Bir Tcl betiğiyle çalışan parça (TCL Generic protokolü); uçları bir VHDL varlığının portlarından gelir"
   },
   "attributes": {
     "tcl": {
@@ -55,7 +55,7 @@
     "ports": "Girişler: {{inputs}}  Çıkışlar: {{outputs}}",
     "interfaceError": "Arayüz: {{message}}",
     "save": "Dosyaya kaydet…",
-    "saveScriptTitle": "Betiği {{file}} olarak kaydet (Logisim-evolution betiği bu dosyadan çalıştırır)",
+    "saveScriptTitle": "Betiği {{file}} olarak kaydet",
     "saveVhdlTitle": "Arayüzü .vhd dosyası olarak kaydet"
   },
   "scriptErrors": {

@@ -2,12 +2,12 @@
   "meta": {
     "badge": "JTAG",
     "name": "JTAG UART",
-    "description": "A character link of a SoC (Logisim-evolution's SoC JTAG UART): a program writes characters over its SoC bus to a TTY and reads the characters of a keyboard through two FIFOs, with interrupt thresholds and an IRQ output; its terminal window can stand in for the keyboard and the TTY"
+    "description": "A character link of a SoC: a program writes characters over its SoC bus to a TTY and reads the characters of a keyboard through two FIFOs, with interrupt thresholds and an IRQ output; its terminal window can stand in for the keyboard and the TTY"
   },
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus the JTAG UART answers on (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus the JTAG UART answers on",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },

@@ -701,7 +701,7 @@ export function generateExhaustiveTestVector(
   });
   const widths = head.map((h, i) => Math.max(h.length, ...table.map((r) => r[i].length)));
   const lines: string[] = [];
-  lines.push('# Logisim-evolution test vektörü. Beklenen değerler simülatörün şu anki sonuçları; gerekirse elle değiştirin.');
+  lines.push('# Test vektörü. Beklenen değerler simülatörün şu anki sonuçları; gerekirse elle değiştirin.');
   lines.push('# Değer: bit sayısı kadar 0/1 (ör. 0101), 0x onaltılık ya da ondalık; x = önemsiz bit, <DC> = her değer, <float> = yüzer.');
   if (sequential) {
     lines.push('# Sıralı test: aynı <set> içindeki adımlar sıfırlanmadan <seq> sırasıyla koşar; ilk adımdan sonra her adım bir saat tikiyle başlar.');

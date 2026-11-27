@@ -2,12 +2,12 @@
   "meta": {
     "badge": "JTAG",
     "name": "JTAG UART",
-    "description": "Bir SoC'nin karakter bağlantısı (Logisim-evolution'ın SoC JTAG UART'ı): bir program SoC veri yolu üzerinden iki FIFO aracılığıyla bir TTY'ye karakter yazar ve bir klavyenin karakterlerini okur; kesme eşikleri ve kesme çıkışı vardır, terminal penceresi klavye ve TTY'nin yerini tutabilir"
+    "description": "Bir SoC'nin karakter bağlantısı: bir program SoC veri yolu üzerinden iki FIFO aracılığıyla bir TTY'ye karakter yazar ve bir klavyenin karakterlerini okur; kesme eşikleri ve kesme çıkışı vardır, terminal penceresi klavye ve TTY'nin yerini tutabilir"
   },
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "JTAG UART'ın işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "title": "JTAG UART'ın işlemlerini yanıtladığı SoC veri yolu",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },

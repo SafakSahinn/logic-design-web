@@ -2,12 +2,12 @@
   "meta": {
     "badge": "MEM",
     "name": "SoC Bellek",
-    "description": "Bir SoC'nin belleği (Logisim-evolution'ın SoC Memory'si): kendi adres aralığındaki veri yolu işlemlerini yanıtlar; hiç yazılmamış sözcükler rastgele okunur"
+    "description": "Bir SoC'nin belleği: kendi adres aralığındaki veri yolu işlemlerini yanıtlar; hiç yazılmamış sözcükler rastgele okunur"
   },
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "Belleğin işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "title": "Belleğin işlemlerini yanıtladığı SoC veri yolu",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },
@@ -17,7 +17,7 @@
     },
     "memSize": {
       "label": "Boyut",
-      "title": "Belleğin bayt cinsinden boyutu (Logisim-evolution'da Memory size: 2^10 ile 2^26 bayt)"
+      "title": "Belleğin bayt cinsinden boyutu (2^10 ile 2^26 bayt)"
     },
     "status": {
       "label": "Durum",

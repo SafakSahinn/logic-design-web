@@ -2,12 +2,12 @@
   "meta": {
     "badge": "CPU",
     "name": "Nios II",
-    "description": "A Nios II/s processor (Logisim-evolution's Nios2s simulator): one instruction per rising clock edge, its fetches and data accesses go over its SoC bus; the IRQ pins feed ipending directly and custom instructions use the pins on the top edge"
+    "description": "A Nios II/s processor: one instruction per rising clock edge, its fetches and data accesses go over its SoC bus; the IRQ pins feed ipending directly and custom instructions use the pins on the top edge"
   },
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus the processor uses for its instructions and data (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus the processor uses for its instructions and data",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },
@@ -17,11 +17,11 @@
     },
     "exceptionVector": {
       "label": "Exception vector (hex)",
-      "title": "Where hardware interrupts and trap go (Logisim-evolution: 0x14 by default)"
+      "title": "Where hardware interrupts and trap go (0x14 by default)"
     },
     "breakVector": {
       "label": "Break vector (hex)",
-      "title": "Where the break instruction goes (Logisim-evolution: 0x30 by default)"
+      "title": "Where the break instruction goes (0x30 by default)"
     },
     "irqWidth": {
       "label": "IRQ inputs",

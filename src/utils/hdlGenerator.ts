@@ -1146,7 +1146,7 @@ function buildModule(
         // Evolution BcdToSevenSegmentDisplayHdlGeneratorFactory: a case table of the 0-9 patterns (bit 0 = segment a)
         const pin = c.inputs[0];
         const r = pin ? readBits(pin.id, 4) : undefined;
-        body.push(L.comment("10-15 ya da tanımsız girişte simülatörde tüm segmentler x; x sentezlenemez, burada 0 (evolution'ın Verilog'u gibi)"));
+        body.push(L.comment("10-15 ya da tanımsız girişte simülatörde tüm segmentler x; x sentezlenemez, burada tüm segmentler 0"));
         if (!r || r.floating || r.mismatch) {
           body.push(L.comment('giriş tam bağlı değil: segmentler 0'));
           out.forEach((o) => o && emit(o, L.zero));
@@ -1306,7 +1306,7 @@ function buildModule(
           const nxt = ctl('nxt', L.one);
           const rst = ctl('rst', L.zero);
           const seed = (c.state.randomSeed ?? 0) >>> 0;
-          if (seed === 0) notes.push('tohum 0: simülatör saate göre rastgele bir başlangıç seçer, burada Logisim-evolution gibi 0x5DEECE66D tohumuyla başlar');
+          if (seed === 0) notes.push('tohum 0: simülatör saate göre rastgele bir başlangıç seçer; HDL sabit bir başlangıç ister, burada 0x5DEECE66D tohumuyla başlar');
           const start = xoshiroInitialState(seed ? BigInt(seed) : XOSHIRO_HDL_DEFAULT_SEED);
           const s = start.map((x, i) => {
             const n = names.make(`${nm}_s${i}`, `s${i}`);
@@ -1627,7 +1627,7 @@ function buildModule(
         // Write at the edge: the whole word, or each enabled byte
         const writeLines = (): string[] => (nBE === 0 ? [store(false, din)] : bytes.flatMap((b) => ifs(b.be, [`${b.sl(word)} <= ${b.src};`])));
         const weOn = level ? (trig === 'high' ? is1c(we) : isOpen('we') ? F : is0c(we)) : is1c(we);
-        if (cfg.clearPin && clr !== L.zero && !level) notes.push('CLR 1 iken saat değişir ve CLR bırakıldığında saat başka seviyedeyse simülatör (evolution gibi) bunu bir kenar sayıp yazar; HDL saymaz');
+        if (cfg.clearPin && clr !== L.zero && !level) notes.push('CLR 1 iken saat değişir ve CLR bırakıldığında saat başka seviyedeyse simülatör bunu bir kenar sayıp yazar; HDL saymaz');
         if (level && !sepData) notes.push('çift yönlü yolda OE ve yazma aynı anda etkinse RAM kendi çıkışını geri yazar (kombinasyonel döngü); HDL simülasyonu salınabilir');
         if (clr === L.one) notes.push('CLR hep 1: bellek hep sıfır, yazılmaz');
         else if (level) {
@@ -2179,7 +2179,7 @@ function buildModule(
           body.push(L.comment(`${label}: tuş takımı kartta (satırlar çıkış, sütunlar giriş); simülatördeki tuşlar burada yok`));
           if (getIo5Config(c).keypadMode === 'raw') {
             warnings.push(
-              `${label}: evolution tuş takımını yalnız PmodKYPD kipinde HDL'e çevirir; ham (raw) kip de aynı bağlantıyla (satırlar çıkış, sütunlar giriş portu) çıkarıldı, sütunları karttaki tuş takımı sürer.`
+              `${label}: tuş takımının HDL karşılığı yalnız PmodKYPD kipinde var; ham (raw) kip de aynı bağlantıyla (satırlar çıkış, sütunlar giriş portu) çıkarıldı, sütunları karttaki tuş takımı sürer.`
             );
           }
           break;
@@ -2325,7 +2325,7 @@ function buildModule(
             outPort('clr', 'clr', 1, ctrl('clr', L.zero));
             body.push(L.comment(`${label}: klavye dışarıda; OUT/AV giriş, RE/CK/CLR çıkış portu (karakter CK'nin ${edge} kenarında RE = 1 iken alınır)`));
             warnings.push(
-              `${label}: evolution'da klavyenin HDL karşılığı yok; OUT ve AV giriş portu, RE / CK / CLR çıkış portu oldu. Karakteri bir UART / PS/2 alıcısı gibi harici bir devre vermeli; simülatördeki tampon HDL'de yok.`
+              `${label}: klavyenin HDL karşılığı yok; OUT ve AV giriş portu, RE / CK / CLR çıkış portu oldu. Karakteri bir UART / PS/2 alıcısı gibi harici bir devre vermeli; simülatördeki tampon HDL'de yok.`
             );
           } else if (c.type === 'tty') {
             outPort('in', 'in', 7, dataIn(7));
@@ -2334,7 +2334,7 @@ function buildModule(
             outPort('clr', 'clr', 1, ctrl('clr', L.zero));
             body.push(L.comment(`${label}: terminal dışarıda; IN/WE/CK/CLR çıkış portu (karakter CK'nin ${edge} kenarında WE = 1 iken yazılır)`));
             warnings.push(
-              `${label}: evolution'da metin terminalinin HDL karşılığı yok; IN / WE / CK / CLR çıkış portu oldu, ekranı harici bir sürücü (UART verici, VGA metin denetleyicisi) göstermeli.`
+              `${label}: metin terminalinin HDL karşılığı yok; IN / WE / CK / CLR çıkış portu oldu, ekranı harici bir sürücü (UART verici, VGA metin denetleyicisi) göstermeli.`
             );
           } else {
             inPort('out', 8);
@@ -2345,7 +2345,7 @@ function buildModule(
             outPort('clk', 'clk', 1, ctrl('clk', L.zero));
             body.push(L.comment(`${label}: Telnet dışarıda; OUT/AV giriş, IN/WR/RD/CK çıkış portu (bayt CK'nin yükselen kenarında)`));
             warnings.push(
-              `${label}: evolution'da Telnet'in HDL karşılığı yok; OUT ve AV giriş portu, IN / WR / RD / CK çıkış portu oldu. Ağ bağlantısını harici bir arayüz (UART köprüsü, Ethernet çekirdeği) sağlamalı.`
+              `${label}: Telnet'in HDL karşılığı yok; OUT ve AV giriş portu, IN / WR / RD / CK çıkış portu oldu. Ağ bağlantısını harici bir arayüz (UART köprüsü, Ethernet çekirdeği) sağlamalı.`
             );
           }
           break;
@@ -2431,7 +2431,7 @@ function buildModule(
           )
         );
         warnings.push(
-          `${label}: evolution'da RGB Video'nun HDL karşılığı yok; RST / CK / WE / X / Y / DATA çıkış portu oldu, görüntüyü harici bir sürücü (çerçeve tamponlu VGA / HDMI denetleyicisi) göstermeli.`
+          `${label}: RGB Video'nun HDL karşılığı yok; RST / CK / WE / X / Y / DATA çıkış portu oldu, görüntüyü harici bir sürücü (çerçeve tamponlu VGA / HDMI denetleyicisi) göstermeli.`
         );
         break;
       }

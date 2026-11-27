@@ -670,7 +670,7 @@ export const IC_DATASHEETS: ICDatasheet[] = [
     pinCount: 16,
     simulatorCompType: 'ttl7447',
     simulatorNote:
-      'Tuvale Logisim-evolution\'daki 7447 çipi eklenir: çıkışlar açık kollektörlü değil, doğrudan 0/1 sürer (ortak anotlu göstergeye direnç gerekmez). BI\'/RBO\' bacağında iç pull-up vardır.',
+      'Tuvale 7447 çipi eklenir: çıkışlar açık kollektörlü değil, doğrudan 0/1 sürer (ortak anotlu göstergeye direnç gerekmez). BI\'/RBO\' bacağında iç pull-up vardır.',
     pins: [
       { pin: 1, label: 'B', desc: 'BCD Veri Girişi Bit 1', type: 'in' },
       { pin: 2, label: 'C', desc: 'BCD Veri Girişi Bit 2', type: 'in' },

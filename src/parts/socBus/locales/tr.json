@@ -2,12 +2,12 @@
   "meta": {
     "badge": "BUS",
     "name": "SoC Veri Yolu",
-    "description": "Bir SoC'nin veri yolu (Logisim-evolution'ın SoC Bus'ı): işlemciler ve bellekler ona kabloyla bağlanmaz, Veri yolu özniteliklerinde onu seçer; gövde son işlemleri gösterir"
+    "description": "Bir SoC'nin veri yolu: işlemciler ve bellekler ona kabloyla bağlanmaz, Veri yolu özniteliklerinde onu seçer; gövde son işlemleri gösterir"
   },
   "attributes": {
     "traceSize": {
       "label": "Gösterilen işlem",
-      "title": "Gövdenin son kaç işlemi gösterdiği (Logisim-evolution'da Number of traces)"
+      "title": "Gövdenin son kaç işlemi gösterdiği"
     },
     "traceVisible": {
       "label": "İzi göster",

@@ -2,12 +2,12 @@
   "meta": {
     "badge": "MEM",
     "name": "SoC Memory",
-    "description": "A memory of a SoC (Logisim-evolution's SoC Memory): it answers the transactions of its bus in its address range; unwritten words read as random values"
+    "description": "A memory of a SoC: it answers the transactions of its bus in its address range; unwritten words read as random values"
   },
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus this memory answers on (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus this memory answers on",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },
@@ -17,7 +17,7 @@
     },
     "memSize": {
       "label": "Size",
-      "title": "Size of the memory in bytes (Logisim-evolution's Memory size: 2^10 to 2^26 bytes)"
+      "title": "Size of the memory in bytes (2^10 to 2^26 bytes)"
     },
     "status": {
       "label": "Status",

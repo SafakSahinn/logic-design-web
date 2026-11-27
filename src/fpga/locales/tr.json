@@ -32,7 +32,7 @@
     "warning": {
       "unknownComponent": "Bilinmeyen bir kart kaynağı <{{element}}> atlandı.",
       "badComponent": "Dikdörtgeni ya da pin listesi geçersiz bir <{{element}}> kaynağı atlandı.",
-      "noPicture": "Kart dosyasında resim yok; resim eklenene kadar Logisim-evolution bu dosyayı açamaz."
+      "noPicture": "Kart dosyasında resim yok; geçerli bir kart dosyasında resim bulunmalı, bir resim ekleyin."
     }
   },
   "map": {
@@ -102,11 +102,11 @@
     "unsafeBoardText": "Kart dosyasında pin kısıt dosyalarına güvenle yazılamayan bir FPGA pini ya da aygıt adı var: {{text}}. Pin adlarında yalnız harf, rakam ve '_' kullanın (part, aile ve kılıf adında boşluk, '.' ve '-' de olabilir).",
     "zeroPinResource": "\"{{resource}}\" kart kaynağının FPGA pini yok, kullanılamaz.",
     "topLevelNoIo": "Devrenin hiç girişi ya da çıkışı yok, karta konacak bir şey yok.",
-    "noLabel": "{{port}} portunun arkasındaki parçanın kendi etiketi yok; kart eşlemesi Logisim-evolution için kaydedilirken (orada gerekli) ona bir etiket verilir. Adı kendiniz seçmek için parçaya etiket verin.",
-    "labelChar": "\"{{label}}\" etiketinde HDL adında olamayacak '{{char}}' karakteri var; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez.",
+    "noLabel": "{{port}} portunun arkasındaki parçanın kendi etiketi yok; kart eşlemesi kaydedilirken (kayıtlı eşlemede her parçanın etiketi olmalı) ona bir etiket verilir. Adı kendiniz seçmek için parçaya etiket verin.",
+    "labelChar": "\"{{label}}\" etiketinde HDL adında olamayacak '{{char}}' karakteri var, bu yüzden port {{port}} adını aldı; portun adının etiket olması için etiketi değiştirin.",
     "label": {
-      "vhdlKeyword": "\"{{label}}\" etiketi bir VHDL anahtar sözcüğü; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez.",
-      "verilogKeyword": "\"{{label}}\" etiketi bir Verilog anahtar sözcüğü; port {{port}} adını aldı, Logisim-evolution ise bu etiketi kabul etmez."
+      "vhdlKeyword": "\"{{label}}\" etiketi bir VHDL anahtar sözcüğü, bu yüzden port {{port}} adını aldı; portun adının etiket olması için etiketi değiştirin.",
+      "verilogKeyword": "\"{{label}}\" etiketi bir Verilog anahtar sözcüğü, bu yüzden port {{port}} adını aldı; portun adının etiket olması için etiketi değiştirin."
     },
     "duplicateLabel": "\"{{label}}\" etiketi birden fazla G/Ç parçasında kullanılıyor (\"{{other}}\" ile de; etiketler büyük / küçük harf ayrımı olmadan karşılaştırılır); kart eşlemesi bunları ayırt edemez.",
     "gatedClock": "\"{{part}}\" parçasının saati mantık kapılarından geçiyor (kapılı saat): FPGA'da bu sıçramalara ve zamanlama sorunlarına yol açar; yerine bir etkinleştirme (enable) girişi kullanın.",
@@ -233,7 +233,7 @@
         "builtInName": "{{name}} hazır bir kartın adı; kartınıza başka bir ad verin.",
         "storage": "Tarayıcı deposuna yazılamadı (gizli pencere, engellenmiş site verisi ya da dolu depo); kartı XML olarak dışa aktarın."
       },
-      "noPictureWarning": "Kartın fotoğrafı yok; Logisim-evolution fotoğraf eklenene kadar onu açamaz.",
+      "noPictureWarning": "Kartın fotoğrafı yok; geçerli bir kart dosyasında fotoğraf bulunmalı, bir fotoğraf ekleyin.",
       "duplicatePins": "Bu FPGA pinleri birden fazla kaynak pinine verilmiş: {{pins}}.",
       "resource": "Kaynak",
       "removeResource": "Kaldır",

@@ -2,12 +2,12 @@
   "meta": {
     "badge": "CPU",
     "name": "RV32IM",
-    "description": "A RISC-V RV32IM processor (Logisim-evolution's RISC-V IM simulator): one instruction per rising clock edge, its fetches and data accesses go over its SoC bus; the IRQ pins reach it through a PLIC on the same bus"
+    "description": "A RISC-V RV32IM processor: one instruction per rising clock edge, its fetches and data accesses go over its SoC bus; the IRQ pins reach it through a PLIC on the same bus"
   },
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus the processor uses for its instructions and data; its PLIC answers on it too (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus the processor uses for its instructions and data; its PLIC answers on it too",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },

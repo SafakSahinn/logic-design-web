@@ -2,12 +2,12 @@
   "meta": {
     "badge": "CPU",
     "name": "Nios II",
-    "description": "Bir Nios II/s işlemcisi (Logisim-evolution'ın Nios2s simulator'ü): her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri doğrudan ipending'e gider, özel komutlar üst kenardaki pinleri kullanır"
+    "description": "Bir Nios II/s işlemcisi: her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri doğrudan ipending'e gider, özel komutlar üst kenardaki pinleri kullanır"
   },
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },
@@ -17,11 +17,11 @@
     },
     "exceptionVector": {
       "label": "İstisna vektörü (hex)",
-      "title": "Donanım kesmelerinin ve trap komutunun gittiği adres (Logisim-evolution'da varsayılan 0x14)"
+      "title": "Donanım kesmelerinin ve trap komutunun gittiği adres (varsayılan 0x14)"
     },
     "breakVector": {
       "label": "Break vektörü (hex)",
-      "title": "break komutunun gittiği adres (Logisim-evolution'da varsayılan 0x30)"
+      "title": "break komutunun gittiği adres (varsayılan 0x30)"
     },
     "irqWidth": {
       "label": "IRQ girişleri",

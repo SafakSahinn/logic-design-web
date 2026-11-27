@@ -2,7 +2,7 @@
   "meta": {
     "badge": "VGA",
     "name": "VGA ekranı",
-    "description": "Bir SoC'nin ekranı (Logisim-evolution'ın SoC VGA ekranı): program, ekranın SoC veri yolunda izlediği bellekteki bir çerçeve tamponuna piksel başına bir 0xRRGGBB sözcüğü yazarak çizer; bir kip yazmacı 160x120'den 1024x768'e kadar çözünürlüğü seçer ve parça kiple birlikte büyür"
+    "description": "Bir SoC'nin ekranı: program, ekranın SoC veri yolunda izlediği bellekteki bir çerçeve tamponuna piksel başına bir 0xRRGGBB sözcüğü yazarak çizer; bir kip yazmacı 160x120'den 1024x768'e kadar çözünürlüğü seçer ve parça kiple birlikte büyür"
   },
   "options": {
     "on": "Açık",
@@ -11,7 +11,7 @@
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "Ekranın işlemlerini yanıtladığı ve izlediği SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "title": "Ekranın işlemlerini yanıtladığı ve izlediği SoC veri yolu",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },
@@ -49,7 +49,7 @@
     },
     "cExport": {
       "label": "C başlığı",
-      "title": "Bu ekran için bir C sürücüsü yazar: kip maskeleri, kip boyutları, adresler ve kip yazmacının yazıcı/okuyucu işlevlerini içeren <AD>.h ve <AD>.c (Logisim-evolution'da Export C)"
+      "title": "Bu ekran için bir C sürücüsü yazar: kip maskeleri, kip boyutları, adresler ve kip yazmacının yazıcı/okuyucu işlevlerini içeren <AD>.h ve <AD>.c"
     },
     "status": {
       "label": "Durum",

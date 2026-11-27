@@ -2,12 +2,12 @@
   "meta": {
     "badge": "DMA",
     "name": "DMA motoru",
-    "description": "Bir SoC'nin bellek kopyalama motoru (Logisim-evolution'ın SoC DMA motoru): program yazmaçlarına bir kaynak, bir hedef ve bir uzunluk yazıp onu başlatır; motor her yükselen saat kenarında kaynak ve hedef veri yolları arasında en çok \"aktarım boyu\" kadar sözcük taşır, IRQ pini de aktarımın bittiğini bildirebilir"
+    "description": "Bir SoC'nin bellek kopyalama motoru: program yazmaçlarına bir kaynak, bir hedef ve bir uzunluk yazıp onu başlatır; motor her yükselen saat kenarında kaynak ve hedef veri yolları arasında en çok \"aktarım boyu\" kadar sözcük taşır, IRQ pini de aktarımın bittiğini bildirebilir"
   },
   "attributes": {
     "bus": {
       "label": "Denetim veri yolu",
-      "title": "DMA yazmaçlarının işlemleri yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus); kaynak ya da hedef veri yolu seçilmezse aktarımlar da bunu kullanır",
+      "title": "DMA yazmaçlarının işlemleri yanıtladığı SoC veri yolu; kaynak ya da hedef veri yolu seçilmezse aktarımlar da bunu kullanır",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },

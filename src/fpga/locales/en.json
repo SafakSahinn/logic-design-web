@@ -32,7 +32,7 @@
     "warning": {
       "unknownComponent": "Skipped an unknown board resource <{{element}}>.",
       "badComponent": "Skipped a <{{element}}> resource with an invalid rectangle or pin list.",
-      "noPicture": "The board file has no picture; Logisim-evolution cannot open it until one is added."
+      "noPicture": "The board file has no picture; a valid board file must have one, so add a picture."
     }
   },
   "map": {
@@ -102,11 +102,11 @@
     "unsafeBoardText": "The board file has an FPGA pin or device name the pin constraint files cannot take safely: {{text}}. Use only letters, digits and '_' in pin names (and also spaces, '.' and '-' in the part, family and package).",
     "zeroPinResource": "The board resource \"{{resource}}\" has no FPGA pin and cannot be used.",
     "topLevelNoIo": "The circuit has no inputs or outputs, so there is nothing to put on the board.",
-    "noLabel": "The part behind port {{port}} has no label of its own; it gets one when the board map is saved for Logisim-evolution (which needs it). Give it a label to choose the name yourself.",
-    "labelChar": "Label \"{{label}}\" has the character '{{char}}', which an HDL name cannot have; the port is called {{port}}, and Logisim-evolution will not accept the label.",
+    "noLabel": "The part behind port {{port}} has no label of its own; it gets one when the board map is saved (a saved map needs a label on every mapped part). Give it a label to choose the name yourself.",
+    "labelChar": "Label \"{{label}}\" has the character '{{char}}', which an HDL name cannot have, so the port is called {{port}}; change the label to give the port its name.",
     "label": {
-      "vhdlKeyword": "Label \"{{label}}\" is a VHDL keyword; the port is called {{port}}, and Logisim-evolution will not accept the label.",
-      "verilogKeyword": "Label \"{{label}}\" is a Verilog keyword; the port is called {{port}}, and Logisim-evolution will not accept the label."
+      "vhdlKeyword": "Label \"{{label}}\" is a VHDL keyword, so the port is called {{port}}; change the label to give the port its name.",
+      "verilogKeyword": "Label \"{{label}}\" is a Verilog keyword, so the port is called {{port}}; change the label to give the port its name."
     },
     "duplicateLabel": "Label \"{{label}}\" is used by more than one I/O part (also \"{{other}}\"; labels are compared without case); the board map cannot tell them apart.",
     "gatedClock": "The clock of \"{{part}}\" goes through logic gates (a gated clock): on an FPGA this gives glitches and timing problems; use an enable input instead.",
@@ -233,7 +233,7 @@
         "builtInName": "{{name}} is the name of a built-in board; give your board another name.",
         "storage": "The browser storage could not be written (private window, blocked site data or full storage); export the board as XML instead."
       },
-      "noPictureWarning": "The board has no photo; Logisim-evolution cannot open it until one is added.",
+      "noPictureWarning": "The board has no photo; a valid board file must have one, so add a photo.",
       "duplicatePins": "These FPGA pins are given to more than one resource pin: {{pins}}.",
       "resource": "Resource",
       "removeResource": "Remove",

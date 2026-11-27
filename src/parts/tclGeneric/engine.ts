@@ -61,10 +61,10 @@ proc force {args} {
 }
 proc run {args} {}
 proc restart {args} { echo "Restart" }
-proc add {args} { echo "'add' command ignored in Logisim execution mode" }
-proc delete {args} { echo "'delete' command ignored in Logisim execution mode" }
-proc configure {args} { echo "'configure' command ignored in Logisim execution mode" }
-proc WaveRestoreZoom {args} { echo "'WaveRestoreZoom' command ignored in Logisim execution mode" }
+proc add {args} { echo "'add' command ignored by this simulator" }
+proc delete {args} { echo "'delete' command ignored by this simulator" }
+proc configure {args} { echo "'configure' command ignored by this simulator" }
+proc WaveRestoreZoom {args} { echo "'WaveRestoreZoom' command ignored by this simulator" }
 proc enableLogisim {args} {}
 proc logisimExamine {} {}
 

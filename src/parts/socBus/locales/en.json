@@ -2,12 +2,12 @@
   "meta": {
     "badge": "BUS",
     "name": "SoC Bus",
-    "description": "The bus of a SoC (Logisim-evolution's SoC Bus): processors and memories are not wired to it but name it in their Bus attribute; the body shows the last transactions"
+    "description": "The bus of a SoC: processors and memories are not wired to it but name it in their Bus attribute; the body shows the last transactions"
   },
   "attributes": {
     "traceSize": {
       "label": "Shown transactions",
-      "title": "How many of the last transactions the body shows (Logisim-evolution's Number of traces)"
+      "title": "How many of the last transactions the body shows"
     },
     "traceVisible": {
       "label": "Show trace",

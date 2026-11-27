@@ -2,7 +2,7 @@
   "meta": {
     "badge": "PIO",
     "name": "SoC PIO",
-    "description": "Bir SoC'nin paralel giriş/çıkış kapısı (Logisim-evolution'ın SoC PIO'su): bir programın SoC veri yolu üzerinden okuyup yazdığı en çok 32 giriş, çıkış ya da çift yönlü bit; isteğe bağlı kenar yakalama ve kesme çıkışı"
+    "description": "Bir SoC'nin paralel giriş/çıkış kapısı: bir programın SoC veri yolu üzerinden okuyup yazdığı en çok 32 giriş, çıkış ya da çift yönlü bit; isteğe bağlı kenar yakalama ve kesme çıkışı"
   },
   "options": {
     "on": "Açık",
@@ -11,7 +11,7 @@
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "PIO'nun işlemlerini yanıtladığı SoC veri yolu (Logisim-evolution'da Connected bus)",
+      "title": "PIO'nun işlemlerini yanıtladığı SoC veri yolu",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },
@@ -72,7 +72,7 @@
     },
     "cExport": {
       "label": "C başlığı",
-      "title": "Bu yapılandırma için bir C sürücüsü yazar: her yazmaç için bir yazıcı/okuyucu işlev içeren <AD>.h ve <AD>.c (Logisim-evolution'da Export C)"
+      "title": "Bu yapılandırma için bir C sürücüsü yazar: her yazmaç için bir yazıcı/okuyucu işlev içeren <AD>.h ve <AD>.c"
     },
     "status": {
       "label": "Durum",

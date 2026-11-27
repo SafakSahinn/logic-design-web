@@ -2,12 +2,12 @@
   "meta": {
     "badge": "CPU",
     "name": "RV32IM",
-    "description": "Bir RISC-V RV32IM işlemcisi (Logisim-evolution'ın RISC-V IM simulator'ü): her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri aynı veri yolundaki bir PLIC üzerinden ulaşır"
+    "description": "Bir RISC-V RV32IM işlemcisi: her yükselen saat kenarında bir komut yürütür, komut okumaları ve veri erişimleri SoC veri yolundan geçer; IRQ girişleri aynı veri yolundaki bir PLIC üzerinden ulaşır"
   },
   "attributes": {
     "bus": {
       "label": "Veri yolu",
-      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu; PLIC'i de bu yolda yanıt verir (Logisim-evolution'da Connected bus)",
+      "title": "İşlemcinin komut ve veri için kullandığı SoC veri yolu; PLIC'i de bu yolda yanıt verir",
       "none": "Bağlı değil",
       "missing": "(veri yolu bu devrede yok)"
     },

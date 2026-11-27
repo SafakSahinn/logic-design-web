@@ -704,7 +704,7 @@ const CHIPS: TtlChip[] = [
     id: '7447', pins: 16, out: [9, 10, 11, 12, 13, 14, 15], inout: [4], pullUp: [4], vcc: 16, gnd: 8,
     title: 'BCD → 7 parça kod çözücü/sürücü',
     description:
-      'DCBA girişindeki BCD sayıyı ortak anotlu 7 parçalı gösterge için aktif-düşük a..g çıkışlarına çevirir (10-15 Logisim\'deki özel şekiller). '
+      'DCBA girişindeki BCD sayıyı ortak anotlu 7 parçalı gösterge için aktif-düşük a..g çıkışlarına çevirir (10-15 veri sayfasındaki özel şekiller). '
       + 'LT\' = 0 tüm parçaları yakar; BI\'/RBO\' (4. bacak, iç pull-up\'lı) dışarıdan 0 yapılırsa göstergeyi söndürür, '
       + 'RBI\' = 0 iken giriş 0 ise göstergeyi söndürüp RBO\' bacağını 0\'a çeker (baştaki sıfırları silme zinciri).',
     names: ['B', 'C', 'LT\'', 'BI\'/RBO\'', 'RBI\'', 'D', 'A', 'e', 'd', 'c', 'b', 'a', 'g', 'f'],

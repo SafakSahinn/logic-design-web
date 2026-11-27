@@ -19,7 +19,7 @@ entity TCL_Generic is
 end TCL_Generic;
 `;
 
-export const DEFAULT_SCRIPT = `# TCL Generic script (the protocol of Logisim-evolution's TCL Generic).
+export const DEFAULT_SCRIPT = `# TCL Generic script.
 #
 # logisimForce runs once on every simulation tick: read inputs with
 # [examine name] and set outputs with [force name value]. Values are

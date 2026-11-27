@@ -2,12 +2,12 @@
   "meta": {
     "badge": "DMA",
     "name": "DMA engine",
-    "description": "A memory-copy engine of a SoC (Logisim-evolution's SoC DMA engine): a program sets a source, a destination and a length in its registers and starts it; on every rising clock edge it moves up to \"burst size\" words between its source and destination buses, and its IRQ pin can signal the end"
+    "description": "A memory-copy engine of a SoC: a program sets a source, a destination and a length in its registers and starts it; on every rising clock edge it moves up to \"burst size\" words between its source and destination buses, and its IRQ pin can signal the end"
   },
   "attributes": {
     "bus": {
       "label": "Control bus",
-      "title": "The SoC bus the DMA's registers answer on (Logisim-evolution's Connected bus); the transfers use it too unless a source or destination bus is chosen",
+      "title": "The SoC bus the DMA's registers answer on; the transfers use it too unless a source or destination bus is chosen",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },

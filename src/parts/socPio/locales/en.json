@@ -2,7 +2,7 @@
   "meta": {
     "badge": "PIO",
     "name": "SoC PIO",
-    "description": "A parallel input/output port of a SoC (Logisim-evolution's SoC PIO): up to 32 input, output or bidirectional bits a program reads and writes over its SoC bus, with optional edge capture and an interrupt output"
+    "description": "A parallel input/output port of a SoC: up to 32 input, output or bidirectional bits a program reads and writes over its SoC bus, with optional edge capture and an interrupt output"
   },
   "options": {
     "on": "On",
@@ -11,7 +11,7 @@
   "attributes": {
     "bus": {
       "label": "Bus",
-      "title": "The SoC bus the PIO answers on (Logisim-evolution's Connected bus)",
+      "title": "The SoC bus the PIO answers on",
       "none": "Not connected",
       "missing": "(bus not in this circuit)"
     },
@@ -72,7 +72,7 @@
     },
     "cExport": {
       "label": "C header",
-      "title": "Writes a C driver for this configuration: <NAME>.h and <NAME>.c with a setter / getter per register (Logisim-evolution's Export C)"
+      "title": "Writes a C driver for this configuration: <NAME>.h and <NAME>.c with a setter / getter per register"
     },
     "status": {
       "label": "Status",
