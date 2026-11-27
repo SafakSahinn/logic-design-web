@@ -13,10 +13,10 @@ import type { AppearanceSvgElement } from './subcircuitAppearance';
 /**
  * Dynamic appearance elements, after Logisim-evolution's DynamicElement and its shapes (LedShape, RgbLedShape,
  * SevenSegmentShape, HexDigitShape, RegisterShape, CounterShape, ProbeShape, TtyShape, DotMatrixShape,
- * LedBarShape, TwoPinLedShape): a part somewhere inside an IC, reached through a path of part ids, drawn live on the IC body.
- * Evolution offers one for every DynamicElementProvider part; ours are the same parts (the SoC / VGA ones have
- * no counterpart here, and evolution writes the keypad shape but cannot read it back). Evolution cannot read the
- * two-pin LED's visible-two-pin-led back either; it is read here all the same.
+ * LedBarShape, TwoPinLedShape, MatrixKeypadShape): a part somewhere inside an IC, reached through a path of part ids,
+ * drawn live on the IC body. Evolution offers one for every DynamicElementProvider part; ours are the same parts (the
+ * SoC / VGA ones have no counterpart here). Evolution writes the keypad shape as <matrix-keypad> and cannot read it
+ * back, nor the two-pin LED's visible-two-pin-led; both are read here all the same.
  */
 
 /** Our part types that can be shown on an IC body, and the element each one gets */
@@ -32,6 +32,7 @@ export const DYNAMIC_ELEMENT_OF: Partial<Record<ComponentType, AppearanceDynamic
   tty: 'tty',
   dotMatrix: 'dotmatrix',
   ledBar: 'ledbar',
+  matrixKeypad: 'matrix-keypad',
 };
 
 /** Part type each element shows (to check that a path still ends at the right part) */
@@ -47,6 +48,7 @@ export const DYNAMIC_ELEMENT_TYPE: Record<AppearanceDynamicElement, ComponentTyp
   tty: 'tty',
   dotmatrix: 'dotMatrix',
   ledbar: 'ledBar',
+  'matrix-keypad': 'matrixKeypad',
 };
 
 export const DYNAMIC_DEFAULTS = {
@@ -188,6 +190,9 @@ export function dynamicElementSize(
       const rot = target?.rotation ?? 0;
       return rot === 90 || rot === 270 ? { width: across, height: along } : { width: along, height: across };
     }
+    case 'matrix-keypad':
+      // MatrixKeypadShape: 60 x 60 whatever the part's size
+      return { width: 60, height: 60 };
   }
 }
 
@@ -235,13 +240,18 @@ export const DYNAMIC_FACTORY: Record<AppearanceDynamicElement, string> = {
   tty: 'TTY',
   dotmatrix: 'DotMatrix',
   ledbar: 'LedBar',
+  'matrix-keypad': 'MatrixKeypad',
 };
 
-const DYNAMIC_TAGS = new Set<string>(Object.keys(DYNAMIC_FACTORY).map((e) => `visible-${e}`));
+/** The tag of an element (evolution's MatrixKeypadShape writes <matrix-keypad>, the others visible-*) */
+const dynamicTag = (e: AppearanceDynamicElement) => (e === 'matrix-keypad' ? e : `visible-${e}`);
+const DYNAMIC_TAGS = new Map<string, AppearanceDynamicElement>(
+  (Object.keys(DYNAMIC_FACTORY) as AppearanceDynamicElement[]).map((e) => [dynamicTag(e), e])
+);
 
-/** The element a visible-* tag reads as (null: one evolution has but we do not: visible-vga, visible-soc-cpu) */
+/** The element a tag reads as (null: one evolution has but we do not: visible-vga, visible-soc-cpu) */
 export function dynamicElementOfTag(tag: string): AppearanceDynamicElement | null {
-  return DYNAMIC_TAGS.has(tag) ? (tag.slice(8) as AppearanceDynamicElement) : null;
+  return DYNAMIC_TAGS.get(tag) ?? null;
 }
 
 /** One step of a path as the file writes it: the part's factory name and location */
@@ -389,5 +399,5 @@ export function dynamicShapeToSvg(s: AppearanceDynamicShape, path: string): Appe
   if (HAS_VALUE_FONT.has(s.element) && s.valueFont && !sameFont(s.valueFont, DYNAMIC_DEFAULTS.valueFont)) writeFont(attrs, s.valueFont, 'value-');
   if (HAS_SCALE.has(s.element) && s.scale !== undefined && s.scale !== scaleDefault(s.element)) attrs.push(['value-scale', String(s.scale)]);
   attrs.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return { tag: `visible-${s.element}`, attrs };
+  return { tag: dynamicTag(s.element), attrs };
 }

@@ -1501,7 +1501,7 @@ export function getComponentAttributes(type: ComponentType): AttrDef[] {
       list.push(ioActiveAttr, ioDpAttr, ioColorAttr);
       break;
     case 'joystick':
-      list.push(joyBitsAttr, joyColorAttr);
+      list.push(joyBitsAttr, joyColorAttr, joyBgAttr);
       break;
     case 'matrixKeypad':
       list.push(keypadModeAttr, keypadSizeAttr, ...KEYPAD_KEY_ATTRS);
@@ -1701,6 +1701,26 @@ function reconfigureIo5(c: CircuitComponentInstance, patch: Partial<Io5Config>):
   }
   return { comp: next, remap };
 }
+
+const joyBgAttr: AttrDef = {
+  key: 'joyBg',
+  label: 'Gövde rengi',
+  kind: 'buttons',
+  title: 'Kutunun dolgu rengi; varsayılan saydam (altındaki çizim görünür)',
+  options: (c) =>
+    colorChoices(
+      [
+        { value: 'transparent', label: 'Saydam', swatch: 'transparent' },
+        { value: '#ffffff', label: 'Beyaz', swatch: '#ffffff' },
+        { value: '#c0c0c0', label: 'Gri', swatch: '#c0c0c0' },
+        { value: '#000000', label: 'Siyah', swatch: '#000000' },
+        { value: '#fef3c7', label: 'Krem', swatch: '#fef3c7' },
+      ],
+      c.state.joyBg
+    ),
+  get: (c) => c.state.joyBg ?? 'transparent',
+  set: (c, v) => ((c.state.joyBg ?? 'transparent') === v ? null : withState(c, { joyBg: v === 'transparent' ? undefined : String(v) })),
+};
 
 const joyBitsAttr: AttrDef = {
   key: 'joyBits',
@@ -2497,7 +2517,8 @@ export const IO_ON_COLORS = [
   { value: '#f8fafc', label: 'Beyaz' },
 ];
 /** Default lit colour (Logisim: 7-segment / hex digit red 240,0,0; dot matrix / LED bar Color.GREEN; joystick ball Color.RED) */
-export const ioDefaultOnColor = (type: ComponentType) => (type === 'sevenSegment' || type === 'hexDigit' || type === 'joystick' ? '#f00000' : '#00ff00');
+export const ioDefaultOnColor = (type: ComponentType) =>
+  type === 'joystick' ? '#ff0000' : type === 'sevenSegment' || type === 'hexDigit' ? '#f00000' : '#00ff00';
 
 const ioColorAttr: AttrDef = {
   key: 'ioOnColor',

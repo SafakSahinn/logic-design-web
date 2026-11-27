@@ -84,6 +84,7 @@ const ELEMENT_NAMES: Record<AppearanceDynamicElement, string> = {
   tty: 'TTY Terminal',
   dotmatrix: 'Nokta Matris',
   ledbar: 'LED Çubuğu',
+  'matrix-keypad': 'Tuş Takımı',
 };
 const LABEL_POSITIONS: Array<[NonNullable<AppearanceDynamicShape['label']> | '', string]> = [
   ['', 'Yok'],
@@ -94,7 +95,7 @@ const LABEL_POSITIONS: Array<[NonNullable<AppearanceDynamicShape['label']> | '',
   ['center', 'Orta'],
 ];
 /** Which attributes each element has (evolution's getAttributes of each shape) */
-const HAS_STROKE = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled', 'dotmatrix', 'ledbar']);
+const HAS_STROKE = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled', 'dotmatrix', 'ledbar', 'matrix-keypad']);
 const HAS_RADIUS = new Set<AppearanceDynamicElement>(['led', 'two-pin-led', 'rgbled']);
 const HAS_SEG_SCALE = new Set<AppearanceDynamicElement>(['sevensegment', 'hexdigit']);
 const HAS_MATRIX_SCALE = new Set<AppearanceDynamicElement>(['dotmatrix', 'ledbar']);

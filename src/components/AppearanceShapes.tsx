@@ -1,7 +1,7 @@
 import React from 'react';
 import type { AppearanceDynamicShape, AppearanceFont, AppearancePaint, AppearanceShape, CircuitComponentInstance } from '../types/circuit';
 import { formatBits } from '../types/logic';
-import { TWO_PIN_LED_DEFAULTS, matrixDots, getIoConfig, rgbLedBits, segmentsLit, ttyScreen, twoPinLedColor, twoPinLedState } from '../utils/circuitEngine';
+import { TWO_PIN_LED_DEFAULTS, matrixDots, getIoConfig, getIo5Config, rgbLedBits, segmentsLit, ttyScreen, twoPinLedColor, twoPinLedState } from '../utils/circuitEngine';
 import { DYNAMIC_DEFAULTS, ledBarFacing, registerText } from '../utils/dynamicElements';
 import { appearanceTextBox } from '../utils/subcircuitAppearance';
 
@@ -295,6 +295,28 @@ export function DynamicShapeSvg({ shape: s, dark, dyn }: { shape: AppearanceDyna
             {cells}
             {!bar && <rect x={0} y={0} width={along} height={across} fill="none" stroke={color('#404040', '#404040', dark).c} strokeWidth={sw} />}
           </g>
+          {label}
+        </g>
+      );
+    }
+    case 'matrix-keypad': {
+      // MatrixKeypadShape.paintDynamic: dark body, 4 x 4 keys of 12 a 2 apart from 3, 3. Evolution paints them all
+      // up, red in the last row and column; here the keys take the part's own colours (raw: A-D / * / # red;
+      // PmodKYPD: navy) and a pressed key is drawn down, as on the part
+      const part = live ?? target;
+      const pmod = part ? getIo5Config(part).keypadMode === 'pmod' : false;
+      const pressed = live?.state.keypadPressed ?? 0;
+      const RED_KEYS = [3, 7, 11, 12, 14, 15];
+      const keys: React.ReactNode[] = [];
+      for (let k = 0; k < 16; k++) {
+        const on = ((pressed >>> k) & 1) === 1;
+        const rgb = pmod ? (on ? '15,45,85' : '30,80,140') : RED_KEYS.includes(k) ? (on ? '170,30,30' : '220,40,40') : on ? '0,120,170' : '0,170,220';
+        keys.push(<rect key={k} x={x + 3 + (k % 4) * 14} y={y + 3 + Math.floor(k / 4) * 14} width={12} height={12} rx={1} ry={1} fill={`rgb(${rgb})`} stroke="#000000" strokeWidth={1} />);
+      }
+      return (
+        <g>
+          <rect x={x} y={y} width={w} height={h} rx={4} ry={4} fill="rgb(50,50,50)" stroke={color('#404040', '#404040', dark).c} strokeWidth={Math.max(1, sw)} />
+          {keys}
           {label}
         </g>
       );

@@ -447,6 +447,8 @@ export interface CircuitComponentInstance {
     joyY?: number;
     /** Joystick: output width (evolution 'bits', 2-5); unset = 4 */
     joyBits?: number;
+    /** Joystick: body colour '#rrggbb' (evolution 'bg'); unset = transparent, as evolution's default */
+    joyBg?: string;
     /** Matrix keypad: pressed keys, bit row * 4 + col; unset = none */
     keypadPressed?: number;
     /** Matrix keypad: evolution 'mode' (raw = pressed keys pass the row value, pmod = Digilent PmodKYPD active low); unset = raw */
@@ -655,7 +657,8 @@ export type AppearanceDynamicElement =
   | 'probe'
   | 'tty'
   | 'dotmatrix'
-  | 'ledbar';
+  | 'ledbar'
+  | 'matrix-keypad';
 
 /** Font of a dynamic element's label or value (evolution writes family, size, style) */
 export interface AppearanceFont {

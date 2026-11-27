@@ -5709,6 +5709,22 @@ export function updatePinPositions(comp: CircuitComponentInstance): CircuitCompo
     };
   }
 
+  // Joystick: X / Y on the side the part faces, X always the left / upper one on screen (evolution's ports: its
+  // body does not turn, so facing south / west the pair is not the east pair turned around), i.e. turned by 90 or
+  // 180 degrees the pair swaps places
+  if (comp.type === 'joystick') {
+    const r = ((rot % 360) + 360) % 360;
+    const swap = r === 90 || r === 180;
+    return {
+      ...comp,
+      outputs: comp.outputs.map((pin) => {
+        const first = pinKey(comp, pin) === 'x';
+        const p = rotatePoint(60, first !== swap ? 20 : 40);
+        return { ...pin, x: comp.x + p.x, y: comp.y + p.y };
+      }),
+    };
+  }
+
   // Splitter (Logisim SplitterParameters, facing east): the combined end on the left, the ends 20px to
   // the right and 10px apart, above it (left-handed), below it (right-handed) or around it (centered)
   if (comp.type === 'splitter') {

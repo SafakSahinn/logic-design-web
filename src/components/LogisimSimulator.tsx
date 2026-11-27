@@ -4246,6 +4246,9 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
           const w = p?.width ?? 1;
           rows.push({ key: `${c.id}_${k}`, name: `${name} ${port}${sfx(w)}`, kind, width: w, value: pinWaveValue(p) });
         });
+      } else if (c.type === 'matrixKeypad') {
+        // evolution's MatrixKeypad.Logger: one bit, 1 while any key is down
+        rows.push({ key: c.id, name: `${name} (KYPD)`, kind: 'input', width: 1, value: c.state.keypadPressed ? 1 : 0 });
       } else if (c.type === 'asciiKeyboard') {
         rows.push({ key: `${c.id}_st`, name: `${name} (ST Strobe)`, kind: 'input', width: 1, value: c.outputs[7]?.value ?? 0, color: '#22c55e' });
         rows.push({ key: `${c.id}_d0`, name: `${name} (D0 LSB)`, kind: 'input', width: 1, value: c.outputs[0]?.value ?? 0 });
@@ -6581,11 +6584,11 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
         const y0 = 30 + 2 * (dy > 5 ? 1 : dy < 0 ? -1 : 0);
         const x1 = 30 + 2 * dx;
         const y1 = 30 + 2 * dy;
-        const ball = comp.state.ioOnColor ?? '#f00000';
+        const ball = comp.state.ioOnColor ?? '#ff0000';
         const bits = getIo5Config(comp).joyBits;
         return (
           <g onMouseDown={(e) => handleJoystickDown(e, comp)} className={isSelected ? 'cursor-move' : undefined}>
-            <rect x={0} y={0} width={60} height={60} rx={8} fill={cadTheme === 'dark' ? '#1e293b' : '#ffffff'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 2.5 : 2} />
+            <rect x={0} y={0} width={60} height={60} rx={8} fill={comp.state.joyBg ?? 'transparent'} stroke={isSelected ? '#3b82f6' : io5Stroke} strokeWidth={isSelected ? 2.5 : 2} />
             <rect x={4} y={4} width={52} height={52} rx={4} fill="none" stroke={io5Stroke} strokeWidth={1.5} />
             <circle cx={30} cy={30} r={8} fill={io5Stroke} />
             {(sx !== 0 || sy !== 0) && <line x1={x0} y1={y0} x2={x1} y2={y1} stroke={io5Stroke} strokeWidth={6} strokeLinecap="round" />}

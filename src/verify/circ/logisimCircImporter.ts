@@ -1727,7 +1727,7 @@ export function importCircXmlFile(xmlText: string): ImportedCircFile {
     const filePath = new Map<AppearanceShape, string>();
     for (const ap of kids(elem, 'appear'))
       for (const e of elems(ap)) {
-        if (e.tagName.startsWith('visible-')) {
+        if (e.tagName.startsWith('visible-') || e.tagName === 'matrix-keypad') {
           const d = dynamicFromSvg(name, e);
           if (typeof d === 'string') notes.push(`IC görünümü: <${e.tagName}> ${d}, atlandı.`);
           else {

@@ -15,6 +15,7 @@
 import type { CircuitComponentInstance, CircuitPin, CircuitWire, CustomSubcircuit } from '../types/circuit';
 import { configureRam, createComponentInstance, pinKey, updatePinPositions, type RamConfig } from './circuitEngine';
 import { repairWires, rerouteWiresToRemappedPins, snapPt10, snapTo10 } from './wiringEngine';
+import { upgradeJoystickPins } from './legacyJoystick';
 
 export type LegacyRamBus = 'combined' | 'asynch' | 'separate';
 
@@ -179,8 +180,12 @@ function dropDanglingWires(wires: CircuitWire[], comps: CircuitComponentInstance
 export function upgradeLegacyCircuit<T extends { components?: CircuitComponentInstance[]; wires?: CircuitWire[] }>(
   circuit: T
 ): { circuit: T; report: LegacyMemoryReport } {
-  const { components, wires, report } = upgradeLegacyMemories(circuit.components ?? [], circuit.wires ?? []);
-  return report.converted ? { circuit: { ...circuit, components, wires }, report } : { circuit, report };
+  const mem = upgradeLegacyMemories(circuit.components ?? [], circuit.wires ?? []);
+  // joysticks turned south / west whose pins moved to evolution's order (7b-2): their wires follow the pins
+  const joy = upgradeJoystickPins(mem.components, mem.wires);
+  const { components, wires } = joy;
+  const report = mem.report;
+  return report.converted || joy.moved ? { circuit: { ...circuit, components, wires }, report } : { circuit, report };
 }
 
 /** The same for a custom IC's inside */
