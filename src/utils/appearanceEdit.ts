@@ -33,9 +33,9 @@ type Pt = { x: number; y: number };
 
 export const APPEARANCE_STYLE_OPTIONS: Array<{ value: SubcircuitAppearanceStyle; label: string; title: string }> = [
   { value: 'chip', label: 'Çip (uygulama)', title: 'Uygulamanın kendi entegre görünümü: girişler solda, çıkışlar sağda' },
-  { value: 'classic', label: 'Klasik Logisim', title: 'Logisim 2.7.1 kutusu: pinler iç pinin baktığı yönün karşı kenarında' },
-  { value: 'evolution', label: 'Holy Cross', title: 'Logisim-evolution "evolution" (Holy Cross) kutusu: ad üstte, etiketler içeride' },
-  { value: 'logisim_evolution', label: 'Logisim-evolution', title: 'Logisim-evolution kendi görünümü: pin çıkıntıları, etiketler, alt ad şeridi' },
+  { value: 'classic', label: 'Klasik', title: 'Klasik kutu: pinler iç pinin baktığı yönün karşı kenarında' },
+  { value: 'evolution', label: 'Holy Cross', title: 'Holy Cross kutusu: ad üstte, etiketler içeride' },
+  { value: 'logisim_evolution', label: 'Ad şeritli', title: 'Ad şeritli kutu: pin çıkıntıları, etiketler, alt ad şeridi' },
   { value: 'custom', label: 'Özel çizim', title: 'Görünüm düzenleyicide çizilen şekiller' },
 ];
 

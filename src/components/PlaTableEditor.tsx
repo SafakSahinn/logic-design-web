@@ -48,7 +48,7 @@ export default function PlaTableEditor({ comp, dark, onSave, onClose, onToast }:
 
   const exportText = () => {
     // (evolution's file: a comment line, then the rows)
-    const blob = new Blob(['# Logisim PLA program table\n' + plaTableText(rows)], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob(['# PLA program table\n' + plaTableText(rows)], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -148,10 +148,10 @@ export default function PlaTableEditor({ comp, dark, onSave, onClose, onToast }:
             <Plus className="w-3.5 h-3.5" /> Satır ekle
           </button>
           <div className="flex-1" />
-          <button onClick={() => fileRef.current?.click()} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title="Logisim-evolution PLA program dosyası aç">
+          <button onClick={() => fileRef.current?.click()} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title="PLA program dosyası aç">
             <FolderOpen className="w-3.5 h-3.5" /> Dosyadan aç
           </button>
-          <button onClick={exportText} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title="Programı Logisim-evolution PLA dosyası olarak indir">
+          <button onClick={exportText} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title="Programı PLA dosyası olarak indir">
             <Download className="w-3.5 h-3.5" /> Dosyaya kaydet
           </button>
           <input

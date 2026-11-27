@@ -484,7 +484,7 @@ const COMPACT_COMPONENT_NAMES: Record<string, { label: string; badge?: string }>
   dotMatrix: { label: 'Nokta Matris', badge: 'Matris' },
   probe: { label: 'Mantık Probu' },
   buzzer: { label: 'Buzzer', badge: 'Ses' },
-  evoBuzzer: { label: 'Ses Üreteci', badge: 'evo Buzzer' },
+  evoBuzzer: { label: 'Ses Üreteci', badge: 'Hz' },
   digitalOscilloscope: { label: 'Dijital Osiloskop', badge: 'Osilo' },
   rgbVideo: { label: 'RGB Video', badge: 'VGA' },
   asciiKeyboard: { label: 'ASCII Klavye (eski)', badge: 'KBD' },
@@ -3026,7 +3026,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       // Logisim .circ files are no longer opened (the program is independent of Logisim)
       if (file.name.toLowerCase().endsWith('.circ') || text.trim().startsWith('<')) {
-        alert('Logisim .circ dosyaları artık açılmıyor. Yalnız bu programın proje ve devre dosyaları (.json) açılır.');
+        alert('.circ dosyaları artık açılmıyor. Yalnız bu programın proje ve devre dosyaları (.json) açılır.');
         return;
       }
 
@@ -7392,7 +7392,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <g key="mem" transform={unturn}>
               {!quarter && <line x1={sx0 + 28} y1={sy0 + SH / 2} x2={sx0 + SW - 28} y2={sy0 + SH / 2} stroke={grey} strokeWidth={0.6} strokeDasharray="3 3" opacity={0.7} />}
               {cells}
-              <title>{`Çift portlu RAM ${memSizeText(addrBits)} × ${w} bit (Logisim-evolution kuralları)`}</title>
+              <title>{`Çift portlu RAM ${memSizeText(addrBits)} × ${w} bit`}</title>
             </g>
           );
         } else if (ramCfg) {
@@ -9877,7 +9877,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             {hasOscillation && (
               <div
                 className="px-2.5 py-1 bg-rose-500/10 text-rose-400 border border-rose-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 animate-pulse shadow-2xs"
-                title="Geri beslemeli bir döngü sürekli değişiyor (Logisim: Oscillation apparent). Salınan teller ve IC'ler kırmızı halkayla gösteriliyor."
+                title="Geri beslemeli bir döngü sürekli değişiyor. Salınan teller ve IC'ler kırmızı halkayla gösteriliyor."
               >
                 <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
                 <span>⚠ Salınım Tespit Edildi</span>
@@ -12033,10 +12033,10 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
               <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                 <span className={`text-[11px] font-semibold ${rowLabel}`}>Süreler</span>
                 <div className="flex flex-wrap gap-1">
-                  <button onClick={() => setPgEditorCompId(first.id)} className={btnCls(false)} title="Her durumun yüksek / düşük süresini düzenle (Logisim-evolution &quot;Edit&quot;)">
+                  <button onClick={() => setPgEditorCompId(first.id)} className={btnCls(false)} title="Her durumun yüksek / düşük süresini düzenle">
                     Düzenle… ({pgStateCount(first)} durum)
                   </button>
-                  <button onClick={() => handleClearPg(first.id)} className={btnCls(false)} title="Bütün süreleri 1 yap ve ilk durumdan başlat (Logisim-evolution &quot;Clear contents&quot;)">
+                  <button onClick={() => handleClearPg(first.id)} className={btnCls(false)} title="Bütün süreleri 1 yap ve ilk durumdan başlat">
                     Temizle
                   </button>
                 </div>
@@ -12056,14 +12056,14 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                   <span className={`text-[11px] font-semibold ${rowLabel}`}>Araçlar</span>
                   <div className="flex flex-wrap gap-1">
-                    <button disabled={!ok} onClick={() => runImageTool(first.id, 'reset')} className={cls} title="Çerçeveyi resmin kendi boyutuna getir (Logisim-evolution &quot;Reset size&quot;)">
+                    <button disabled={!ok} onClick={() => runImageTool(first.id, 'reset')} className={cls} title="Çerçeveyi resmin kendi boyutuna getir">
                       Kendi boyutu
                     </button>
                     <button
                       disabled={!ok}
                       onClick={() => runImageTool(first.id, 'optimize')}
                       className={cls}
-                      title="Resmi çerçevenin gerektirdiği piksel boyutunda yeniden kaydet, dosya küçülür (Logisim-evolution &quot;Optimize&quot;; sığdırda çerçeve de yeni boyutu alır)"
+                      title="Resmi çerçevenin gerektirdiği piksel boyutunda yeniden kaydet, dosya küçülür (sığdırda çerçeve de yeni boyutu alır)"
                     >
                       Optimize et
                     </button>
@@ -12071,7 +12071,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                       disabled={!ok}
                       onClick={() => runImageTool(first.id, 'white')}
                       className={cls}
-                      title="Kenara bağlı beyaz zemini saydam yap (Logisim-evolution &quot;Make white transparent&quot;)"
+                      title="Kenara bağlı beyaz zemini saydam yap"
                     >
                       Beyazı saydam yap
                     </button>
@@ -12085,7 +12085,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             const appearanceRows = appearDef && (
               <>
                 <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
-                  <span className={`text-[11px] font-semibold ${rowLabel}`} title="Entegrenin gövdesinin çizimi (Logisim-evolution 'Görünüm'); entegrenin tüm örnekleri değişir">Görünüm</span>
+                  <span className={`text-[11px] font-semibold ${rowLabel}`} title="Entegrenin gövdesinin çizimi; entegrenin tüm örnekleri değişir">Görünüm</span>
                   <select
                     id="attr-appearance"
                     value={appearDef.appearance?.style ?? 'chip'}
@@ -12100,7 +12100,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
                 {appearDef.appearance?.style === 'logisim_evolution' && (
                   <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
                     <span className={`text-[11px] font-semibold ${rowLabel}`}>Sabit boyut</span>
-                    <div className="flex gap-1" title="Logisim-evolution 'sabit boyutlu adlı kutu': genişlik 25 karakter, uzun etiketler kısaltılır">
+                    <div className="flex gap-1" title="Sabit boyutlu ad kutusu: genişlik 25 karakter, uzun etiketler kısaltılır">
                       {[false, true].map((v) => (
                         <button
                           key={String(v)}
@@ -14289,7 +14289,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-slate-700">
-                  Test Vektörü (Logisim-evolution biçimi):
+                  Test Vektörü:
                 </label>
                 <button
                   onClick={handleAutoGenerateTestbench}

@@ -269,10 +269,10 @@ export default function MemoryHexEditor({ comp, dark, onSave, onClose, onToast }
             />
           </label>
           <div className="flex-1" />
-          <button onClick={() => fileRef.current?.click()} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title='Logisim "v2.0 raw" bellek dosyası aç'>
+          <button onClick={() => fileRef.current?.click()} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title='"v2.0 raw" biçimli bellek dosyası aç'>
             <FolderOpen className="w-3.5 h-3.5" /> Dosyadan aç
           </button>
-          <button onClick={exportRaw} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title='İçeriği Logisim "v2.0 raw" dosyası olarak indir'>
+          <button onClick={exportRaw} className={`px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer ${c.btn}`} title='İçeriği "v2.0 raw" biçimli dosya olarak indir'>
             <Download className="w-3.5 h-3.5" /> Dosyaya kaydet
           </button>
           <button

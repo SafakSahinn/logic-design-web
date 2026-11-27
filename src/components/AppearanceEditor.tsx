@@ -1190,14 +1190,14 @@ export default function AppearanceEditor({ def, dark, onSave, onClose }: Appeara
             <div className={`pt-3 mt-2 border-t space-y-1.5 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
               <span className={label}>Baştan başla</span>
               <div className="flex flex-wrap gap-1">
-                <button className={textBtn} onClick={() => reset('custom')} title="Logisim-evolution'ın varsayılan özel görünümü: dikdörtgen + portlar">
+                <button className={textBtn} onClick={() => reset('custom')} title="Varsayılan özel görünüm: dikdörtgen + portlar">
                   <RotateCcw className="w-3 h-3 inline mr-1" />
                   Varsayılan özel
                 </button>
-                <button className={textBtn} onClick={() => reset('logisim_evolution')} title="Logisim-evolution kutusu (sabit boyut), düzenlenebilir şekiller olarak">
-                  Logisim-evolution
+                <button className={textBtn} onClick={() => reset('logisim_evolution')} title="Ad şeritli kutu (sabit boyut), düzenlenebilir şekiller olarak">
+                  Ad şeritli
                 </button>
-                <button className={textBtn} onClick={() => reset('classic')} title="Klasik Logisim kutusu, düzenlenebilir şekiller olarak">
+                <button className={textBtn} onClick={() => reset('classic')} title="Klasik kutu, düzenlenebilir şekiller olarak">
                   Klasik
                 </button>
                 <button className={textBtn} onClick={() => reset('evolution')} title="Holy Cross kutusu, düzenlenebilir şekiller olarak">

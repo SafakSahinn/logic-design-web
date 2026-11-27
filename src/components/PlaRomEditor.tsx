@@ -212,7 +212,7 @@ export default function PlaRomEditor({ comp, dark, onSave, onClose }: PlaRomEdit
 
         <div className={`p-4 border-t flex items-center justify-between gap-2 ${dark ? 'border-slate-700' : 'border-slate-200 bg-slate-50'}`}>
           <div className="flex items-center gap-3">
-            <button onClick={clear} className={`px-2.5 py-1 rounded-lg border font-semibold text-xs flex items-center gap-1 cursor-pointer ${c.btn}`} title="Bütün noktaları kaldır (Logisim-evolution 'Clear')">
+            <button onClick={clear} className={`px-2.5 py-1 rounded-lg border font-semibold text-xs flex items-center gap-1 cursor-pointer ${c.btn}`} title="Bütün noktaları kaldır">
               <Eraser className="w-3.5 h-3.5" /> Temizle
             </button>
             <span className={`text-[11px] ${c.sub}`}>
