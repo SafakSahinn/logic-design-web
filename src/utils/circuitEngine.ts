@@ -1547,7 +1547,7 @@ function videoMeta(): ComponentMetadata {
     }),
     outputs: [],
     description:
-      'Piksel ekranı (Logisim-evolution RGB Video): saatin yükselen kenarında WE 1 ise (X, Y) pikseline DATA rengini yazar. Çözünürlük 2-4096, 10 renk modeli (24 bit RGB, 555, 565, 444, 8 renk, Atari, XTerm16/256, gri, VGA256), ölçek 1-8. RST 1 iken ekran siyaha döner (asenkron ya da saatle)',
+      'Piksel ekranı: saatin yükselen kenarında WE 1 ise (X, Y) pikseline DATA rengini yazar. Çözünürlük 2-4096, 10 renk modeli (24 bit RGB, 555, 565, 444, 8 renk, Atari, XTerm16/256, gri, VGA256), ölçek 1-8. RST 1 iken ekran siyaha döner (asenkron ya da saatle)',
   };
 }
 
@@ -1700,7 +1700,7 @@ function oscMeta(): ComponentMetadata {
     inputs: oscPinKeys(cfg.inputs).map((k) => ({ id: k, name: oscPinLabel(k), type: 'input' as const, relX: g.pins[k].x, relY: g.pins[k].y })),
     outputs: [],
     description:
-      'Dijital osiloskop (Logisim-evolution Digital Oscilloscope): CLK girişinin her seviye değişiminde (iki kenarda da) girişlerin (1-32) seviyelerini yeni bir sütuna çizer; 4-35 saat çevrimi (iki katı sütun) görünür, dolunca eski sütunlar sola kayar. EN 0 iken durur, CLR 1 iken çizim silinir. Saat izi, çevrim numaraları ve kenar çizgileri (yükselen, düşen, ikisi) isteğe bağlı',
+      'Dijital osiloskop: CLK girişinin her seviye değişiminde (iki kenarda da) girişlerin (1-32) seviyelerini yeni bir sütuna çizer; 4-35 saat çevrimi (iki katı sütun) görünür, dolunca eski sütunlar sola kayar. EN 0 iken durur, CLR 1 iken çizim silinir. Saat izi, çevrim numaraları ve kenar çizgileri (yükselen, düşen, ikisi) isteğe bağlı',
   };
 }
 
@@ -2556,7 +2556,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 20,
     inputs: [],
     outputs: [{ id: 'out', name: 'K', type: 'output', relX: 30, relY: 10 }],
-    description: 'Seçilen bit genişliğinde sabit bir değer sürer (Logisim Constant)',
+    description: 'Seçilen bit genişliğinde sabit bir değer sürer',
   },
   tunnel: {
     type: 'tunnel',
@@ -2591,7 +2591,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'inG', name: 'G', type: 'input', relX: 20, relY: 0 },
     ],
     outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
-    description: 'Tek transistör (Logisim-evolution Transistor): P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir (0 gelirse çıkış boşta kalır), N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir; iletmezken çıkış boşta, kapı tanımsızsa hata (E)',
+    description: 'Tek transistör: P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir (0 gelirse çıkış boşta kalır), N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir; iletmezken çıkış boşta, kapı tanımsızsa hata (E)',
   },
   transmissionGate: {
     type: 'transmissionGate',
@@ -2605,7 +2605,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'inN', name: 'N', type: 'input', relX: 20, relY: 40 },
     ],
     outputs: [{ id: 'outD', name: 'D', type: 'output', relX: 40, relY: 20 }],
-    description: 'İletim kapısı (Logisim Transmission Gate): P kapısı 0 ve N kapısı 1 iken girişi olduğu gibi çıkışa geçirir, P = 1 ve N = 0 iken çıkış boşta; iki kapı aynı seviyedeyse ya da biri tanımsızsa hata (E)',
+    description: 'İletim kapısı: P kapısı 0 ve N kapısı 1 iken girişi olduğu gibi çıkışa geçirir, P = 1 ve N = 0 iken çıkış boşta; iki kapı aynı seviyedeyse ya da biri tanımsızsa hata (E)',
   },
   // Logisim-evolution Input/Output-Extra Switch / TwoWaySwitch. Evolution's bodies are 30 high (20 x 30, 40 x 30)
   // with the ports on their middle line, 10 apart; the boxes here are 40 high (the body 5 below their top), so the
@@ -2618,7 +2618,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 40,
     inputs: [{ id: 'in', name: 'in', type: 'input', relX: 0, relY: 20 }],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 20, relY: 20 }],
-    description: 'Geçiş anahtarı (Logisim-evolution Switch): tıklayınca kapanır ya da açılır; kapalıyken girişi olduğu gibi çıkışa geçirir, açıkken çıkış boşta (x)',
+    description: 'Geçiş anahtarı: tıklayınca kapanır ya da açılır; kapalıyken girişi olduğu gibi çıkışa geçirir, açıkken çıkış boşta (x)',
   },
   twoWaySwitch: {
     type: 'twoWaySwitch',
@@ -2631,7 +2631,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'out0', name: 'out0', type: 'output', relX: 40, relY: 10 },
       { id: 'out1', name: 'out1', type: 'output', relX: 40, relY: 30 },
     ],
-    description: 'İki yollu (değiştirici) anahtar (Logisim-evolution TwoWaySwitch): tıklayınca kol öbür tarafa geçer. 1 giriş / 2 çıkış kipinde giriş koldaki çıkışa gider, öbür çıkış boşta (x); 2 giriş / 1 çıkış kipinde çıkış koldaki girişi alır',
+    description: 'İki yollu (değiştirici) anahtar: tıklayınca kol öbür tarafa geçer. 1 giriş / 2 çıkış kipinde giriş koldaki çıkışa gider, öbür çıkış boşta (x); 2 giriş / 1 çıkış kipinde çıkış koldaki girişi alır',
   },
   // Logisim-evolution Input/Output-Extra Slider: a 275 x 30 body (the track 255 pixels long) placed 5 below the box top
   // and 5 short of its output side, so the output stays on the grid. Unlike evolution, the body turns with the part
@@ -2643,7 +2643,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 40,
     inputs: [],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 280, relY: 20 }],
-    description: 'Kaydırıcı (Logisim-evolution Slider): düğmesi fareyle sürüklenir, çıkış düğmenin konumuna göre 0 ile 2^genişlik - 1 arası bir sayı (1-8 bit). Yön soldan sağa ya da sağdan sola seçilir',
+    description: 'Kaydırıcı: düğmesi fareyle sürüklenir, çıkış düğmenin konumuna göre 0 ile 2^genişlik - 1 arası bir sayı (1-8 bit). Yön soldan sağa ya da sağdan sola seçilir',
   },
   // Logisim-evolution Input/Output-Extra Programmable Generator: Probe's 20 x 20 body, the output on the facing side
   // (east = not turned)
@@ -2655,7 +2655,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 20,
     inputs: [],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 20, relY: 10 }],
-    description: "Programlanabilir üreteç (Logisim-evolution Programmable Generator): 1-32 durumun her birinde önce \"yüksek\" süre kadar tik 1, sonra \"düşük\" süre kadar tik 0 verir, sonra sıradaki duruma geçer. Simülasyonun tikleriyle (genel saat hızı, adım, saate tıklama) ilerler; üstüne tıklamak tek tik ilerletir",
+    description: "Programlanabilir üreteç: 1-32 durumun her birinde önce \"yüksek\" süre kadar tik 1, sonra \"düşük\" süre kadar tik 0 verir, sonra sıradaki duruma geçer. Simülasyonun tikleriyle (genel saat hızı, adım, saate tıklama) ilerler; üstüne tıklamak tek tik ilerletir",
   },
   // Logisim-evolution TWOPINLED: a 20 x 20 round body with the anode and the cathode on opposite sides (facing west in
   // evolution = not turned here: the anode on the left)
@@ -2670,14 +2670,14 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'cathode', name: 'K', type: 'input', relX: 20, relY: 10 },
     ],
     outputs: [],
-    description: 'İki uçlu LED (Logisim-evolution Two-Pin LED): anot 1 ve katot 0 iken yanar. Çift renkli (bipolar) seçilirse katot 1 ve anot 0 iken ters yön rengiyle yanar; başka her durumda söner',
+    description: 'İki uçlu LED: anot 1 ve katot 0 iken yanar. Çift renkli (bipolar) seçilirse katot 1 ve anot 0 iken ters yön rengiyle yanar; başka her durumda söner',
   },
   // Logisim-evolution Buzzer (Input/Output-Extra): a 40 x 40 round body, the frequency, enable and volume inputs on one
   // side (facing west in evolution = not turned here: on the left) and the duty cycle in the middle of the bottom
   // ('bl') or top ('tr') side. evoBuzzerLayout places them for every turn
   evoBuzzer: {
     type: 'evoBuzzer',
-    name: 'Ses Üreteci (evo Buzzer)',
+    name: 'Ses Üreteci',
     category: 'outputs',
     width: 40,
     height: 40,
@@ -2688,7 +2688,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'pw', name: 'PW', type: 'input', relX: 20, relY: 40, width: 8 },
     ],
     outputs: [],
-    description: 'Ses üreteci (Logisim-evolution Buzzer): EN 1 iken F girişindeki frekansta (14 bit, Hz ya da 0,1 Hz) ses çalar; 20 Hz - 20 kHz dışında susar. Ses V girişiyle (1-32 bit), kare dalganın doluluk oranı PW girişiyle (8 bit, 128 = %50) ayarlanır. Dalga biçimi sinüs, kare, üçgen, testere ya da gürültü; kanal sol, sağ ya da ikisi',
+    description: 'Ses üreteci: EN 1 iken F girişindeki frekansta (14 bit, Hz ya da 0,1 Hz) ses çalar; 20 Hz - 20 kHz dışında susar. Ses V girişiyle (1-32 bit), kare dalganın doluluk oranı PW girişiyle (8 bit, 128 = %50) ayarlanır. Dalga biçimi sinüs, kare, üçgen, testere ya da gürültü; kanal sol, sağ ya da ikisi',
   },
   // Logisim-evolution Digital Oscilloscope (Input/Output-Extra): oscGeometry gives the box and pins for its settings
   digitalOscilloscope: oscMeta(),
@@ -2701,7 +2701,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 40,
     inputs: [],
     outputs: [{ id: 'out', name: 'POR', type: 'output', relX: 200, relY: 20 }],
-    description: 'Açılış sıfırlaması (Logisim-evolution Power-on Reset): devre açıldığında 1-10 saniye boyunca başlangıç seviyesini verir, sonra öbür seviyeye geçip orada kalır; parçaya tıklamak darbeyi yeniden başlatır',
+    description: 'Açılış sıfırlaması: devre açıldığında 1-10 saniye boyunca başlangıç seviyesini verir, sonra öbür seviyeye geçip orada kalır; parçaya tıklamak darbeyi yeniden başlatır',
   },
   // Logisim-evolution Do Not Connect: a red cross on its single pin, which never drives
   doNotConnect: {
@@ -2712,19 +2712,19 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 20,
     inputs: [{ id: 'in', name: 'NC', type: 'input', relX: 10, relY: 10 }],
     outputs: [],
-    description: 'Bağlanmaz işareti (Logisim-evolution Do Not Connect): bir ucun bilerek boş bırakıldığını gösteren kırmızı çarpı; hattı sürmez, yalnız bit genişliği taşır',
+    description: 'Bağlanmaz işareti: bir ucun bilerek boş bırakıldığını gösteren kırmızı çarpı; hattı sürmez, yalnız bit genişliği taşır',
   },
-  dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı (Logisim-evolution DipSwitch); her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
-  joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu (Logisim Joystick): X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
-  matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı (Logisim-evolution MatrixKeypad): basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
-  portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu (Logisim-evolution PortIO): yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
-  binToBcd: bfhMeta('binToBcd', 'İkili → BCD Dönüştürücü', 'İkili sayıyı (4-13 bit) ondalık basamaklarına ayırır (Logisim-evolution BinToBcd): her basamak 4 bitlik BCD çıkışı (1, 10, 100, 1000); giriş tanımsızsa birler basamağı 1111, diğerleri 0'),
-  bcdToSevenSegment: bfhMeta('bcdToSevenSegment', 'BCD → 7-Segment Kod Çözücü', '4 bitlik BCD girişi (0-9) 7-segment göstergenin a-g segment sinyallerine (aktif-yüksek) çevirir (Logisim-evolution BcdToSevenSegmentDisplay); 10-15 ya da tanımsız girişte bütün segmentler x'),
+  dipSwitch: ioMeta('dipSwitch', 'DIP Anahtar', 'Tek pakette 1-32 açma/kapama anahtarı; her anahtarın kendi 1 bitlik çıkışı var, anahtara tıklayınca değişir'),
+  joystick: io5Meta('joystick', 'Joystick', 'Fareyle sürüklenen kumanda kolu: X ve Y çıkışları 2-5 bit; kol ortadayken yaklaşık yarı değer, bırakınca ortaya döner'),
+  matrixKeypad: io5Meta('matrixKeypad', 'Matris Tuş Takımı', '4x4 tuş takımı: basılı tuş, alttaki satır girişinin değerini sağdaki sütun çıkışına geçirir (ham mod; basılı tuş yokken sütun boşta). PmodKYPD modunda sütunlar 1, basılı tuşun satırı 0 ise 0'),
+  portIo: io5Meta('portIo', 'Port G/Ç', '1-32 bacaklı G/Ç portu: yalnız giriş (bacaklara tıklayarak boşta/0/1), yalnız çıkış (devrenin değerini gösterir) ya da tek / bacak başı etkinleştirmeli giriş-çıkış'),
+  binToBcd: bfhMeta('binToBcd', 'İkili → BCD Dönüştürücü', 'İkili sayıyı (4-13 bit) ondalık basamaklarına ayırır: her basamak 4 bitlik BCD çıkışı (1, 10, 100, 1000); giriş tanımsızsa birler basamağı 1111, diğerleri 0'),
+  bcdToSevenSegment: bfhMeta('bcdToSevenSegment', 'BCD → 7-Segment Kod Çözücü', '4 bitlik BCD girişi (0-9) 7-segment göstergenin a-g segment sinyallerine (aktif-yüksek) çevirir; 10-15 ya da tanımsız girişte bütün segmentler x'),
   rgbVideo: videoMeta(),
-  keyboard: io5cMeta('keyboard', 'Klavye', 'Yazılan karakterleri 1-256 karakterlik bir tamponda biriktirir (Logisim-evolution Keyboard): OUT tamponun ilk karakterinin 7 bitlik ASCII kodu, AV tampon boş değilken 1; RE açıkken saat kenarı ilk karakteri tampondan alır, CLR tamponu boşaltır. Parçayı seçip yazın (← → Home End Delete ile düzenlenir)'),
-  tty: io5cMeta('tty', 'Metin Terminali', 'Satır x sütun metin ekranı (Logisim-evolution TTY): WE açıkken her saat kenarında IN girişindeki 7 bitlik ASCII karakteri yazar; satır sonu (10/13) yeni satıra geçer, geri silme (8) son karakteri siler, form besleme (12) ve CLR ekranı temizler, en altta satırlar yukarı kayar'),
-  telnet: io5cMeta('telnet', 'Telnet', 'Devre ile bir Telnet istemcisi arasında bayt alıp verir (Logisim-evolution Telnet): istemciden gelen baytlar tamponda bekler, AV doluyken 1; RD = 1 iken OUT ilk baytı gösterir ve yükselen saat kenarı onu tampondan alır, WR = 1 iken saat kenarı IN baytını istemciye gönderir'),
-  realTimeClock: io5Meta('realTimeClock', 'Gerçek Zamanlı Saat', 'Bilgisayarın saatini veren 32 bitlik çıkış (Logisim-evolution RealTimeClock): 1970 yılından beri geçen milisaniye ya da saniye (evolution 64 bit verir, burada alt 32 biti)'),
+  keyboard: io5cMeta('keyboard', 'Klavye', 'Yazılan karakterleri 1-256 karakterlik bir tamponda biriktirir: OUT tamponun ilk karakterinin 7 bitlik ASCII kodu, AV tampon boş değilken 1; RE açıkken saat kenarı ilk karakteri tampondan alır, CLR tamponu boşaltır. Parçayı seçip yazın (← → Home End Delete ile düzenlenir)'),
+  tty: io5cMeta('tty', 'Metin Terminali', 'Satır x sütun metin ekranı: WE açıkken her saat kenarında IN girişindeki 7 bitlik ASCII karakteri yazar; satır sonu (10/13) yeni satıra geçer, geri silme (8) son karakteri siler, form besleme (12) ve CLR ekranı temizler, en altta satırlar yukarı kayar'),
+  telnet: io5cMeta('telnet', 'Telnet', 'Devre ile bir Telnet istemcisi arasında bayt alıp verir: istemciden gelen baytlar tamponda bekler, AV doluyken 1; RD = 1 iken OUT ilk baytı gösterir ve yükselen saat kenarı onu tampondan alır, WR = 1 iken saat kenarı IN baytını istemciye gönderir'),
+  realTimeClock: io5Meta('realTimeClock', 'Gerçek Zamanlı Saat', 'Bilgisayarın saatini veren 32 bitlik çıkış: 1970 yılından beri geçen milisaniye ya da saniye (64 bitlik değerin alt 32 biti)'),
   asciiKeyboard: {
     type: 'asciiKeyboard',
     name: 'ASCII Klavye Giriş Matrisi',
@@ -2880,7 +2880,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 60,
     inputs: [{ id: 'in', name: 'in', type: 'input', relX: 0, relY: 30, width: 2 }],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 50, relY: 30, width: 2 }],
-    description: 'Programlanabilir mantık dizisi (Logisim-evolution PLA): tablodaki satırlar yukarıdan aşağı denenir, giriş desenine uyan ilk satırın çıkışı verilir (x = fark etmez); hiçbir satır uymazsa çıkış 0',
+    description: 'Programlanabilir mantık dizisi: tablodaki satırlar yukarıdan aşağı denenir, giriş desenine uyan ilk satırın çıkışı verilir (x = fark etmez); hiçbir satır uymazsa çıkış 0',
   },
   // Logisim-evolution Input/Output-Extra PlaRom: a 60 x 60 body, the input on the left middle, the output on the right
   // middle and the chip select in the middle of the bottom (evolution's bounds 0, -30, 60, 60 from the input)
@@ -2895,7 +2895,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'cs', name: 'sel', type: 'input', relX: 30, relY: 60 },
     ],
     outputs: [{ id: 'out', name: 'out', type: 'output', relX: 60, relY: 30, width: 4 }],
-    description: 'PLA ROM (Logisim-evolution PLA ROM): her VE kapısı seçilen girişlerin kendisini ya da tersini VE\'ler, her çıkış kendisine bağlanan VE kapılarını VEYA\'lar. Matris çift tıklayınca açılan şemada noktalar konarak programlanır; seçme (sel) girişi pasifken çıkış boşta',
+    description: 'PLA ROM: her VE kapısı seçilen girişlerin kendisini ya da tersini VE\'ler, her çıkış kendisine bağlanan VE kapılarını VEYA\'lar. Matris çift tıklayınca açılan şemada noktalar konarak programlanır; seçme (sel) girişi pasifken çıkış boşta',
   },
   triState: {
     type: 'triState',
@@ -2959,10 +2959,10 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     outputs: [],
     description: 'EN girişi 1 iken ses çalar. N0-N3 (4-Bit) nota girişleriyle 16 farklı müzik notası/şarkı çalabilir',
   },
-  hexDigit: ioMeta('hexDigit', 'Hex Gösterge', '4 bitlik D girişini 0-F onaltılık rakamı olarak gösterir (Logisim Hex Digit Display); tanımsız bitli girişte tire. DP girişi ondalık noktayı yakar, ayardan kaldırılabilir'),
-  ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk (Logisim-evolution LedBar): her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
-  dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris (Logisim DotMatrix). Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
-  rgbLed: io5Meta('rgbLed', 'RGB LED', 'Kırmızı, yeşil ve mavi girişli LED (Logisim-evolution RgbLed): her renk girişi 1 iken yanar, karışımlar ara renkleri verir; ortak anotta (aktif düşük) 0 iken yanar'),
+  hexDigit: ioMeta('hexDigit', 'Hex Gösterge', '4 bitlik D girişini 0-F onaltılık rakamı olarak gösterir; tanımsız bitli girişte hiçbir segment yanmaz. DP girişi ondalık noktayı yakar, ayardan kaldırılabilir'),
+  ledBar: ioMeta('ledBar', 'LED Çubuk', '1-32 segmentli LED çubuk: her segmente ayrı 1 bitlik giriş ya da tüm segmentlere tek geniş giriş (bit 0 en sağdaki segment)'),
+  dotMatrix: ioMeta('dotMatrix', 'Nokta Matris', 'Satır ve sütunları 1-32 olan LED nokta matris. Sütun girişi: her sütuna bir giriş (bit 0 en alt nokta); satır girişi: her satıra bir giriş (bit 0 en sağ nokta); seçim: satır vektörü 1 olan satırlar sütun vektörünü gösterir (tarama)'),
+  rgbLed: io5Meta('rgbLed', 'RGB LED', 'Kırmızı, yeşil ve mavi girişli LED: her renk girişi 1 iken yanar, karışımlar ara renkleri verir; ortak anotta (aktif düşük) 0 iken yanar'),
   textLabel: {
     type: 'textLabel',
     name: 'Metin',
@@ -2972,7 +2972,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     inputs: [],
     outputs: [],
     description:
-      'Devreye başlık ya da açıklama yazısı koyar (Logisim Text): bacağı ve mantığı yok. Yazı birden çok satır olabilir; yazı tipi, renk ve yatay / dikey hizalama ayarlanır. Hizalama, yazının hangi noktasının yerinde durduğunu söyler',
+      'Devreye başlık ya da açıklama yazısı koyar: bacağı ve mantığı yok. Yazı birden çok satır olabilir; yazı tipi, renk ve yatay / dikey hizalama ayarlanır. Hizalama, yazının hangi noktasının yerinde durduğunu söyler',
   },
   image: {
     type: 'image',
@@ -2983,7 +2983,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     inputs: [],
     outputs: [],
     description:
-      'Devreye süs ya da açıklama için resim koyar (Logisim-evolution Image): PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Bacağı ve mantığı yok; çerçeve boyutu, sığdır / uzat / kapla, lisans ve atıf ayarlanır. Ctrl+V panodaki resmi yeni bir Resim olarak yapıştırır',
+      'Devreye süs ya da açıklama için resim koyar: PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Bacağı ve mantığı yok; çerçeve boyutu, sığdır / uzat / kapla, lisans ve atıf ayarlanır. Ctrl+V panodaki resmi yeni bir Resim olarak yapıştırır',
   },
   sevenSegment: {
     type: 'sevenSegment',
@@ -3108,7 +3108,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'outF', name: 'f', type: 'output', relX: 96, relY: 70 },
       { id: 'outG', name: 'g', type: 'output', relX: 96, relY: 80 },
     ],
-    description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir (yalnız 0-9 çözen Logisim-evolution parçası: BCD → 7-Segment). Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
+    description: '4-bit sayıyı (A-D, 0-F) ortak katotlu 7-segment göstergenin segment sinyallerine (a-g, aktif-yüksek) dönüştürür; 10-15 için A-F harflerini gösterir (yalnız 0-9 çözen parça: BCD → 7-Segment Kod Çözücü). Gerçek 74LS47 aktif-düşüktür (ortak anot) ve yalnızca 0-9 içindir',
   },
   splitter4: {
     type: 'splitter4',
@@ -3142,7 +3142,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'out0', name: '1', type: 'output', relX: 20, relY: 0 },
       { id: 'out1', name: '2', type: 'output', relX: 20, relY: 10 },
     ],
-    description: 'Çok bitli bir veri yolunu uçlara ayırır ya da uçları birleştirir (iki yönlü, Logisim Splitter)',
+    description: 'Çok bitli bir veri yolunu uçlara ayırır ya da uçları birleştirir (iki yönlü)',
   },
   bitExtender: {
     type: 'bitExtender',
@@ -3157,7 +3157,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'in1', name: 'ext', type: 'input', relX: 20, relY: 0 },
     ],
     outputs: [{ id: 'out0', name: 'out', type: 'output', relX: 40, relY: 20, width: 16 }],
-    description: 'Veri yolunu genişletir ya da daraltır; üst bitler 0, 1, işaret biti ya da ek girişle doldurulur (Logisim Bit Extender)',
+    description: 'Veri yolunu genişletir ya da daraltır; üst bitler 0, 1, işaret biti ya da ek girişle doldurulur',
   },
   bitSelector: {
     type: 'bitSelector',
@@ -3171,7 +3171,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'in1', name: 'S', type: 'input', relX: 30, relY: 40, width: 3 },
     ],
     outputs: [{ id: 'out0', name: 'Q', type: 'output', relX: 40, relY: 20 }],
-    description: 'Veri yolundan seçme girişinin gösterdiği bit grubunu çıkışa verir (Logisim Bit Selector)',
+    description: 'Veri yolundan seçme girişinin gösterdiği bit grubunu çıkışa verir',
   },
   // Parametric plexers (Logisim std/plexers). configurePlexer rebuilds the pins; the ids below are the keys
   // plexerLayout places, so a pin keeps its id (and its wires) when the select or data width changes
@@ -3187,7 +3187,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'sel', name: 'S', type: 'input', relX: 30, relY: 60 },
     ],
     outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 60, relY: 30 }],
-    description: 'Seçme girişinin değerindeki veri girişini çıkışa aktarır; seçme 1-5 bit, veri 1-32 bit, isteğe bağlı enable (Logisim Multiplexer)',
+    description: 'Seçme girişinin değerindeki veri girişini çıkışa aktarır; seçme 1-5 bit, veri 1-32 bit, isteğe bağlı enable',
   },
   demultiplexer: {
     type: 'demultiplexer',
@@ -3203,7 +3203,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'out0', name: '0', type: 'output', relX: 60, relY: 20 },
       { id: 'out1', name: '1', type: 'output', relX: 60, relY: 40 },
     ],
-    description: 'Veri girişini seçme girişinin gösterdiği çıkışa yönlendirir, öbür çıkışlar 0 (ya da yüzer); seçme 1-5 bit, veri 1-32 bit (Logisim Demultiplexer)',
+    description: 'Veri girişini seçme girişinin gösterdiği çıkışa yönlendirir, öbür çıkışlar 0 (ya da yüzer); seçme 1-5 bit, veri 1-32 bit',
   },
   decoder: {
     type: 'decoder',
@@ -3219,7 +3219,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
       { id: 'out0', name: '0', type: 'output', relX: 40, relY: 20 },
       { id: 'out1', name: '1', type: 'output', relX: 40, relY: 40 },
     ],
-    description: 'Seçme girişinin değerindeki çıkışı 1 yapar, öbürleri 0 (ya da yüzer); seçme 1-5 bit, isteğe bağlı enable (Logisim Decoder)',
+    description: 'Seçme girişinin değerindeki çıkışı 1 yapar, öbürleri 0 (ya da yüzer); seçme 1-5 bit, isteğe bağlı enable',
   },
   priorityEncoder: {
     type: 'priorityEncoder',
@@ -3229,36 +3229,36 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
     height: 180,
     inputs: [{ id: 'in0', name: '0', type: 'input', relX: 0, relY: 20 }],
     outputs: [{ id: 'out', name: 'Y', type: 'output', relX: 60, relY: 90 }],
-    description: '1 olan en yüksek numaralı girişin numarasını verir; GS bir giriş aktifken 1, EO hiçbiri aktif değilken 1 (Logisim Priority Encoder, 2-32 giriş)',
+    description: '1 olan en yüksek numaralı girişin numarasını verir; GS bir giriş aktifken 1, EO hiçbiri aktif değilken 1 (2-32 giriş)',
   },
   // Parametric arithmetic (Logisim std/arith). configureArith rebuilds the pins and arithLayout places them
   // by key with Logisim's geometry (a 40x40 body, the main output in the middle of the right side)
   adder: arithMeta('adder', 'Toplayıcı (Adder)', [['a', 'A'], ['b', 'B'], ['cin', 'Cin']], [['out', 'S'], ['cout', 'Cout']],
-    'A + B + elde girişi; elde çıkışı toplamın taşan biti. Veri 1-32 bit, açık ya da x elde girişi 0 sayılır (Logisim Adder)'),
+    'A + B + elde girişi; elde çıkışı toplamın taşan biti. Veri 1-32 bit, açık ya da x elde girişi 0 sayılır'),
   subtractor: arithMeta('subtractor', 'Çıkarıcı (Subtractor)', [['a', 'A'], ['b', 'B'], ['bin', 'Bin']], [['out', 'D'], ['bout', 'Bout']],
-    'A - B - borç girişi; borç çıkışı sonuç eksiye düştüğünde 1. Veri 1-32 bit (Logisim Subtractor)'),
+    'A - B - borç girişi; borç çıkışı sonuç eksiye düştüğünde 1. Veri 1-32 bit'),
   multiplier: arithMeta('multiplier', 'Çarpıcı (Multiplier)', [['a', 'A'], ['b', 'B'], ['cin', 'Cin']], [['out', 'P'], ['cout', 'Cout']],
-    'A × B + elde girişi (veri genişliğinde); alt yarı P, üst yarı Cout. İşaretsiz, işaretli ya da işaretli×işaretsiz (Logisim Multiplier)'),
+    'A × B + elde girişi (veri genişliğinde); alt yarı P, üst yarı Cout. İşaretsiz, işaretli ya da işaretli×işaretsiz'),
   divider: arithMeta('divider', 'Bölücü (Divider)', [['a', 'A'], ['b', 'B'], ['upper', 'Üst']], [['out', 'Q'], ['rem', 'R']],
-    '(Üst:A) / B; bölüm Q, kalan R. Sıfıra bölmede bölen 1 sayılır. İşaretsiz ya da işaretli (Logisim Divider)'),
+    '(Üst:A) / B; bölüm Q, kalan R. Sıfıra bölmede bölen 1 sayılır. İşaretsiz ya da işaretli'),
   negator: arithMeta('negator', 'Negatif Alıcı (Negator)', [['in', 'X']], [['out', '-X']],
-    'Girişin ikiye tümleyenini (−X) verir; veri 1-32 bit (Logisim Negator)'),
+    'Girişin ikiye tümleyenini (−X) verir; veri 1-32 bit'),
   absolute: arithMeta('absolute', 'Mutlak Değer (Absolute)', [['in', 'X']], [['out', '|X|'], ['ovf', 'OV']],
-    'İşaretli girişin mutlak değeri; en küçük negatif sayıda taşma (OV) 1 olur (Logisim-evolution Absolute)'),
+    'İşaretli girişin mutlak değeri; en küçük negatif sayıda taşma (OV) 1 olur'),
   comparator: arithMeta('comparator', 'Karşılaştırıcı (Comparator)', [['a', 'A'], ['b', 'B']], [['gt', '>'], ['eq', '='], ['lt', '<']],
-    'A ile B’yi karşılaştırır: A>B, A=B, A<B. İşaretli (varsayılan) ya da işaretsiz, veri 1-32 bit (Logisim Comparator)'),
+    'A ile B’yi karşılaştırır: A>B, A=B, A<B. İşaretli (varsayılan) ya da işaretsiz, veri 1-32 bit'),
   minMax: arithMeta('minMax', 'En Küçük / En Büyük (Min/Max)', [['a', 'A'], ['b', 'B']], [['min', 'Min'], ['max', 'Max']],
-    'A ve B’den küçüğünü ve büyüğünü verir; işaretsiz ya da işaretli (Logisim-evolution Min/Max)'),
+    'A ve B’den küçüğünü ve büyüğünü verir; işaretsiz ya da işaretli'),
   shifter: arithMeta('shifter', 'Kaydırıcı (Shifter)', [['a', 'X'], ['dist', 'D']], [['out', 'Y']],
-    'Veriyi D bit kaydırır ya da döndürür: mantıksal sola/sağa, aritmetik sağa, sola/sağa döndürme (Logisim Shifter)'),
+    'Veriyi D bit kaydırır ya da döndürür: mantıksal sola/sağa, aritmetik sağa, sola/sağa döndürme'),
   squareRoot: arithMeta('squareRoot', 'Karekök (Square Root)', [['in', 'X'], ['upper', 'Üst']], [['out', '√'], ['rem', 'R']],
-    '(Üst:X) sayısının tam karekökü ve kalanı (Logisim-evolution Square Root)'),
+    '(Üst:X) sayısının tam karekökü ve kalanı'),
   exponentiator: arithMeta('exponentiator', 'Üs Alıcı (Exponentiator)', [['a', 'A'], ['b', 'B']], [['out', 'Alt'], ['upper', 'Üst']],
-    'A üzeri B; sonucun alt yarısı ve üst yarısı. İşaretsiz ya da işaretli (Logisim-evolution Exponentiator)'),
+    'A üzeri B; sonucun alt yarısı ve üst yarısı. İşaretsiz ya da işaretli'),
   bitAdder: arithMeta('bitAdder', 'Bit Sayıcı (Bit Adder)', [['in0', '']], [['out', '#']],
-    'Girişlerdeki 1 bitlerini sayar; 1-32 giriş, her biri 1-32 bit (Logisim Bit Adder)'),
+    'Girişlerdeki 1 bitlerini sayar; 1-32 giriş, her biri 1-32 bit'),
   bitFinder: arithMeta('bitFinder', 'Bit Bulucu (Bit Finder)', [['in', 'X']], [['out', 'i'], ['present', '?']],
-    'En düşük ya da en yüksek 1 (veya 0) bitinin numarasını verir; bulunduysa ? çıkışı 1 (Logisim Bit Finder)'),
+    'En düşük ya da en yüksek 1 (veya 0) bitinin numarasını verir; bulunduysa ? çıkışı 1'),
   alu: arithMeta('alu', 'Aritmetik Mantık Birimi (ALU)', [['a', 'A'], ['b', 'B'], ['op', 'OP'], ['cin', 'Cin']],
     [['out', 'Y'], ['z', 'Z'], ['n', 'N'], ['c', 'C'], ['v', 'V']],
     '3 bitlik OP ile 8 işlem: 000 ADD (A+B+Cin), 001 SUB (A−B−Cin), 010 AND, 011 OR, 100 XOR, 101 NOR, 110 SLT (işaretli A<B), 111 PASS-B. Bayraklar: Z sıfır, N işaret, C elde/borç, V işaretli taşma (C ve V yalnız ADD/SUB). Veri 1-32 bit'),
@@ -3270,7 +3270,7 @@ const BUILT_IN_CATALOG: Record<Exclude<ComponentType, PartId>, ComponentMetadata
   counter: memMeta('counter', 'Sayaç (Counter)', 'Saat kenarında LD = 1 ise D yüklenir, değilse CT 0 değilken UD yönünde (açık / 1 yukarı, 0 aşağı) sayar. Üst sınır ve sınırda davranış (başa dön / dur / devam / yükle) ayarlanır; C çıkışı değer hedefteyken 1 (yukarı: üst sınır, aşağı: 0). CLR asenkron sıfırlar. 1-32 bit'),
   ram: ramMeta('ram', 'RAM', 'Rastgele erişimli bellek: adres 2-24 bit, veri 1-32 bit. WE bacağı, tetikleme seçimi (kenar ya da seviye), ayrı ya da çift yönlü veri yolu, saatli ya da anında okuma, bayt etkinleştirme, CLR bacağı'),
   rom: ramMeta('rom', 'ROM', 'Salt okunur bellek: adres 2-24 bit, veri 1-32 bit; adresteki kelimeyi D çıkışına verir'),
-  dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek (Logisim-evolution 5): her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı Logisim-evolution RAM'i gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
+  dualRam: ramMeta('dualRam', 'Çift Portlu RAM', "İki bağımsız portlu bellek: her portun kendi adresi, veri girişi/çıkışı, OE, WE ve saati var; iki port aynı içeriği paylaşır, aynı anda okunup yazılabilir. Adres 2-24 bit, veri 1-32 bit; tetikleme, saatli ya da asenkron okuma, bayt etkinleştirme ve ortak CLR bacağı RAM'deki gibi. Aynı adrese aynı anda iki yazmada port 1 kazanır"),
   random: ramMeta('random', 'Rastgele Sayı Üreteci', 'Saat kenarında NXT 0 değilken bir sonraki sayıya geçer (xoshiro256++ dizisi, tohum ayarlı; tohum 0 = zamandan). RST = 1 başa döndürür. Genişlik 1-32 bit'),
   shiftRegister: memMeta('shiftRegister','Kaydırmalı Yazmaç (Shift Register)', 'Saat kenarında SH 0 değilken IN verisi ilk aşamaya girer, her aşama bir sonrakine kayar, OUT son aşamadır. Paralel yükleme açıkken LD = 1 tüm aşamaları üstteki girişlerden yükler, aşamalar alttan çıkar. CLR asenkron sıfırlar. Genişlik 1-32 bit, 1-32 aşama'),
   subcircuit: {
