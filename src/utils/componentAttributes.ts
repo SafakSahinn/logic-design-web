@@ -450,7 +450,7 @@ const xorModeAttr: AttrDef = {
   title: 'İkiden çok girişte çıkış ne zaman 1 olur (iki girişte ikisi aynıdır)',
   options: [
     { value: 'odd', label: 'Tek sayıda 1', title: 'Parite: 1 olan giriş sayısı tekse 1' },
-    { value: 'one', label: 'Tam bir tane 1', title: 'Yalnızca bir giriş 1 ise 1 (Logisim varsayılanı)' },
+    { value: 'one', label: 'Tam bir tane 1', title: 'Yalnızca bir giriş 1 ise 1 (varsayılan)' },
   ],
   get: (c) => c.state.xorMode ?? 'odd',
   set: (c, v) => ((c.state.xorMode ?? 'odd') === v ? null : withState(c, { xorMode: v as 'odd' | 'one' })),
@@ -519,7 +519,7 @@ const splitterAttrs: AttrDef[] = [
     label: 'Görünüm',
     kind: 'buttons',
     options: [
-      { value: 'left', label: 'Sol', title: 'Sol elli: uçlar birleşik ucun bir yanında (Logisim varsayılanı)' },
+      { value: 'left', label: 'Sol', title: 'Sol elli: uçlar birleşik ucun bir yanında (varsayılan)' },
       { value: 'center', label: 'Orta', title: 'Ortalı: uçlar birleşik ucun iki yanına dağılır' },
       { value: 'right', label: 'Sağ', title: 'Sağ elli: uçlar birleşik ucun öbür yanında' },
     ],
@@ -583,7 +583,7 @@ const plaRomAttrs: AttrDef[] = [
     key: 'plaRomCsHigh',
     label: 'Seçme (sel)',
     kind: 'buttons',
-    title: 'Parçayı çalıştıran seçme girişi seviyesi (Logisim-evolution "Select"); öbür seviyede çıkış boşta kalır. Bağlanmamış, x ya da E seçme girişi parçayı çalıştırır',
+    title: 'Parçayı çalıştıran seçme girişi seviyesi; öbür seviyede çıkış boşta kalır. Bağlanmamış, x ya da E seçme girişi parçayı çalıştırır',
     options: [
       { value: 'low', label: '0 iken etkin' },
       { value: 'high', label: '1 iken etkin' },
@@ -729,7 +729,7 @@ const plexerDisabledAttr: AttrDef = {
   key: 'plexDisabled',
   label: 'Devre dışı çıkış',
   kind: 'buttons',
-  title: 'Enable 0 iken çıkışların değeri (Logisim "Disabled Output")',
+  title: 'Enable 0 iken çıkışların değeri',
   options: FLOAT_OPTIONS,
   get: (c) => c.state.plexDisabled ?? '0',
   set: (c, v) => ((c.state.plexDisabled ?? '0') === v ? null : withState(c, { plexDisabled: v as '0' | 'Z' })),
@@ -739,7 +739,7 @@ const plexerTristateAttr: AttrDef = {
   key: 'plexTristate',
   label: 'Seçilmeyen çıkış',
   kind: 'buttons',
-  title: 'Seçilmeyen çıkışların değeri (Logisim "Three-State")',
+  title: 'Seçilmeyen çıkışların değeri',
   options: FLOAT_OPTIONS,
   get: (c) => (c.state.plexTristate ? 'Z' : '0'),
   set: (c, v) => ((c.state.plexTristate ? 'Z' : '0') === v ? null : withState(c, { plexTristate: v === 'Z' })),
@@ -751,7 +751,7 @@ const switchTristateAttr: AttrDef = {
   key: 'pinTristate',
   label: 'Davranış',
   kind: 'buttons',
-  title: 'Logisim "Three-state": 3 durumlu giriş kayan (Z) başlar, tıklandıkça 0 → 1 → Z sırasıyla döner',
+  title: '3 durumlu giriş kayan (Z) başlar, tıklandıkça 0 → 1 → Z sırasıyla döner',
   options: [
     { value: 'simple', label: 'Normal', title: 'Tıklandıkça 0 ↔ 1' },
     { value: 'tristate', label: '3 durumlu', title: 'Kayan (Z) başlar, tıklandıkça 0 → 1 → Z' },
@@ -769,7 +769,7 @@ const plexerSelectLocAttr: AttrDef = {
   key: 'selectLoc',
   label: 'Seçme bacağı',
   kind: 'buttons',
-  title: 'Seçme (ve enable) girişinin bulunduğu kenar (Logisim "Select Location")',
+  title: 'Seçme (ve enable) girişinin bulunduğu kenar',
   options: [
     { value: 'bl', label: 'Alt / Sol' },
     { value: 'tr', label: 'Üst / Sağ' },
@@ -783,7 +783,7 @@ const transistorTypeAttr: AttrDef = {
   key: 'transistorType',
   label: 'Tip',
   kind: 'buttons',
-  title: 'P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir; N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir (Logisim-evolution "Type")',
+  title: 'P tipi kapı 0 iken iletir ve yalnız 1 seviyesini geçirir; N tipi kapı 1 iken iletir ve yalnız 0 seviyesini geçirir',
   options: [
     { value: 'p', label: 'P tipi' },
     { value: 'n', label: 'N tipi' },
@@ -797,7 +797,7 @@ const transistorGateLocAttr: AttrDef = {
   key: 'gateLoc',
   label: 'Kapı bacağı',
   kind: 'buttons',
-  title: 'Kapı girişinin bulunduğu kenar (Logisim "Gate Location"); iletim kapısında P kapısının kenarı, N kapısı karşı kenarda',
+  title: 'Kapı girişinin bulunduğu kenar; iletim kapısında P kapısının kenarı, N kapısı karşı kenarda',
   options: [
     { value: 'bl', label: 'Alt / Sol' },
     { value: 'tr', label: 'Üst / Sağ' },
@@ -820,7 +820,7 @@ const porSizeAttr: AttrDef = {
   key: 'porSize',
   label: 'Boyut',
   kind: 'buttons',
-  title: 'Gövde boyutu (Logisim-evolution "Size"): geniş 200 x 40 (adı yazılı), orta 40 x 40 ve dar 20 x 20 (darbe grafiği)',
+  title: 'Gövde boyutu: geniş 200 x 40 (adı yazılı), orta 40 x 40 ve dar 20 x 20 (darbe grafiği)',
   options: [
     { value: 'wide', label: 'Geniş' },
     { value: 'medium', label: 'Orta' },
@@ -835,7 +835,7 @@ const porTransitionAttr: AttrDef = {
   key: 'porTransition',
   label: 'Geçiş',
   kind: 'buttons',
-  title: 'Darbenin yönü (Logisim-evolution "Transition"): açılışta 1 verip süre sonunda 0\'a düşer ya da açılışta 0 verip 1\'e çıkar',
+  title: 'Darbenin yönü: açılışta 1 verip süre sonunda 0\'a düşer ya da açılışta 0 verip 1\'e çıkar',
   options: [
     { value: 'hl', label: '1 → 0' },
     { value: 'lh', label: '0 → 1' },
@@ -848,7 +848,7 @@ const porDurationAttr: AttrDef = {
   key: 'porDuration',
   label: 'Süre (sn)',
   kind: 'int',
-  title: 'Başlangıç seviyesinin sürdüğü gerçek süre, 1-10 saniye (Logisim-evolution "Duration"); simülasyon durmuş olsa da işler. Değiştirince darbe yeniden başlar',
+  title: 'Başlangıç seviyesinin sürdüğü gerçek süre, 1-10 saniye; simülasyon durmuş olsa da işler. Değiştirince darbe yeniden başlar',
   get: (c) => getPorConfig(c).seconds,
   set: (c, v) => {
     const n = Math.min(POR_MAX_SECONDS, Math.max(POR_MIN_SECONDS, Math.round(Number(v)) || POR_MIN_SECONDS));
@@ -864,7 +864,7 @@ const extraSwitchWidthAttr: AttrDef = {
   key: 'extraSwitchWidth',
   label: 'Bit genişliği',
   kind: 'select',
-  title: 'Anahtarın geçirdiği bit sayısı (1-32, Logisim "Data Bits"); bütün uçlar bu genişlikte',
+  title: 'Anahtarın geçirdiği bit sayısı (1-32); bütün uçlar bu genişlikte',
   options: WIDTH_OPTIONS,
   get: (c) => getExtraSwitchConfig(c).width,
   set: (c, v) => (getExtraSwitchConfig(c).width === Number(v) ? null : { comp: configureExtraSwitch(c, { width: Number(v) }), stateOnly: true }),
@@ -875,7 +875,7 @@ const twoWayModeAttr: AttrDef = {
   key: 'twoWayMode',
   label: 'Kip',
   kind: 'buttons',
-  title: '1 giriş / 2 çıkış: giriş koldaki çıkışa gider. 2 giriş / 1 çıkış: çıkış koldaki girişi alır (Logisim-evolution "Mode")',
+  title: '1 giriş / 2 çıkış: giriş koldaki çıkışa gider. 2 giriş / 1 çıkış: çıkış koldaki girişi alır',
   options: [
     { value: '1in2out', label: '1 giriş → 2 çıkış' },
     { value: '2in1out', label: '2 giriş → 1 çıkış' },
@@ -888,7 +888,7 @@ const extraSwitchColorAttr: AttrDef = {
   key: 'switchColor',
   label: 'Renk',
   kind: 'buttons',
-  title: 'Gövdenin rengi (Logisim-evolution "Color"); beyaz iki yollu anahtarda gövdeyi boş bırakır',
+  title: 'Gövdenin rengi; beyaz iki yollu anahtarda gövdeyi boş bırakır',
   options: (c) =>
     colorChoices(
       [
@@ -914,7 +914,7 @@ const sliderWidthAttr: AttrDef = {
   key: 'sliderWidth',
   label: 'Bit genişliği',
   kind: 'select',
-  title: `Çıkışın bit sayısı (1-${SLIDER_MAX_BITS}, Logisim-evolution "Data Bits"); düğmenin 8 bitlik konumunun üst bitleri`,
+  title: `Çıkışın bit sayısı (1-${SLIDER_MAX_BITS}); düğmenin 8 bitlik konumunun üst bitleri`,
   options: Array.from({ length: SLIDER_MAX_BITS }, (_, i) => ({ value: i + 1, label: String(i + 1) })),
   get: (c) => getSliderConfig(c).width,
   set: (c, v) => (getSliderConfig(c).width === Number(v) ? null : { comp: configureSlider(c, { width: Number(v) }), stateOnly: true }),
@@ -925,7 +925,7 @@ const sliderDirAttr: AttrDef = {
   key: 'sliderRtl',
   label: 'Yön',
   kind: 'buttons',
-  title: 'Değerin hangi uçtan büyüdüğü (Logisim-evolution "Direction"); yön değişince düğme aynalanır, değer aynı kalır',
+  title: 'Değerin hangi uçtan büyüdüğü; yön değişince düğme aynalanır, değer aynı kalır',
   options: [
     { value: 'ltr', label: 'Soldan sağa' },
     { value: 'rtl', label: 'Sağdan sola' },
@@ -966,8 +966,8 @@ const ledColorAttrOf = (
 });
 
 const twoPinLedAttrs: AttrDef[] = [
-  ledColorAttrOf('ioOnColor', 'Yanık renk', 'Anot 1, katot 0 iken LED\'in rengi (Logisim-evolution "On Color")', TWO_PIN_LED_DEFAULTS.on),
-  ledColorAttrOf('ledOffColor', 'Sönük renk', 'Sönükken LED\'in rengi (Logisim-evolution "Off Color")', TWO_PIN_LED_DEFAULTS.off, [
+  ledColorAttrOf('ioOnColor', 'Yanık renk', 'Anot 1, katot 0 iken LED\'in rengi', TWO_PIN_LED_DEFAULTS.on),
+  ledColorAttrOf('ledOffColor', 'Sönük renk', 'Sönükken LED\'in rengi', TWO_PIN_LED_DEFAULTS.off, [
     { value: TWO_PIN_LED_DEFAULTS.off, label: 'Koyu gri', swatch: TWO_PIN_LED_DEFAULTS.off },
     { value: '#000000', label: 'Siyah', swatch: '#000000' },
   ]),
@@ -975,7 +975,7 @@ const twoPinLedAttrs: AttrDef[] = [
     key: 'ledBipolar',
     label: 'Çift renkli',
     kind: 'buttons',
-    title: 'Açıksa katot 1, anot 0 iken LED ters yön rengiyle yanar (Logisim-evolution "Bipolar"); kapalıysa o durumda söner',
+    title: 'Açıksa katot 1, anot 0 iken LED ters yön rengiyle yanar; kapalıysa o durumda söner',
     options: [
       { value: 'no', label: 'Hayır' },
       { value: 'yes', label: 'Evet' },
@@ -983,7 +983,7 @@ const twoPinLedAttrs: AttrDef[] = [
     get: (c) => (c.state.ledBipolar ? 'yes' : 'no'),
     set: (c, v) => ((c.state.ledBipolar ? 'yes' : 'no') === v ? null : withState(c, { ledBipolar: v === 'yes' ? true : undefined })),
   },
-  ledColorAttrOf('ledReverseColor', 'Ters renk', 'Çift renkli LED ters yönde sürülünce rengi (Logisim-evolution "Reverse Color")', TWO_PIN_LED_DEFAULTS.reverse, [], (c) => !!c.state.ledBipolar),
+  ledColorAttrOf('ledReverseColor', 'Ters renk', 'Çift renkli LED ters yönde sürülünce rengi', TWO_PIN_LED_DEFAULTS.reverse, [], (c) => !!c.state.ledBipolar),
 ];
 
 // ---- Evolution buzzer (Logisim-evolution Input/Output-Extra Buzzer) ------------------------------------------------
@@ -992,7 +992,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerDHz',
     label: 'Frekans birimi',
     kind: 'buttons',
-    title: 'F girişinin birimi (Logisim-evolution "Frequency"): Hz ya da 0,1 Hz (dHz; değer 10\'a bölünüp küsuratı atılır)',
+    title: 'F girişinin birimi: Hz ya da 0,1 Hz (dHz; değer 10\'a bölünüp küsuratı atılır)',
     options: [
       { value: 'hz', label: 'Hz' },
       { value: 'dhz', label: '0,1 Hz (dHz)' },
@@ -1004,7 +1004,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerVolWidth',
     label: 'Ses bit',
     kind: 'select',
-    title: 'V (ses yüksekliği) girişinin genişliği (1-32, Logisim-evolution "Volume Bit Width"); en büyük değer tam ses',
+    title: 'V (ses yüksekliği) girişinin genişliği (1-32); en büyük değer tam ses',
     options: numberOptions(1, 32),
     get: (c) => getEvoBuzzerConfig(c).volWidth,
     set: (c, v) => (getEvoBuzzerConfig(c).volWidth === Number(v) ? null : { comp: configureEvoBuzzer(c, { volWidth: Number(v) }), stateOnly: true }),
@@ -1013,7 +1013,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerWave',
     label: 'Dalga biçimi',
     kind: 'select',
-    title: 'Çalınan dalganın biçimi (Logisim-evolution "Waveform"); kare dalganın doluluk oranı PW girişinden',
+    title: 'Çalınan dalganın biçimi; kare dalganın doluluk oranı PW girişinden',
     options: [
       { value: 'sine', label: 'Sinüs' },
       { value: 'square', label: 'Kare' },
@@ -1028,7 +1028,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerChannel',
     label: 'Kanal',
     kind: 'buttons',
-    title: 'Sesin çıktığı kanal (Logisim-evolution "Channel")',
+    title: 'Sesin çıktığı kanal',
     options: [
       { value: 'both', label: 'İkisi' },
       { value: 'left', label: 'Sol' },
@@ -1041,7 +1041,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerSmoothLevel',
     label: 'Yumuşatma',
     kind: 'select',
-    title: 'Dalgaya uygulanan hareketli ortalama geçişi sayısı (0-10, Logisim-evolution "Smooth Level"); sinüse uygulanmaz, 0 = kapalı',
+    title: 'Dalgaya uygulanan hareketli ortalama geçişi sayısı (0-10); sinüse uygulanmaz, 0 = kapalı',
     options: numberOptions(0, 10),
     get: (c) => getEvoBuzzerConfig(c).smoothLevel,
     set: (c, v) => (getEvoBuzzerConfig(c).smoothLevel === Number(v) ? null : withState(c, { buzzerSmoothLevel: Number(v) === 2 ? undefined : Number(v) })),
@@ -1050,7 +1050,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'buzzerSmoothWidth',
     label: 'Yumuşatma genişliği',
     kind: 'select',
-    title: 'Hareketli ortalamanın yarı genişliği, örnek sayısı (1-10, Logisim-evolution "Smooth Width")',
+    title: 'Hareketli ortalamanın yarı genişliği, örnek sayısı (1-10)',
     options: numberOptions(1, 10),
     get: (c) => getEvoBuzzerConfig(c).smoothWidth,
     set: (c, v) => (getEvoBuzzerConfig(c).smoothWidth === Number(v) ? null : withState(c, { buzzerSmoothWidth: Number(v) === 2 ? undefined : Number(v) })),
@@ -1060,7 +1060,7 @@ const evoBuzzerAttrs: AttrDef[] = [
     key: 'selectLoc',
     label: 'PW bacağı',
     kind: 'buttons',
-    title: 'Doluluk oranı (PW) girişinin bulunduğu kenar (Logisim-evolution "Select Location")',
+    title: 'Doluluk oranı (PW) girişinin bulunduğu kenar',
     options: [
       { value: 'bl', label: 'Alt / Sol' },
       { value: 'tr', label: 'Üst / Sağ' },
@@ -1098,7 +1098,7 @@ const pgStatesAttr: AttrDef = {
   key: 'pgStates',
   label: 'Durum sayısı',
   kind: 'select',
-  title: 'Üretecin durum sayısı (1-32, Logisim-evolution "Nr. of States"); değişince ilk durumların süreleri kalır, yeniler 1 / 1 olur ve üreteç ilk durumdan başlar',
+  title: 'Üretecin durum sayısı (1-32); değişince ilk durumların süreleri kalır, yeniler 1 / 1 olur ve üreteç ilk durumdan başlar',
   options: numberOptions(PG_MIN_STATES, PG_MAX_STATES),
   get: (c) => pgStateCount(c),
   set: (c, v) => (pgStateCount(c) === Number(v) ? null : { comp: configurePg(c, { states: Number(v) }), stateOnly: true }),
@@ -1109,7 +1109,7 @@ const oscAttrs: AttrDef[] = [
     key: 'oscInputs',
     label: 'Giriş sayısı',
     kind: 'select',
-    title: 'Çizilen giriş sayısı, saatten ayrı (1-32, Logisim-evolution "Number Of Inputs")',
+    title: 'Çizilen giriş sayısı, saatten ayrı (1-32)',
     options: numberOptions(OSC_MIN_INPUTS, OSC_MAX_INPUTS),
     get: (c) => getOscConfig(c).inputs,
     set: (c, v) => (getOscConfig(c).inputs === Number(v) ? null : oscResize(c, { inputs: Number(v) })),
@@ -1118,7 +1118,7 @@ const oscAttrs: AttrDef[] = [
     key: 'oscStates',
     label: 'Saat çevrimi',
     kind: 'select',
-    title: 'Görünen saat çevrimi sayısı (4-35, Logisim-evolution "Number of States"); her çevrim iki sütun (iki kenar)',
+    title: 'Görünen saat çevrimi sayısı (4-35); her çevrim iki sütun (iki kenar)',
     options: numberOptions(OSC_MIN_STATES, OSC_MAX_STATES),
     get: (c) => getOscConfig(c).states,
     set: (c, v) => (getOscConfig(c).states === Number(v) ? null : oscResize(c, { states: Number(v) })),
@@ -1127,7 +1127,7 @@ const oscAttrs: AttrDef[] = [
     key: 'oscFrontLines',
     label: 'Kenar çizgileri',
     kind: 'buttons',
-    title: 'Saatin hangi kenarlarında kesikli dikey çizgi çizilir (Logisim-evolution "Draw Clock Front Line")',
+    title: 'Saatin hangi kenarlarında kesikli dikey çizgi çizilir',
     options: [
       { value: 'no', label: 'Yok' },
       { value: 'rising', label: 'Yükselen' },
@@ -1141,7 +1141,7 @@ const oscAttrs: AttrDef[] = [
     key: 'oscShowClock',
     label: 'Saat izi',
     kind: 'buttons',
-    title: 'Saatin kendi izi ve çevrim numaraları en üstte gösterilir mi (Logisim-evolution "Show Clock")',
+    title: 'Saatin kendi izi ve çevrim numaraları en üstte gösterilir mi',
     options: [
       { value: 'yes', label: 'Göster' },
       { value: 'no', label: 'Gizle' },
@@ -1153,7 +1153,7 @@ const oscAttrs: AttrDef[] = [
     key: 'oscColor',
     label: 'Çerçeve rengi',
     kind: 'buttons',
-    title: 'Çerçevenin rengi; saat izi, eksenler ve kenar çizgileri bu rengin koyu tonları (Logisim-evolution "Border Color")',
+    title: 'Çerçevenin rengi; saat izi, eksenler ve kenar çizgileri bu rengin koyu tonları',
     options: (c) =>
       colorChoices(
         [
@@ -1212,14 +1212,14 @@ const bitAdderInputsAttr: AttrDef = {
   set: (c, v) => (getArithConfig(c).inputs === Number(v) ? null : reconfigureArith(c, { inputs: Number(v) })),
 };
 
-const SIGNED_OPTION: AttrOption = { value: 'signed', label: 'İşaretli', title: 'İkiye tümleyen (Logisim "2\'s Complement")' };
-const UNSIGNED_OPTION: AttrOption = { value: 'unsigned', label: 'İşaretsiz', title: 'İşaretsiz sayı (Logisim "Unsigned")' };
+const SIGNED_OPTION: AttrOption = { value: 'signed', label: 'İşaretli', title: 'İkiye tümleyen' };
+const UNSIGNED_OPTION: AttrOption = { value: 'unsigned', label: 'İşaretsiz', title: 'İşaretsiz sayı' };
 
 const arithModeAttr: AttrDef = {
   key: 'arithMode',
   label: 'Sayı türü',
   kind: 'buttons',
-  title: 'Girişlerin nasıl okunduğu (Logisim "Numeric Type")',
+  title: 'Girişlerin nasıl okunduğu',
   options: [SIGNED_OPTION, UNSIGNED_OPTION],
   get: (c) => getArithMode(c),
   set: (c, v) => (getArithMode(c) === v ? null : withState(c, { arithMode: v as 'signed' | 'unsigned' })),
@@ -1229,7 +1229,7 @@ const multiplierModeAttr: AttrDef = {
   ...arithModeAttr,
   options: [
     SIGNED_OPTION,
-    { value: 'signedUnsigned', label: 'İşaretli × işaretsiz', title: 'A işaretli, B işaretsiz okunur (Logisim-evolution)' },
+    { value: 'signedUnsigned', label: 'İşaretli × işaretsiz', title: 'A işaretli, B işaretsiz okunur' },
     UNSIGNED_OPTION,
   ],
   set: (c, v) => (getArithMode(c) === v ? null : withState(c, { arithMode: v as 'signed' | 'signedUnsigned' | 'unsigned' })),
@@ -1239,7 +1239,7 @@ const shiftTypeAttr: AttrDef = {
   key: 'shiftType',
   label: 'Kaydırma',
   kind: 'select',
-  title: 'Kaydırma türü (Logisim "Shift Type")',
+  title: 'Kaydırma türü',
   options: [
     { value: 'll', label: 'Mantıksal sola' },
     { value: 'lr', label: 'Mantıksal sağa' },
@@ -1255,7 +1255,7 @@ const findTypeAttr: AttrDef = {
   key: 'findType',
   label: 'Aranan',
   kind: 'select',
-  title: 'Hangi bitin numarası verilir (Logisim "Type")',
+  title: 'Hangi bitin numarası verilir',
   options: [
     { value: 'low1', label: 'En düşük 1' },
     { value: 'high1', label: 'En yüksek 1' },
@@ -1335,14 +1335,14 @@ const clockHighAttr = clockTicksAttr(
   'clockHigh',
   'high',
   'Yüksek süre (tik)',
-  "Saatin her çevrimde 1'de kaldığı tik sayısı (Logisim \"High Duration\"). Bir tik, saatin hızındaki yarım periyottur: 1 / 1 ayarında saat her tikte değişir"
+  "Saatin her çevrimde 1'de kaldığı tik sayısı. Bir tik, saatin hızındaki yarım periyottur: 1 / 1 ayarında saat her tikte değişir"
 );
-const clockLowAttr = clockTicksAttr('clockLow', 'low', 'Düşük süre (tik)', "Saatin her çevrimde 0'da kaldığı tik sayısı (Logisim \"Low Duration\"); çevrim düşük kısımla başlar");
+const clockLowAttr = clockTicksAttr('clockLow', 'low', 'Düşük süre (tik)', "Saatin her çevrimde 0'da kaldığı tik sayısı; çevrim düşük kısımla başlar");
 const clockPhaseAttr = clockTicksAttr(
   'clockPhase',
   'phase',
   'Faz kayması (tik)',
-  'Saatin dalgası bu kadar tik öne alınır (Logisim-evolution "Phase Offset"); aynı hızdaki saatler ortak tik sayar, böylece aralarında faz farkı kurulabilir'
+  'Saatin dalgası bu kadar tik öne alınır; aynı hızdaki saatler ortak tik sayar, böylece aralarında faz farkı kurulabilir'
 );
 
 const labelPosAttr: AttrDef = {
@@ -1576,17 +1576,17 @@ function reconfigureMem(c: CircuitComponentInstance, patch: Partial<MemConfig>):
 }
 
 const TRIGGER_OPTIONS: AttrOption[] = [
-  { value: 'rising', label: 'Yükselen kenar', title: '0 → 1 geçişinde (Logisim "Rising Edge")' },
-  { value: 'falling', label: 'Düşen kenar', title: '1 → 0 geçişinde (Logisim "Falling Edge")' },
-  { value: 'high', label: 'Yüksek seviye', title: 'Saat 1 olduğu sürece; mandal gibi saydamdır (Logisim "High Level")' },
-  { value: 'low', label: 'Düşük seviye', title: 'Saat 0 olduğu sürece; mandal gibi saydamdır (Logisim "Low Level")' },
+  { value: 'rising', label: 'Yükselen kenar', title: '0 → 1 geçişinde' },
+  { value: 'falling', label: 'Düşen kenar', title: '1 → 0 geçişinde' },
+  { value: 'high', label: 'Yüksek seviye', title: 'Saat 1 olduğu sürece; mandal gibi saydamdır' },
+  { value: 'low', label: 'Düşük seviye', title: 'Saat 0 olduğu sürece; mandal gibi saydamdır' },
 ];
 
 const triggerAttr: AttrDef = {
   key: 'trigger',
   label: 'Tetikleme',
   kind: 'select',
-  title: 'Saatin ne zaman etki ettiği (Logisim "Trigger"); T, J-K, sayaç ve kaydırmalı yazmaç yalnız kenarla tetiklenir',
+  title: 'Saatin ne zaman etki ettiği; T, J-K, sayaç ve kaydırmalı yazmaç yalnız kenarla tetiklenir',
   options: (c) => (LEVEL_TRIGGER_TYPES.has(c.type) ? TRIGGER_OPTIONS : TRIGGER_OPTIONS.slice(0, 2)),
   get: (c) => getTrigger(c),
   set: (c, v) => (getTrigger(c) === v ? null : withState(c, { trigger: v as TriggerMode })),
@@ -1606,7 +1606,7 @@ const counterMaxAttr: AttrDef = {
   key: 'counterMax',
   label: 'Üst sınır (hex)',
   kind: 'hex',
-  title: 'Sayacın en büyük değeri (Logisim "Maximum Value"); genişliğe sığmayan üst bitler atılır',
+  title: 'Sayacın en büyük değeri; genişliğe sığmayan üst bitler atılır',
   get: (c) => getCounterMax(c),
   set: (c, v) => {
     const n = Number(v) % 2 ** getMemConfig(c).width;
@@ -1618,7 +1618,7 @@ const counterGoalAttr: AttrDef = {
   key: 'counterGoal',
   label: 'Sınırda',
   kind: 'select',
-  title: 'Sayaç hedefe (yukarı: üst sınır, aşağı: 0) ulaşmışken gelen sayma darbesi (Logisim "Action On Overflow")',
+  title: 'Sayaç hedefe (yukarı: üst sınır, aşağı: 0) ulaşmışken gelen sayma darbesi',
   options: [
     { value: 'wrap', label: 'Başa dön', title: "Yukarı sayarken 0'a, aşağı sayarken üst sınıra geçer" },
     { value: 'stay', label: 'Dur', title: 'Değer hedefte kalır' },
@@ -1633,7 +1633,7 @@ const shiftLengthAttr: AttrDef = {
   key: 'shiftLength',
   label: 'Aşama sayısı',
   kind: 'select',
-  title: 'Kaydırmalı yazmacın aşama sayısı (Logisim "Number of Stages", 1-32)',
+  title: 'Kaydırmalı yazmacın aşama sayısı (1-32)',
   options: numberOptions(1, SHIFT_REGISTER_MAX_LENGTH),
   get: (c) => getMemConfig(c).length,
   set: (c, v) => (getMemConfig(c).length === Number(v) ? null : reconfigureMem(c, { length: Number(v) })),
@@ -1643,7 +1643,7 @@ const shiftParallelAttr: AttrDef = {
   key: 'shiftParallel',
   label: 'Paralel yükleme',
   kind: 'buttons',
-  title: 'Üstte paralel girişler + LD, altta aşama çıkışları (Logisim "Parallel Load")',
+  title: 'Üstte paralel girişler + LD, altta aşama çıkışları',
   options: [
     { value: 'on', label: 'Açık' },
     { value: 'off', label: 'Kapalı' },
@@ -1706,7 +1706,7 @@ const joyBitsAttr: AttrDef = {
   key: 'joyBits',
   label: 'Veri bit',
   kind: 'select',
-  title: 'X ve Y çıkışlarının genişliği (2-5, Logisim "Bit Width"); kol ortadayken yaklaşık yarı değer verir',
+  title: 'X ve Y çıkışlarının genişliği (2-5); kol ortadayken yaklaşık yarı değer verir',
   options: numberOptions(2, 5),
   get: (c) => getIo5Config(c).joyBits,
   set: (c, v) => reconfigureIo5(c, { joyBits: Number(v) }),
@@ -1716,7 +1716,7 @@ const joyColorAttr: AttrDef = {
   key: 'ioOnColor',
   label: 'Top rengi',
   kind: 'buttons',
-  title: 'Kolun ucundaki topun rengi (Logisim "Color")',
+  title: 'Kolun ucundaki topun rengi',
   options: (c) => {
     const cur = c.state.ioOnColor;
     const list: AttrOption[] = IO_ON_COLORS.map((o) => ({ ...o, swatch: o.value }));
@@ -1733,7 +1733,7 @@ const keypadModeAttr: AttrDef = {
   kind: 'buttons',
   title:
     'Ham: basılı tuş, satır girişinin değerini sütun çıkışına geçirir; basılı tuş yoksa sütun boşta. ' +
-    'PmodKYPD: Digilent PmodKYPD gibi sütunlar 1, basılı tuşun satırı 0 ise 0 (aktif düşük); tuş etiketleri 0-F (Logisim-evolution "Mode")',
+    'PmodKYPD: Digilent PmodKYPD gibi sütunlar 1, basılı tuşun satırı 0 ise 0 (aktif düşük); tuş etiketleri 0-F',
   options: [
     { value: 'raw', label: 'Ham' },
     { value: 'pmod', label: 'PmodKYPD' },
@@ -1746,7 +1746,7 @@ const keypadSizeAttr: AttrDef = {
   key: 'keypadSize',
   label: 'Boyut',
   kind: 'buttons',
-  title: 'Gövde boyutu; büyükte tuşlar ve bacak aralığı iki katıdır (Logisim-evolution "Size")',
+  title: 'Gövde boyutu; büyükte tuşlar ve bacak aralığı iki katıdır',
   options: [
     { value: 'normal', label: 'Normal' },
     { value: 'large', label: 'Büyük' },
@@ -1761,7 +1761,7 @@ const KEYPAD_KEY_ATTRS: AttrDef[] = KEYPAD_DEFAULT_CUSTOM.map((def, i) => ({
   label: `${def} tuşu`,
   kind: 'text' as const,
   maxLength: 1,
-  title: `"${def}" tuşunun üstünde yazan tek karakterlik etiket (Logisim-evolution "${def === '*' ? 'Star' : def === '#' ? 'Hash' : def} key label"); boş bırakılırsa ${def}. Yalnız ham modda`,
+  title: `"${def}" tuşunun üstünde yazan tek karakterlik etiket; boş bırakılırsa ${def}. Yalnız ham modda`,
   visible: (c: CircuitComponentInstance) => getIo5Config(c).keypadMode === 'raw',
   get: (c: CircuitComponentInstance) => c.state.keypadKeys?.[i] || def,
   set: (c: CircuitComponentInstance, v: AttrValue) => {
@@ -1779,7 +1779,7 @@ const portSizeAttr: AttrDef = {
   key: 'portSize',
   label: 'Bacak sayısı',
   kind: 'select',
-  title: `Porttaki bacak sayısı (1-${PORT_IO_MAX}, Logisim-evolution "Number of pins"; evolution 64'e kadar izin verir, burada en geniş tel ${PORT_IO_MAX} bit). Bütün bacaklar tek veriyolundadır`,
+  title: `Porttaki bacak sayısı (1-${PORT_IO_MAX}; en geniş tel ${PORT_IO_MAX} bit). Bütün bacaklar tek veriyolundadır`,
   options: numberOptions(1, PORT_IO_MAX),
   get: (c) => getIo5Config(c).portSize,
   set: (c, v) => reconfigureIo5(c, { portSize: Number(v) }),
@@ -1791,7 +1791,7 @@ const portDirAttr: AttrDef = {
   kind: 'select',
   title:
     'Yalnız giriş: bacaklara tıklayarak boşta / 0 / 1 verilir, OUT çıkışına gider. Yalnız çıkış: IN girişinin değerini bacaklarda gösterir. ' +
-    "Giriş-çıkış: EN 1 iken bacaklar IN'i gösterir, değilse tıklanan değerleri OUT'a verir (tek EN ya da her bacağa bir EN biti) (Logisim-evolution \"Direction\")",
+    "Giriş-çıkış: EN 1 iken bacaklar IN'i gösterir, değilse tıklanan değerleri OUT'a verir (tek EN ya da her bacağa bir EN biti)",
   options: [
     { value: 'input', label: 'Yalnız giriş' },
     { value: 'output', label: 'Yalnız çıkış' },
@@ -1806,7 +1806,7 @@ const rtcTypeAttr: AttrDef = {
   key: 'rtcType',
   label: 'Zaman',
   kind: 'buttons',
-  title: "1 Ocak 1970'ten beri geçen milisaniye ya da saniye; evolution 64 bit verir, buradaki çıkış onun alt 32 biti (Logisim-evolution \"Time type\")",
+  title: "1 Ocak 1970'ten beri geçen milisaniye ya da saniye; çıkış bu 64 bitlik değerin alt 32 biti",
   options: [
     { value: 'ms', label: 'Milisaniye' },
     { value: 's', label: 'Saniye' },
@@ -1819,7 +1819,7 @@ const rtcSizeAttr: AttrDef = {
   key: 'rtcSize',
   label: 'Boyut',
   kind: 'buttons',
-  title: 'Gövde boyutu (Logisim-evolution "Size")',
+  title: 'Gövde boyutu',
   options: [
     { value: 'medium', label: 'Orta' },
     { value: 'narrow', label: 'Dar' },
@@ -1832,7 +1832,7 @@ const rgbActiveAttr: AttrDef = {
   key: 'ioActive',
   label: 'Renk yanar',
   kind: 'buttons',
-  title: "Her renk 1'de (ortak katot, aktif yüksek) ya da 0'da (ortak anot, aktif düşük) yanar (Logisim-evolution \"Active On High\")",
+  title: "Her renk 1'de (ortak katot, aktif yüksek) ya da 0'da (ortak anot, aktif düşük) yanar",
   options: [
     { value: 'high', label: "1'de (ortak katot)" },
     { value: 'low', label: "0'da (ortak anot)" },
@@ -1847,7 +1847,7 @@ const binBitsAttr: AttrDef = {
   key: 'binBits',
   label: 'Giriş bit',
   kind: 'select',
-  title: 'İkili girişin genişliği (4-13, Logisim-evolution "Binary data bits"); çıkış sayısı 2^n sayısının basamak sayısı kadar (4-6 bit: 2, 7-9: 3, 10-13: 4)',
+  title: 'İkili girişin genişliği (4-13); çıkış sayısı 2^n sayısının basamak sayısı kadar (4-6 bit: 2, 7-9: 3, 10-13: 4)',
   options: numberOptions(BIN_TO_BCD_MIN_BITS, BIN_TO_BCD_MAX_BITS),
   get: (c) => binToBcdBits(c),
   set: (c, v) => {
@@ -1882,7 +1882,7 @@ const kbdBufLenAttr: AttrDef = {
   key: 'kbdBufLen',
   label: 'Tampon',
   kind: 'select',
-  title: `Tamponda bekleyebilecek en çok karakter (1-${KEYBOARD_BUFFER_MAX}, Logisim-evolution "Buffer Length"); dolunca yazılanlar atılır. Kısaltınca sondaki karakterler silinir`,
+  title: `Tamponda bekleyebilecek en çok karakter (1-${KEYBOARD_BUFFER_MAX}); dolunca yazılanlar atılır. Kısaltınca sondaki karakterler silinir`,
   options: numberOptions(1, KEYBOARD_BUFFER_MAX),
   get: (c) => getIo5cConfig(c).kbdBufLen,
   set: (c, v) => reconfigureIo5c(c, { kbdBufLen: Number(v) }),
@@ -1892,7 +1892,7 @@ const ttyRowsAttr: AttrDef = {
   key: 'ttyRows',
   label: 'Satır',
   kind: 'select',
-  title: `Ekrandaki satır sayısı (1-${TTY_ROWS_MAX}, Logisim-evolution "Rows"); küçültünce son satırlar kalır`,
+  title: `Ekrandaki satır sayısı (1-${TTY_ROWS_MAX}); küçültünce son satırlar kalır`,
   options: numberOptions(1, TTY_ROWS_MAX),
   get: (c) => getIo5cConfig(c).ttyRows,
   set: (c, v) => reconfigureIo5c(c, { ttyRows: Number(v) }),
@@ -1902,7 +1902,7 @@ const ttyColsAttr: AttrDef = {
   key: 'ttyCols',
   label: 'Sütun',
   kind: 'select',
-  title: `Bir satırdaki karakter sayısı (1-${TTY_COLS_MAX}, Logisim-evolution "Columns"); daraltınca uzun satırların sonu kesilir`,
+  title: `Bir satırdaki karakter sayısı (1-${TTY_COLS_MAX}); daraltınca uzun satırların sonu kesilir`,
   options: numberOptions(1, TTY_COLS_MAX),
   get: (c) => getIo5cConfig(c).ttyCols,
   set: (c, v) => reconfigureIo5c(c, { ttyCols: Number(v) }),
@@ -1916,7 +1916,7 @@ const ttyColorAttr: AttrDef = {
   key: 'ttyColor',
   label: 'Yazı rengi',
   kind: 'buttons',
-  title: 'Karakterlerin rengi (Logisim-evolution "Color")',
+  title: 'Karakterlerin rengi',
   options: (c) =>
     colorChoices(
       [
@@ -1936,7 +1936,7 @@ const ttyBgAttr: AttrDef = {
   key: 'ttyBg',
   label: 'Arka plan',
   kind: 'buttons',
-  title: 'Ekranın arka plan rengi (Logisim-evolution "Background"); varsayılan yarı saydam gri',
+  title: 'Ekranın arka plan rengi; varsayılan yarı saydam gri',
   options: (c) =>
     colorChoices(
       [
@@ -1956,7 +1956,7 @@ const telnetPortAttr: AttrDef = {
   key: 'telnetPort',
   label: 'TCP port',
   kind: 'int',
-  title: 'Telnet istemcisinin bağlanacağı TCP portu (1-65535, Logisim-evolution "Port"); değişince tampon boşalır. Gerçek ağ yalnız masaüstü uygulamasında, ayarlardan açılınca',
+  title: 'Telnet istemcisinin bağlanacağı TCP portu (1-65535); değişince tampon boşalır. Gerçek ağ yalnız masaüstü uygulamasında, ayarlardan açılınca',
   get: (c) => getIo5cConfig(c).telnetPort,
   set: (c, v) => reconfigureIo5c(c, { telnetPort: Number(v) }),
 };
@@ -1965,7 +1965,7 @@ const telnetBufLenAttr: AttrDef = {
   key: 'telnetBufLen',
   label: 'Tampon',
   kind: 'int',
-  title: `İstemciden gelip bekleyebilecek en çok bayt (1-${TELNET_BUFFER_MAX}, Logisim-evolution "Buffer Length"); dolunca gelenler atılır, değişince tampon boşalır`,
+  title: `İstemciden gelip bekleyebilecek en çok bayt (1-${TELNET_BUFFER_MAX}); dolunca gelenler atılır, değişince tampon boşalır`,
   get: (c) => getIo5cConfig(c).telnetBufLen,
   set: (c, v) => reconfigureIo5c(c, { telnetBufLen: Number(v) }),
 };
@@ -1974,7 +1974,7 @@ const telnetModeAttr: AttrDef = {
   key: 'telnetMode',
   label: 'Telnet anlaşması',
   kind: 'buttons',
-  title: "Açıkken bağlanan istemciye telnet seçenekleri (karakter karakter gönderim, yankı) bildirilir ve istemcinin telnet komutları (IAC) tampona alınmaz; kapalıyken baytlar olduğu gibi geçer (Logisim-evolution \"Telnet mode\")",
+  title: "Açıkken bağlanan istemciye telnet seçenekleri (karakter karakter gönderim, yankı) bildirilir ve istemcinin telnet komutları (IAC) tampona alınmaz; kapalıyken baytlar olduğu gibi geçer",
   options: [
     { value: 'off', label: 'Kapalı (ham)' },
     { value: 'on', label: 'Açık' },
@@ -2006,7 +2006,7 @@ const videoResolutionAttr: AttrDef = {
   key: 'videoResolution',
   label: 'Çözünürlük',
   kind: 'select',
-  title: `Ekranın piksel boyutu (Logisim-evolution "Resolution"); "Özel" ile genişlik ve yükseklik ayrı ayrı ${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX} seçilir. X ve Y girişleri boyuta yetecek kadar bit alır; boyut değişince iki boyutta da kalan pikseller korunur`,
+  title: `Ekranın piksel boyutu; "Özel" ile genişlik ve yükseklik ayrı ayrı ${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX} seçilir. X ve Y girişleri boyuta yetecek kadar bit alır; boyut değişince iki boyutta da kalan pikseller korunur`,
   options: [
     ...VIDEO_RESOLUTIONS.map(([w, h]) => ({ value: `${w}x${h}`, label: `${w} × ${h}` })),
     { value: 'custom', label: 'Özel' },
@@ -2026,7 +2026,7 @@ const videoSizeAttr = (key: 'width' | 'height', label: string): AttrDef => ({
   key: key === 'width' ? 'videoWidth' : 'videoHeight',
   label,
   kind: 'int',
-  title: `Ekranın ${key === 'width' ? 'genişliği' : 'yüksekliği'} piksel olarak (${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX}, Logisim-evolution "Custom ${key === 'width' ? 'Width' : 'Height'}")`,
+  title: `Ekranın ${key === 'width' ? 'genişliği' : 'yüksekliği'} piksel olarak (${VIDEO_SIZE_MIN}-${VIDEO_SIZE_MAX})`,
   visible: (c) => videoResolutionOf(c) === 'custom',
   get: (c) => getVideoConfig(c)[key],
   set: (c, v) => reconfigureVideo(c, { [key]: Math.min(VIDEO_SIZE_MAX, Math.max(VIDEO_SIZE_MIN, Math.round(Number(v)))) }),
@@ -2051,7 +2051,7 @@ const videoColorAttr: AttrDef = {
   key: 'videoColor',
   label: 'Renk modeli',
   kind: 'select',
-  title: 'DATA girişinin bir pikseli nasıl tarif ettiği (Logisim-evolution "Color Model"); DATA bu modelin bit sayısı kadar geniştir. Doğrudan modellerde en yüksek alan kırmızı, en düşük mavidir; diğerleri bir renk tablosundan seçer. Ekrandaki pikseller değişmez',
+  title: 'DATA girişinin bir pikseli nasıl tarif ettiği; DATA bu modelin bit sayısı kadar geniştir. Doğrudan modellerde en yüksek alan kırmızı, en düşük mavidir; diğerleri bir renk tablosundan seçer. Ekrandaki pikseller değişmez',
   options: VIDEO_COLOR_MODELS.map((m) => ({ value: m.id, label: VIDEO_COLOR_LABELS[m.id] ?? m.circ })),
   get: (c) => getVideoConfig(c).color,
   set: (c, v) => reconfigureVideo(c, { color: v as VideoConfig['color'] }),
@@ -2061,7 +2061,7 @@ const videoResetAttr: AttrDef = {
   key: 'videoReset',
   label: 'Sıfırlama',
   kind: 'buttons',
-  title: 'RST 1 iken ekranın siyaha dönmesi: hemen (asenkron) ya da yalnız saatin yükselen kenarında WE de 1 iken (senkron) (Logisim-evolution "Reset Behavior")',
+  title: 'RST 1 iken ekranın siyaha dönmesi: hemen (asenkron) ya da yalnız saatin yükselen kenarında WE de 1 iken (senkron)',
   options: [
     { value: 'async', label: 'Asenkron' },
     { value: 'sync', label: 'Senkron' },
@@ -2074,7 +2074,7 @@ const videoCursorAttr: AttrDef = {
   key: 'videoCursor',
   label: 'İmleç',
   kind: 'buttons',
-  title: 'Son yazılan (X, Y) konumunda saniyede bir yanıp sönen imleç (Logisim-evolution "Cursor"); rengi DATA girişindeki renktir',
+  title: 'Son yazılan (X, Y) konumunda saniyede bir yanıp sönen imleç; rengi DATA girişindeki renktir',
   options: [
     { value: 'on', label: 'Açık' },
     { value: 'off', label: 'Kapalı' },
@@ -2087,7 +2087,7 @@ const videoScaleAttr: AttrDef = {
   key: 'videoScale',
   label: 'Ölçek',
   kind: 'select',
-  title: `Bir pikselin ekranda kaç birim kare olduğu (1-${VIDEO_SCALE_MAX}, Logisim-evolution "Scale"); büyük çözünürlükte gövde çok büyür`,
+  title: `Bir pikselin ekranda kaç birim kare olduğu (1-${VIDEO_SCALE_MAX}); büyük çözünürlükte gövde çok büyür`,
   options: numberOptions(1, VIDEO_SCALE_MAX),
   get: (c) => getVideoConfig(c).scale,
   set: (c, v) => reconfigureVideo(c, { scale: Number(v) }),
@@ -2106,7 +2106,7 @@ export const imageSrcAttr: AttrDef = {
   key: 'imageSrc',
   label: 'Resim',
   kind: 'image',
-  title: 'Gösterilen resim (Logisim-evolution "Image"): PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Çerçeve elle boyutlandırılmadıysa resmin boyutunu alır (2048 pikselden büyük resim 2048\'e sığacak kadar küçültülerek)',
+  title: 'Gösterilen resim: PNG, JPEG, GIF ya da BMP dosyası devrenin içine gömülür. Çerçeve elle boyutlandırılmadıysa resmin boyutunu alır (2048 pikselden büyük resim 2048\'e sığacak kadar küçültülerek)',
   get: (c) => getImageConfig(c).src,
   set: (c, v) => imageEdit(c, imageWithSource(c, String(v))),
 };
@@ -2137,7 +2137,7 @@ const imageSizeAttr = (key: 'width' | 'height', label: string): AttrDef => ({
   key: key === 'width' ? 'imageWidth' : 'imageHeight',
   label,
   kind: 'int',
-  title: `Çerçevenin ${key === 'width' ? 'genişliği' : 'yüksekliği'} (Logisim-evolution "${key === 'width' ? 'Width' : 'Height'}"); 0 ya da eksi değer resmin kendi boyutuna döndürür. Elle boyut verildikten sonra yeni resim çerçeveyi değiştirmez`,
+  title: `Çerçevenin ${key === 'width' ? 'genişliği' : 'yüksekliği'}; 0 ya da eksi değer resmin kendi boyutuna döndürür. Elle boyut verildikten sonra yeni resim çerçeveyi değiştirmez`,
   get: (c) => getImageConfig(c)[key],
   set: (c, v) => imageEdit(c, imageWithSize(c, key, Number(v))),
 });
@@ -2148,7 +2148,7 @@ const imageScaleAttr: AttrDef = {
   key: 'imageScale',
   label: 'Yerleşim',
   kind: 'select',
-  title: 'Resmin çerçeveye nasıl yerleştiği (Logisim-evolution "Scale"): sığdır en-boy oranını korur ve ortalar, uzat çerçeveyi tam doldurur, kapla oranı koruyarak doldurur ve taşanı kırpar',
+  title: 'Resmin çerçeveye nasıl yerleştiği: sığdır en-boy oranını korur ve ortalar, uzat çerçeveyi tam doldurur, kapla oranı koruyarak doldurur ve taşanı kırpar',
   options: [
     { value: 'fit', label: 'Sığdır' },
     { value: 'stretch', label: 'Uzat' },
@@ -2162,7 +2162,7 @@ const imageDataSizeAttr: AttrDef = {
   key: 'imageDataSize',
   label: 'Veri boyutu',
   kind: 'info',
-  title: 'Gömülü resmin devre dosyasında kapladığı yer (Logisim-evolution "Data Size"; dosyaya yazılmaz)',
+  title: 'Gömülü resmin devre dosyasında kapladığı yer (dosyaya yazılmaz)',
   get: (c) => imageDataSize(getImageConfig(c).src),
 };
 
@@ -2172,7 +2172,7 @@ const imageLicenseAttr: AttrDef = {
   key: 'imageLicense',
   label: 'Lisans',
   kind: 'select',
-  title: 'Resmin lisansı (Logisim-evolution "License"); yalnız bilgi, devreyi etkilemez',
+  title: 'Resmin lisansı; yalnız bilgi, devreyi etkilemez',
   options: IMAGE_LICENSES.map((l) => ({ value: l, label: IMAGE_LICENSE_LABELS[l] ?? l })),
   get: (c) => getImageConfig(c).license,
   set: (c, v) => imageEdit(c, configureImage(c, { license: IMAGE_LICENSES.includes(String(v)) ? String(v) : 'Unspecified' })),
@@ -2182,7 +2182,7 @@ const imageAttributionAttr: AttrDef = {
   key: 'imageAttribution',
   label: 'Atıf',
   kind: 'text',
-  title: 'Resmin sahibi ya da kaynağı (Logisim-evolution "Attribution"); yalnız bilgi',
+  title: 'Resmin sahibi ya da kaynağı; yalnız bilgi',
   get: (c) => getImageConfig(c).attribution,
   set: (c, v) => imageEdit(c, configureImage(c, { attribution: String(v) })),
 };
@@ -2197,7 +2197,7 @@ const textTextAttr: AttrDef = {
   key: 'textText',
   label: 'Metin',
   kind: 'multiline',
-  title: 'Gösterilen yazı (Logisim "Text"); birden çok satır olabilir',
+  title: 'Gösterilen yazı; birden çok satır olabilir',
   singleOnly: true,
   get: (c) => getTextConfig(c).text,
   set: (c, v) => textEdit(c, configureText(c, { text: String(v) })),
@@ -2211,7 +2211,7 @@ const textFamilyAttr: AttrDef = {
   label: 'Yazı tipi',
   kind: 'select',
   title:
-    'Yazı tipi ailesi (Logisim "Font"). SansSerif, Serif, Monospaced, Dialog ve DialogInput her Logisim kurulumunda var; başka bir aile o bilgisayarda yüklü değilse Logisim onu Dialog ile çizer',
+    'Yazı tipi ailesi. SansSerif, Serif, Monospaced, Dialog ve DialogInput genel ailelerdir, her bilgisayarda karşılığı bulunur; başka bir aile o bilgisayarda yüklü değilse yerine genel bir yazı tipi çizilir',
   options: (c) => {
     const cur = decodeTextFont(getTextConfig(c).font).family;
     return [...TEXT_FAMILIES, ...(TEXT_FAMILIES.includes(cur) ? [] : [cur])].map((f) => ({ value: f, label: f }));
@@ -2224,7 +2224,7 @@ const textStyleAttr: AttrDef = {
   key: 'textStyle',
   label: 'Stil',
   kind: 'buttons',
-  title: 'Düz, kalın, eğik ya da kalın eğik (Logisim "Font" stili)',
+  title: 'Düz, kalın, eğik ya da kalın eğik',
   options: [
     { value: 'plain', label: 'Düz' },
     { value: 'bold', label: 'Kalın' },
@@ -2240,7 +2240,7 @@ const textSizeAttr: AttrDef = {
   key: 'textSize',
   label: 'Boyut',
   kind: 'int',
-  title: `Yazı boyutu, punto (1-${TEXT_SIZE_MAX}, Logisim "Font" boyutu)`,
+  title: `Yazı boyutu, punto (1-${TEXT_SIZE_MAX})`,
   get: (c) => decodeTextFont(getTextConfig(c).font).size,
   set: (c, v) => textFontPatch(c, { size: Math.max(1, Math.min(TEXT_SIZE_MAX, Math.round(Number(v)) || 1)) }),
 };
@@ -2249,7 +2249,7 @@ const textColorAttr: AttrDef = {
   key: 'textColor',
   label: 'Renk',
   kind: 'buttons',
-  title: 'Yazının rengi (Logisim-evolution "Color"; Logisim 2.7.1 rengi bilmez, siyah çizer)',
+  title: 'Yazının rengi',
   options: (c) =>
     colorChoices(
       [
@@ -2270,7 +2270,7 @@ const textHAlignAttr: AttrDef = {
   key: 'textHAlign',
   label: 'Yatay hizalama',
   kind: 'buttons',
-  title: 'Yazının yerinde duran noktası: sol kenarı, ortası ya da sağ kenarı (Logisim "Horizontal Alignment")',
+  title: 'Yazının yerinde duran noktası: sol kenarı, ortası ya da sağ kenarı',
   options: [
     { value: 'left', label: 'Sol' },
     { value: 'center', label: 'Orta' },
@@ -2284,7 +2284,7 @@ const textVAlignAttr: AttrDef = {
   key: 'textVAlign',
   label: 'Dikey hizalama',
   kind: 'buttons',
-  title: 'Yazının yerinde duran noktası: üstü, ortası, taban çizgisi ya da altı (Logisim "Vertical Alignment")',
+  title: 'Yazının yerinde duran noktası: üstü, ortası, taban çizgisi ya da altı',
   options: [
     { value: 'top', label: 'Üst' },
     { value: 'center', label: 'Orta' },
@@ -2301,7 +2301,7 @@ const ttlVccGndAttr: AttrDef = {
   label: 'VCC/GND bacakları',
   kind: 'buttons',
   title:
-    'Açık: VCC ve GND bacakları bağlanması gereken pinler olur; GND = 0 ve VCC = 1 değilse bütün çıkışlar boşta kalır (Logisim-evolution "VCC/GND ports"). Kapalı: çip her zaman beslenmiş sayılır',
+    'Açık: VCC ve GND bacakları bağlanması gereken pinler olur; GND = 0 ve VCC = 1 değilse bütün çıkışlar boşta kalır. Kapalı: çip her zaman beslenmiş sayılır',
   options: [
     { value: 'off', label: 'Kapalı' },
     { value: 'on', label: 'Açık' },
@@ -2325,7 +2325,7 @@ const ttlInternalAttr: AttrDef = {
   key: 'ttlInternal',
   label: 'İç yapı',
   kind: 'buttons',
-  title: 'Gövdenin içinde bacak işlevlerini (1A, 1B, 1Y...) göster (Logisim-evolution "Show internal structure")',
+  title: 'Gövdenin içinde bacak işlevlerini (1A, 1B, 1Y...) göster',
   options: [
     { value: 'off', label: 'Gizli' },
     { value: 'on', label: 'Göster' },
@@ -2366,7 +2366,7 @@ const dipSizeAttr: AttrDef = {
   key: 'dipSize',
   label: 'Anahtar sayısı',
   kind: 'select',
-  title: 'Paketteki anahtar sayısı (1-32, Logisim-evolution "Number of switches"); her anahtarın kendi çıkışı var',
+  title: 'Paketteki anahtar sayısı (1-32); her anahtarın kendi çıkışı var',
   options: IO_SIZE_OPTIONS,
   get: (c) => getIoConfig(c).size,
   set: (c, v) => reconfigureIo(c, { size: Number(v) }),
@@ -2376,7 +2376,7 @@ const ledBarSizeAttr: AttrDef = {
   key: 'ledBarSize',
   label: 'Segment sayısı',
   kind: 'select',
-  title: 'LED çubuktaki segment sayısı (1-32, Logisim-evolution "Number of segments")',
+  title: 'LED çubuktaki segment sayısı (1-32)',
   options: IO_SIZE_OPTIONS,
   get: (c) => getIoConfig(c).size,
   set: (c, v) => reconfigureIo(c, { size: Number(v) }),
@@ -2386,7 +2386,7 @@ const ledBarModeAttr: AttrDef = {
   key: 'ledBarMode',
   label: 'Giriş',
   kind: 'buttons',
-  title: 'Ayrı: her segmente bir 1 bitlik giriş (D0 en soldaki). Tek tel: tek n bitlik giriş, bit 0 en sağdaki segment (Logisim-evolution "Input type")',
+  title: 'Ayrı: her segmente bir 1 bitlik giriş (D0 en soldaki). Tek tel: tek n bitlik giriş, bit 0 en sağdaki segment',
   options: [
     { value: 'separated', label: 'Ayrı' },
     { value: 'oneWire', label: 'Tek tel' },
@@ -2399,7 +2399,7 @@ const matrixColsAttr: AttrDef = {
   key: 'matrixCols',
   label: 'Sütun',
   kind: 'select',
-  title: 'Sütun sayısı (1-32, Logisim "Matrix Columns")',
+  title: 'Sütun sayısı (1-32)',
   options: IO_SIZE_OPTIONS,
   get: (c) => getIoConfig(c).cols,
   set: (c, v) => reconfigureIo(c, { cols: Number(v) }),
@@ -2409,7 +2409,7 @@ const matrixRowsAttr: AttrDef = {
   key: 'matrixRows',
   label: 'Satır',
   kind: 'select',
-  title: 'Satır sayısı (1-32, Logisim "Matrix Rows")',
+  title: 'Satır sayısı (1-32)',
   options: IO_SIZE_OPTIONS,
   get: (c) => getIoConfig(c).rows,
   set: (c, v) => reconfigureIo(c, { rows: Number(v) }),
@@ -2421,7 +2421,7 @@ const matrixInputAttr: AttrDef = {
   kind: 'buttons',
   title:
     'Sütun: her sütuna satır sayısı kadar bitlik bir giriş, bit 0 en alttaki nokta. Satır: her satıra sütun sayısı kadar bitlik bir giriş, bit 0 en sağdaki nokta. ' +
-    'Seçim: C (sütun vektörü, bit 0 en sol) ve R (satır vektörü, en üst satır en yüksek bit); R biti 1 olan satırlar C\'yi gösterir (Logisim "Input Type")',
+    'Seçim: C (sütun vektörü, bit 0 en sol) ve R (satır vektörü, en üst satır en yüksek bit); R biti 1 olan satırlar C\'yi gösterir',
   options: [
     { value: 'column', label: 'Sütun' },
     { value: 'row', label: 'Satır' },
@@ -2435,7 +2435,7 @@ const ioSelectLocAttr: AttrDef = {
   key: 'ioSelectLoc',
   label: 'Giriş kenarı',
   kind: 'buttons',
-  title: 'Girişlerin bulunduğu kenar (Logisim-evolution "Select Location")',
+  title: 'Girişlerin bulunduğu kenar',
   options: [
     { value: 'bl', label: 'Alt / Sol' },
     { value: 'tr', label: 'Üst / Sağ' },
@@ -2450,7 +2450,7 @@ const dotShapeAttr: AttrDef = {
   key: 'dotShape',
   label: 'Nokta şekli',
   kind: 'buttons',
-  title: 'Noktaların çizim şekli (Logisim "Dot Shape")',
+  title: 'Noktaların çizim şekli',
   options: [
     { value: 'square', label: 'Kare' },
     { value: 'circle', label: 'Daire' },
@@ -2464,7 +2464,7 @@ const ioDpAttr: AttrDef = {
   key: 'ioDp',
   label: 'Ondalık nokta',
   kind: 'buttons',
-  title: 'DP girişi ve noktası (Logisim-evolution "Decimal Point"); kaldırılınca DP girişindeki tel açık uç olarak kalır',
+  title: 'DP girişi ve noktası; kaldırılınca DP girişindeki tel açık uç olarak kalır',
   options: [
     { value: 'on', label: 'Var' },
     { value: 'off', label: 'Yok' },
@@ -2478,7 +2478,7 @@ const ioActiveAttr: AttrDef = {
   label: 'Segment yanar',
   kind: 'buttons',
   title:
-    '1\'de (ortak katot, aktif yüksek) ya da 0\'da (ortak anot, aktif düşük) yanar (Logisim "Active On High"). Aktif düşükte 1 olmayan her giriş, açık uç dahil, segmenti yakar',
+    '1\'de (ortak katot, aktif yüksek) ya da 0\'da (ortak anot, aktif düşük) yanar. Aktif düşükte 1 olmayan her giriş, açık uç dahil, segmenti yakar',
   options: [
     { value: 'high', label: "1'de (ortak katot)" },
     { value: 'low', label: "0'da (ortak anot)" },
@@ -2503,7 +2503,7 @@ const ioColorAttr: AttrDef = {
   key: 'ioOnColor',
   label: 'Renk',
   kind: 'buttons',
-  title: 'Yanan segmentin / noktanın rengi (Logisim "On Color")',
+  title: 'Yanan segmentin / noktanın rengi',
   options: (c) => {
     const cur = c.state.ioOnColor;
     const list: AttrOption[] = IO_ON_COLORS.map((o) => ({ ...o, swatch: o.value }));
@@ -2543,7 +2543,7 @@ const ramDataBusAttr: AttrDef = {
   key: 'ramDataBus',
   label: 'Veri yolu',
   kind: 'select',
-  title: 'Logisim-evolution "Data Interface"',
+  title: 'Verinin hangi bacaklardan okunup yazıldığı',
   options: [
     { value: 'separate', label: 'Ayrı (D + DIN)', title: 'Okuma D\'den, yazma DIN\'den; OE = 0 iken D son değerini korur' },
     { value: 'controlled', label: 'Ayrı, kontrollü', title: 'Ayrı D ve DIN; OE = 0 iken D yüzer' },
@@ -2557,7 +2557,7 @@ const ramTriggerAttr: AttrDef = {
   key: 'ramTrigger',
   label: 'Tetikleme',
   kind: 'select',
-  title: 'Yazmanın ne zaman olduğu (Logisim-evolution "Trigger"); seviyede saat bacağı yoktur, WE seviyesi yazar',
+  title: 'Yazmanın ne zaman olduğu; seviyede saat bacağı yoktur, WE seviyesi yazar',
   options: TRIGGER_OPTIONS,
   get: (c) => getRamConfig(c).trigger,
   set: (c, v) => reconfigureRam(c, { trigger: v as RamConfig['trigger'] }),
@@ -2567,9 +2567,9 @@ const ramAsyncReadAttr: AttrDef = {
   key: 'ramAsyncRead',
   label: 'Okuma',
   kind: 'buttons',
-  title: 'Logisim-evolution "Asynchronous Read"; seviye tetiklemede okuma hep anındadır',
+  title: 'Verinin saat kenarında mı, adres değişince hemen mi okunduğu; seviye tetiklemede okuma hep anındadır',
   options: [
-    { value: 'off', label: 'Saatli', title: 'D yalnız saat kenarında güncellenir (evolution varsayılanı)' },
+    { value: 'off', label: 'Saatli', title: 'D yalnız saat kenarında güncellenir (varsayılan)' },
     { value: 'on', label: 'Anında', title: 'D, adres değişince hemen güncellenir' },
   ],
   visible: isEdge,
@@ -2581,7 +2581,7 @@ const ramReadBehaviorAttr: AttrDef = {
   key: 'ramReadBehavior',
   label: 'Aynı kenarda',
   kind: 'buttons',
-  title: 'Saatli okumada, aynı adrese yazılan kenarda D\'ye çıkan değer (Logisim-evolution "Read Behavior")',
+  title: 'Saatli okumada, aynı adrese yazılan kenarda D\'ye çıkan değer',
   options: [
     { value: 'raw', label: 'Yeni değer', title: 'Read after write: yazılan değer okunur' },
     { value: 'war', label: 'Eski değer', title: 'Write after read: yazmadan önceki değer okunur' },
@@ -2595,7 +2595,7 @@ const ramByteEnablesAttr: AttrDef = {
   key: 'ramByteEnables',
   label: 'Bayt seçme',
   kind: 'buttons',
-  title: 'Her 8 veri biti için bir BE bacağı; yalnız 1 olan baytlar yazılır (Logisim-evolution "Byte Enables"). Veri 8 bitten geniş ve tetikleme kenar olmalı',
+  title: 'Her 8 veri biti için bir BE bacağı; yalnız 1 olan baytlar yazılır. Veri 8 bitten geniş ve tetikleme kenar olmalı',
   options: [
     { value: 'on', label: 'Açık' },
     { value: 'off', label: 'Kapalı' },
@@ -2609,7 +2609,7 @@ const ramClearPinAttr: AttrDef = {
   key: 'ramClearPin',
   label: 'CLR bacağı',
   kind: 'buttons',
-  title: 'CLR = 1 iken bütün kelimeler 0 olur (Logisim-evolution "Clear Pin")',
+  title: 'CLR = 1 iken bütün kelimeler 0 olur',
   options: [
     { value: 'on', label: 'Var' },
     { value: 'off', label: 'Yok' },
