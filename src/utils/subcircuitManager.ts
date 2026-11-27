@@ -13,6 +13,7 @@ import {
 } from './circuitEngine';
 import { getInternalWires, snapTo10 } from './wiringEngine';
 import { upgradeLegacySubcircuit } from './legacyMemory';
+import { projectReplacer, projectReviver } from './projectCodec';
 
 const SUBCIRCUITS_STORAGE_KEY = 'logicdesign_custom_subcircuits_v1';
 
@@ -186,7 +187,7 @@ export function initSubcircuits(): CustomSubcircuit[] {
   try {
     const raw = localStorage.getItem(SUBCIRCUITS_STORAGE_KEY);
     if (raw) {
-      const parsed: CustomSubcircuit[] = JSON.parse(raw);
+      const parsed: CustomSubcircuit[] = JSON.parse(raw, projectReviver);
       if (Array.isArray(parsed)) {
         parsed.forEach((item) => {
           // a 2.7.1-rule RAM / ROM inside becomes an evolution one (saved so the next time the library is written)
@@ -245,7 +246,7 @@ export function saveCustomSubcircuit(subDef: CustomSubcircuit): void {
   try {
     // Only persist non-builtins or custom-saved ones
     const all = Array.from(runtimeSubcircuits.values());
-    localStorage.setItem(SUBCIRCUITS_STORAGE_KEY, JSON.stringify(all));
+    localStorage.setItem(SUBCIRCUITS_STORAGE_KEY, JSON.stringify(all, projectReplacer));
   } catch (e) {
     console.error('Failed to save subcircuits to localStorage', e);
   }
@@ -258,7 +259,7 @@ export function deleteCustomSubcircuit(id: string): void {
   runtimeSubcircuits.delete(id);
   try {
     const all = Array.from(runtimeSubcircuits.values());
-    localStorage.setItem(SUBCIRCUITS_STORAGE_KEY, JSON.stringify(all));
+    localStorage.setItem(SUBCIRCUITS_STORAGE_KEY, JSON.stringify(all, projectReplacer));
   } catch (e) {
     console.error('Failed to delete subcircuit from localStorage', e);
   }

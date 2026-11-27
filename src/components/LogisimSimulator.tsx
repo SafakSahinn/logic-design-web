@@ -20,6 +20,7 @@ import {
   type LogisimWireDirection,
 } from '../utils/wiringEngine';
 import { addLegacyReports, emptyLegacyReport, legacyMemoryNote, upgradeLegacyCircuit } from '../utils/legacyMemory';
+import { hasVideoImages, projectReplacer, projectReplacerWithoutImages, projectReviver } from '../utils/projectCodec';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import type {
   ComponentType,
@@ -1299,7 +1300,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
     try {
       const saved = localStorage.getItem('logic_workspace_autosave');
       if (saved) {
-        const data = JSON.parse(saved);
+        const data = JSON.parse(saved, projectReviver);
         // 2.7.1-rule RAM / ROM parts of an older session follow evolution's rules from now on
         let legacyReport = emptyLegacyReport();
         const upgrade = <T extends { components?: CircuitComponentInstance[]; wires?: CircuitWire[] }>(c: T): T => {
@@ -1403,6 +1404,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
   autosaveSnapshotRef.current = { components, wires, annotations, sheets, activeSheetId, fpgaMappings };
   const lastAutosaveRef = useRef(Date.now());
   const autosaveFullRef = useRef(false);
+  const autosaveNoImagesRef = useRef(false);
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
   const writeAutosave = useCallback(() => {
@@ -1419,7 +1421,24 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       }
       // the board mappings of the sheets that still exist (FPGA map dialog, .circ boardmap)
       const fpga = readSheetMappings(snap.fpgaMappings, snap.sheets.map((s) => s.id));
-      localStorage.setItem('logic_workspace_autosave', JSON.stringify({ ...snap, fpgaMappings: fpga, timestamp: Date.now() }));
+      const data = { ...snap, fpgaMappings: fpga, timestamp: Date.now() };
+      const quota = (err: unknown) =>
+        err instanceof DOMException && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+      try {
+        localStorage.setItem('logic_workspace_autosave', JSON.stringify(data, projectReplacer));
+        autosaveNoImagesRef.current = false;
+      } catch (err) {
+        // Too big with the RGB Video images: keep the circuit (and the other part states), drop only the images
+        if (!quota(err) || !hasVideoImages(data)) throw err;
+        localStorage.setItem('logic_workspace_autosave', JSON.stringify(data, projectReplacerWithoutImages));
+        if (!autosaveNoImagesRef.current) {
+          autosaveNoImagesRef.current = true;
+          showToastRef.current(
+            'RGB Video ekranındaki resim otomatik kayda sığmadı; devre kaydedildi ama resim yeniden açılışta gelmez. Resmi korumak için devreyi dosyaya kaydedin.',
+            8000
+          );
+        }
+      }
       autosaveFullRef.current = false;
     } catch (err) {
       // quota exceeded or private mode; a full storage (big pictures in Image parts) is said once until a save works
@@ -2656,7 +2675,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
       // The definitions live in this browser's storage only; ship them so the file opens anywhere
       subcircuits: collectUsedSubcircuits(updatedSheets.flatMap((s) => s.components)),
     };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(data, projectReplacer, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -3032,7 +3051,7 @@ export const LogicCircuitSimulator: React.FC<LogicCircuitSimulatorProps> = ({ de
 
       // Standard JSON circuit parsing
       try {
-        const json = JSON.parse(text);
+        const json = JSON.parse(text, projectReviver);
         // 2.7.1-rule RAM / ROM parts of an older file follow evolution's rules from now on
         let legacyReport = emptyLegacyReport();
         const upgrade = <T extends { components?: CircuitComponentInstance[]; wires?: CircuitWire[] }>(c: T): T => {
